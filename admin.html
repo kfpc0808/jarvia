@@ -201,7 +201,8 @@
 // ★★★ Firebase 설정 — index.html과 동일하게 교체하세요 ★★★
 const firebaseConfig={apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",authDomain:"kfpc-company-support-project.firebaseapp.com",projectId:"kfpc-company-support-project",storageBucket:"kfpc-company-support-project.firebasestorage.app",messagingSenderId:"1012609333373",appId:"1:1012609333373:web:7b6c207c81ff10d156d914",measurementId:"G-CMW6QQ470G"};
 firebase.initializeApp(firebaseConfig);const auth=firebase.auth();const db=firebase.firestore();db.settings({ignoreUndefinedProperties:true});
-const COLLECTIONS={USERS:'jv_users',CONTENTS:'jv_contents',CATEGORIES:'jv_categories',TRANSACTIONS:'jv_transactions',VIEW_LOGS:'jv_view_logs',PROPOSALS:'jv_partner_proposals',PAYMENTS:'jv_payments',FAVORITES:'jv_favorites',NOTICES:'jv_notices',TERMS:'jv_terms',CHARGE_OPTIONS:'jv_charge_options',ADMINS:'jv_admins'};
+const javiaDb=firebase.app().firestore('javia-db');
+const COLLECTIONS={USERS:'users',CONTENTS:'contents',CATEGORIES:'categories',TRANSACTIONS:'transactions',VIEW_LOGS:'view_logs',PROPOSALS:'partner_proposals',PAYMENTS:'payments',FAVORITES:'favorites',NOTICES:'notices',TERMS:'terms',CHARGE_OPTIONS:'charge_options',ADMINS:'admins'};
 </script>
 <script>
 // ═══════════════════════════════════════════════════════
@@ -230,7 +231,7 @@ auth.onAuthStateChanged(async u=>{
   }
   admUser=u;
   const lid=u.email.replace('@javia-admin.internal','');
-  const snap=await db.collection(C.ADMINS).where('loginId','==',lid).limit(1).get();
+  const snap=await javiaDb.collection(C.ADMINS).where('loginId','==',lid).limit(1).get();
   if(snap.empty){ window.location.href='index.html'; return; }
   admData=snap.docs[0].data();
   $('adm-name').textContent=(admData.name||admData.loginId)+' ('+({superadmin:'총괄',admin:'관리자'}[admData.role]||admData.role)+')';
@@ -260,11 +261,11 @@ function goPanel(el){
 // ════════════════════════════════════════
 async function loadDash(){
   const today=new Date(); today.setHours(0,0,0,0); const tTs=TS.fromDate(today);
-  const su=await db.collection(C.USERS).where('createdAt','>=',tTs).get(); $('d-signup').textContent=su.size;
-  const vw=await db.collection(C.VIEW_LOGS).where('createdAt','>=',tTs).get(); $('d-views').textContent=vw.size;
-  const ch=await db.collection(C.PAYMENTS).where('status','==','paid').where('createdAt','>=',tTs).get();
+  const su=await javiaDb.collection(C.USERS).where('createdAt','>=',tTs).get(); $('d-signup').textContent=su.size;
+  const vw=await javiaDb.collection(C.VIEW_LOGS).where('createdAt','>=',tTs).get(); $('d-views').textContent=vw.size;
+  const ch=await javiaDb.collection(C.PAYMENTS).where('status','==','paid').where('createdAt','>=',tTs).get();
   let rev=0; ch.forEach(d=>rev+=(d.data().paidAmount||0)); $('d-rev').textContent=fmt(rev);
-  const tt=await db.collection(C.USERS).where('role','==','user').get(); $('d-total').textContent=tt.size;
+  const tt=await javiaDb.collection(C.USERS).where('role','==','user').get(); $('d-total').textContent=tt.size;
 }
 
 // ════════════════════════════════════════
@@ -272,7 +273,7 @@ async function loadDash(){
 // ════════════════════════════════════════
 async function loadMembers(){
   const s=($('m-search')?.value||'').toLowerCase();
-  const snap=await db.collection(C.USERS).where('role','==','user').orderBy('createdAt','desc').get();
+  const snap=await javiaDb.collection(C.USERS).where('role','==','user').orderBy('createdAt','desc').get();
   let list=snap.docs.map(d=>({id:d.id,...d.data()}));
   if(s) list=list.filter(m=>(m.name||'').toLowerCase().includes(s)||(m.phone||'').includes(s)||(m.email||'').toLowerCase().includes(s));
   $('tb-members').innerHTML=list.map(m=>`<tr>
@@ -285,9 +286,9 @@ async function loadMembers(){
 }
 
 async function showMember(uid){
-  const d=await db.collection(C.USERS).doc(uid).get(); if(!d.exists) return; const m=d.data();
-  const vlSnap=await db.collection(C.VIEW_LOGS).where('userId','==',uid).orderBy('createdAt','desc').limit(20).get();
-  const txSnap=await db.collection(C.TRANSACTIONS).where('userId','==',uid).orderBy('createdAt','desc').limit(20).get();
+  const d=await javiaDb.collection(C.USERS).doc(uid).get(); if(!d.exists) return; const m=d.data();
+  const vlSnap=await javiaDb.collection(C.VIEW_LOGS).where('userId','==',uid).orderBy('createdAt','desc').limit(20).get();
+  const txSnap=await javiaDb.collection(C.TRANSACTIONS).where('userId','==',uid).orderBy('createdAt','desc').limit(20).get();
   $('member-inner').innerHTML=`
     <h2>${esc(m.name)} 회원 상세</h2>
     <div class="info-grid">
@@ -319,7 +320,7 @@ async function showMember(uid){
 async function toggleStatus(uid,cur){
   const ns=cur==='active'?'suspended':'active';
   if(!confirm(`회원을 ${ns==='suspended'?'정지':'해제'}하시겠습니까?`)) return;
-  await db.collection(C.USERS).doc(uid).update({status:ns,updatedAt:SRV.serverTimestamp()});
+  await javiaDb.collection(C.USERS).doc(uid).update({status:ns,updatedAt:SRV.serverTimestamp()});
   toast('상태 변경 완료','success'); closeM('mdl-member'); loadMembers();
 }
 
@@ -328,12 +329,12 @@ async function doAdjust(uid){
   if(isNaN(amt)||amt===0) return toast('금액을 입력하세요.','error');
   if(!memo) return toast('사유를 입력하세요.','error');
   try {
-    const uRef=db.collection(C.USERS).doc(uid);
-    await db.runTransaction(async tx=>{
+    const uRef=javiaDb.collection(C.USERS).doc(uid);
+    await javiaDb.runTransaction(async tx=>{
       const ud=(await tx.get(uRef)).data();
       const nb=ud.balance+amt; if(nb<0) throw new Error('잔액이 음수가 됩니다.');
       tx.update(uRef,{balance:nb,updatedAt:SRV.serverTimestamp()});
-      tx.set(db.collection(C.TRANSACTIONS).doc(gid()),{txId:gid(),userId:uid,type:'admin_adjust',amount:amt,balanceAfter:nb,refType:'admin',refId:admUser.uid,memo,createdAt:SRV.serverTimestamp()});
+      tx.set(javiaDb.collection(C.TRANSACTIONS).doc(gid()),{txId:gid(),userId:uid,type:'admin_adjust',amount:amt,balanceAfter:nb,refType:'admin',refId:admUser.uid,memo,createdAt:SRV.serverTimestamp()});
     });
     toast('잔액 조정 완료','success'); closeM('mdl-member'); loadMembers();
   } catch(e){ toast('조정 실패: '+e.message,'error'); }
@@ -343,7 +344,7 @@ async function doAdjust(uid){
 //  ADMINS
 // ════════════════════════════════════════
 async function loadAdmins(){
-  const snap=await db.collection(C.ADMINS).orderBy('createdAt','desc').get();
+  const snap=await javiaDb.collection(C.ADMINS).orderBy('createdAt','desc').get();
   $('tb-admins').innerHTML=snap.docs.map(d=>{
     const a=d.data(); const isSA=a.role==='superadmin';
     return `<tr><td>${esc(a.loginId)}</td><td>${esc(a.name||'')}</td><td>${a.role==='superadmin'?'총괄관리자':'관리자'}</td>
@@ -357,7 +358,7 @@ async function createAdmin(){
   const lid=$('na-id').value.trim(), name=$('na-name').value.trim(), pw=$('na-pw').value;
   if(!lid||!name||!pw) return toast('모든 항목을 입력하세요.','error');
   if(pw.length<6) return toast('비밀번호 6자 이상','error');
-  const ex=await db.collection(C.ADMINS).where('loginId','==',lid).limit(1).get();
+  const ex=await javiaDb.collection(C.ADMINS).where('loginId','==',lid).limit(1).get();
   if(!ex.empty) return toast('이미 존재하는 아이디','error');
   try{
     // Create a secondary Firebase app to create auth account without logging out current admin
@@ -368,7 +369,7 @@ async function createAdmin(){
     await secondAuth.signOut();
     await secondApp.delete();
     const id=gid();
-    await db.collection(C.ADMINS).doc(id).set({adminId:id,loginId:lid,name,role:'admin',status:'active',createdBy:admUser.uid,lastLoginAt:null,createdAt:SRV.serverTimestamp()});
+    await javiaDb.collection(C.ADMINS).doc(id).set({adminId:id,loginId:lid,name,role:'admin',status:'active',createdBy:admUser.uid,lastLoginAt:null,createdAt:SRV.serverTimestamp()});
     toast('관리자 추가 완료 (아이디: '+lid+')','success'); $('add-adm-form').classList.add('hidden');
     $('na-id').value=''; $('na-name').value=''; $('na-pw').value=''; loadAdmins();
   }catch(e){
@@ -379,18 +380,18 @@ async function createAdmin(){
 
 async function delAdmin(docId){
   if(!confirm('삭제하시겠습니까?')) return;
-  await db.collection(C.ADMINS).doc(docId).delete(); toast('삭제 완료','success'); loadAdmins();
+  await javiaDb.collection(C.ADMINS).doc(docId).delete(); toast('삭제 완료','success'); loadAdmins();
 }
 
 // ════════════════════════════════════════
 //  CONTENTS
 // ════════════════════════════════════════
 async function loadConts(){
-  const catSnap=await db.collection(C.CATEGORIES).orderBy('sortOrder').get();
+  const catSnap=await javiaDb.collection(C.CATEGORIES).orderBy('sortOrder').get();
   const cats=catSnap.docs.map(d=>d.data()); const catMap={};
   cats.forEach(c=>catMap[c.categoryId]=c.name);
   $('cf-cat').innerHTML=cats.map(c=>`<option value="${c.categoryId}">${esc(c.name)}</option>`).join('');
-  const cSnap=await db.collection(C.CONTENTS).orderBy('sortOrder').get();
+  const cSnap=await javiaDb.collection(C.CONTENTS).orderBy('sortOrder').get();
   $('tb-conts').innerHTML=cSnap.docs.map(d=>{const c=d.data();return `<tr>
     <td class="ov">${esc(c.title)}</td><td>${esc(catMap[c.categoryId]||'')}</td><td>${typeBadge(c.type)}</td>
     <td>${fmt(c.price)}원</td><td>${c.viewCount||0}</td>
@@ -399,7 +400,7 @@ async function loadConts(){
 }
 function showCF(){ $('cf-area').classList.remove('hidden'); $('cf-id').value=''; document.querySelector('#cf-area form').reset(); }
 async function editCont(cid){
-  const d=await db.collection(C.CONTENTS).doc(cid).get(); if(!d.exists) return; const c=d.data();
+  const d=await javiaDb.collection(C.CONTENTS).doc(cid).get(); if(!d.exists) return; const c=d.data();
   $('cf-id').value=cid; $('cf-title').value=c.title; $('cf-cat').value=c.categoryId;
   $('cf-type').value=c.type; $('cf-price').value=c.price; $('cf-url').value=c.url;
   $('cf-thumb').value=c.thumbnailUrl||''; $('cf-summary').value=c.summary||'';
@@ -413,7 +414,7 @@ async function saveCont(e){
     summary:$('cf-summary').value.trim(),sortOrder:parseInt($('cf-sort').value)||0,isActive:$('cf-active').value==='1',
     updatedAt:SRV.serverTimestamp()};
   if(!$('cf-id').value){data.viewCount=0;data.createdAt=SRV.serverTimestamp();}
-  await db.collection(C.CONTENTS).doc(cid).set(data,{merge:true});
+  await javiaDb.collection(C.CONTENTS).doc(cid).set(data,{merge:true});
   toast('콘텐츠 저장 완료','success'); $('cf-area').classList.add('hidden'); loadConts();
 }
 
@@ -421,7 +422,7 @@ async function saveCont(e){
 //  CATEGORIES
 // ════════════════════════════════════════
 async function loadCats(){
-  const snap=await db.collection(C.CATEGORIES).orderBy('sortOrder').get();
+  const snap=await javiaDb.collection(C.CATEGORIES).orderBy('sortOrder').get();
   $('tb-cats').innerHTML=snap.docs.map(d=>{const c=d.data();return `<tr>
     <td>${esc(c.name)}</td><td>${c.sortOrder}</td>
     <td>${c.isActive?'<span class="st-active">활성</span>':'<span class="st-suspended">비활성</span>'}</td>
@@ -429,22 +430,22 @@ async function loadCats(){
 }
 async function addCat(){
   const name=$('nc-name').value.trim(); if(!name) return toast('이름을 입력하세요.','error');
-  const snap=await db.collection(C.CATEGORIES).get(); const id=gid();
-  await db.collection(C.CATEGORIES).doc(id).set({categoryId:id,name,sortOrder:snap.size,isActive:true});
+  const snap=await javiaDb.collection(C.CATEGORIES).get(); const id=gid();
+  await javiaDb.collection(C.CATEGORIES).doc(id).set({categoryId:id,name,sortOrder:snap.size,isActive:true});
   $('nc-name').value=''; toast('추가 완료','success'); loadCats();
 }
-async function toggleCat(id,cur){ await db.collection(C.CATEGORIES).doc(id).update({isActive:!cur}); loadCats(); }
+async function toggleCat(id,cur){ await javiaDb.collection(C.CATEGORIES).doc(id).update({isActive:!cur}); loadCats(); }
 
 // ════════════════════════════════════════
 //  PAYMENTS
 // ════════════════════════════════════════
 async function loadPays(){
-  const snap=await db.collection(C.PAYMENTS).orderBy('createdAt','desc').limit(100).get();
+  const snap=await javiaDb.collection(C.PAYMENTS).orderBy('createdAt','desc').limit(100).get();
   const uc={};
   const rows=[];
   for(const d of snap.docs){
     const p=d.data();
-    if(!uc[p.userId]){const u=await db.collection(C.USERS).doc(p.userId).get();uc[p.userId]=u.exists?u.data().name:p.userId;}
+    if(!uc[p.userId]){const u=await javiaDb.collection(C.USERS).doc(p.userId).get();uc[p.userId]=u.exists?u.data().name:p.userId;}
     rows.push(`<tr><td>${fdatetime(p.createdAt)}</td><td>${esc(uc[p.userId])}</td><td>${fmt(p.paidAmount)}원</td><td>${fmt(p.chargeAmount)}원</td><td>${p.status}</td></tr>`);
   }
   $('tb-pays').innerHTML=rows.join('');
@@ -455,7 +456,7 @@ async function loadPays(){
 // ════════════════════════════════════════
 let _logs=[];
 async function loadLogs(){
-  let q=db.collection(C.VIEW_LOGS).orderBy('createdAt','desc');
+  let q=javiaDb.collection(C.VIEW_LOGS).orderBy('createdAt','desc');
   const f=$('lg-from').value, t=$('lg-to').value;
   if(f) q=q.where('createdAt','>=',TS.fromDate(new Date(f)));
   if(t){const td=new Date(t);td.setHours(23,59,59,999);q=q.where('createdAt','<=',TS.fromDate(td));}
@@ -463,8 +464,8 @@ async function loadLogs(){
   const uc={},cc={}; let total=0;
   const rows=[];
   for(const l of _logs){
-    if(!uc[l.userId]){const u=await db.collection(C.USERS).doc(l.userId).get();uc[l.userId]=u.exists?u.data().name:l.userId;}
-    if(!cc[l.contentId]){const c=await db.collection(C.CONTENTS).doc(l.contentId).get();cc[l.contentId]=c.exists?c.data().title:l.contentId;}
+    if(!uc[l.userId]){const u=await javiaDb.collection(C.USERS).doc(l.userId).get();uc[l.userId]=u.exists?u.data().name:l.userId;}
+    if(!cc[l.contentId]){const c=await javiaDb.collection(C.CONTENTS).doc(l.contentId).get();cc[l.contentId]=c.exists?c.data().title:l.contentId;}
     total+=(l.price||0);
     rows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td class="ov">${esc(cc[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`);
   }
@@ -484,7 +485,7 @@ function exportCSV(){
 //  PROPOSALS
 // ════════════════════════════════════════
 async function loadProps(){
-  const snap=await db.collection(C.PROPOSALS).orderBy('createdAt','desc').get();
+  const snap=await javiaDb.collection(C.PROPOSALS).orderBy('createdAt','desc').get();
   const sl={new:'신규',reviewing:'검토중',done:'완료'};
   $('tb-props').innerHTML=snap.docs.map(d=>{const p=d.data();return `<tr>
     <td>${fdate(p.createdAt)}</td><td>${esc(p.userNameSnapshot)}</td><td class="ov">${esc(p.title)}</td>
@@ -492,7 +493,7 @@ async function loadProps(){
     <td><button class="btn btn-sm" onclick="showProp('${p.proposalId}')">상세</button></td></tr>`;}).join('');
 }
 async function showProp(pid){
-  const d=await db.collection(C.PROPOSALS).doc(pid).get(); if(!d.exists) return; const p=d.data();
+  const d=await javiaDb.collection(C.PROPOSALS).doc(pid).get(); if(!d.exists) return; const p=d.data();
   $('prop-inner').innerHTML=`
     <h2>${esc(p.title)}</h2>
     <p style="color:#888;margin-bottom:16px">제안자: ${esc(p.userNameSnapshot)} | 접수일: ${fdate(p.createdAt)}</p>
@@ -503,7 +504,7 @@ async function showProp(pid){
   openM('mdl-prop');
 }
 async function updateProp(pid){
-  await db.collection(C.PROPOSALS).doc(pid).update({status:$('ps-'+pid).value,adminMemo:$('pm-'+pid).value.trim(),updatedAt:SRV.serverTimestamp()});
+  await javiaDb.collection(C.PROPOSALS).doc(pid).update({status:$('ps-'+pid).value,adminMemo:$('pm-'+pid).value.trim(),updatedAt:SRV.serverTimestamp()});
   toast('업데이트 완료','success'); closeM('mdl-prop'); loadProps();
 }
 
@@ -511,14 +512,14 @@ async function updateProp(pid){
 //  NOTICES
 // ════════════════════════════════════════
 async function loadNoticesAdm(){
-  const snap=await db.collection(C.NOTICES).orderBy('createdAt','desc').get();
+  const snap=await javiaDb.collection(C.NOTICES).orderBy('createdAt','desc').get();
   $('tb-notices').innerHTML=snap.docs.map(d=>{const n=d.data();return `<tr>
     <td>${esc(n.title)}</td><td>${n.isActive?'<span class="st-active">노출</span>':'<span class="st-suspended">비노출</span>'}</td>
     <td>${fdate(n.createdAt)}</td><td><button class="btn btn-sm" onclick="editNotice('${n.noticeId}')">수정</button></td></tr>`;}).join('');
 }
 function showNF(){ $('nf-area').classList.remove('hidden'); $('nf-id').value=''; $('nf-title').value=''; $('nf-body').value=''; }
 async function editNotice(nid){
-  const d=await db.collection(C.NOTICES).doc(nid).get(); if(!d.exists) return; const n=d.data();
+  const d=await javiaDb.collection(C.NOTICES).doc(nid).get(); if(!d.exists) return; const n=d.data();
   $('nf-id').value=nid; $('nf-title').value=n.title; $('nf-body').value=n.body; $('nf-active').value=n.isActive?'1':'0';
   $('nf-area').classList.remove('hidden');
 }
@@ -526,7 +527,7 @@ async function saveNotice(e){
   e.preventDefault(); const nid=$('nf-id').value||gid();
   const data={noticeId:nid,title:$('nf-title').value.trim(),body:$('nf-body').value.trim(),isActive:$('nf-active').value==='1',updatedAt:SRV.serverTimestamp()};
   if(!$('nf-id').value){data.createdBy=admUser.uid;data.createdAt=SRV.serverTimestamp();}
-  await db.collection(C.NOTICES).doc(nid).set(data,{merge:true});
+  await javiaDb.collection(C.NOTICES).doc(nid).set(data,{merge:true});
   toast('공지 저장 완료','success'); $('nf-area').classList.add('hidden'); loadNoticesAdm();
 }
 
@@ -536,15 +537,15 @@ async function saveNotice(e){
 async function loadTermEdit(type,btn){
   if(btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');}
   $('te-type').value=type;
-  const snap=await db.collection(C.TERMS).where('type','==',type).where('isActive','==',true).orderBy('version','desc').limit(1).get();
+  const snap=await javiaDb.collection(C.TERMS).where('type','==',type).where('isActive','==',true).orderBy('version','desc').limit(1).get();
   $('te-body').value=snap.empty?'':snap.docs[0].data().content;
 }
 async function saveTerm(e){
   e.preventDefault(); const type=$('te-type').value, content=$('te-body').value.trim();
-  const ex=await db.collection(C.TERMS).where('type','==',type).where('isActive','==',true).get();
+  const ex=await javiaDb.collection(C.TERMS).where('type','==',type).where('isActive','==',true).get();
   let ver=1;
   if(!ex.empty){ver=(ex.docs[0].data().version||0)+1; for(const d of ex.docs) await d.ref.update({isActive:false});}
-  await db.collection(C.TERMS).doc(gid()).set({termId:gid(),type,content,version:ver,isActive:true,updatedBy:admUser.uid,createdAt:SRV.serverTimestamp(),updatedAt:SRV.serverTimestamp()});
+  await javiaDb.collection(C.TERMS).doc(gid()).set({termId:gid(),type,content,version:ver,isActive:true,updatedBy:admUser.uid,createdAt:SRV.serverTimestamp(),updatedAt:SRV.serverTimestamp()});
   toast(`약관 저장 완료 (v${ver})`,'success');
 }
 
@@ -552,7 +553,7 @@ async function saveTerm(e){
 //  CHARGE OPTIONS
 // ════════════════════════════════════════
 async function loadChargeOpts(){
-  const snap=await db.collection(C.CHARGE_OPTIONS).orderBy('sortOrder').get();
+  const snap=await javiaDb.collection(C.CHARGE_OPTIONS).orderBy('sortOrder').get();
   $('tb-copts').innerHTML=snap.docs.map(d=>{const o=d.data();return `<tr>
     <td>${fmt(o.paidAmount)}원</td><td>${fmt(o.chargeAmount)}원</td><td>${esc(o.label||'')}</td><td>${o.sortOrder}</td>
     <td>${o.isActive?'<span class="st-active">활성</span>':'<span class="st-suspended">비활성</span>'}</td>
@@ -562,12 +563,12 @@ async function loadChargeOpts(){
 async function addChargeOpt(){
   const paid=parseInt($('co-paid').value), credit=parseInt($('co-credit').value), label=$('co-label').value.trim();
   if(!paid||!credit) return toast('금액을 입력하세요.','error');
-  const snap=await db.collection(C.CHARGE_OPTIONS).get(); const id=gid();
-  await db.collection(C.CHARGE_OPTIONS).doc(id).set({optionId:id,paidAmount:paid,chargeAmount:credit,label:label||fmt(paid)+'원',sortOrder:snap.size,isActive:true});
+  const snap=await javiaDb.collection(C.CHARGE_OPTIONS).get(); const id=gid();
+  await javiaDb.collection(C.CHARGE_OPTIONS).doc(id).set({optionId:id,paidAmount:paid,chargeAmount:credit,label:label||fmt(paid)+'원',sortOrder:snap.size,isActive:true});
   $('co-paid').value=''; $('co-credit').value=''; $('co-label').value=''; toast('추가 완료','success'); loadChargeOpts();
 }
-async function toggleCO(id,cur){ await db.collection(C.CHARGE_OPTIONS).doc(id).update({isActive:!cur}); loadChargeOpts(); }
-async function delCO(id){ if(!confirm('삭제?')) return; await db.collection(C.CHARGE_OPTIONS).doc(id).delete(); toast('삭제 완료','success'); loadChargeOpts(); }
+async function toggleCO(id,cur){ await javiaDb.collection(C.CHARGE_OPTIONS).doc(id).update({isActive:!cur}); loadChargeOpts(); }
+async function delCO(id){ if(!confirm('삭제?')) return; await javiaDb.collection(C.CHARGE_OPTIONS).doc(id).delete(); toast('삭제 완료','success'); loadChargeOpts(); }
 </script>
 </body>
 </html>
