@@ -201,7 +201,7 @@
 // ★★★ Firebase 설정 — index.html과 동일하게 교체하세요 ★★★
 const firebaseConfig={apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",authDomain:"kfpc-company-support-project.firebaseapp.com",projectId:"kfpc-company-support-project",storageBucket:"kfpc-company-support-project.firebasestorage.app",messagingSenderId:"1012609333373",appId:"1:1012609333373:web:7b6c207c81ff10d156d914",measurementId:"G-CMW6QQ470G"};
 firebase.initializeApp(firebaseConfig);const auth=firebase.auth();const db=firebase.firestore();db.settings({ignoreUndefinedProperties:true});
-const COLLECTIONS={USERS:'users',CONTENTS:'contents',CATEGORIES:'categories',TRANSACTIONS:'transactions',VIEW_LOGS:'view_logs',PROPOSALS:'partner_proposals',PAYMENTS:'payments',FAVORITES:'favorites',NOTICES:'notices',TERMS:'terms',CHARGE_OPTIONS:'charge_options',ADMINS:'admins'};
+const COLLECTIONS={USERS:'jv_users',CONTENTS:'jv_contents',CATEGORIES:'jv_categories',TRANSACTIONS:'jv_transactions',VIEW_LOGS:'jv_view_logs',PROPOSALS:'jv_partner_proposals',PAYMENTS:'jv_payments',FAVORITES:'jv_favorites',NOTICES:'jv_notices',TERMS:'jv_terms',CHARGE_OPTIONS:'jv_charge_options',ADMINS:'jv_admins'};
 </script>
 <script>
 // ═══════════════════════════════════════════════════════
@@ -359,9 +359,22 @@ async function createAdmin(){
   if(pw.length<6) return toast('비밀번호 6자 이상','error');
   const ex=await db.collection(C.ADMINS).where('loginId','==',lid).limit(1).get();
   if(!ex.empty) return toast('이미 존재하는 아이디','error');
-  await db.collection(C.ADMINS).doc(gid()).set({adminId:gid(),loginId:lid,name,role:'admin',status:'active',createdBy:admUser.uid,lastLoginAt:null,createdAt:SRV.serverTimestamp(),_tempPassword:pw});
-  toast('관리자 추가 완료','success'); $('add-adm-form').classList.add('hidden');
-  $('na-id').value=''; $('na-name').value=''; $('na-pw').value=''; loadAdmins();
+  try{
+    // Create a secondary Firebase app to create auth account without logging out current admin
+    const secondApp=firebase.initializeApp(firebaseConfig,'tempAdmin'+Date.now());
+    const secondAuth=secondApp.auth();
+    const email=lid+'@javia-admin.internal';
+    await secondAuth.createUserWithEmailAndPassword(email,pw);
+    await secondAuth.signOut();
+    await secondApp.delete();
+    const id=gid();
+    await db.collection(C.ADMINS).doc(id).set({adminId:id,loginId:lid,name,role:'admin',status:'active',createdBy:admUser.uid,lastLoginAt:null,createdAt:SRV.serverTimestamp()});
+    toast('관리자 추가 완료 (아이디: '+lid+')','success'); $('add-adm-form').classList.add('hidden');
+    $('na-id').value=''; $('na-name').value=''; $('na-pw').value=''; loadAdmins();
+  }catch(e){
+    if(e.code==='auth/email-already-in-use') toast('이미 Auth에 존재하는 계정입니다.','error');
+    else toast('생성 실패: '+e.message,'error');
+  }
 }
 
 async function delAdmin(docId){
