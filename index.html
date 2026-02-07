@@ -264,7 +264,7 @@ function typeBadge(t){const l={video:'영상',brief:'이슈브리핑',audio:'오
 const _thumbColors={video:['#1a237e','#283593'],brief:['#0277bd','#0288d1'],audio:['#6a1b9a','#7b1fa2'],report:['#2e7d32','#388e3c'],closing:['#e65100','#ef6c00']};
 function genThumb(type,title){const cv=document.createElement('canvas');cv.width=400;cv.height=220;const ctx=cv.getContext('2d');const c=_thumbColors[type]||['#37474f','#455a64'];const grd=ctx.createLinearGradient(0,0,400,220);grd.addColorStop(0,c[0]);grd.addColorStop(1,c[1]);ctx.fillStyle=grd;ctx.fillRect(0,0,400,220);ctx.fillStyle='rgba(255,255,255,0.12)';ctx.beginPath();ctx.arc(340,40,80,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(60,190,50,0,Math.PI*2);ctx.fill();const icon=typeIcon(type);ctx.font='48px serif';ctx.textAlign='center';ctx.fillStyle='rgba(255,255,255,0.3)';ctx.fillText(icon,200,80);ctx.font='bold 18px "Pretendard",sans-serif';ctx.fillStyle='#fff';ctx.textAlign='center';const tokens=title.replace(/([_\-])/g,' $1 ').replace(/([\(\)\[\]])/g,' $1').split(/\s+/).filter(t=>t);let lines=[],line='';for(const w of tokens){const test=line?line+' '+w:w;if(ctx.measureText(test).width>340){if(line)lines.push(line);line=w;}else line=test;}if(line)lines.push(line);if(lines.length>3){lines=lines.slice(0,3);lines[2]=lines[2].length>20?lines[2].slice(0,20)+'…':lines[2];}const y0=130-(lines.length-1)*14;lines.forEach((l,i)=>ctx.fillText(l,200,y0+i*28));return cv.toDataURL('image/png',0.8);}
 const _thumbCache={};
-function getThumb(c){const k=c.contentId;if(_thumbCache[k])return _thumbCache[k];const imgUrl=c.thumbnailUrl||(thumbSettings&&thumbSettings[c.type]?thumbSettings[c.type]:null);if(imgUrl){let apply=true;if(!c.thumbnailUrl&&thumbSettings&&thumbSettings.scope==='after'&&thumbSettings.afterDate&&c.createdAt){const d=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);apply=d>=new Date(thumbSettings.afterDate);}if(apply){_thumbCache[k]='pending';genThumbImg(imgUrl,c.title).then(url=>{if(url){_thumbCache[k]=url;const el=document.querySelector(`[data-cid="${k}"]`);if(el)el.style.backgroundImage=`url('${url}')`;}});return genThumb(c.type,c.title);}}_thumbCache[k]=genThumb(c.type,c.title);return _thumbCache[k];}
+function getThumb(c){const k=c.contentId;if(_thumbCache[k]&&_thumbCache[k]!=='pending')return _thumbCache[k];const imgUrl=c.thumbnailUrl||(thumbSettings&&thumbSettings[c.type]?thumbSettings[c.type]:null);if(imgUrl){let apply=true;if(!c.thumbnailUrl&&thumbSettings&&thumbSettings.scope==='after'&&thumbSettings.afterDate&&c.createdAt){const d=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);apply=d>=new Date(thumbSettings.afterDate);}if(apply){_thumbCache[k]='pending';genThumbImg(imgUrl,c.title).then(url=>{if(url){_thumbCache[k]=url;const el=document.querySelector(`[data-cid="${k}"]`);if(el)el.style.backgroundImage=`url('${url}')`;}else{_thumbCache[k]=genThumb(c.type,c.title);const el=document.querySelector(`[data-cid="${k}"]`);if(el)el.style.backgroundImage=`url('${_thumbCache[k]}')`;}});return genThumb(c.type,c.title);}}_thumbCache[k]=genThumb(c.type,c.title);return _thumbCache[k];}
 function genThumbImg(imgUrl,title){return new Promise(resolve=>{const img=new Image();img.crossOrigin='anonymous';img.onload=function(){const cv=document.createElement('canvas');cv.width=400;cv.height=220;const ctx=cv.getContext('2d');ctx.drawImage(img,0,0,400,220);ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(0,0,400,220);ctx.font='bold 18px "Pretendard",sans-serif';ctx.fillStyle='#fff';ctx.textAlign='center';const tokens=title.replace(/([_\-])/g,' $1 ').replace(/([\(\)\[\]])/g,' $1').split(/\s+/).filter(t=>t);let lines=[],line='';for(const w of tokens){const test=line?line+' '+w:w;if(ctx.measureText(test).width>340){if(line)lines.push(line);line=w;}else line=test;}if(line)lines.push(line);if(lines.length>3){lines=lines.slice(0,3);lines[2]=lines[2].length>20?lines[2].slice(0,20)+'…':lines[2];}const y0=120-(lines.length-1)*14;lines.forEach((l,i)=>ctx.fillText(l,200,y0+i*28));resolve(cv.toDataURL('image/png',0.8));};img.onerror=function(){resolve(null);};img.src=imgUrl;});}
 function cardHTML(c){const bg=getThumb(c);const subLabel=c.subType?`<span class="badge" style="background:#E8EAF6;color:#283593;margin-left:4px">${esc(c.subType)}</span>`:'';return`<div class="card" onclick="showDetail('${c.contentId}')"><div class="card-thumb" data-cid="${c.contentId}" style="background-image:url('${bg}');background-size:cover;background-position:center"></div><div class="card-body"><h3>${esc(c.title)}</h3><p>${esc(c.summary||'')}</p><div class="card-foot"><span class="price">${fmt(c.price)}원</span>${typeBadge(c.type)}${subLabel}</div></div></div>`;}
 
@@ -440,8 +440,8 @@ async function doView(cid){
     }
     const result=await spendCredit(me.uid,cid);
     meData.balance=result.balance;updateBal();closeM('mdl-detail');
-    if(result.charged)toast(`${fmt(result.price)}원 차감 / 잔액 ${fmt(result.balance)}원 / ${fdate(result.expiresAt)}까지 재열람 가능`,'success');
-    else toast('무료 재열람 (30일 이내 결제 이력)','success');
+    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n잔액: ${fmt(result.balance)}원\n${fdate(result.expiresAt)}까지 재열람 가능`);
+    else alert('무료 재열람 (30일 이내 결제 이력)');
     openViewer(result.url,result.title,result.type);
   }catch(err){
     if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다. 충전 후 이용해주세요.','warning');closeM('mdl-detail');openCharge();}
@@ -504,8 +504,8 @@ async function doViewVideo(cid){
     const result=await spendCredit(me.uid,cid);
     const c=allContents.find(x=>x.contentId===cid);
     meData.balance=result.balance;updateBal();closeM('mdl-detail');
-    if(result.charged)toast(`${fmt(result.price)}원 차감 / 잔액 ${fmt(result.balance)}원`,'success');
-    else toast('무료 재열람 (30일 이내 결제 이력)','success');
+    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n잔액: ${fmt(result.balance)}원`);
+    else alert('무료 재열람 (30일 이내 결제 이력)');
     openViewer(c?.videoUrl||result.url,result.title,'video');
   }catch(err){
     if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다.','warning');closeM('mdl-detail');openCharge();}
@@ -536,7 +536,7 @@ async function doDownloadPPTX(cid){
       tx.set(doc(db,'transactions',txId),{txId,userId:me.uid,type:'spend',amount:-1000,balanceAfter:nb,refType:'pptx_download',refId:cid,memo:'PPTX 다운로드: '+c.title,createdAt:serverTimestamp()});
     });
     await refreshMe();updateBal();
-    toast(`1,000원 차감 / 잔액 ${fmt(meData.balance)}원 — 다운로드를 시작합니다.`,'success');
+    alert(`💰 1,000원 차감\n잔액: ${fmt(meData.balance)}원`);
     const a=document.createElement('a');a.href=c.pptxUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
   }catch(err){
     if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다.','warning');openCharge();}
