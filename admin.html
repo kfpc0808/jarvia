@@ -48,7 +48,7 @@
         <div class="fr"><div class="fg"><label>이름 <i>*</i></label><input id="nu-name" required data-next="nu-loginid"></div><div class="fg"><label>아이디 <i>*</i></label><input id="nu-loginid" required data-next="nu-pw"></div></div>
         <div class="fr"><div class="fg"><label>비밀번호 <i>*</i></label><input id="nu-pw" type="password" required data-next="nu-email-id"></div><div class="fg"><label>이메일 <i>*</i></label><div style="display:flex;gap:4px;align-items:center"><input id="nu-email-id" style="flex:1" placeholder="아이디" data-next="nu-company"><span>@</span><input id="nu-email-domain" style="flex:1" placeholder="직접입력"><select id="nu-email-sel" style="flex:1" onchange="nuEmailSel()"><option value="">직접입력</option><option value="naver.com">naver.com</option><option value="gmail.com">gmail.com</option><option value="daum.net">daum.net</option><option value="hanmail.net">hanmail.net</option><option value="kakao.com">kakao.com</option><option value="nate.com">nate.com</option><option value="hotmail.com">hotmail.com</option></select></div></div></div>
         <div class="fr"><div class="fg"><label>소속사</label><input id="nu-company" data-next="nu-title"></div><div class="fg"><label>직함</label><input id="nu-title" data-next="nu-ph2"></div></div>
-        <div class="fr"><div class="fg"><label>연락처</label><div style="display:flex;gap:4px;align-items:center"><input id="nu-ph1" value="010" style="width:60px;text-align:center" readonly><span>-</span><input id="nu-ph2" inputmode="numeric" pattern="[0-9]*" maxlength="4" style="width:70px;text-align:center" placeholder="0000" data-next="nu-ph3"><span>-</span><input id="nu-ph3" inputmode="numeric" pattern="[0-9]*" maxlength="4" style="width:70px;text-align:center" placeholder="0000" data-next="nu-period"></div></div><div class="fg"><label>이용기간</label><div style="display:flex;gap:4px;align-items:center"><select id="nu-period"><option value="30">30일</option><option value="90">90일</option><option value="180">180일</option><option value="365">365일</option><option value="0">무제한</option></select></div></div></div>
+        <div class="fr"><div class="fg"><label>연락처</label><div style="display:flex;gap:4px;align-items:center"><input id="nu-ph1" value="010" style="width:60px;text-align:center" readonly><span>-</span><input id="nu-ph2" inputmode="numeric" pattern="[0-9]*" maxlength="4" style="width:70px;text-align:center" placeholder="0000" data-next="nu-ph3"><span>-</span><input id="nu-ph3" inputmode="numeric" pattern="[0-9]*" maxlength="4" style="width:70px;text-align:center" placeholder="0000" data-next="nu-start"></div></div><div class="fg"><label>이용기간</label><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="nu-start" type="date" style="width:150px" data-next="nu-end"><span>~</span><input id="nu-end" type="date" style="width:150px"><label style="margin-left:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="nu-unlimited" onchange="nuUnlimitedChk()"> 무제한</label></div></div></div>
         <button class="btn" onclick="createFreeUser()">생성</button> <button class="btn btn-sec" onclick="document.getElementById('add-user-form').classList.add('hidden')">취소</button>
       </div>
       <div class="toolbar mt"><input id="m-search" placeholder="이름/연락처/이메일 검색..." oninput="loadMembers()"></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>가입일</th><th>이름</th><th>아이디</th><th>소속</th><th>연락처</th><th>이용만료</th><th>잔액</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-members"></tbody></table></div></div>
@@ -91,14 +91,15 @@ function expiryStatus(m){
   if(m.expiresAt==='unlimited')return{text:'무제한',cls:'st-ok',short:'무제한'};
   if(!m.expiresAt)return{text:'미설정',cls:'st-warn',short:'미설정'};
   const exp=m.expiresAt.toDate?m.expiresAt.toDate():new Date(m.expiresAt);
-  const start=m.createdAt?(m.createdAt.toDate?m.createdAt.toDate():new Date(m.createdAt)):null;
+  const startSrc=m.startsAt||m.createdAt;
+  const start=startSrc?(startSrc.toDate?startSrc.toDate():new Date(startSrc)):null;
   const now=new Date(),diff=Math.ceil((exp-now)/(1000*60*60*24));
-  const startStr=start?fdate(m.createdAt):'';const endStr=fdate(m.expiresAt);
+  const startStr=start?fdate(startSrc):'';const endStr=fdate(m.expiresAt);
   if(diff<0)return{text:startStr+'~'+endStr+' (만료)',cls:'st-expired',short:'만료'};
   if(diff<=7)return{text:startStr+'~'+endStr+' ('+diff+'일 남음)',cls:'st-warn',short:diff+'일'};
   return{text:startStr+'~'+endStr+' ('+diff+'일 남음)',cls:'st-ok',short:diff+'일'};
 }
-function showAddUser(){document.getElementById('add-user-form').classList.toggle('hidden');}
+function showAddUser(){document.getElementById('add-user-form').classList.toggle('hidden');if(!$('nu-start').value)initNuDates();}
 
 let admUser=null,admData=null;
 
@@ -157,22 +158,23 @@ async function loadMembers(){
     list.sort((a,b)=>{const at=a.createdAt?.toDate?a.createdAt.toDate():new Date(0);const bt=b.createdAt?.toDate?b.createdAt.toDate():new Date(0);return bt-at;});
   }
   if(s)list=list.filter(m=>(m.name||'').toLowerCase().includes(s)||(m.phone||'').includes(s)||(m.email||'').toLowerCase().includes(s)||(m.loginId||'').toLowerCase().includes(s));
-  $('tb-members').innerHTML=list.length?list.map(m=>{const es=expiryStatus(m);return`<tr><td>${fdate(m.createdAt)}</td><td>${esc(m.name)}</td><td>${esc(m.loginId||'')}</td><td>${esc(m.company||'')}</td><td>${esc(m.phone||'')}</td><td><span class="${es.cls}">${es.text}</span></td><td>${fmt(m.balance)}원</td><td><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></td><td><button class="btn btn-sm" onclick="showMember('${m.id}')">상세</button></td></tr>`;}).join(''):'<tr><td colspan="9" class="tc">등록된 회원이 없습니다.</td></tr>';
+  $('tb-members').innerHTML=list.length?list.map(m=>{const es=expiryStatus(m);return`<tr><td>${fdate(m.createdAt)}</td><td>${esc(m.name)}</td><td>${esc(m.loginId||'')}</td><td>${esc(m.company||'')}</td><td>${esc(m.phone||'')}</td><td><span class="${es.cls}">${es.text}</span></td><td>${fmt(m.balance)}원</td><td><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></td><td><button class="btn btn-sm" onclick="showMember('${m.id}')">수정</button></td></tr>`;}).join(''):'<tr><td colspan="9" class="tc">등록된 회원이 없습니다.</td></tr>';
 }
 
 async function showMember(uid){
-  const d=await getDoc(doc(db,'users',uid));if(!d.exists())return;const m=d.data();
+  const d=await getDoc(doc(db,'users',uid));if(!d.exists()){toast('회원 정보를 찾을 수 없습니다.','error');return;}const m=d.data();
   const es=expiryStatus(m);
-  const vlSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));
-  const txSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));
-  $('member-inner').innerHTML=`<h2>${esc(m.name)} 회원 상세</h2>
+  let vlDocs=[],txDocs=[];
+  try{const vlSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));vlDocs=vlSnap.docs;}catch(e){console.warn('view_logs 인덱스 없음:',e.message);}
+  try{const txSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));txDocs=txSnap.docs;}catch(e){console.warn('transactions 인덱스 없음:',e.message);}
+  $('member-inner').innerHTML=`<h2>${esc(m.name)} 회원 수정</h2>
     <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div></div>
     <div style="margin:16px 0;display:flex;gap:8px"><button class="btn btn-sm" onclick="toggleStatus('${uid}','${m.status}')">${m.status==='active'?'정지하기':'해제하기'}</button></div>
     <h3>이용기간 연장/변경</h3>
     <div class="fr" style="margin:12px 0 16px"><div class="fg"><label>연장 기간</label><select id="ext-${uid}"><option value="30">30일</option><option value="90">90일</option><option value="180">180일</option><option value="365">365일</option><option value="0">무제한</option></select></div><button class="btn btn-sm btn-success" style="align-self:end" onclick="extendPeriod('${uid}')">연장</button><div class="fg"><label>만료일 직접 지정</label><input id="expdate-${uid}" type="date"></div><button class="btn btn-sm btn-warning" style="align-self:end" onclick="setExpDate('${uid}')">적용</button></div>
     <h3>잔액 조정</h3><div class="fr" style="margin-bottom:16px"><div class="fg"><label>금액(+/-)</label><input id="adj-amt-${uid}" type="number" placeholder="5000"></div><div class="fg"><label>사유(필수)</label><input id="adj-memo-${uid}" placeholder="사유 입력"></div><button class="btn btn-sm" style="align-self:end" onclick="doAdjust('${uid}')">조정</button></div>
-    <h3>이용 내역(최근 20건)</h3><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠ID</th><th>차감액</th></tr></thead><tbody>${vlSnap.docs.map(d=>{const l=d.data();return`<tr><td>${fdatetime(l.createdAt)}</td><td class="ov">${l.contentId}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`;}).join('')}</tbody></table>
-    <h3 class="mt">트랜잭션(최근 20건)</h3><table class="tbl"><thead><tr><th>날짜</th><th>유형</th><th>금액</th><th>잔액</th><th>메모</th></tr></thead><tbody>${txSnap.docs.map(d=>{const t=d.data();return`<tr><td>${fdatetime(t.createdAt)}</td><td>${t.type}</td><td style="color:${t.amount>=0?'var(--success)':'var(--danger)'}"> ${t.amount>=0?'+':''}${fmt(t.amount)}원</td><td>${fmt(t.balanceAfter)}원</td><td>${esc(t.memo||'')}</td></tr>`;}).join('')}</tbody></table>`;
+    <h3>이용 내역(최근 20건)</h3><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠ID</th><th>차감액</th></tr></thead><tbody>${vlDocs.map(d=>{const l=d.data();return`<tr><td>${fdatetime(l.createdAt)}</td><td class="ov">${l.contentId}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`;}).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>'}</tbody></table>
+    <h3 class="mt">트랜잭션(최근 20건)</h3><table class="tbl"><thead><tr><th>날짜</th><th>유형</th><th>금액</th><th>잔액</th><th>메모</th></tr></thead><tbody>${txDocs.map(d=>{const t=d.data();return`<tr><td>${fdatetime(t.createdAt)}</td><td>${t.type}</td><td style="color:${t.amount>=0?'var(--success)':'var(--danger)'}"> ${t.amount>=0?'+':''}${fmt(t.amount)}원</td><td>${fmt(t.balanceAfter)}원</td><td>${esc(t.memo||'')}</td></tr>`;}).join('')||'<tr><td colspan="5" class="tc">내역 없음</td></tr>'}</tbody></table>`;
   openM('mdl-member');
 }
 
@@ -191,14 +193,19 @@ async function doAdjust(uid){
 function nuEmailSel(){const v=$('nu-email-sel').value;$('nu-email-domain').value=v;$('nu-email-domain').readOnly=!!v;if(!v)$('nu-email-domain').focus();}
 function getNuEmail(){const id=($('nu-email-id')?.value||'').trim(),dm=($('nu-email-domain')?.value||'').trim();return id&&dm?id+'@'+dm:'';}
 function getNuPhone(){const p1=($('nu-ph1')?.value||'010'),p2=($('nu-ph2')?.value||'').trim(),p3=($('nu-ph3')?.value||'').trim();return p2&&p3?p1+'-'+p2+'-'+p3:p2||p3?p1+'-'+p2+'-'+p3:'';}
+function nuUnlimitedChk(){const ck=$('nu-unlimited').checked;$('nu-start').disabled=ck;$('nu-end').disabled=ck;if(ck){$('nu-start').value='';$('nu-end').value='';}}
+function initNuDates(){const today=new Date().toISOString().split('T')[0];$('nu-start').value=today;const d30=new Date(Date.now()+30*24*60*60*1000).toISOString().split('T')[0];$('nu-end').value=d30;}
 
 async function createFreeUser(){
   const name=$('nu-name').value.trim(),loginId=$('nu-loginid').value.trim(),pw=$('nu-pw').value;
   const email=getNuEmail(),phone=getNuPhone();
   const company=$('nu-company')?.value.trim()||'',title=$('nu-title')?.value.trim()||'';
-  const days=parseInt($('nu-period').value);
+  const isUnlimited=$('nu-unlimited').checked;
+  const startVal=$('nu-start').value,endVal=$('nu-end').value;
   if(!name||!loginId||!pw||!email)return toast('필수항목(이름,아이디,비밀번호,이메일)을 입력하세요.','error');
   if(pw.length<6)return toast('비밀번호 6자 이상','error');
+  if(!isUnlimited&&(!startVal||!endVal))return toast('이용기간(시작일/종료일)을 선택하세요.','error');
+  if(!isUnlimited&&startVal>endVal)return toast('종료일이 시작일보다 앞설 수 없습니다.','error');
   const idChk=await getDocs(query(collection(db,'users'),where('loginId','==',loginId),limit(1)));
   if(!idChk.empty)return toast('이미 사용 중인 아이디','error');
   try{
@@ -207,17 +214,23 @@ async function createFreeUser(){
     const cred=await createUserWithEmailAndPassword(secondAuth,email,pw);
     const uid=cred.user.uid;
     await signOut(secondAuth);
-    const expiresAt=days===0?'unlimited':Timestamp.fromDate(new Date(Date.now()+days*24*60*60*1000));
+    let startsAt=null,expiresAt='unlimited';
+    if(!isUnlimited){
+      const sd=new Date(startVal);sd.setHours(0,0,0,0);
+      const ed=new Date(endVal);ed.setHours(23,59,59,999);
+      startsAt=Timestamp.fromDate(sd);expiresAt=Timestamp.fromDate(ed);
+    }
     await setDoc(doc(db,'users',uid),{
       userId:uid,name,company,title,phone,email,address:'',loginId,
-      role:'free_user',status:'active',balance:0,expiresAt,
+      role:'free_user',status:'active',balance:0,startsAt,expiresAt,
       createdBy:admUser.uid,lastLoginAt:null,
       createdAt:serverTimestamp(),updatedAt:serverTimestamp()
     });
-    toast('무료사용자 생성 완료 (아이디: '+loginId+(days===0?', 무제한':','+days+'일')+')','success');
+    const periodTxt=isUnlimited?'무제한':startVal+'~'+endVal;
+    toast('무료사용자 생성 완료 (아이디: '+loginId+', '+periodTxt+')','success');
     document.getElementById('add-user-form').classList.add('hidden');
     ['nu-name','nu-loginid','nu-pw','nu-email-id','nu-email-domain','nu-company','nu-title','nu-ph2','nu-ph3'].forEach(id=>{const el=$(id);if(el){el.value='';el.readOnly=false;}});
-    $('nu-email-sel').value='';
+    $('nu-email-sel').value='';$('nu-unlimited').checked=false;nuUnlimitedChk();initNuDates();
     loadMembers();
   }catch(e){
     if(e.code==='auth/email-already-in-use')toast('이미 Auth에 존재하는 이메일','error');
@@ -339,7 +352,7 @@ async function delCO(id){if(!confirm('삭제?'))return;await deleteDoc(doc(db,'c
 // ═══ WINDOW EXPORTS ═══
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.extendPeriod=extendPeriod;window.setExpDate=setExpDate;
-window.nuEmailSel=nuEmailSel;
+window.nuEmailSel=nuEmailSel;window.nuUnlimitedChk=nuUnlimitedChk;window.initNuDates=initNuDates;
 
 // ── Enter키: 다음 입력창 이동 ──
 document.addEventListener('keydown',e=>{
