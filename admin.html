@@ -173,6 +173,9 @@ async function showMember(uid){
   $('member-inner').innerHTML=`<h2>${esc(m.name)} 회원 수정</h2>
     <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div></div>
     <div style="margin:16px 0;display:flex;gap:8px"><button class="btn btn-sm" onclick="toggleStatus('${uid}','${m.status}')">${m.status==='active'?'정지하기':'해제하기'}</button></div>
+    <h3>회원 정보 수정</h3>
+    <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>무료회원</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
+    <div class="fr" style="margin:0 0 16px"><div class="fg"><label>새 비밀번호</label><input id="ed-pw-${uid}" type="password" placeholder="변경 시에만 입력"></div><button class="btn btn-sm btn-warning" style="align-self:end" onclick="changeMemberPw('${uid}','${esc(m.email)}')">비밀번호 변경</button></div>
     <h3>이용기간 연장/변경</h3>
     <div class="fr" style="margin:12px 0 16px"><div class="fg"><label>연장 기간</label><select id="ext-${uid}"><option value="30">30일</option><option value="90">90일</option><option value="180">180일</option><option value="365">365일</option><option value="0">무제한</option></select></div><button class="btn btn-sm btn-success" style="align-self:end" onclick="extendPeriod('${uid}')">연장</button><div class="fg"><label>만료일 직접 지정</label><input id="expdate-${uid}" type="date"></div><button class="btn btn-sm btn-warning" style="align-self:end" onclick="setExpDate('${uid}')">적용</button></div>
     <h3>잔액 조정</h3><div class="fr" style="margin-bottom:16px"><div class="fg"><label>금액(+/-)</label><input id="adj-amt-${uid}" type="number" placeholder="5000"></div><div class="fg"><label>사유(필수)</label><input id="adj-memo-${uid}" placeholder="사유 입력"></div><button class="btn btn-sm" style="align-self:end" onclick="doAdjust('${uid}')">조정</button></div>
@@ -182,6 +185,31 @@ async function showMember(uid){
 }
 
 async function toggleStatus(uid,cur){const ns=cur==='active'?'suspended':'active';if(!confirm('회원을 '+(ns==='suspended'?'정지':'해제')+'하시겠습니까?'))return;await updateDoc(doc(db,'users',uid),{status:ns,updatedAt:serverTimestamp()});toast('상태 변경 완료','success');closeM('mdl-member');loadMembers();}
+
+async function updateMemberInfo(uid){
+  const name=$('ed-name-'+uid).value.trim();
+  const role=$('ed-role-'+uid).value;
+  if(!name)return toast('이름을 입력하세요.','error');
+  if(!['user','free_user'].includes(role))return toast('올바른 회원유형을 선택하세요.','error');
+  try{
+    await updateDoc(doc(db,'users',uid),{name,role,updatedAt:serverTimestamp()});
+    toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();
+  }catch(e){toast('수정 실패: '+e.message,'error');}
+}
+
+async function changeMemberPw(uid,email){
+  const pw=$('ed-pw-'+uid).value;
+  if(!pw)return toast('새 비밀번호를 입력하세요.','error');
+  if(pw.length<6)return toast('비밀번호는 6자 이상이어야 합니다.','error');
+  if(!confirm('비밀번호를 변경하시겠습니까?'))return;
+  try{
+    const {getAuth:gA,signInWithEmailAndPassword:sI,updatePassword:uP}=await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
+    // Admin SDK 없이 클라이언트에서 비밀번호 변경은 제한적이므로 비밀번호 재설정 이메일 발송
+    const {sendPasswordResetEmail:sR}=await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
+    await sR(auth,email);
+    toast('비밀번호 재설정 이메일이 '+email+'로 발송되었습니다.','success');
+  }catch(e){toast('발송 실패: '+e.message,'error');}
+}
 
 function toggleAllMembers(){const ck=$('m-chk-all').checked;document.querySelectorAll('.m-chk').forEach(c=>c.checked=ck);}
 async function deleteSelectedMembers(){
@@ -460,7 +488,7 @@ document.addEventListener('keydown',e=>{
     const idx=inputs.indexOf(e.target);if(idx>=0&&idx<inputs.length-1)inputs[idx+1].focus();
   }
 });
-window.loadMembers=loadMembers;window.showMember=showMember;window.toggleStatus=toggleStatus;window.doAdjust=doAdjust;
+window.loadMembers=loadMembers;window.showMember=showMember;window.toggleStatus=toggleStatus;window.doAdjust=doAdjust;window.updateMemberInfo=updateMemberInfo;window.changeMemberPw=changeMemberPw;
 window.toggleAllMembers=toggleAllMembers;window.deleteSelectedMembers=deleteSelectedMembers;
 window.loadAdmins=loadAdmins;window.createAdmin=createAdmin;window.delAdmin=delAdmin;
 window.showCF=showCF;window.editCont=editCont;window.delCont=delCont;window.saveCont=saveCont;window.loadConts=loadConts;window.onCfTypeChange=onCfTypeChange;window.syncGitHub=syncGitHub;window.renderConts=renderConts;window.contPg=contPg;window.toggleAllChk=toggleAllChk;window.delSelected=delSelected;
