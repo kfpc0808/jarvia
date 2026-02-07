@@ -244,7 +244,7 @@ let _tt;
 function toast(msg,type=''){const t=$('toast');t.textContent=msg;t.className='toast'+(type?' toast-'+type:'');t.classList.remove('hidden');clearTimeout(_tt);_tt=setTimeout(()=>t.classList.add('hidden'),3000);}
 
 // ── Globals ──
-let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set();
+let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set(),thumbSettings=null;
 
 // ── Navigation ──
 const PAGES=['login','register','resetpw','main','mypage','partnership','notices'];
@@ -259,7 +259,8 @@ function typeBadge(t){const l={video:'영상',brief:'이슈브리핑',audio:'오
 const _thumbColors={video:['#1a237e','#283593'],brief:['#0277bd','#0288d1'],audio:['#6a1b9a','#7b1fa2'],report:['#2e7d32','#388e3c'],closing:['#e65100','#ef6c00']};
 function genThumb(type,title){const cv=document.createElement('canvas');cv.width=400;cv.height=220;const ctx=cv.getContext('2d');const c=_thumbColors[type]||['#37474f','#455a64'];const grd=ctx.createLinearGradient(0,0,400,220);grd.addColorStop(0,c[0]);grd.addColorStop(1,c[1]);ctx.fillStyle=grd;ctx.fillRect(0,0,400,220);ctx.fillStyle='rgba(255,255,255,0.12)';ctx.beginPath();ctx.arc(340,40,80,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(60,190,50,0,Math.PI*2);ctx.fill();const icon=typeIcon(type);ctx.font='48px serif';ctx.textAlign='center';ctx.fillStyle='rgba(255,255,255,0.3)';ctx.fillText(icon,200,80);ctx.font='bold 18px "Pretendard",sans-serif';ctx.fillStyle='#fff';ctx.textAlign='center';const tokens=title.replace(/([_\-])/g,' $1 ').replace(/([\(\)\[\]])/g,' $1').split(/\s+/).filter(t=>t);let lines=[],line='';for(const w of tokens){const test=line?line+' '+w:w;if(ctx.measureText(test).width>340){if(line)lines.push(line);line=w;}else line=test;}if(line)lines.push(line);if(lines.length>3){lines=lines.slice(0,3);lines[2]=lines[2].length>20?lines[2].slice(0,20)+'…':lines[2];}const y0=130-(lines.length-1)*14;lines.forEach((l,i)=>ctx.fillText(l,200,y0+i*28));return cv.toDataURL('image/png',0.8);}
 const _thumbCache={};
-function getThumb(c){const k=c.contentId;if(!_thumbCache[k])_thumbCache[k]=genThumb(c.type,c.title);return _thumbCache[k];}
+function getThumb(c){const k=c.contentId;if(_thumbCache[k])return _thumbCache[k];if(thumbSettings&&thumbSettings[c.type]){let apply=true;if(thumbSettings.scope==='after'&&thumbSettings.afterDate&&c.createdAt){const d=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);apply=d>=new Date(thumbSettings.afterDate);}if(apply){_thumbCache[k]=genThumbImg(thumbSettings[c.type],c.title);return _thumbCache[k];}}_thumbCache[k]=genThumb(c.type,c.title);return _thumbCache[k];}
+function genThumbImg(imgUrl,title){const cv=document.createElement('canvas');cv.width=400;cv.height=220;const ctx=cv.getContext('2d');const img=new Image();img.crossOrigin='anonymous';img.src=imgUrl;try{ctx.drawImage(img,0,0,400,220);}catch(e){ctx.fillStyle='#37474f';ctx.fillRect(0,0,400,220);}ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(0,0,400,220);ctx.font='bold 18px "Pretendard",sans-serif';ctx.fillStyle='#fff';ctx.textAlign='center';const tokens=title.replace(/([_\-])/g,' $1 ').replace(/([\(\)\[\]])/g,' $1').split(/\s+/).filter(t=>t);let lines=[],line='';for(const w of tokens){const test=line?line+' '+w:w;if(ctx.measureText(test).width>340){if(line)lines.push(line);line=w;}else line=test;}if(line)lines.push(line);if(lines.length>3){lines=lines.slice(0,3);lines[2]=lines[2].length>20?lines[2].slice(0,20)+'…':lines[2];}const y0=120-(lines.length-1)*14;lines.forEach((l,i)=>ctx.fillText(l,200,y0+i*28));return cv.toDataURL('image/png',0.8);}
 function cardHTML(c){const bg=c.thumbnailUrl?c.thumbnailUrl:getThumb(c);const subLabel=c.subType?`<span class="badge" style="background:#E8EAF6;color:#283593;margin-left:4px">${esc(c.subType)}</span>`:'';return`<div class="card" onclick="showDetail('${c.contentId}')"><div class="card-thumb" style="background-image:url('${bg}');background-size:cover;background-position:center"></div><div class="card-body"><h3>${esc(c.title)}</h3><p>${esc(c.summary||'')}</p><div class="card-foot"><span class="price">${fmt(c.price)}원</span>${typeBadge(c.type)}${subLabel}</div></div></div>`;}
 
 // ── 이메일 도메인 선택 ──
@@ -381,6 +382,7 @@ async function loadMain(){
     allCats=catSnap.docs.map(d=>d.data());
     const cSnap=await getDocs(query(collection(db,'contents'),where('isActive','==',true),orderBy('sortOrder')));
     allContents=cSnap.docs.map(d=>d.data());
+    try{const ts=await getDoc(doc(db,'settings','thumb_settings'));thumbSettings=ts.exists()?ts.data():null;}catch(e){thumbSettings=null;}
     if(me){const fSnap=await getDocs(query(collection(db,'favorites'),where('userId','==',me.uid)));myFavSet=new Set(fSnap.docs.map(d=>d.data().contentId));}
     _curCat='all';_curSub='all';document.querySelectorAll('.cat-tab').forEach((t,i)=>t.classList.toggle('active',i===0));$('sub-tab-area').classList.add('hidden');
     try{await loadRecent();}catch(e){console.warn('loadRecent:',e);}renderGrid(allContents);
