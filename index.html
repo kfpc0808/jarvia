@@ -37,6 +37,9 @@
 .hidden{display:none!important}.empty{text-align:center;padding:48px;color:var(--text-lt);font-size:15px}.mt{margin-top:16px}
 @media(max-width:768px){.header-nav{display:none}.mob-menu-btn{display:block}.fr{flex-direction:column;gap:0}.auth-card{padding:24px}.hero h1{font-size:24px}.grid{grid-template-columns:1fr}.filter-bar{flex-direction:column}.filter-bar input,.filter-bar select{min-width:100%}.charge-grid{grid-template-columns:1fr}.tbl{font-size:12px}.tbl th,.tbl td{padding:8px 6px}.mdl-box{padding:20px}.bal-card strong{font-size:22px}}
   </style>
+  <!-- INNOPAY PG SDK (구버전) -->
+  <script src="https://pg.innopay.co.kr/ipay/js/jquery-2.1.4.min.js"></script>
+  <script src="https://pg.innopay.co.kr/ipay/js/innopay-2.0.js"></script>
 </head>
 <body>
 
@@ -566,23 +569,99 @@ function selOpt(el,id,paid,credit){document.querySelectorAll('.ch-opt').forEach(
 
 async function doCharge(){
   if(!_selOpt||!me)return;
-  const btn=$('charge-btn');btn.disabled=true;btn.textContent='처리중...';
+  const btn=$('charge-btn');btn.disabled=true;btn.textContent='결제창 호출중...';
+  try{
+    const moid='JAVIA'+Date.now()+Math.random().toString(36).substr(2,9);
+    if(typeof innopay==='undefined'){toast('결제 모듈을 불러오는 중입니다. 잠시 후 다시 시도해주세요.','error');return;}
+    // 결제 정보를 전역에 저장 (콜백에서 사용)
+    window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id};
+    innopay.goPay({
+      PayMethod:'CARD',
+      MID:'pgkfpcen5m',
+      MerchantKey:'c/odh029sWya/US4LINs89lb/8PD0qlbZjEkckW5L3toSMCpD4TQ8IWquueuKFpZm8XY/mVuxrsygQD9P9CooQ==',
+      GoodsName:'크레딧 충전 '+fmt(_selOpt.credit)+'원',
+      Amt:String(_selOpt.paid),
+      Moid:moid,
+      BuyerName:meData.name||me.email.split('@')[0],
+      BuyerEmail:meData.email||me.email,
+      BuyerTel:(meData.phone||'01000000000').replace(/-/g,''),
+      ResultYN:'Y'
+    });
+  }catch(err){toast('결제 요청 실패: '+err.message,'error');}
+  finally{btn.disabled=false;btn.textContent='결제하기';}
+}
+
+// INNOPAY 결제 결과 콜백 (전역 함수 - SDK가 호출, 함수명 변경불가)
+window.innopay_result=function(data){
+  console.log('💳 INNOPAY 결과:',data);
+  const resultCode=String(data.ResultCode||'').trim();
+  if(resultCode==='0000'||resultCode==='3001'){
+    // 결제 성공 → 포인트 적립
+    chargeAfterPayment({tid:data.TID,amt:data.Amt,moid:data.MOID,authCode:data.AuthCode||'',cardNum:data.CardNum||'',cardName:data.fn_name||''});
+  }else if(resultCode==='U000'){
+    console.log('💳 결제 취소됨');
+  }else{
+    toast('결제가 완료되지 않았습니다. ['+resultCode+'] '+(data.ResultMsg||''),'error');
+  }
+};
+
+// 결제 성공 후 크레딧 적립 (Firestore 트랜잭션)
+async function chargeAfterPayment(payData){
+  const pending=window._pendingCharge;
+  if(!pending||!me){toast('결제 정보 오류. 고객센터에 문의해주세요.','error');return;}
   try{
     const pid=gid();
-    await setDoc(doc(db,'payments',pid),{paymentId:pid,userId:me.uid,paidAmount:_selOpt.paid,chargeAmount:_selOpt.credit,provider:'TBD',status:'paid',createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    const paidAmount=parseInt(payData.amt)||pending.paid;
+    const chargeAmount=pending.credit;
+    // 1) 결제 기록 저장
+    await setDoc(doc(db,'payments',pid),{
+      paymentId:pid,userId:me.uid,
+      paidAmount,chargeAmount,
+      provider:'INNOPAY',status:'paid',
+      tid:payData.tid,moid:payData.moid,
+      authCode:payData.authCode,cardNum:payData.cardNum,cardName:payData.cardName,
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+    });
+    // 2) 잔액 증가 + 트랜잭션 기록
     const uRef=doc(db,'users',me.uid);
     await runTransaction(db,async tx=>{
       const ud=(await tx.get(uRef)).data();
-      const nb=ud.balance+_selOpt.credit;
+      const nb=(ud.balance||0)+chargeAmount;
       tx.update(uRef,{balance:nb,updatedAt:serverTimestamp()});
       const tid=gid();
-      tx.set(doc(db,'transactions',tid),{txId:tid,userId:me.uid,type:'charge',amount:_selOpt.credit,balanceAfter:nb,refType:'payment',refId:pid,createdAt:serverTimestamp()});
+      tx.set(doc(db,'transactions',tid),{txId:tid,userId:me.uid,type:'charge',amount:chargeAmount,balanceAfter:nb,refType:'payment',refId:pid,createdAt:serverTimestamp()});
     });
     await refreshMe();closeM('mdl-charge');
-    toast(`${fmt(_selOpt.credit)}원 충전 완료! 잔액: ${fmt(meData.balance)}원`,'success');
-  }catch(err){toast('충전 실패: '+err.message,'error');}
-  finally{btn.disabled=false;btn.textContent='결제하기';}
+    toast(`${fmt(chargeAmount)}원 충전 완료! 잔액: ${fmt(meData.balance)}원`,'success');
+    window._pendingCharge=null;
+  }catch(err){
+    console.error('❌ 포인트 적립 오류:',err);
+    toast('결제는 완료되었으나 포인트 적립 중 오류 발생. 고객센터에 문의해주세요.','error');
+  }
 }
+
+// 페이지 로드 시 URL 파라미터 결제 결과 확인 (returnUrl 백업용)
+function checkPaymentResult(){
+  const urlParams=new URLSearchParams(window.location.search);
+  const hasResult=urlParams.get('payment')==='result'||urlParams.get('tid')||urlParams.get('ResultCode');
+  if(hasResult){
+    const payData={
+      tid:urlParams.get('tid')||urlParams.get('TID'),
+      amt:urlParams.get('amt')||urlParams.get('Amt'),
+      moid:urlParams.get('moid')||urlParams.get('Moid'),
+      resultCode:urlParams.get('resultCode')||urlParams.get('ResultCode'),
+      resultMsg:urlParams.get('resultMsg')||urlParams.get('ResultMsg'),
+      authCode:urlParams.get('authCode')||urlParams.get('AuthCode'),
+      cardNum:urlParams.get('cardNum')||urlParams.get('CardNum')
+    };
+    console.log('💳 URL 결제 결과:',payData);
+    window.history.replaceState({},document.title,window.location.pathname);
+    const rc=String(payData.resultCode||'').trim();
+    if(rc==='0000'||rc==='3001'){chargeAfterPayment(payData);}
+    else if(rc&&rc!=='U000'){toast('결제가 완료되지 않았습니다. ['+ rc+'] '+(payData.resultMsg||''),'error');}
+  }
+}
+checkPaymentResult();
 
 // ════════════════════════════════════════
 //  MYPAGE
@@ -656,7 +735,7 @@ document.addEventListener('keydown',e=>{if(!$('mdl-viewer').classList.contains('
 window.nav=nav;window.openM=openM;window.closeM=closeM;window.mpTab=mpTab;
 window.doLogin=doLogin;window.doRegister=doRegister;window.doResetPw=doResetPw;window.doLogout=doLogout;
 window.showDetail=showDetail;window.doView=doView;window.doFav=doFav;window.doViewVideo=doViewVideo;window.doDownloadPPTX=doDownloadPPTX;
-window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;
+window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;
 window.doUpdateProfile=doUpdateProfile;window.doPartnership=doPartnership;
 window.filterList=filterList;window.filterCat=filterCat;window.filterSub=filterSub;window.showTerms=showTerms;window.closeViewer=closeViewer;window.gridPg=gridPg;
 window.rgEmailSel=rgEmailSel;
