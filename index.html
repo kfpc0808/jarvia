@@ -383,10 +383,10 @@ onAuthStateChanged(auth,async u=>{
 async function loadMain(){
   try{
     allCats=[];allContents=[];
-    const catSnap=await getDocs(query(collection(db,'categories'),where('isActive','==',true),orderBy('sortOrder')));
-    allCats=catSnap.docs.map(d=>d.data());
-    const cSnap=await getDocs(query(collection(db,'contents'),where('isActive','==',true),orderBy('sortOrder')));
-    allContents=cSnap.docs.map(d=>d.data());
+    const catSnap=await getDocs(collection(db,'categories'));
+    allCats=catSnap.docs.map(d=>d.data()).filter(c=>c.isActive===true).sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0));
+    const cSnap=await getDocs(collection(db,'contents'));
+    allContents=cSnap.docs.map(d=>d.data()).filter(c=>c.isActive===true).sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0));
     try{const ts=await getDoc(doc(db,'settings','thumb_settings'));thumbSettings=ts.exists()?ts.data():null;}catch(e){thumbSettings=null;}
     if(me){const fSnap=await getDocs(query(collection(db,'favorites'),where('userId','==',me.uid)));myFavSet=new Set(fSnap.docs.map(d=>d.data().contentId));}
     _curCat='all';_curSub='all';document.querySelectorAll('.cat-tab').forEach((t,i)=>t.classList.toggle('active',i===0));$('sub-tab-area').classList.add('hidden');
@@ -401,7 +401,7 @@ let _curCat='all',_curSub='all';
 function filterCat(cat,btn){_curCat=cat;_curSub='all';document.querySelectorAll('.cat-tab').forEach(t=>t.classList.remove('active'));if(btn)btn.classList.add('active');const titles={all:'전체 콘텐츠',video:'영상콘텐츠',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT'};$('sec-title-main').textContent=titles[cat]||'전체 콘텐츠';if(cat==='report'||cat==='closing'){$('sub-tab-area').classList.remove('hidden');document.querySelectorAll('.sub-tab').forEach((t,i)=>t.classList.toggle('active',i===0));}else{$('sub-tab-area').classList.add('hidden');}filterList();}
 function filterSub(sub,btn){_curSub=sub;document.querySelectorAll('.sub-tab').forEach(t=>t.classList.remove('active'));if(btn)btn.classList.add('active');filterList();}
 function filterList(){const kw=$('f-keyword').value.toLowerCase();let f=allContents;if(_curCat!=='all')f=f.filter(c=>c.type===_curCat);if((_curCat==='report'||_curCat==='closing')&&_curSub!=='all')f=f.filter(c=>(c.subType||'')=== _curSub);if(kw)f=f.filter(c=>c.title.toLowerCase().includes(kw)||(c.summary||'').toLowerCase().includes(kw));renderGrid(f);}
-async function loadRecent(){if(!me)return;const snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(8)));if(snap.empty){$('recent-sec').classList.add('hidden');return;}const seen=new Set(),ids=[];snap.docs.forEach(d=>{const id=d.data().contentId;if(!seen.has(id)){seen.add(id);ids.push(id);}});const items=allContents.filter(c=>ids.includes(c.contentId)).slice(0,4);if(!items.length){$('recent-sec').classList.add('hidden');return;}$('recent-sec').classList.remove('hidden');$('recent-grid').innerHTML=items.map(c=>cardHTML(c)).join('');}
+async function loadRecent(){if(!me)return;let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(8)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={empty:all.empty,docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,8)};}if(snap.empty){$('recent-sec').classList.add('hidden');return;}const seen=new Set(),ids=[];snap.docs.forEach(d=>{const id=d.data().contentId;if(!seen.has(id)){seen.add(id);ids.push(id);}});const items=allContents.filter(c=>ids.includes(c.contentId)).slice(0,4);if(!items.length){$('recent-sec').classList.add('hidden');return;}$('recent-sec').classList.remove('hidden');$('recent-grid').innerHTML=items.map(c=>cardHTML(c)).join('');}
 
 // ════════════════════════════════════════
 //  CONTENT DETAIL & VIEW
@@ -457,7 +457,7 @@ async function spendCredit(uid,cid){
     const uDoc=await tx.get(uRef),cDoc=await tx.get(cRef);
     if(!uDoc.exists()||!cDoc.exists())throw new Error('데이터 오류');
     const ud=uDoc.data(),cd=cDoc.data(),price=cd.price,now=new Date();
-    const vSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),where('contentId','==',cid),where('expiresAt','>',Timestamp.fromDate(now)),orderBy('expiresAt','desc'),limit(1)));
+    let vSnap;try{vSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),where('contentId','==',cid),where('expiresAt','>',Timestamp.fromDate(now)),orderBy('expiresAt','desc'),limit(1)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),where('contentId','==',cid)));vSnap={empty:true,docs:[]};const valid=all.docs.filter(d=>{const ex=d.data().expiresAt;return ex&&ex.toMillis()>now.getTime();}).sort((a,b)=>(b.data().expiresAt?.toMillis()??0)-(a.data().expiresAt?.toMillis()??0));if(valid.length){vSnap={empty:false,docs:[valid[0]]};}}
     if(!vSnap.empty){
       const ex=vSnap.docs[0].data();
       const logRef=doc(db,'view_logs',gid());
@@ -563,7 +563,7 @@ async function doFav(cid,btn){
 let _selOpt=null;
 async function openCharge(){
   try{
-    const snap=await getDocs(query(collection(db,'charge_options'),where('isActive','==',true),orderBy('sortOrder')));
+    let snap;try{snap=await getDocs(query(collection(db,'charge_options'),where('isActive','==',true),orderBy('sortOrder')));}catch(e){snap=await getDocs(collection(db,'charge_options'));snap={docs:snap.docs.filter(d=>d.data().isActive===true).sort((a,b)=>(a.data().sortOrder||0)-(b.data().sortOrder||0))};}
     const opts=snap.docs.map(d=>d.data());
     if(!opts.length){$('charge-opts').innerHTML='<div class="empty">충전 옵션이 없습니다.</div>';$('charge-btn').disabled=true;openM('mdl-charge');return;}
     $('charge-opts').innerHTML=opts.map(o=>`<div class="ch-opt" onclick="selOpt(this,'${o.optionId}',${o.paidAmount},${o.chargeAmount})"><div class="ch-amt">${fmt(o.paidAmount)}원</div>${o.chargeAmount>o.paidAmount?`<div class="ch-bonus">+${fmt(o.chargeAmount-o.paidAmount)}원 보너스!</div>`:`<div class="ch-bonus">${esc(o.label||'')}</div>`}</div>`).join('');
@@ -694,7 +694,7 @@ async function doUpdateProfile(e){
   await refreshMe();toast('정보가 수정되었습니다.','success');
 }
 async function loadUsage(){
-  const snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));
+  let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
   const logs=snap.docs.map(d=>d.data());
   if(!logs.length){$('tb-usage').innerHTML='<tr><td colspan="4" class="tc">이용 내역이 없습니다.</td></tr>';return;}
   const cMap={};
@@ -702,8 +702,8 @@ async function loadUsage(){
   $('tb-usage').innerHTML=logs.map(l=>`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(cMap[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'<span class="t-free">무료</span>'}</td><td>${fdate(l.expiresAt)}</td></tr>`).join('');
 }
 async function loadChargeHistory(){
-  const snap=await getDocs(query(collection(db,'payments'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));
-  const list=snap.docs.map(d=>d.data());
+  let psnap;try{psnap=await getDocs(query(collection(db,'payments'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'payments'),where('userId','==',me.uid)));psnap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
+  const list=psnap.docs.map(d=>d.data());
   if(!list.length){$('tb-charges').innerHTML='<tr><td colspan="4" class="tc">충전 내역이 없습니다.</td></tr>';return;}
   const sm={paid:'완료',ready:'대기',failed:'실패',canceled:'취소',refunded:'환불'};
   $('tb-charges').innerHTML=list.map(p=>`<tr><td>${fdatetime(p.createdAt)}</td><td>${fmt(p.paidAmount)}원</td><td>${fmt(p.chargeAmount)}원</td><td>${sm[p.status]||p.status}</td></tr>`).join('');
@@ -751,12 +751,10 @@ async function showTerms(type){
   const title=type==='tos'?'이용약관':'개인정보처리방침';
   let content='약관 내용이 등록되지 않았습니다.';
   try{
-    const snap=await getDocs(query(collection(db,'terms'),where('type','==',ttype),where('isActive','==',true),orderBy('version','desc'),limit(1)));
-    if(!snap.empty)content=esc(snap.docs[0].data().content);
-  }catch(e){
-    console.warn('terms index fallback:',e);
-    try{const snap2=await getDocs(collection(db,'terms'));const list=snap2.docs.map(d=>d.data()).filter(t=>t.type===ttype&&t.isActive).sort((a,b)=>(b.version||0)-(a.version||0));if(list.length)content=esc(list[0].content);}catch(e2){console.error('terms load fail:',e2);}
-  }
+    const snap=await getDocs(collection(db,'terms'));
+    const list=snap.docs.map(d=>d.data()).filter(t=>t.type===ttype&&t.isActive===true).sort((a,b)=>(b.version||0)-(a.version||0));
+    if(list.length)content=esc(list[0].content);
+  }catch(e){console.error('terms load fail:',e);}
   $('terms-body').innerHTML=`<h2 style="margin-bottom:16px">${title}</h2><div style="white-space:pre-wrap;line-height:1.8;font-size:14px">${content}</div>`;
   openM('mdl-terms');
 }
