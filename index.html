@@ -615,8 +615,9 @@ async function doCharge(){
   try{
     const moid='JAVIA'+Date.now()+Math.random().toString(36).substr(2,9);
     if(typeof innopay==='undefined'){toast('결제 모듈을 불러오는 중입니다. 잠시 후 다시 시도해주세요.','error');return;}
-    // 결제 정보를 전역에 저장 (콜백에서 사용)
+    // 결제 정보를 전역 + sessionStorage에 저장 (모바일 리다이렉트 대응)
     window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id};
+    try{sessionStorage.setItem('_pendingCharge',JSON.stringify(window._pendingCharge));}catch(e){}
     innopay.goPay({
       PayMethod:'CARD',
       MID:'pgkfpcen5m',
@@ -649,7 +650,11 @@ window.innopay_result=function(data){
 
 // 결제 성공 후 크레딧 적립 (Firestore 트랜잭션)
 async function chargeAfterPayment(payData){
-  const pending=window._pendingCharge;
+  let pending=window._pendingCharge;
+  // 모바일 리다이렉트 후 전역변수가 사라진 경우 sessionStorage에서 복구
+  if(!pending){try{const s=sessionStorage.getItem('_pendingCharge');if(s)pending=JSON.parse(s);}catch(e){}}
+  // pending 없으면 URL의 amt로 직접 적립 (최후 fallback)
+  if(!pending&&payData.amt){pending={paid:parseInt(payData.amt),credit:parseInt(payData.amt),moid:payData.moid||''};}
   if(!pending||!me){toast('결제 정보 오류. 고객센터에 문의해주세요.','error');return;}
   try{
     const pid=gid();
@@ -676,6 +681,7 @@ async function chargeAfterPayment(payData){
     await refreshMe();closeM('mdl-charge');
     toast(`${fmt(chargeAmount)}원 충전 완료! 잔액: ${fmt(meData.balance)}원`,'success');
     window._pendingCharge=null;
+    try{sessionStorage.removeItem('_pendingCharge');}catch(e){}
   }catch(err){
     console.error('❌ 포인트 적립 오류:',err);
     toast('결제는 완료되었으나 포인트 적립 중 오류 발생. 고객센터에 문의해주세요.','error');
