@@ -617,7 +617,7 @@ async function doCharge(){
     const moid='JAVIA'+Date.now()+Math.random().toString(36).substr(2,9);
     if(typeof innopay==='undefined'){toast('결제 모듈을 불러오는 중입니다. 잠시 후 다시 시도해주세요.','error');return;}
     // 결제 정보를 전역 + localStorage에 저장 (모바일 리다이렉트 대응)
-    window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id,ts:Date.now()};
+    window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id,userId:me.uid,ts:Date.now()};
     try{localStorage.setItem('_pendingCharge',JSON.stringify(window._pendingCharge));}catch(e){}
     innopay.goPay({
       PayMethod:'CARD',
@@ -640,12 +640,15 @@ window.innopay_result=function(data){
   console.log('💳 INNOPAY 결과:',data);
   const resultCode=String(data.ResultCode||'').trim();
   if(resultCode==='0000'||resultCode==='3001'){
-    // 결제 성공 → 포인트 적립
+    // 결제 성공 → 포인트 적립 (PC 콜백 성공이므로 localStorage 정리)
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
     chargeAfterPayment({tid:data.TID,amt:data.Amt,moid:data.MOID,authCode:data.AuthCode||'',cardNum:data.CardNum||'',cardName:data.fn_name||''});
   }else if(resultCode==='U000'){
     console.log('💳 결제 취소됨');
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
   }else{
     toast('결제가 완료되지 않았습니다. ['+resultCode+'] '+(data.ResultMsg||''),'error');
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
   }
 };
 
@@ -718,16 +721,30 @@ function checkPaymentResult(){
     const pending=JSON.parse(s);
     // 10분 이내 결제 건만 처리 (오래된 건은 무시)
     if(!pending.ts||Date.now()-pending.ts>600000){localStorage.removeItem('_pendingCharge');return;}
+    // 현재 로그인 사용자와 결제 사용자 일치 확인
+    if(pending.userId&&pending.userId!==me.uid){return;}
     // Firestore payments에 이미 적립된 건인지 확인 (중복 방지)
     getDocs(query(collection(db,'payments'),where('userId','==',me.uid),where('moid','==',pending.moid),limit(1))).then(snap=>{
       if(!snap.empty){console.log('💳 이미 적립된 결제건');localStorage.removeItem('_pendingCharge');return;}
       // 미적립 결제 → 적립 처리
-      console.log('💳 localStorage 미처리 결제 발견, 적립 처리:',pending);
+      console.log('💳 미처리 결제 발견, 적립 처리:',pending);
       chargeAfterPayment({tid:'MOB_'+pending.moid,amt:String(pending.paid),moid:pending.moid,authCode:'',cardNum:'',cardName:''});
     }).catch(e=>{console.error('💳 미처리 결제 확인 오류:',e);});
   }catch(e){}
 }
 // checkPaymentResult는 onAuthStateChanged에서 로그인 완료 후 호출됨
+
+// 모바일 결제 후 앱 전환/복귀 대응: 화면이 다시 활성화될 때 결제결과 재확인
+let _lastPayCheck=0;
+['focus','pageshow','visibilitychange'].forEach(ev=>{
+  window.addEventListener(ev,()=>{
+    if(ev==='visibilitychange'&&document.visibilityState!=='visible')return;
+    // 중복 실행 방지: 3초 이내 재호출 무시
+    if(Date.now()-_lastPayCheck<3000)return;
+    _lastPayCheck=Date.now();
+    if(me&&meData)checkPaymentResult();
+  });
+});
 
 // ════════════════════════════════════════
 //  MYPAGE
