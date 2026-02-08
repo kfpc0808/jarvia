@@ -616,9 +616,9 @@ async function doCharge(){
   try{
     const moid='JAVIA'+Date.now()+Math.random().toString(36).substr(2,9);
     if(typeof innopay==='undefined'){toast('결제 모듈을 불러오는 중입니다. 잠시 후 다시 시도해주세요.','error');return;}
-    // 결제 정보를 전역 + sessionStorage에 저장 (모바일 리다이렉트 대응)
-    window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id};
-    try{sessionStorage.setItem('_pendingCharge',JSON.stringify(window._pendingCharge));}catch(e){}
+    // 결제 정보를 전역 + localStorage에 저장 (모바일 리다이렉트 대응)
+    window._pendingCharge={moid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id,ts:Date.now()};
+    try{localStorage.setItem('_pendingCharge',JSON.stringify(window._pendingCharge));}catch(e){}
     innopay.goPay({
       PayMethod:'CARD',
       MID:'pgkfpcen5m',
@@ -652,8 +652,8 @@ window.innopay_result=function(data){
 // 결제 성공 후 크레딧 적립 (Firestore 트랜잭션)
 async function chargeAfterPayment(payData){
   let pending=window._pendingCharge;
-  // 모바일 리다이렉트 후 전역변수가 사라진 경우 sessionStorage에서 복구
-  if(!pending){try{const s=sessionStorage.getItem('_pendingCharge');if(s)pending=JSON.parse(s);}catch(e){}}
+  // 모바일 리다이렉트 후 전역변수가 사라진 경우 localStorage에서 복구
+  if(!pending){try{const s=localStorage.getItem('_pendingCharge');if(s)pending=JSON.parse(s);}catch(e){}}
   // pending 없으면 URL의 amt로 직접 적립 (최후 fallback)
   if(!pending&&payData.amt){pending={paid:parseInt(payData.amt),credit:parseInt(payData.amt),moid:payData.moid||''};}
   if(!pending||!me){toast('결제 정보 오류. 고객센터에 문의해주세요.','error');return;}
@@ -682,15 +682,16 @@ async function chargeAfterPayment(payData){
     await refreshMe();closeM('mdl-charge');
     toast(`${fmt(chargeAmount)}원 충전 완료! 잔액: ${fmt(meData.balance)}원`,'success');
     window._pendingCharge=null;
-    try{sessionStorage.removeItem('_pendingCharge');}catch(e){}
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
   }catch(err){
     console.error('❌ 포인트 적립 오류:',err);
     toast('결제는 완료되었으나 포인트 적립 중 오류 발생. 고객센터에 문의해주세요.','error');
   }
 }
 
-// 페이지 로드 시 URL 파라미터 결제 결과 확인 (returnUrl 백업용)
+// 페이지 로드 시 결제 결과 확인 (URL 파라미터 + localStorage 미처리 결제)
 function checkPaymentResult(){
+  // 1) URL 파라미터 방식 (PC 리다이렉트 백업)
   const urlParams=new URLSearchParams(window.location.search);
   const hasResult=urlParams.get('payment')==='result'||urlParams.get('tid')||urlParams.get('ResultCode');
   if(hasResult){
@@ -708,7 +709,23 @@ function checkPaymentResult(){
     const rc=String(payData.resultCode||'').trim();
     if(rc==='0000'||rc==='3001'){chargeAfterPayment(payData);}
     else if(rc&&rc!=='U000'){toast('결제가 완료되지 않았습니다. ['+ rc+'] '+(payData.resultMsg||''),'error');}
+    return;
   }
+  // 2) localStorage 미처리 결제 확인 (모바일 리다이렉트 대응)
+  try{
+    const s=localStorage.getItem('_pendingCharge');
+    if(!s)return;
+    const pending=JSON.parse(s);
+    // 10분 이내 결제 건만 처리 (오래된 건은 무시)
+    if(!pending.ts||Date.now()-pending.ts>600000){localStorage.removeItem('_pendingCharge');return;}
+    // Firestore payments에 이미 적립된 건인지 확인 (중복 방지)
+    getDocs(query(collection(db,'payments'),where('userId','==',me.uid),where('moid','==',pending.moid),limit(1))).then(snap=>{
+      if(!snap.empty){console.log('💳 이미 적립된 결제건');localStorage.removeItem('_pendingCharge');return;}
+      // 미적립 결제 → 적립 처리
+      console.log('💳 localStorage 미처리 결제 발견, 적립 처리:',pending);
+      chargeAfterPayment({tid:'MOB_'+pending.moid,amt:String(pending.paid),moid:pending.moid,authCode:'',cardNum:'',cardName:''});
+    }).catch(e=>{console.error('💳 미처리 결제 확인 오류:',e);});
+  }catch(e){}
 }
 // checkPaymentResult는 onAuthStateChanged에서 로그인 완료 후 호출됨
 
