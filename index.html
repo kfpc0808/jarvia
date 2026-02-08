@@ -147,7 +147,7 @@
 
 <section id="pg-main" class="page hidden">
   <div class="container">
-    <div class="hero"><h1>콘텐츠 허브</h1><p>보험·법인영업 컨설팅에 필요한 모든 자료를 한곳에서</p></div>
+    <div class="hero"><h1>콘텐츠 허브</h1><p>보험·법인영업 컨설팅에 필요한 모든 자료를 한곳에서</p><p style="margin-top:8px;font-size:14px;color:var(--accent);font-weight:600">열람 1,000P / 다운로드 1,000P</p></div>
     <div class="cat-tabs" id="cat-tabs">
       <button class="cat-tab active" onclick="filterCat('all',this)"><span class="tab-icon">📋</span>전체</button>
       <button class="cat-tab" onclick="filterCat('video',this)"><span class="tab-icon">🎬</span>영상콘텐츠</button>
@@ -537,15 +537,23 @@ async function doDownloadPPTX(cid){
   if(_viewing)return;
   if(isExpired){toast('이용 기간이 만료되었습니다.','error');return;}
   const c=allContents.find(x=>x.contentId===cid);if(!c||!c.pptxUrl){toast('PPTX 파일이 등록되지 않았습니다.','error');return;}
+  if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+  // 관리자/무료회원은 구매이력 체크 없이 바로 다운로드
+  if(meData.role==='admin'||meData.role==='free_user'){
+    const a=document.createElement('a');a.href=c.pptxUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
+    toast('다운로드를 시작합니다.','success');return;
+  }
+  // 일반회원: PDF 열람 또는 영상 구매 이력 확인
+  try{
+    let hasLog=false;
+    try{const vSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid),limit(1)));hasLog=!vSnap.empty;}
+    catch(e){const allLogs=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid)));hasLog=allLogs.docs.length>0;}
+    if(!hasLog){toast('PDF 열람 또는 영상을 먼저 구매한 후 다운로드 가능합니다.','warning');return;}
+  }catch(e){toast('구매이력 확인 오류: '+e.message,'error');return;}
   if(!confirm('PPTX 다운로드 시 추가 1,000원이 차감됩니다.\n진행하시겠습니까?'))return;
   _viewing=true;
   const btn=$('btn-dl');if(btn){btn.disabled=true;btn.textContent='처리중...';}
   try{
-    if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
-    if(meData.role==='admin'||meData.role==='free_user'){
-      const a=document.createElement('a');a.href=c.pptxUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
-      toast('다운로드를 시작합니다.','success');return;
-    }
     const uRef=doc(db,'users',me.uid);
     await runTransaction(db,async tx=>{
       const ud=(await tx.get(uRef)).data();
