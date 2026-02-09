@@ -847,7 +847,8 @@ async function doCharge(){
       BuyerName:meData.name||me.email.split('@')[0],
       BuyerEmail:meData.email||me.email,
       BuyerTel:(meData.phone||'01000000000').replace(/-/g,''),
-      ResultYN:'Y'
+      ResultYN:'Y',
+      ReturnURL:'https://jarvia.co.kr/'
     });
   }catch(err){toast('결제 요청 실패: '+err.message,'error');}
   finally{btn.disabled=false;btn.textContent='결제하기';}
@@ -872,13 +873,29 @@ window.innopay_result=function(data){
 
 // 결제 성공 후 크레딧 적립 (Firestore 트랜잭션)
 async function chargeAfterPayment(payData){
+  // ── 핵심 검증: 실제 PG 결제 TID가 있어야만 적립 ──
+  const tid=String(payData.tid||'').trim();
+  if(!tid){
+    console.warn('⛔ TID 없음 → 적립 차단');
+    toast('결제 확인이 필요합니다. 고객센터에 문의해주세요.','warning');
+    window._pendingCharge=null;
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
+    return;
+  }
   let pending=window._pendingCharge;
   // 모바일 리다이렉트 후 전역변수가 사라진 경우 localStorage에서 복구
   if(!pending){try{const s=localStorage.getItem('_pendingCharge');if(s)pending=JSON.parse(s);}catch(e){}}
-  // pending 없으면 URL의 amt로 직접 적립 (최후 fallback)
-  if(!pending&&payData.amt){pending={paid:parseInt(payData.amt),credit:parseInt(payData.amt),moid:payData.moid||''};}
   if(!pending||!me){toast('결제 정보 오류. 고객센터에 문의해주세요.','error');return;}
   try{
+    // ── 중복 적립 방지: 동일 TID 존재 여부 확인 ──
+    const dupSnap=await getDocs(query(collection(db,'payments'),where('tid','==',tid),limit(1)));
+    if(!dupSnap.empty){
+      console.warn('⛔ 이미 적립된 TID:',tid);
+      toast('이미 처리된 결제입니다.','warning');
+      window._pendingCharge=null;
+      try{localStorage.removeItem('_pendingCharge');}catch(e){}
+      return;
+    }
     const pid=gid();
     const paidAmount=parseInt(payData.amt)||pending.paid;
     const chargeAmount=pending.credit;
@@ -932,22 +949,15 @@ function checkPaymentResult(){
     else if(rc&&rc!=='U000'){toast('결제가 완료되지 않았습니다. ['+ rc+'] '+(payData.resultMsg||''),'error');}
     return;
   }
-  // 2) localStorage 미처리 결제 확인 (모바일 리다이렉트 대응)
+  // 2) localStorage 미처리 결제 정리 (모바일은 ReturnURL로 TID를 받아 처리됨)
   try{
     const s=localStorage.getItem('_pendingCharge');
     if(!s)return;
     const pending=JSON.parse(s);
-    // 10분 이내 결제 건만 처리 (오래된 건은 무시)
+    // 10분 이상 지난 건은 정리
     if(!pending.ts||Date.now()-pending.ts>600000){localStorage.removeItem('_pendingCharge');return;}
-    // 현재 로그인 사용자와 결제 사용자 일치 확인
-    if(pending.userId&&pending.userId!==me.uid){return;}
-    // Firestore payments에 이미 적립된 건인지 확인 (중복 방지)
-    getDocs(query(collection(db,'payments'),where('userId','==',me.uid),where('moid','==',pending.moid),limit(1))).then(snap=>{
-      if(!snap.empty){console.log('💳 이미 적립된 결제건');localStorage.removeItem('_pendingCharge');return;}
-      // 미적립 결제 → 적립 처리
-      console.log('💳 미처리 결제 발견, 적립 처리:',pending);
-      chargeAfterPayment({tid:'MOB_'+pending.moid,amt:String(pending.paid),moid:pending.moid,authCode:'',cardNum:'',cardName:''});
-    }).catch(e=>{console.error('💳 미처리 결제 확인 오류:',e);});
+    // TID 없이 자동 적립하지 않음 — 결제가 실제 완료되었다면 URL 파라미터로 TID가 전달됨
+    console.log('💳 미처리 pending 발견 (TID 대기중):',pending.moid);
   }catch(e){}
 }
 // checkPaymentResult는 onAuthStateChanged에서 로그인 완료 후 호출됨
