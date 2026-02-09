@@ -65,7 +65,9 @@
       </div>
       <div class="toolbar mt"><input id="m-search" placeholder="이름/연락처/이메일 검색..." oninput="loadMembers()"> <button class="btn btn-danger" onclick="deleteSelectedMembers()" style="margin-left:8px">선택 삭제</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px"><input type="checkbox" id="m-chk-all" onchange="toggleAllMembers()"></th><th>가입일</th><th>회원유형</th><th>이름</th><th>아이디</th><th>소속</th><th>연락처</th><th>이용만료</th><th>잔액</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-members"></tbody></table></div></div>
     <div id="p-admins" class="panel hidden"><h2>관리자 관리</h2><button class="btn" id="btn-add-adm" onclick="document.getElementById('add-adm-form').classList.toggle('hidden')">관리자 추가</button><div id="add-adm-form" class="hidden form-box"><div class="fr"><div class="fg"><label>아이디</label><input id="na-id"></div><div class="fg"><label>이름</label><input id="na-name"></div><div class="fg"><label>비밀번호</label><input id="na-pw" type="password"></div></div><button class="btn" onclick="createAdmin()">생성</button> <button class="btn btn-sec" onclick="document.getElementById('add-adm-form').classList.add('hidden')">취소</button></div><div class="tbl-wrap"><table class="tbl mt"><thead><tr><th>아이디</th><th>이름</th><th>권한</th><th>마지막 로그인</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-admins"></tbody></table></div></div>
-    <div id="p-contents" class="panel hidden"><h2>콘텐츠 관리</h2><button class="btn" onclick="showCF()">콘텐츠 등록</button> <button class="btn btn-sec" onclick="syncGitHub()">🔄 GitHub 동기화</button> <button class="btn btn-sec" onclick="showBatchUpload()">📦 일괄 등록</button><div id="sync-status" style="display:none;margin:12px 0;padding:12px;border-radius:8px;background:#f0f7ff;border:1px solid #c0d8f0;font-size:14px"></div>
+    <div id="p-contents" class="panel hidden"><h2>콘텐츠 관리</h2><button class="btn" onclick="showCF()">콘텐츠 등록</button> <button class="btn btn-sec" onclick="syncGitHub()">🔄 GitHub 동기화</button> <button class="btn btn-sec" onclick="showBatchUpload()">📦 일괄 등록</button> <button class="btn btn-sec" onclick="toggleBulkPrice()">💰 가격 일괄변경</button>
+    <div id="bulk-price-area" class="hidden form-box" style="margin-top:12px"><h3 style="margin-bottom:12px">💰 가격 일괄변경</h3><div class="fr"><div class="fg"><label>기본 가격(원) — 영상/브리핑/오디오/보고서</label><input id="bp-default" type="number" value="2000" min="0" step="100"></div><div class="fg"><label>클로징PPT 가격(원)</label><input id="bp-closing" type="number" value="5000" min="0" step="100"></div></div><button type="button" class="btn" onclick="bulkPricePreview()">미리보기</button> <button type="button" class="btn btn-sec" onclick="bulkPriceApply()">적용</button><div id="bp-result" style="margin-top:12px;font-size:13px"></div></div>
+    <div id="sync-status" style="display:none;margin:12px 0;padding:12px;border-radius:8px;background:#f0f7ff;border:1px solid #c0d8f0;font-size:14px"></div>
     <div id="batch-area" class="hidden form-box"><h3 style="margin-bottom:12px">📦 일괄 등록</h3>
       <div class="tabs" style="margin-bottom:16px"><button class="tab active" onclick="switchBatchTab('audio',this)">🎧 오디오 일괄</button><button class="tab" onclick="switchBatchTab('video',this)">🎬 영상 일괄 (엑셀)</button></div>
       <div id="batch-audio">
@@ -495,23 +497,27 @@ function switchBatchTab(tab,btn){btn.parentElement.querySelectorAll('.tab').forE
 async function batchAudioUpload(){
   const files=$('ba-files').files;if(!files.length){toast('오디오 파일을 선택하세요.','error');return;}
   const catId=$('ba-cat').value;const price=parseInt($('ba-price').value)||1000;
-  const prog=$('ba-progress');prog.innerHTML='';
-  let done=0,fail=0;const total=files.length;
+  const prog=$('ba-progress');prog.innerHTML='<div style="font-size:13px">기존 콘텐츠 확인 중...</div>';
+  const cSnap=await getDocs(collection(db,'contents'));const existUrls=new Set(cSnap.docs.map(d=>(d.data().url||'')));
+  let done=0,fail=0,dup=0;const total=files.length;prog.innerHTML='';
   for(let i=0;i<files.length;i++){
     const file=files[i];
     const title=file.name.replace(/\.[^.]+$/,'').replace(/^팟캐스트_/,'').replace(/_/g,' ');
+    const cleanName=file.name.replace(/[^a-zA-Z0-9가-힣._-]/g,'');
+    const isDup=[...existUrls].some(u=>u.includes(cleanName));
+    if(isDup){dup++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--warning)">⏭ (${i+1}/${total}) ${esc(title)} - 이미 등록됨</div>`+prog.innerHTML;continue;}
     prog.innerHTML=`<div style="margin:4px 0;font-size:13px">⏳ (${i+1}/${total}) ${esc(title)} 업로드 중...</div>`+prog.innerHTML;
     try{
-      const path='audio/'+Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9가-힣._-]/g,'');
+      const path='audio/'+Date.now()+'_'+cleanName;
       const sR=stRef(storage,path);const task=uploadBytesResumable(sR,file,{contentType:file.type});
       await new Promise((resolve,reject)=>{task.on('state_changed',null,reject,resolve);});
-      const url=await getDownloadURL(task.snapshot.ref);
+      const url=await getDownloadURL(task.snapshot.ref);existUrls.add(url);
       const cid=gid();
       await setDoc(doc(db,'contents',cid),{contentId:cid,title,categoryId:catId,type:'audio',price,url,thumbnailUrl:null,summary:title,sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
       done++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--success)">✅ (${i+1}/${total}) ${esc(title)}</div>`+prog.innerHTML.replace(/⏳[^<]*<\/div>/,'');
     }catch(e){fail++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--danger)">❌ (${i+1}/${total}) ${esc(title)} - ${e.message}</div>`+prog.innerHTML.replace(/⏳[^<]*<\/div>/,'');}
   }
-  prog.innerHTML=`<div style="margin:8px 0;font-size:14px;font-weight:600">완료! 성공 ${done}개 / 실패 ${fail}개</div>`+prog.innerHTML;
+  prog.innerHTML=`<div style="margin:8px 0;font-size:14px;font-weight:600">완료! 성공 ${done}개 / 중복 ${dup}개 / 실패 ${fail}개</div>`+prog.innerHTML;
   if(done>0)loadConts();$('ba-files').value='';
 }
 async function batchVideoUpload(){
@@ -522,20 +528,22 @@ async function batchVideoUpload(){
     const XLSX=await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
     const wb=XLSX.read(ab,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{header:1});
     const catSnap=await getDocs(query(collection(db,'categories'),orderBy('sortOrder')));const catMap={};catSnap.docs.forEach(d=>{const c=d.data();catMap[c.name]=c.categoryId;});
-    let done=0,fail=0,skip=0;const dataRows=rows.filter(r=>r.length>=3&&r[0]&&r[1]&&r[2]);
+    const cSnap=await getDocs(collection(db,'contents'));const existUrls=new Set(cSnap.docs.map(d=>(d.data().url||'')));
+    let done=0,fail=0,skip=0,dup=0;const dataRows=rows.filter(r=>r.length>=3&&r[0]&&r[1]&&r[2]);
     prog.innerHTML=`<div style="font-size:13px">총 ${dataRows.length}개 행 발견. 등록 중...</div>`;
     for(let i=0;i<dataRows.length;i++){
       const r=dataRows[i];const catName=String(r[0]).trim();const title=String(r[1]).trim();const url=String(r[2]).trim();
       if(!url.startsWith('http')){skip++;continue;}
+      if(existUrls.has(url)){dup++;continue;}
       const catId=catMap[catName]||'';
       try{
         const cid=gid();
         await setDoc(doc(db,'contents',cid),{contentId:cid,title,categoryId:catId,type:'video',price,url,thumbnailUrl:null,summary:title,sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-        done++;
+        done++;existUrls.add(url);
       }catch(e){fail++;}
       if((i+1)%10===0)prog.innerHTML=`<div style="font-size:13px">등록 중... ${i+1}/${dataRows.length}</div>`;
     }
-    prog.innerHTML=`<div style="font-size:14px;font-weight:600">완료! 성공 ${done}개 / 실패 ${fail}개 / 건너뜀 ${skip}개</div>`;
+    prog.innerHTML=`<div style="font-size:14px;font-weight:600">완료! 성공 ${done}개 / 중복 ${dup}개 / 실패 ${fail}개 / 건너뜀 ${skip}개</div>`;
     if(done>0)loadConts();fileInput.value='';
   }catch(e){prog.innerHTML=`<div style="color:var(--danger);font-size:13px">❌ 오류: ${e.message}</div>`;}
 }
@@ -620,6 +628,22 @@ window.toggleAllMembers=toggleAllMembers;window.deleteSelectedMembers=deleteSele
 window.loadAdmins=loadAdmins;window.createAdmin=createAdmin;window.delAdmin=delAdmin;
 window.showCF=showCF;window.editCont=editCont;window.delCont=delCont;window.saveCont=saveCont;window.loadConts=loadConts;window.onCfTypeChange=onCfTypeChange;window.uploadAudio=uploadAudio;window.syncGitHub=syncGitHub;window.renderConts=renderConts;window.contPg=contPg;window.toggleAllChk=toggleAllChk;window.delSelected=delSelected;
 window.showBatchUpload=showBatchUpload;window.switchBatchTab=switchBatchTab;window.batchAudioUpload=batchAudioUpload;window.batchVideoUpload=batchVideoUpload;
+function toggleBulkPrice(){$('bulk-price-area').classList.toggle('hidden');$('bp-result').innerHTML='';}
+async function bulkPricePreview(){
+  const dp=parseInt($('bp-default').value)||0;const cp=parseInt($('bp-closing').value)||0;
+  const snap=await getDocs(collection(db,'contents'));let lines=[];let cnt=0;
+  snap.docs.forEach(d=>{const c=d.data();const np=c.type==='closing'?cp:dp;if(c.price!==np){lines.push(`${c.type} | ${c.title} | ${fmt(c.price)}원 → ${fmt(np)}원`);cnt++;}});
+  $('bp-result').innerHTML=cnt?`<div style="max-height:300px;overflow-y:auto;background:#f9f9f9;padding:12px;border-radius:8px;white-space:pre-line;font-size:12px">${lines.join('\n')}</div><div style="margin-top:8px;font-weight:600">총 ${cnt}건 변경 예정</div>`:'<div>변경할 항목이 없습니다.</div>';
+}
+async function bulkPriceApply(){
+  const dp=parseInt($('bp-default').value)||0;const cp=parseInt($('bp-closing').value)||0;
+  if(!confirm(`기본 ${fmt(dp)}원 / 클로징PPT ${fmt(cp)}원으로 일괄 변경하시겠습니까?`))return;
+  const snap=await getDocs(collection(db,'contents'));let cnt=0;
+  for(const d of snap.docs){const c=d.data();const np=c.type==='closing'?cp:dp;if(c.price!==np){await updateDoc(doc(db,'contents',c.contentId),{price:np,updatedAt:serverTimestamp()});cnt++;}}
+  $('bp-result').innerHTML=`<div style="color:var(--success);font-weight:600">✅ ${cnt}건 가격 변경 완료!</div>`;
+  if(cnt>0)loadConts();
+}
+window.toggleBulkPrice=toggleBulkPrice;window.bulkPricePreview=bulkPricePreview;window.bulkPriceApply=bulkPriceApply;
 window.addCat=addCat;window.toggleCat=toggleCat;window.delCat=delCat;window.loadCats=loadCats;
 window.loadPays=loadPays;window.loadLogs=loadLogs;window.exportCSV=exportCSV;
 window.loadProps=loadProps;window.showProp=showProp;window.updateProp=updateProp;
