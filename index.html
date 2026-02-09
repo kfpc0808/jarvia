@@ -333,6 +333,8 @@ async function doLogin(e){
     const ud=uSnap.docs[0].data();
     if(ud.status==='suspended')return toast('정지된 계정입니다.','error');
     if(ud.status==='withdrawn')return toast('탈퇴된 계정입니다.','error');
+    // 중복 로그인 경고: 다른 기기에서 사용 중이면 확인
+    if(ud.currentSessionId){if(!confirm('⚠️ 현재 다른 기기에서 이용 중인 계정입니다.\n\n지금 로그인을 진행하시면 현재 이용 중인\n사용자의 접속이 즉시 중단됩니다.\n\n본인의 계정이 맞다면 [확인]을 눌러주세요.\n타인이 이용 중이라면 [취소]를 눌러주세요.'))return;}
     await signInWithEmailAndPassword(auth,ud.email,pw);
     const sid=gid();
     await updateDoc(uSnap.docs[0].ref,{lastLoginAt:serverTimestamp(),currentSessionId:sid});
@@ -383,12 +385,21 @@ function showEmailVerify(user){
   $('pg-register').innerHTML=`<div class="auth-card" style="text-align:center">
     <h2 style="margin-bottom:16px;color:var(--primary)">📧 이메일 인증</h2>
     <p style="font-size:15px;line-height:1.8;margin-bottom:8px"><strong>${user.email}</strong> 으로<br>인증 메일이 발송되었습니다.</p>
-    <p style="font-size:14px;color:var(--text-lt);margin-bottom:24px">메일함에서 인증 링크를 클릭한 후<br>아래 버튼을 눌러주세요.</p>
+    <p style="font-size:14px;color:var(--text-lt);margin-bottom:24px">메일함에서 인증 링크를 클릭하시면<br>자동으로 로그인됩니다.</p>
+    <div id="verify-spinner" style="margin-bottom:16px"><div style="display:inline-block;width:24px;height:24px;border:3px solid #ddd;border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite"></div><p style="font-size:13px;color:var(--text-lt);margin-top:8px">인증 대기 중...</p></div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
     <button class="btn" onclick="checkEmailVerified()" style="width:100%;padding:14px;font-size:16px">✅ 인증 완료 확인</button>
     <button class="btn btn-sec" onclick="resendVerify()" style="width:100%;padding:12px;margin-top:10px;font-size:14px">📩 인증 메일 재발송</button>
     <a onclick="doLogout()" style="display:inline-block;margin-top:16px;font-size:13px;color:var(--text-lt);cursor:pointer;text-decoration:underline">로그인 화면으로</a>
     <p id="verify-msg" style="margin-top:12px;font-size:13px;color:var(--text-lt)"></p>
   </div>`;
+  // 5초마다 자동 인증 확인
+  if(window._verifyChk)clearInterval(window._verifyChk);
+  window._verifyChk=setInterval(async()=>{
+    try{await auth.currentUser.reload();
+      if(auth.currentUser.emailVerified){clearInterval(window._verifyChk);toast('이메일 인증이 완료되었습니다!','success');setTimeout(()=>location.reload(),1000);}
+    }catch(e){}
+  },5000);
 }
 async function checkEmailVerified(){
   try{await auth.currentUser.reload();
@@ -436,7 +447,7 @@ onAuthStateChanged(auth,async u=>{
       meData=d.data();
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
       // 이메일 인증 확인 (관리자가 만든 무료회원/멤버십은 제외)
-      if(!u.emailVerified&&meData.role==='user'&&meData.createdAt?.toDate?.()>new Date('2026-02-09')){showEmailVerify(u);return;}
+      if(!u.emailVerified&&meData.role==='user'&&meData.createdAt?.toDate?.()>new Date('2026-02-08T15:00:00Z')){showEmailVerify(u);return;}
       // 중복 로그인 체크: 다른 기기에서 로그인했으면 강제 로그아웃
       const mySid=sessionStorage.getItem('sid');
       if(mySid&&meData.currentSessionId&&mySid!==meData.currentSessionId){
@@ -1193,7 +1204,7 @@ function doShare(){
   if(!me||!meData||!meData.referralCode)return toast('추천 코드가 없습니다.','error');
   const url=window.location.origin+window.location.pathname+'?ref='+meData.referralCode;
   const isMob=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  if(isMob&&navigator.share){navigator.share({title:'JARVIA - 금융 콘텐츠 플랫폼',text:'JARVIA에서 클로징PPT, 영상, 오디오 등 금융 콘텐츠를 만나보세요!',url:url}).catch(()=>{});return;}
+  if(isMob&&navigator.share){navigator.share({title:'JARVIA',text:'JARVIA에서 클로징PPT, 영상, 오디오 등 금융 콘텐츠를 만나보세요!\n\n👉 '+url}).catch(()=>{});return;}
   navigator.clipboard.writeText(url).then(()=>toast('추천 링크가 복사되었습니다!','success')).catch(()=>{const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);toast('추천 링크가 복사되었습니다!','success');});
 }
 function copyRefCode(){
