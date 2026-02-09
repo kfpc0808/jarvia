@@ -155,6 +155,7 @@
 <section id="pg-main" class="page hidden">
   <div class="container">
     <div class="hero"><h1>콘텐츠 허브</h1><p>클로징PPT 매월 15개,<br class="mob-br"> 연간 180개 이상 업데이트</p><p style="margin-top:8px;font-size:14px;color:var(--accent);font-weight:600">열람 2,000P / 다운로드 5,000P</p></div>
+    <div id="share-area" class="hidden" style="text-align:center;margin-bottom:16px"><button onclick="doShare()" style="background:linear-gradient(135deg,#FF6B35,#F7931E);color:#fff;border:none;padding:12px 28px;border-radius:25px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 15px rgba(255,107,53,.3);transition:all .2s">🎁 동료에게 추천하고 1개월 무료!</button></div>
     <div class="cat-tabs" id="cat-tabs">
       <button class="cat-tab active" onclick="filterCat('all',this)">전체</button>
       <button class="cat-tab" onclick="filterCat('closing',this)">클로징PPT</button>
@@ -184,6 +185,7 @@
       <button class="tab" data-t="mp-usage" onclick="mpTab(this)">이용 내역</button>
       <button class="tab" data-t="mp-charge" onclick="mpTab(this)">충전 내역</button>
       <button class="tab" data-t="mp-fav" onclick="mpTab(this)">즐겨찾기</button>
+      <button class="tab" data-t="mp-referral" onclick="mpTab(this)" id="tab-referral" style="display:none">추천 현황</button>
     </div>
     <div id="mp-info" class="tp">
       <div class="bal-card"><span>보유 크레딧</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
@@ -199,6 +201,7 @@
     <div id="mp-usage" class="tp hidden"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠</th><th>차감액</th><th>열람만료</th><th>상태</th></tr></thead><tbody id="tb-usage"></tbody></table></div></div>
     <div id="mp-charge" class="tp hidden"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>결제금액</th><th>충전크레딧</th><th>잔액</th><th>상태</th></tr></thead><tbody id="tb-charges"></tbody></table></div></div>
     <div id="mp-fav" class="tp hidden"><div id="fav-grid" class="grid"></div><div id="no-fav" class="empty hidden">즐겨찾기한 콘텐츠가 없습니다.</div></div>
+    <div id="mp-referral" class="tp hidden"><div id="ref-info" style="background:#f8f9fa;border-radius:12px;padding:20px;margin-bottom:20px"></div><h3 style="margin-bottom:12px">추천한 회원 목록</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>가입일</th><th>회원유형</th><th>포인트 지급</th></tr></thead><tbody id="tb-referrals"></tbody></table></div></div>
   </div>
 </section>
 
@@ -291,7 +294,7 @@ function closeMobMenu(){$('mob-menu').classList.remove('open');$('mob-menu-backd
 function nav(p){PAGES.forEach(x=>$('pg-'+x).classList.add('hidden'));$('pg-'+p).classList.remove('hidden');closeMobMenu();window.scrollTo(0,0);if(p==='main'){loadMain();loadTicker();}if(p==='login')loadTicker();if(p==='mypage')loadMyPage();if(p==='notices')loadNotices();}
 function openM(id){$(id).classList.remove('hidden');}
 function closeM(id){$(id).classList.add('hidden');}
-function mpTab(btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('#pg-mypage .tp').forEach(t=>t.classList.add('hidden'));$(btn.dataset.t).classList.remove('hidden');if(btn.dataset.t==='mp-active')loadActiveContents();if(btn.dataset.t==='mp-usage')loadUsage();if(btn.dataset.t==='mp-charge')loadChargeHistory();if(btn.dataset.t==='mp-fav')loadFavorites();}
+function mpTab(btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('#pg-mypage .tp').forEach(t=>t.classList.add('hidden'));$(btn.dataset.t).classList.remove('hidden');if(btn.dataset.t==='mp-active')loadActiveContents();if(btn.dataset.t==='mp-usage')loadUsage();if(btn.dataset.t==='mp-charge')loadChargeHistory();if(btn.dataset.t==='mp-fav')loadFavorites();if(btn.dataset.t==='mp-referral')loadReferrals();}
 
 // ── Type helpers ──
 function typeIcon(t){return{video:'🎬',brief:'📰',audio:'🎧',report:'📊',closing:'📑',doc:'📄',ppt:'📊',html:'🌐'}[t]||'📁';}
@@ -362,13 +365,13 @@ async function doRegister(e){
     const cred=await createUserWithEmailAndPassword(auth,email,pw);
     await setDoc(doc(db,'users',cred.user.uid),{
       userId:cred.user.uid,name,company,title,phone,email,address:addr,loginId,
-      role:'user',status:'active',balance:0,
+      role:'user',status:'active',balance:0,referralCode:genRefCode(),referredBy:localStorage.getItem('jarvia_ref')||'',referralPoints:0,
       expiresAt:Timestamp.fromDate(new Date(Date.now()+30*24*60*60*1000)),
       agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
       lastLoginAt:serverTimestamp(),currentSessionId:'',
       createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
     });
-    toast('가입이 완료되었습니다! 인증 메일을 확인해주세요.','success');
+    localStorage.removeItem('jarvia_ref');toast('가입이 완료되었습니다! 인증 메일을 확인해주세요.','success');
     await sendEmailVerification(cred.user);
     showEmailVerify(cred.user);
   }catch(err){
@@ -406,6 +409,9 @@ async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.
 
 // ── Auth Observer ──
 let _authWait=false;
+// ── 추천 코드 감지 ──
+(function(){const u=new URLSearchParams(window.location.search);const ref=u.get('ref');if(ref){localStorage.setItem('jarvia_ref',ref);u.delete('ref');const nUrl=u.toString()?window.location.pathname+'?'+u.toString():window.location.pathname;window.history.replaceState({},'',nUrl);}})();
+function genRefCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let r='';for(let i=0;i<8;i++)r+=c[Math.floor(Math.random()*c.length)];return r;}
 onAuthStateChanged(auth,async u=>{
   if(u){
     me=u;
@@ -440,6 +446,10 @@ onAuthStateChanged(auth,async u=>{
       $('app-header').classList.remove('hidden');
       $('hdr-name').textContent=meData.name+'님';
       if($('mob-name'))$('mob-name').textContent=meData.name+'님';
+      // 추천코드 없으면 생성
+      if(!meData.referralCode){const rc=genRefCode();await updateDoc(doc(db,'users',me.uid),{referralCode:rc});meData.referralCode=rc;}
+      // JARVIA멤버십이면 공유버튼/추천탭 표시
+      if(meData.role==='jarvia_member'){$('share-area').classList.remove('hidden');$('tab-referral').style.display='';}else{$('share-area').classList.add('hidden');$('tab-referral').style.display='none';}
       updateBal();nav('main');
       checkPaymentResult();
       // 주기적 세션 체크 (30초마다)
@@ -1173,7 +1183,30 @@ window.showDetail=showDetail;window.doView=doView;window.doFav=doFav;window.doVi
 window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;
 window.doUpdateProfile=doUpdateProfile;window.doPartnership=doPartnership;
 window.filterList=filterList;window.filterCat=filterCat;window.filterSub=filterSub;window.showTerms=showTerms;window.closeViewer=closeViewer;window.gridPg=gridPg;window.loadUpcoming=loadUpcoming;
-window.rgEmailSel=rgEmailSel;
+window.rgEmailSel=rgEmailSel;window.doShare=doShare;window.loadReferrals=loadReferrals;window.copyRefCode=copyRefCode;
+
+// ── 추천 공유 ──
+function doShare(){
+  if(!me||!meData||!meData.referralCode)return toast('추천 코드가 없습니다.','error');
+  const url=window.location.origin+window.location.pathname+'?ref='+meData.referralCode;
+  if(navigator.share){navigator.share({title:'JARVIA - 금융 콘텐츠 플랫폼',text:'JARVIA에서 클로징PPT, 영상, 오디오 등 금융 콘텐츠를 만나보세요!',url:url}).catch(()=>{});return;}
+  navigator.clipboard.writeText(url).then(()=>toast('추천 링크가 복사되었습니다!','success')).catch(()=>{const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);toast('추천 링크가 복사되었습니다!','success');});
+}
+function copyRefCode(){
+  if(!meData||!meData.referralCode)return;
+  navigator.clipboard.writeText(meData.referralCode).then(()=>toast('추천 코드가 복사되었습니다!','success')).catch(()=>toast('복사 실패','error'));
+}
+async function loadReferrals(){
+  if(!me||!meData)return;
+  const rc=meData.referralCode||'';
+  const pts=meData.referralPoints||0;
+  // 내 추천코드로 가입한 회원 조회
+  let refs=[];
+  try{const snap=await getDocs(query(collection(db,'users'),where('referredBy','==',rc)));refs=snap.docs.map(d=>d.data());}catch(e){}
+  const roleLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클'}[r]||r);
+  $('ref-info').innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center"><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">내 추천 코드</div><div style="font-size:20px;font-weight:700;color:var(--primary);letter-spacing:2px;margin:4px 0">${rc} <button onclick="copyRefCode()" style="font-size:12px;padding:4px 10px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">복사</button></div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">추천 성공</div><div style="font-size:20px;font-weight:700;color:var(--accent)">${refs.length}명</div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">적립 포인트</div><div style="font-size:20px;font-weight:700;color:var(--success)">${fmt(pts)}P</div></div></div><div style="margin-top:12px"><button onclick="doShare()" style="background:linear-gradient(135deg,#FF6B35,#F7931E);color:#fff;border:none;padding:10px 24px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer">🔗 추천 링크 공유</button></div>`;
+  $('tb-referrals').innerHTML=refs.length?refs.map(r=>`<tr><td>${esc(r.name)}</td><td>${fdate(r.createdAt)}</td><td>${roleLabel(r.role)}</td><td>${r.role==='jarvia_member'?'<span style="color:var(--success);font-weight:600">✅ 50,000P</span>':'<span style="color:var(--text-lt)">-</span>'}</td></tr>`).join(''):'<tr><td colspan="4" class="tc">추천한 회원이 없습니다.</td></tr>';
+}
 // Expose for admin createAdmin (secondary app)
 window._javiaFC=FC;
 

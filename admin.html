@@ -223,7 +223,7 @@ async function showMember(uid){
   try{const vlSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));vlDocs=vlSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid)));vlDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
   try{const txSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));txDocs=txSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',uid)));txDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
   $('member-inner').innerHTML=`<h2>${esc(m.name)} 회원 수정</h2>
-    <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div></div>
+    <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div><div><label>추천코드:</label>${esc(m.referralCode||'-')}</div><div><label>추천인코드:</label>${esc(m.referredBy||'-')}</div><div><label>추천포인트:</label><strong style="color:var(--success)">${fmt(m.referralPoints||0)}P</strong></div></div>
     <div style="margin:16px 0;display:flex;gap:8px"><button class="btn btn-sm" onclick="toggleStatus('${uid}','${m.status}')">${m.status==='active'?'정지하기':'해제하기'}</button></div>
     <h3>회원 정보 수정</h3>
     <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}" onchange="(function(sel){var jArea=document.getElementById('jarvia-area-${uid}');if(jArea)jArea.style.display=sel.value==='jarvia_member'?'':'none';var expArea=document.getElementById('exp-section-${uid}');if(expArea)expArea.style.display=(sel.value==='user'||sel.value==='jarvia_member'||sel.value==='inner_circle')?'none':'';})(this)"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>무료회원</option><option value="jarvia_member" ${m.role==='jarvia_member'?'selected':''}>JARVIA멤버십</option><option value="inner_circle" ${m.role==='inner_circle'?'selected':''}>이너서클멤버십</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
@@ -246,9 +246,28 @@ async function updateMemberInfo(uid){
   if(!name)return toast('이름을 입력하세요.','error');
   if(!['user','free_user','jarvia_member','inner_circle'].includes(role))return toast('올바른 회원유형을 선택하세요.','error');
   try{
+    // 기존 역할 확인 (jarvia_member 변경 감지용)
+    const prevDoc=await getDoc(doc(db,'users',uid));const prevRole=prevDoc.exists()?prevDoc.data().role:'';
     const updateData={name,role,updatedAt:serverTimestamp()};
     if(role==='user'){updateData.expiresAt=deleteField();}
     await updateDoc(doc(db,'users',uid),updateData);
+    // jarvia_member로 새로 변경된 경우 → 추천인에게 50,000P 지급
+    if(role==='jarvia_member'&&prevRole!=='jarvia_member'){
+      const userData=prevDoc.data();
+      if(userData.referredBy){
+        try{
+          const refSnap=await getDocs(query(collection(db,'users'),where('referralCode','==',userData.referredBy),limit(1)));
+          if(!refSnap.empty){
+            const refDoc=refSnap.docs[0];const refUid=refDoc.id;
+            await updateDoc(doc(db,'users',refUid),{referralPoints:increment(50000),updatedAt:serverTimestamp()});
+            // 트랜잭션 기록
+            const txId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+            await setDoc(doc(db,'transactions',txId),{txId,userId:refUid,type:'referral_reward',amount:50000,balanceAfter:(refDoc.data().referralPoints||0)+50000,memo:name+'님 JARVIA멤버십 가입 추천보상',createdAt:serverTimestamp()});
+            toast('추천인 '+refDoc.data().name+'에게 50,000P 지급 완료','success');
+          }
+        }catch(re){console.error('추천 포인트 지급 오류:',re);}
+      }
+    }
     toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();
   }catch(e){toast('수정 실패: '+e.message,'error');}
 }
@@ -402,7 +421,7 @@ function renderConts(){
   $('tb-conts').innerHTML=paged.length?paged.map((c,i)=>`<tr><td><input type="checkbox" class="c-chk" value="${c.contentId}"></td><td>${start+i+1}</td><td class="ov">${esc(c.title)}</td><td>${esc(_contCatMap[c.categoryId]||'')}</td><td>${typeBadge(c.type)}</td><td>${c.subType||'-'}</td><td>${fmt(c.price)}원</td><td>${c.viewCount||0}</td><td>${fdate(c.createdAt)}</td><td>${c.isActive?'<span class="st-active">노출</span>':'<span class="st-suspended">비노출</span>'}</td><td><button class="btn btn-sm" onclick="editCont('${c.contentId}')">수정</button> <button class="btn-danger" onclick="delCont('${c.contentId}')">삭제</button></td></tr>`).join(''):'<tr><td colspan="11" class="tc">검색 결과가 없습니다.</td></tr>';
   if($('c-all-chk'))$('c-all-chk').checked=false;
   let pg=`<span style="font-size:13px;color:#666">총 ${total}건</span> `;
-  if(pages>1){pg+=`<button class="btn btn-sm" onclick="contPg(1)" ${_contPage===1?'disabled':''}>«</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage-1})" ${_contPage===1?'disabled':''}>‹</button>`;const st=Math.max(1,_contPage-5),en=Math.min(pages,_contPage+4);for(let i=st;i<=en;i++)pg+=`<button class="btn btn-sm" onclick="contPg(${i})" style="${i===_contPage?'background:var(--primary);color:#fff':''}">${i}</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage+1})" ${_contPage===pages?'disabled':''}>›</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${pages})" ${_contPage===pages?'disabled':''}>»</button>`;}
+  if(pages>1){pg+=`<button class="btn btn-sm" onclick="contPg(1)" ${_contPage===1?'disabled':''}>«</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage-1})" ${_contPage===1?'disabled':''}>‹</button>`;const st=Math.max(1,_contPage-5),en=Math.min(pages,_contPage+4);for(let i=st;i<=en;i++)pg+=`<button class="btn btn-sm" onclick="contPg(${i})" style="${i===_contPage?'background:var(--accent);color:#fff;font-weight:700':''}">${i}</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage+1})" ${_contPage===pages?'disabled':''}>›</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${pages})" ${_contPage===pages?'disabled':''}>»</button>`;}
   $('cont-pager').innerHTML=pg;
 }
 function contPg(p){_contPage=p;renderConts();}
