@@ -568,20 +568,69 @@ function doPreview(cid){
       const ti=$('pv-timer');if(ti)ti.textContent='남은시간 '+mm+':'+ss;
     });
   }else if(type==='html'){
-    // HTML: iframe으로 로드 후 30% 높이까지만 보이고 나머지 블러
-    $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="${c.url}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div></div>`;
+    // HTML: fetch로 가져와서 앞 20~30%만 잘라서 표시
+    $('v-body').innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">로딩 중...</div>`;
     openM('mdl-viewer');
+    fetch(c.url).then(r=>r.text()).then(html=>{
+      const parser=new DOMParser();const doc2=parser.parseFromString(html,'text/html');
+      const body=doc2.body;if(!body){$('v-body').innerHTML='<p style="padding:40px;text-align:center">미리보기를 불러올 수 없습니다.</p>';return;}
+      const allText=body.innerText||'';const cutLen=Math.floor(allText.length*0.25);
+      const nodes=body.childNodes;let charCount=0;let cutIndex=nodes.length;
+      for(let i=0;i<nodes.length;i++){charCount+=(nodes[i].textContent||'').length;if(charCount>=cutLen){cutIndex=i+1;break;}}
+      let truncatedHTML='';for(let i=0;i<cutIndex&&i<nodes.length;i++){truncatedHTML+=nodes[i].outerHTML||nodes[i].textContent||'';}
+      const styleEls=doc2.querySelectorAll('style,link[rel="stylesheet"]');let styles='';styleEls.forEach(s=>styles+=s.outerHTML);
+      $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow-y:auto;background:#fff"><div style="padding:24px;max-width:900px;margin:0 auto">${styles}${truncatedHTML}</div><div style="position:sticky;bottom:0;left:0;right:0;height:120px;background:linear-gradient(transparent,#fff 40%);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:0 20px 24px"><p style="color:#333;font-size:15px;font-weight:600;margin-bottom:10px">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div>`;
+    }).catch(()=>{
+      $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="${c.url}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div></div>`;
+    });
   }else{
-    // PDF (brief, report, doc, closing의 PDF): 첫 4페이지만
+    // PDF: PDF.js로 첫 4페이지만 canvas 렌더링
     const isPdf=c.url.toLowerCase().endsWith('.pdf');
     if(isPdf){
-      const gviewUrl='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(c.url);
-      $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%"><iframe src="${gviewUrl}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;bottom:0;left:0;right:0;height:40%;background:linear-gradient(transparent,rgba(26,35,53,.95) 60%);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:32px 20px"><p class="preview-msg">🔒 미리보기는 처음 일부 페이지만 가능합니다<br><span style="font-size:13px;font-weight:400;opacity:.8">전체 내용은 구매 후 열람하세요</span></p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div>`;
+      $('v-body').innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">PDF 로딩 중...</div>`;
+      openM('mdl-viewer');
+      const renderPdfPreview=async function(){
+        try{
+          const pdfjsLib=window['pdfjs-dist/build/pdf'];
+          pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          const pdf=await pdfjsLib.getDocument(c.url).promise;
+          const maxPages=Math.min(4,pdf.numPages);
+          const container=document.createElement('div');
+          container.style.cssText='width:100%;height:100%;overflow-y:auto;background:#f5f5f5;padding:16px 0';
+          for(let i=1;i<=maxPages;i++){
+            const page=await pdf.getPage(i);
+            const vp=page.getViewport({scale:1.5});
+            const canvas=document.createElement('canvas');
+            canvas.width=vp.width;canvas.height=vp.height;
+            canvas.style.cssText='display:block;margin:0 auto 12px;max-width:100%;height:auto;box-shadow:0 2px 8px rgba(0,0,0,.15)';
+            container.appendChild(canvas);
+            await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+          }
+          const footer=document.createElement('div');
+          footer.style.cssText='position:sticky;bottom:0;left:0;right:0;background:linear-gradient(transparent,#f5f5f5 30%);padding:24px 20px 32px;text-align:center';
+          footer.innerHTML=`<p style="color:#333;font-size:15px;font-weight:600;margin-bottom:10px">🔒 미리보기는 ${maxPages}페이지까지 가능합니다 (전체 ${pdf.numPages}페이지)</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button>`;
+          container.appendChild(footer);
+          $('v-body').innerHTML='';
+          $('v-body').appendChild(container);
+        }catch(e){
+          const gviewUrl='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(c.url);
+          $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%"><iframe src="${gviewUrl}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;bottom:0;left:0;right:0;height:40%;background:linear-gradient(transparent,rgba(26,35,53,.95) 60%);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:32px 20px"><p class="preview-msg">🔒 미리보기는 처음 일부 페이지만 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div>`;
+        }
+      };
+      if(window['pdfjs-dist/build/pdf']){renderPdfPreview();}
+      else{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';s.onload=renderPdfPreview;document.head.appendChild(s);}
     }else{
-      // 기타 문서
-      $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="${c.url}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div></div>`;
+      // 기타 문서: fetch 시도
+      $('v-body').innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">로딩 중...</div>`;
+      openM('mdl-viewer');
+      fetch(c.url).then(r=>r.text()).then(txt=>{
+        const cutLen=Math.floor(txt.length*0.25);const truncated=txt.substring(0,cutLen);
+        $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow-y:auto;background:#fff"><div style="padding:24px;max-width:900px;margin:0 auto;white-space:pre-wrap;font-size:14px;line-height:1.8">${esc(truncated)}</div><div style="position:sticky;bottom:0;left:0;right:0;background:linear-gradient(transparent,#fff 40%);padding:24px 20px 32px;text-align:center"><p style="color:#333;font-size:15px;font-weight:600;margin-bottom:10px">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div>`;
+      }).catch(()=>{
+        $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="${c.url}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div></div>`;
+      });
+      return;
     }
-    openM('mdl-viewer');
   }
 }
 
