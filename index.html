@@ -568,30 +568,32 @@ function doPreview(cid){
       const ti=$('pv-timer');if(ti)ti.textContent='남은시간 '+mm+':'+ss;
     });
   }else if(type==='html'){
-    // HTML: fetch로 원본 HTML을 가져와서 텍스트 기준 25%까지만 잘라서 iframe srcdoc 렌더링
-    $('v-body').innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">로딩 중...</div>`;
+    // HTML: fetch 원본 → body 텍스트 25%까지 자르기 → Blob URL iframe 렌더링
+    $('v-body').innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">로딩 중...</div>';
     openM('mdl-viewer');
-    fetch(c.url).then(r=>r.text()).then(raw=>{
+    fetch(c.url).then(function(r){return r.text();}).then(function(raw){
       if(!raw||raw.length<10){$('v-body').innerHTML='<p style="padding:40px;text-align:center">미리보기를 불러올 수 없습니다.</p>';return;}
-      const bm=raw.match(/<body[^>]*>/i);
-      let head='',body='';
-      if(bm){const bs=raw.indexOf(bm[0])+bm[0].length;head=raw.substring(0,bs);body=raw.substring(bs);}
-      else{head='<!DOCTYPE html><html><head></head><body>';body=raw;}
-      const plain=body.replace(/<[^>]*>/g,'');
-      const cutAt=Math.floor(plain.length*0.25);
-      let tc=0,cp=body.length;
-      for(let i=0;i<body.length;i++){if(body[i]==='<'){while(i<body.length&&body[i]!=='>')i++;}else{tc++;if(tc>=cutAt){cp=i+1;break;}}}
-      const cut=body.substring(0,cp);
-      const footer='<div style="position:sticky;bottom:0;left:0;right:0;background:linear-gradient(transparent,#fff 40%);padding:32px 20px;text-align:center"><p style="color:#333;font-size:15px;font-weight:600;margin-bottom:10px">🔒 전체 내용은 구매 후 열람 가능합니다</p></div>';
-      const doc=head+cut+footer+'</body></html>';
-      const iframe=document.createElement('iframe');
+      var bm=raw.match(/<body[^>]*>/i);
+      var head='',bdy='';
+      if(bm){var idx=raw.indexOf(bm[0])+bm[0].length;head=raw.substring(0,idx);bdy=raw.substring(idx);}
+      else{head='<!DOCTYPE html><html><head></head><body>';bdy=raw;}
+      var endTag=bdy.search(/<\/body>/i);if(endTag>-1)bdy=bdy.substring(0,endTag);
+      var plain=bdy.replace(/<[^>]*>/g,'');
+      var cutAt=Math.floor(plain.length*0.25);
+      var tc=0,cp=bdy.length;
+      for(var i=0;i<bdy.length;i++){if(bdy[i]==='<'){while(i<bdy.length&&bdy[i]!=='>')i++;}else{tc++;if(tc>=cutAt){cp=i+1;break;}}}
+      var cut=bdy.substring(0,cp);
+      var full=head+cut+'<div style="padding:32px 20px;text-align:center;background:linear-gradient(transparent,#fff 40%)"><p style="color:#333;font-size:15px;font-weight:600">\uD83D\uDD12 전체 내용은 구매 후 열람 가능합니다</p></div></body></html>';
+      var blob=new Blob([full],{type:'text/html;charset=utf-8'});
+      var blobUrl=URL.createObjectURL(blob);
+      var iframe=document.createElement('iframe');
       iframe.style.cssText='width:100%;height:100%;border:none';
-      iframe.sandbox='allow-same-origin allow-scripts';
-      iframe.srcdoc=doc;
+      iframe.src=blobUrl;
+      iframe.onload=function(){URL.revokeObjectURL(blobUrl);};
       $('v-body').innerHTML='';
       $('v-body').appendChild(iframe);
-    }).catch(()=>{
-      $('v-body').innerHTML=`<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="${c.url}" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">🔒 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail('${cid}')">구매하러 가기</button></div></div></div>`;
+    }).catch(function(){
+      $('v-body').innerHTML='<div style="position:relative;width:100%;height:100%;overflow:hidden"><iframe src="'+c.url+'" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin"></iframe><div style="position:absolute;top:30%;left:0;right:0;bottom:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:rgba(255,255,255,.3)"><div class="preview-overlay" style="height:100%"><p class="preview-msg">\uD83D\uDD12 전체 내용은 구매 후 열람 가능합니다</p><button class="preview-buy" onclick="closeViewer();showDetail(\''+cid+'\')">구매하러 가기</button></div></div></div>';
     });
   }else{
     // PDF: PDF.js로 첫 4페이지만 canvas 렌더링
