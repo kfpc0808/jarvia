@@ -450,22 +450,32 @@ async function loadRecent(){if(!me)return;let snap;try{snap=await getDocs(query(
 // ════════════════════════════════════════
 //  CONTENT DETAIL & VIEW
 // ════════════════════════════════════════
-function showDetail(cid){
+async function showDetail(cid){
   const c=allContents.find(x=>x.contentId===cid);if(!c)return;
   const cat=allCats.find(x=>x.categoryId===c.categoryId);const isFav=myFavSet.has(cid);
+  // 30일 이내 구매이력 확인
+  let canReview=false;
+  if(me&&meData&&meData.role!=='admin'&&meData.role!=='free_user'){
+    try{
+      var now=new Date();
+      var vSnap;try{vSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid),where('expiresAt','>',Timestamp.fromDate(now)),orderBy('expiresAt','desc'),limit(1)));}catch(e){var all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid)));var valid=all.docs.filter(function(d){var ex=d.data().expiresAt;return ex&&ex.toMillis()>now.getTime();});vSnap={empty:valid.length===0,docs:valid};}
+      if(!vSnap.empty)canReview=true;
+    }catch(e){canReview=false;}
+  }
+  var viewLabel=canReview?'\uC7AC\uC5F4\uB78C\uAC00\uB2A5':'('+fmt(c.price)+'\uC6D0)';
   let actionsHTML='';
   if(c.type==='closing'){
     const previewBtn=c.videoUrl?`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`:`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`;
     actionsHTML=`<div class="closing-actions">
       <div class="cd-notice">📑 클로징PPT는 PDF 열람, 영상 보기, PPTX 다운로드가 가능합니다.<br>PPTX 다운로드 시 추가 1,000원이 차감됩니다.</div>
-      <div class="closing-row">${previewBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">📄 PDF 열람 (${fmt(c.price)}원)</button>${c.videoUrl?`<button class="btn btn-sec" onclick="doViewVideo('${cid}')">🎬 영상 보기</button>`:''}<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${cid}')">⬇ PPTX 다운로드 (+1,000원)</button></div>
+      <div class="closing-row">${previewBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">📄 PDF 열람 ${viewLabel}</button>${c.videoUrl?`<button class="btn btn-sec" onclick="doViewVideo('${cid}')">🎬 영상 보기</button>`:''}<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${cid}')">⬇ PPTX 다운로드 (+1,000원)</button></div>
       <div class="closing-row"><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>
     </div>`;
   }else if(c.type==='audio'){
-    actionsHTML=`<div class="cd-actions"><button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button><button class="btn" id="btn-view" onclick="doView('${cid}')">🎧 오디오 재생 (${fmt(c.price)}원)</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
+    actionsHTML=`<div class="cd-actions"><button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button><button class="btn" id="btn-view" onclick="doView('${cid}')">🎧 오디오 재생 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
   }else{
     const pvBtn=c.type==='ppt'?'':`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`;
-    actionsHTML=`<div class="cd-notice">⚠️ 모든 콘텐츠는 다운로드 불가입니다. 웹 뷰어를 통한 열람만 가능하며, 결제 후 30일간 재열람 가능합니다.</div><div class="cd-actions">${pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">열람하기 (${fmt(c.price)}원)</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
+    actionsHTML=`<div class="cd-notice">⚠️ 모든 콘텐츠는 다운로드 불가입니다. 웹 뷰어를 통한 열람만 가능하며, 결제 후 30일간 재열람 가능합니다.</div><div class="cd-actions">${pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">열람하기 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
   }
   const subLabel=c.subType?` <span class="badge" style="background:#E8EAF6;color:#283593">${esc(c.subType)}</span>`:'';
   $('detail-inner').innerHTML=`<div class="cd"><h2>${esc(c.title)}</h2><div class="cd-meta">${typeBadge(c.type)}${subLabel} ${cat?`<span class="cd-cat">${esc(cat.name)}</span>`:''} <span class="cd-date">업데이트: ${fdate(c.updatedAt)}</span></div><div class="cd-price">${fmt(c.price)}원</div><p class="cd-summary">${esc(c.summary||'')}</p>${actionsHTML}</div>`;
