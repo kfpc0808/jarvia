@@ -374,7 +374,7 @@ async function doRegister(e){
 }
 
 async function doResetPw(e){e.preventDefault();try{await sendPasswordResetEmail(auth,$('rp-email').value.trim());toast('재설정 링크가 이메일로 발송되었습니다.','success');nav('login');}catch(err){toast(err.code==='auth/user-not-found'?'등록되지 않은 이메일입니다.':err.message,'error');}}
-async function doLogout(){await signOut(auth);me=null;meData=null;sessionStorage.clear();nav('login');$('app-header').classList.add('hidden');}
+async function doLogout(){if(window._sessionChk)clearInterval(window._sessionChk);await signOut(auth);me=null;meData=null;sessionStorage.clear();nav('login');$('app-header').classList.add('hidden');}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';$('hdr-balance').textContent='💰 '+s+' | 충전';$('mob-balance').textContent='💰 '+s+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
@@ -404,11 +404,25 @@ onAuthStateChanged(auth,async u=>{
     if(d.exists()){
       meData=d.data();
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
+      // 중복 로그인 체크: 다른 기기에서 로그인했으면 강제 로그아웃
+      const mySid=sessionStorage.getItem('sid');
+      if(mySid&&meData.currentSessionId&&mySid!==meData.currentSessionId){
+        toast('다른 기기에서 로그인되어 자동 로그아웃됩니다.','warning');
+        await signOut(auth);me=null;meData=null;sessionStorage.clear();$('app-header').classList.add('hidden');nav('login');return;
+      }
       $('app-header').classList.remove('hidden');
       $('hdr-name').textContent=meData.name+'님';
       if($('mob-name'))$('mob-name').textContent=meData.name+'님';
       updateBal();nav('main');
       checkPaymentResult();
+      // 주기적 세션 체크 (30초마다)
+      if(window._sessionChk)clearInterval(window._sessionChk);
+      window._sessionChk=setInterval(async()=>{
+        try{const sd=await getDoc(doc(db,'users',me.uid));if(!sd.exists())return;
+          const cur=sd.data().currentSessionId;const my=sessionStorage.getItem('sid');
+          if(my&&cur&&my!==cur){clearInterval(window._sessionChk);toast('다른 기기에서 로그인되어 자동 로그아웃됩니다.','warning');await signOut(auth);me=null;meData=null;sessionStorage.clear();$('app-header').classList.add('hidden');nav('login');}
+        }catch(e){}
+      },30000);
     }
   }else{me=null;meData=null;$('app-header').classList.add('hidden');nav('login');}
 });
@@ -721,8 +735,8 @@ async function doDownloadPPTX(cid){
   if(isExpired){toast('이용 기간이 만료되었습니다.','error');return;}
   const c=allContents.find(x=>x.contentId===cid);if(!c||!c.pptxUrl){toast('PPTX 파일이 등록되지 않았습니다.','error');return;}
   if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
-  // 관리자/무료회원은 구매이력 체크 없이 바로 다운로드
-  if(meData.role==='admin'||meData.role==='free_user'){
+  // 관리자만 무료 다운로드
+  if(meData.role==='admin'){
     const a=document.createElement('a');a.href=c.pptxUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
     toast('다운로드를 시작합니다.','success');return;
   }
