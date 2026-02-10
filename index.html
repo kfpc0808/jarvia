@@ -367,8 +367,7 @@ async function doRegister(e){
     const cred=await createUserWithEmailAndPassword(auth,email,pw);
     await setDoc(doc(db,'users',cred.user.uid),{
       userId:cred.user.uid,name,company,title,phone,email,address:addr,loginId,
-      role:'user',status:'active',balance:0,referralCode:genRefCode(),referredBy:localStorage.getItem('jarvia_ref')||'',referralPoints:0,
-      expiresAt:Timestamp.fromDate(new Date(Date.now()+30*24*60*60*1000)),
+      role:'user',status:'active',balance:0,point:0,referralCode:genRefCode(),referredBy:localStorage.getItem('jarvia_ref')||'',referralPoints:0,
       agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
       lastLoginAt:serverTimestamp(),
       createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
@@ -416,8 +415,8 @@ onAuthStateChanged(auth,async u=>{
       meData=d.data();
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
       $('app-header').classList.remove('hidden');
-      $('hdr-name').textContent=meData.name+'님 ('+({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클멤버십'}[meData.role]||meData.role)+')';
-      if($('mob-name'))$('mob-name').textContent=meData.name+'님 ('+({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클멤버십'}[meData.role]||meData.role)+')';
+      $('hdr-name').textContent=meData.name+'님 ('+({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클멤버십',branch_manager:'지사장'}[meData.role]||meData.role)+')';
+      if($('mob-name'))$('mob-name').textContent=meData.name+'님 ('+({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클멤버십',branch_manager:'지사장'}[meData.role]||meData.role)+')';
       // 추천코드 없으면 생성
       if(!meData.referralCode){const rc=genRefCode();await updateDoc(doc(db,'users',me.uid),{referralCode:rc});meData.referralCode=rc;}
       // JARVIA멤버십이면 공유버튼/추천탭 표시
@@ -479,14 +478,14 @@ async function showDetail(cid){
   // 30일 이내 구매이력 확인
   let canReview=false;
   let reviewDays=0;
-  if(me&&meData&&meData.role!=='admin'&&meData.role!=='free_user'&&meData.role!=='jarvia_member'&&meData.role!=='inner_circle'){
+  if(me&&meData&&meData.role!=='admin'&&meData.role!=='free_user'&&meData.role!=='jarvia_member'&&meData.role!=='inner_circle'&&meData.role!=='branch_manager'){
     try{
       var now=new Date();
       var vSnap;try{vSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid),where('expiresAt','>',Timestamp.fromDate(now)),orderBy('expiresAt','desc'),limit(1)));}catch(e){var all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid)));var valid=all.docs.filter(function(d){var ex=d.data().expiresAt;return ex&&ex.toMillis()>now.getTime();});vSnap={empty:valid.length===0,docs:valid};}
       if(!vSnap.empty){canReview=true;var expD=vSnap.docs[0].data().expiresAt;var expDate=expD.toDate?expD.toDate():new Date(expD);reviewDays=Math.ceil((expDate-now)/(1000*60*60*24));}
     }catch(e){canReview=false;}
   }
-  var isFreeRole=me&&meData&&(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle');
+  var isFreeRole=me&&meData&&(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager');
   var viewLabel=canReview?'\uC7AC\uC5F4\uB78C\uAC00\uB2A5 (D-'+reviewDays+')':(isFreeRole?'(\uBB34\uB8CC)':'('+fmt(c.price)+'\uC6D0)');
   var dlPriceLabel=me&&meData&&meData.role==='jarvia_member'?'무료':'+5,000원';
   var dlNoticePrice=me&&meData&&meData.role==='jarvia_member'?'JARVIA멤버십은 PPTX 다운로드가 무료입니다.':'PPTX 다운로드 시 추가 5,000원이 차감됩니다.';
@@ -520,7 +519,7 @@ async function doView(cid){
   const btn=$('btn-view');if(btn){btn.disabled=true;btn.textContent='처리중...';}
   try{
     if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
-    if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'){
+    if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       if(meData.role!=='admin'){
         try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
@@ -757,7 +756,7 @@ async function doViewVideo(cid){
   _viewing=true;
   try{
     if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
-    if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'){
+    if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       if(meData.role!=='admin'){
         try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
@@ -1181,7 +1180,7 @@ async function loadReferrals(){
   // 내 추천코드로 가입한 회원 조회
   let refs=[];
   try{const snap=await getDocs(query(collection(db,'users'),where('referredBy','==',rc)));refs=snap.docs.map(d=>d.data());}catch(e){}
-  const roleLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클'}[r]||r);
+  const roleLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클',branch_manager:'지사장'}[r]||r);
   $('ref-info').innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center"><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">내 추천 코드</div><div style="font-size:20px;font-weight:700;color:var(--primary);letter-spacing:2px;margin:4px 0">${rc} <button onclick="copyRefCode()" style="font-size:12px;padding:4px 10px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">복사</button></div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">추천 성공</div><div style="font-size:20px;font-weight:700;color:var(--accent)">${refs.length}명</div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">적립 포인트</div><div style="font-size:20px;font-weight:700;color:var(--success)">${fmt(pts)}P</div></div></div><div style="margin-top:12px"><button onclick="doShare()" style="background:linear-gradient(135deg,#FF6B35,#F7931E);color:#fff;border:none;padding:10px 24px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer">🔗 추천 링크 공유</button></div>`;
   $('tb-referrals').innerHTML=refs.length?refs.map(r=>`<tr><td>${esc(r.name)}</td><td>${fdate(r.createdAt)}</td><td>${roleLabel(r.role)}</td><td>${r.role==='jarvia_member'?'<span style="color:var(--success);font-weight:600">✅ 50,000P</span>':'<span style="color:var(--text-lt)">-</span>'}</td></tr>`).join(''):'<tr><td colspan="4" class="tc">추천한 회원이 없습니다.</td></tr>';
 }
