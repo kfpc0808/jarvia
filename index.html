@@ -191,6 +191,7 @@
     </div>
     <div id="mp-info" class="tp">
       <div class="bal-card"><span>보유 크레딧</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
+      <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
       <form class="info-form" onsubmit="doUpdateProfile(event)">
         <div class="fr"><div class="fg"><label>이름</label><input id="mp-name" readonly class="ro"></div><div class="fg"><label>아이디</label><input id="mp-lid" readonly class="ro"></div></div>
         <div class="fr"><div class="fg"><label>소속사</label><input id="mp-comp"></div><div class="fg"><label>직함</label><input id="mp-ttl"></div></div>
@@ -383,7 +384,7 @@ async function doRegister(e){
 async function doResetPw(e){e.preventDefault();try{await sendPasswordResetEmail(auth,$('rp-email').value.trim());toast('재설정 링크가 이메일로 발송되었습니다.','success');nav('login');}catch(err){toast(err.code==='auth/user-not-found'?'등록되지 않은 이메일입니다.':err.message,'error');}}
 async function doLogout(){await signOut(auth);me=null;meData=null;sessionStorage.clear();nav('login');$('app-header').classList.add('hidden');}
 
-function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';$('hdr-balance').textContent='💰 '+s+' | 충전';$('mob-balance').textContent='💰 '+s+' | 충전';checkExpiry();}
+function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
 
 // ── Auth Observer ──
@@ -529,8 +530,8 @@ async function doView(cid){
       closeM('mdl-detail');openViewer(c.url,c.title,c.type);return;
     }
     const result=await spendCredit(me.uid,cid);
-    meData.balance=result.balance;updateBal();closeM('mdl-detail');
-    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n잔액: ${fmt(result.balance)}원\n${fdate(result.expiresAt)}까지 재열람 가능`);
+    meData.balance=result.balance;if(result.point!==undefined)meData.point=result.point;updateBal();closeM('mdl-detail');
+    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n포인트: ${fmt(result.point||0)}P | 잔액: ${fmt(result.balance)}원\n${fdate(result.expiresAt)}까지 재열람 가능`);
     else alert('무료 재열람 (30일 이내 결제 이력)');
     openViewer(result.url,result.title,result.type);
   }catch(err){
@@ -555,14 +556,19 @@ async function spendCredit(uid,cid){
       tx.update(cRef,{viewCount:increment(1)});
       return{charged:false,price:0,balance:ud.balance,url:cd.url,title:cd.title,type:cd.type,expiresAt:ex.expiresAt};
     }
-    if(ud.balance<price)throw new Error('INSUFFICIENT_BALANCE');
-    const nb=ud.balance-price,txId=gid(),logId=gid();
+    const totalAvail=(ud.point||0)+(ud.balance||0);
+    if(totalAvail<price)throw new Error('INSUFFICIENT_BALANCE');
+    let pointUsed=Math.min(ud.point||0,price);
+    let balUsed=price-pointUsed;
+    const np=(ud.point||0)-pointUsed;
+    const nb=(ud.balance||0)-balUsed;
+    const txId=gid(),logId=gid();
     const paidAt=Timestamp.fromDate(now),expiresAt=Timestamp.fromDate(new Date(now.getTime()+THIRTY_DAYS));
-    tx.update(uRef,{balance:nb,updatedAt:serverTimestamp()});
-    tx.set(doc(db,'transactions',txId),{txId,userId:uid,type:'spend',amount:-price,balanceAfter:nb,refType:'content',refId:cid,createdAt:serverTimestamp()});
+    tx.update(uRef,{balance:nb,point:np,updatedAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId,userId:uid,type:'spend',amount:-price,pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'content',refId:cid,createdAt:serverTimestamp()});
     tx.set(doc(db,'view_logs',logId),{logId,userId:uid,contentId:cid,price,txId,paidAt,expiresAt,createdAt:serverTimestamp()});
     tx.update(cRef,{viewCount:increment(1)});
-    return{charged:true,price,balance:nb,url:cd.url,title:cd.title,type:cd.type,expiresAt};
+    return{charged:true,price,balance:nb,point:np,url:cd.url,title:cd.title,type:cd.type,expiresAt};
   });
 }
 
@@ -762,8 +768,8 @@ async function doViewVideo(cid){
     }
     const result=await spendCredit(me.uid,cid);
     const c=allContents.find(x=>x.contentId===cid);
-    meData.balance=result.balance;updateBal();closeM('mdl-detail');
-    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n잔액: ${fmt(result.balance)}원`);
+    meData.balance=result.balance;if(result.point!==undefined)meData.point=result.point;updateBal();closeM('mdl-detail');
+    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n포인트: ${fmt(result.point||0)}P | 잔액: ${fmt(result.balance)}원`);
     else alert('무료 재열람 (30일 이내 결제 이력)');
     openViewer(c?.videoUrl||result.url,result.title,'video');
   }catch(err){
@@ -800,13 +806,18 @@ async function doDownloadPPTX(cid){
     const uRef=doc(db,'users',me.uid);
     await runTransaction(db,async tx=>{
       const ud=(await tx.get(uRef)).data();
-      if(ud.balance<dlPrice)throw new Error('INSUFFICIENT_BALANCE');
-      const nb=ud.balance-dlPrice,txId=gid();
-      tx.update(uRef,{balance:nb,updatedAt:serverTimestamp()});
-      tx.set(doc(db,'transactions',txId),{txId,userId:me.uid,type:'spend',amount:-dlPrice,balanceAfter:nb,refType:'pptx_download',refId:cid,memo:'PPTX 다운로드: '+c.title,createdAt:serverTimestamp()});
+      const totalAvail=(ud.point||0)+(ud.balance||0);
+      if(totalAvail<dlPrice)throw new Error('INSUFFICIENT_BALANCE');
+      let pointUsed=Math.min(ud.point||0,dlPrice);
+      let balUsed=dlPrice-pointUsed;
+      const np=(ud.point||0)-pointUsed;
+      const nb=(ud.balance||0)-balUsed;
+      const txId=gid();
+      tx.update(uRef,{balance:nb,point:np,updatedAt:serverTimestamp()});
+      tx.set(doc(db,'transactions',txId),{txId,userId:me.uid,type:'spend',amount:-dlPrice,pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'pptx_download',refId:cid,memo:'PPTX 다운로드: '+c.title,createdAt:serverTimestamp()});
     });
     await refreshMe();updateBal();
-    const dlAlertMsg=`💰 ${fmt(dlPrice)}원 차감\n잔액: ${fmt(meData.balance)}원`;
+    const dlAlertMsg=`💰 ${fmt(dlPrice)}원 차감\n포인트: ${fmt(meData.point||0)}P | 잔액: ${fmt(meData.balance)}원`;
     alert(dlAlertMsg);
     const a=document.createElement('a');a.href=c.pptxUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
   }catch(err){
@@ -1004,6 +1015,7 @@ let _lastPayCheck=0;
 async function loadMyPage(){
   if(!me||!meData)return;await refreshMe();
   $('mp-bal').textContent=fmt(meData.balance);
+  $('mp-point').textContent=fmt(meData.point||0);
   $('mp-name').value=meData.name||'';$('mp-lid').value=meData.loginId||'';
   $('mp-comp').value=meData.company||'';$('mp-ttl').value=meData.title||'';
   $('mp-phone').value=meData.phone||'';$('mp-email').value=meData.email||'';
