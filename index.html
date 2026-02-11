@@ -253,6 +253,17 @@
   <div class="mdl-bg" onclick="closeM('mdl-terms')"></div>
   <div class="mdl-box mdl-lg"><button class="mdl-x" onclick="closeM('mdl-terms')">×</button><div id="terms-body"></div></div>
 </div>
+<div id="mdl-login-popup" class="modal hidden" style="z-index:210">
+  <div class="mdl-bg" onclick="closeLoginPopup()"></div>
+  <div class="mdl-box" style="max-width:520px"><button class="mdl-x" onclick="closeLoginPopup()">×</button>
+    <h2 id="lp-title" style="font-size:18px;margin-bottom:16px;color:var(--primary)"></h2>
+    <div id="lp-body" style="font-size:14px;line-height:1.8;max-height:60vh;overflow-y:auto"></div>
+    <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center">
+      <label style="font-size:13px;color:var(--text-lt);cursor:pointer"><input type="checkbox" id="lp-today-hide" style="margin-right:4px">오늘 하루 안 보기</label>
+      <button class="btn" onclick="closeLoginPopup()">확인</button>
+    </div>
+  </div>
+</div>
 <div id="toast" class="toast hidden"></div>
 
 <!-- ════════════════════════════════════════════════════
@@ -435,6 +446,7 @@ onAuthStateChanged(auth,async u=>{
       updateBal();nav('main');
       if(window._justLoggedIn){window._justLoggedIn=false;setTimeout(()=>alert('📢 안내\n\n본 프로그램은 PC 및 태블릿에 최적화되어 있음을 알려드립니다. 행복하세요~^^'),300);}
       checkPaymentResult();
+      showLoginPopups();
     }
   }else{me=null;meData=null;$('app-header').classList.add('hidden');nav('login');}
 });
@@ -1207,6 +1219,50 @@ document.addEventListener('keydown',e=>{
     }
   }
 });
+
+// ═══ 로그인 팝업 ═══
+let _lpQueue=[];
+async function showLoginPopups(){
+  if(!me||!meData||meData.role==='admin')return;
+  _lpQueue=[];
+  const now=new Date();const todayStr=now.toISOString().slice(0,10);
+  try{
+    const ids=[meData.role,'common'];
+    for(const id of ids){
+      const hideKey='lp_hide_'+id;
+      const hidden=localStorage.getItem(hideKey);
+      if(hidden===todayStr)continue;
+      try{const d=await getDoc(doc(db,'login_popups',id));
+        if(d.exists()){const p=d.data();
+          if(!p.isActive)continue;
+          if(p.startDate&&todayStr<p.startDate)continue;
+          if(p.endDate&&todayStr>p.endDate)continue;
+          _lpQueue.push({id,title:p.title,bodyHtml:p.bodyHtml});
+        }
+      }catch(e){}
+    }
+    if(_lpQueue.length)setTimeout(()=>showNextPopup(),500);
+  }catch(e){console.warn('popup load error:',e);}
+}
+function showNextPopup(){
+  if(!_lpQueue.length)return;
+  const p=_lpQueue.shift();
+  $('lp-title').textContent=p.title||'공지';
+  $('lp-body').innerHTML=p.bodyHtml||'';
+  $('lp-today-hide').checked=false;
+  $('mdl-login-popup').dataset.pid=p.id;
+  openM('mdl-login-popup');
+}
+function closeLoginPopup(){
+  const pid=$('mdl-login-popup').dataset.pid;
+  if($('lp-today-hide').checked&&pid){
+    const todayStr=new Date().toISOString().slice(0,10);
+    localStorage.setItem('lp_hide_'+pid,todayStr);
+  }
+  closeM('mdl-login-popup');
+  if(_lpQueue.length)setTimeout(()=>showNextPopup(),300);
+}
+window.showLoginPopups=showLoginPopups;window.closeLoginPopup=closeLoginPopup;
 </script>
 <footer style="background:var(--primary-dk);color:rgba(255,255,255,.6);text-align:center;padding:24px 16px;font-size:13px;line-height:1.8;margin-top:40px">
 <div>Copyright © 2026 (주)KFPC All Rights Reserved</div>
