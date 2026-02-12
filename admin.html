@@ -651,25 +651,17 @@ async function syncGitHub(){
     const existPptx=new Set(cSnap.docs.map(d=>{const u=d.data().pptxUrl||'';return u;}).filter(u=>u));
     let added=0,skipped=0;
     const pdfMap={};
-    const reportPdfMap={};
-    const reportPptxMap={};
     files.forEach(f=>{
       const ext=f.path.split('.').pop().toLowerCase();
       const parts=f.path.replace(GH_BASE+'/','').split('/');
       const folder=parts[0];
       if(ext==='pptx'&&folder==='closing_ppt'){const key=f.path.replace(/\.[^.]+$/,'');pdfMap[key]=f.path;}
-      if(folder==='special_report'&&parts.length>=3&&(parts[1]==='개인'||parts[1]==='법인')){
-        const baseName=parts[parts.length-1].replace(/\.[^.]+$/,'');
-        if(ext==='pdf')reportPdfMap[baseName]={path:f.path,subType:parts[1]};
-        if(ext==='pptx')reportPptxMap[baseName]={path:f.path,subType:parts[1]};
-      }
     });
     for(const f of files){
       const ext=f.path.split('.').pop().toLowerCase();
       const parts=f.path.replace(GH_BASE+'/','').split('/');
       const folder=parts[0];
-      if(ext==='pptx'){skipped++;continue;}
-      if(folder==='special_report'&&parts.length>=3&&(parts[1]==='개인'||parts[1]==='법인')&&ext==='pdf'){skipped++;continue;}
+      if(ext==='pptx'&&folder!=='special_report'){skipped++;continue;}
       const rawUrl=ext==='html'?`https://kfpc0808.github.io/${GH_REPO.split('/')[1]}/${f.path}`:`https://raw.githubusercontent.com/${GH_REPO}/main/${f.path}`;
       if(existUrls.has(rawUrl)){skipped++;continue;}
       const type=FOLDER_TYPE_MAP[folder];
@@ -682,15 +674,6 @@ async function syncGitHub(){
       const cid=gid();
       const contData={contentId:cid,title,categoryId:'',type,price:1000,url:rawUrl,thumbnailUrl:null,summary:'',sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
       if(type==='report'||type==='closing')contData.subType=subType;
-      if(type==='report'){
-        const _n=s=>s.replace(/[_ ]/g,'');
-        const baseName=title;const bn=_n(baseName);
-        const pdfInfo=Object.entries(reportPdfMap).find(([k])=>_n(k)===bn);
-        const pptxInfo=Object.entries(reportPptxMap).find(([k])=>_n(k)===bn);
-        if(pdfInfo)contData.pdfUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pdfInfo[1].path}`;
-        if(pptxInfo)contData.pptxUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pptxInfo[1].path}`;
-        if(!subType&&(pdfInfo||pptxInfo))contData.subType=(pdfInfo||pptxInfo)[1].subType;
-      }
       if(type==='closing'){
         const pdfKey=f.path.replace(/\.[^.]+$/,'');
         const pptxPath=pdfMap[pdfKey];
@@ -700,30 +683,7 @@ async function syncGitHub(){
       await setDoc(doc(db,'contents',cid),contData);added++;
       ss.textContent=`동기화 중... (${added}개 추가 / ${skipped}개 건너뜀)`;
     }
-    // 기존 특급보고서에 PDF/PPTX URL 매칭 업데이트
-    let updated=0;
-    if(Object.keys(reportPdfMap).length||Object.keys(reportPptxMap).length){
-      const norm=s=>s.replace(/[_ ]/g,'');
-      const normPdfMap={};Object.keys(reportPdfMap).forEach(k=>{normPdfMap[norm(k)]=reportPdfMap[k];});
-      const normPptxMap={};Object.keys(reportPptxMap).forEach(k=>{normPptxMap[norm(k)]=reportPptxMap[k];});
-      const rSnap=await getDocs(collection(db,'contents'));
-      for(const d of rSnap.docs){
-        const c=d.data();
-        if(c.type!=='report')continue;
-        const t=c.title||'';
-        const tClean=t.replace(/^\([^)]*\)/,'');
-        const tn=norm(t),tcn=norm(tClean);
-        const pdfInfo=normPdfMap[tn]||normPdfMap[tcn];
-        const pptxInfo=normPptxMap[tn]||normPptxMap[tcn];
-        if(!pdfInfo&&!pptxInfo)continue;
-        const upd={};
-        if(pdfInfo&&!c.pdfUrl){upd.pdfUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pdfInfo.path}`;}
-        if(pptxInfo&&!c.pptxUrl){upd.pptxUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pptxInfo.path}`;}
-        if(!c.subType&&(pdfInfo||pptxInfo)){upd.subType=(pdfInfo||pptxInfo).subType;}
-        if(Object.keys(upd).length){await updateDoc(doc(db,'contents',d.id),upd);updated++;}
-      }
-    }
-    ss.innerHTML=`<strong>✅ 동기화 완료!</strong> 신규 ${added}개 등록 / ${updated?updated+'개 PDF/PPTX 연결 / ':''}${skipped}개 건너뜀 (이미 등록 또는 제외)`;
+    ss.innerHTML=`<strong>✅ 동기화 완료!</strong> 신규 ${added}개 등록 / ${skipped}개 건너뜀 (이미 등록 또는 제외)`;
     if(added>0)loadConts();
   }catch(err){ss.innerHTML=`<strong style="color:red">❌ 동기화 실패:</strong> ${err.message}`;console.error(err);}
 }
