@@ -77,8 +77,9 @@
       <div class="tabs" style="margin-bottom:16px"><button class="tab active" onclick="switchBatchTab('audio',this)">🎧 오디오 일괄</button><button class="tab" onclick="switchBatchTab('video',this)">🎬 영상 일괄 (엑셀)</button></div>
       <div id="batch-audio">
         <div class="fr"><div class="fg"><label>카테고리</label><select id="ba-cat"></select></div><div class="fg"><label>가격(원)</label><input id="ba-price" type="number" value="2000" min="0" step="100"></div></div>
-        <div class="fg"><label>오디오 파일 선택 (다중)</label><input type="file" id="ba-files" accept="audio/*" multiple></div>
-        <button type="button" class="btn mt" onclick="batchAudioUpload()">업로드 및 등록</button>
+        <div class="fg"><label>오디오 파일 선택 (다중)</label><input type="file" id="ba-files" accept="audio/*" multiple onchange="previewAudioFiles()"></div>
+        <div id="ba-preview" style="margin-top:12px"></div>
+        <button type="button" class="btn mt" id="ba-upload-btn" onclick="batchAudioUpload()" style="display:none">업로드 및 등록</button>
         <div id="ba-progress" style="margin-top:12px"></div>
       </div>
       <div id="batch-video" style="display:none">
@@ -681,6 +682,27 @@ async function syncGitHub(){
 // ═══ BATCH UPLOAD ═══
 function showBatchUpload(){$('cf-area').classList.add('hidden');$('bulk-price-area').classList.add('hidden');$('batch-area').classList.remove('hidden');}
 function switchBatchTab(tab,btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');$('batch-audio').style.display=tab==='audio'?'':'none';$('batch-video').style.display=tab==='video'?'':'none';}
+// 오디오 파일 선택 시 미리보기 목록 표시
+function previewAudioFiles(){
+  const files=$('ba-files').files;
+  const prev=$('ba-preview');
+  const btn=$('ba-upload-btn');
+  if(!files.length){prev.innerHTML='';btn.style.display='none';return;}
+  let html='<div style="font-size:13px;color:var(--text-lt);margin-bottom:8px">'+files.length+'개 파일 선택됨 — 각 파일의 구분(개인/법인)을 선택한 후 업로드해 주세요.</div>';
+  html+='<div style="display:flex;gap:4px;margin-bottom:8px"><button type="button" class="btn btn-sm" onclick="baSetAll(\'개인\')">전체 → 개인</button><button type="button" class="btn btn-sm" onclick="baSetAll(\'법인\')">전체 → 법인</button><button type="button" class="btn btn-sm btn-sec" onclick="baSetAll(\'\')">전체 → 없음</button></div>';
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No</th><th>파일명 (제목)</th><th style="width:100px">구분</th></tr></thead><tbody>';
+  for(let i=0;i<files.length;i++){
+    const title=files[i].name.replace(/\.[^.]+$/,'').replace(/^팟캐스트_/,'').replace(/_/g,' ');
+    html+=`<tr><td style="text-align:center">${i+1}</td><td>${esc(title)}</td><td><select id="ba-sub-${i}" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px"><option value="">없음</option><option value="개인">개인</option><option value="법인">법인</option></select></td></tr>`;
+  }
+  html+='</tbody></table></div>';
+  prev.innerHTML=html;
+  btn.style.display='';
+}
+function baSetAll(v){
+  const files=$('ba-files').files;
+  for(let i=0;i<files.length;i++){const sel=$('ba-sub-'+i);if(sel)sel.value=v;}
+}
 async function batchAudioUpload(){
   const files=$('ba-files').files;if(!files.length){toast('오디오 파일을 선택하세요.','error');return;}
   const catId=$('ba-cat').value;const price=parseInt($('ba-price').value)||1000;
@@ -690,6 +712,7 @@ async function batchAudioUpload(){
   for(let i=0;i<files.length;i++){
     const file=files[i];
     const title=file.name.replace(/\.[^.]+$/,'').replace(/^팟캐스트_/,'').replace(/_/g,' ');
+    const subtype=($('ba-sub-'+i)?.value)||'';
     const cleanName=file.name.replace(/[^a-zA-Z0-9가-힣._-]/g,'');
     const isDup=[...existUrls].some(u=>u.includes(cleanName));
     if(isDup){dup++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--warning)">⏭ (${i+1}/${total}) ${esc(title)} - 이미 등록됨</div>`+prog.innerHTML;continue;}
@@ -700,12 +723,14 @@ async function batchAudioUpload(){
       await new Promise((resolve,reject)=>{task.on('state_changed',null,reject,resolve);});
       const url=await getDownloadURL(task.snapshot.ref);existUrls.add(url);
       const cid=gid();
-      await setDoc(doc(db,'contents',cid),{contentId:cid,title,categoryId:catId,type:'audio',price,url,thumbnailUrl:null,summary:title,sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-      done++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--success)">✅ (${i+1}/${total}) ${esc(title)}</div>`+prog.innerHTML.replace(/⏳[^<]*<\/div>/,'');
+      const data={contentId:cid,title,categoryId:catId,type:'audio',price,url,thumbnailUrl:null,summary:title,sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+      if(subtype==='개인'||subtype==='법인')data.subType=subtype;
+      await setDoc(doc(db,'contents',cid),data);
+      done++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--success)">✅ (${i+1}/${total}) ${esc(title)} [${subtype||'구분없음'}]</div>`+prog.innerHTML.replace(/⏳[^<]*<\/div>/,'');
     }catch(e){fail++;prog.innerHTML=`<div style="margin:4px 0;font-size:13px;color:var(--danger)">❌ (${i+1}/${total}) ${esc(title)} - ${e.message}</div>`+prog.innerHTML.replace(/⏳[^<]*<\/div>/,'');}
   }
   prog.innerHTML=`<div style="margin:8px 0;font-size:14px;font-weight:600">완료! 성공 ${done}개 / 중복 ${dup}개 / 실패 ${fail}개</div>`+prog.innerHTML;
-  if(done>0)loadConts();$('ba-files').value='';
+  if(done>0)loadConts();$('ba-files').value='';$('ba-preview').innerHTML='';$('ba-upload-btn').style.display='none';
 }
 async function batchVideoUpload(){
   const fileInput=$('bv-file');const file=fileInput.files[0];if(!file){toast('엑셀 파일을 선택하세요.','error');return;}
@@ -849,7 +874,7 @@ async function updateJarviaMember(uid){
 window.toggleAllMembers=toggleAllMembers;window.deleteSelectedMembers=deleteSelectedMembers;
 window.loadAdmins=loadAdmins;window.createAdmin=createAdmin;window.delAdmin=delAdmin;
 window.showCF=showCF;window.editCont=editCont;window.delCont=delCont;window.saveCont=saveCont;window.loadConts=loadConts;window.onCfTypeChange=onCfTypeChange;window.uploadAudio=uploadAudio;window.syncGitHub=syncGitHub;window.renderConts=renderConts;window.contPg=contPg;window.toggleAllChk=toggleAllChk;window.delSelected=delSelected;
-window.showBatchUpload=showBatchUpload;window.switchBatchTab=switchBatchTab;window.batchAudioUpload=batchAudioUpload;window.batchVideoUpload=batchVideoUpload;
+window.showBatchUpload=showBatchUpload;window.switchBatchTab=switchBatchTab;window.previewAudioFiles=previewAudioFiles;window.baSetAll=baSetAll;window.batchAudioUpload=batchAudioUpload;window.batchVideoUpload=batchVideoUpload;
 function toggleBulkPrice(){$('cf-area').classList.add('hidden');$('batch-area').classList.add('hidden');$('bulk-price-area').classList.toggle('hidden');$('bp-result').innerHTML='';}
 async function bulkPricePreview(){
   const dp=parseInt($('bp-default').value)||0;const cp=parseInt($('bp-closing').value)||0;
