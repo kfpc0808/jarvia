@@ -596,7 +596,7 @@ function contPg(p){_contPage=p;renderConts();}
 function toggleAllChk(v){document.querySelectorAll('.c-chk').forEach(cb=>cb.checked=v);}
 async function delSelected(){const ids=[...document.querySelectorAll('.c-chk:checked')].map(cb=>cb.value);if(!ids.length)return toast('선택된 항목이 없습니다.','error');if(!confirm(`${ids.length}개 콘텐츠를 삭제하시겠습니까?`))return;for(const id of ids){await deleteDoc(doc(db,'contents',id));}toast(`${ids.length}개 삭제 완료`,'success');loadConts();}
 function showCF(){$('batch-area').classList.add('hidden');$('bulk-price-area').classList.add('hidden');$('cf-area').classList.remove('hidden');$('cf-id').value='';document.querySelector('#cf-area form').reset();$('cf-price').value='2000';onCfTypeChange();}
-function onCfTypeChange(){const t=$('cf-type').value;const labels={video:'영상 URL',brief:'HTML URL (GitHub)',audio:'오디오 파일 URL',report:'HTML URL (GitHub)',closing:'PDF URL'};$('cf-url-label').textContent=labels[t]||'콘텐츠 URL';$('cf-sub-wrap').classList.remove('hidden');$('cf-video-wrap').classList.toggle('hidden',t!=='closing');$('cf-pptx-wrap').classList.toggle('hidden',t!=='closing');$('cf-audio-upload').classList.toggle('hidden',t!=='audio');if(t==='audio'){$('cf-url').removeAttribute('required');}else{$('cf-url').setAttribute('required','');}}
+function onCfTypeChange(){const t=$('cf-type').value;const labels={video:'영상 URL',brief:'HTML URL (GitHub)',audio:'오디오 파일 URL',report:'HTML URL (GitHub)',closing:'PDF URL'};$('cf-url-label').textContent=labels[t]||'콘텐츠 URL';$('cf-sub-wrap').classList.remove('hidden');$('cf-video-wrap').classList.toggle('hidden',t!=='closing');$('cf-pptx-wrap').classList.toggle('hidden',t!=='closing'&&t!=='report');$('cf-audio-upload').classList.toggle('hidden',t!=='audio');if(t==='audio'){$('cf-url').removeAttribute('required');}else{$('cf-url').setAttribute('required','');}document.querySelector('#cf-pptx-wrap label').textContent=t==='report'?'PPTX 다운로드 URL (특급보고서용)':'PPTX 다운로드 URL (클로징PPT용)';}
 async function uploadAudio(input){
   const file=input.files[0];if(!file)return;
   if(!file.type.startsWith('audio/')){toast('오디오 파일만 업로드 가능합니다.','error');input.value='';return;}
@@ -626,6 +626,7 @@ async function saveCont(e){
   const data={contentId:cid,title:$('cf-title').value.trim(),categoryId:$('cf-cat').value,type:tp,price:parseInt($('cf-price').value)||0,url:toFileUrl($('cf-url').value.trim()),thumbnailUrl:toFileUrl($('cf-thumb').value.trim())||null,summary:$('cf-summary').value.trim(),sortOrder:parseInt($('cf-sort').value)||0,isActive:$('cf-active').value==='1',updatedAt:serverTimestamp()};
   data.subType=$('cf-subtype').value||null;
   if(tp==='closing'){data.videoUrl=$('cf-videourl').value.trim()||null;data.pptxUrl=toFileUrl($('cf-pptxurl').value.trim())||null;}
+  if(tp==='report'){data.pptxUrl=toFileUrl($('cf-pptxurl').value.trim())||null;}
   if(!$('cf-id').value){data.viewCount=0;data.createdAt=serverTimestamp();}
   await setDoc(doc(db,'contents',cid),data,{merge:true});toast('콘텐츠 저장 완료','success');$('cf-area').classList.add('hidden');loadConts();
 }
@@ -648,17 +649,27 @@ async function syncGitHub(){
     const existPptx=new Set(cSnap.docs.map(d=>{const u=d.data().pptxUrl||'';return u;}).filter(u=>u));
     let added=0,skipped=0;
     const pdfMap={};
+    const reportPdfMap={};
+    const reportPptxMap={};
     files.forEach(f=>{
       const ext=f.path.split('.').pop().toLowerCase();
-      if(ext==='pptx'){const key=f.path.replace(/\.[^.]+$/,'');pdfMap[key]=f.path;}
+      const parts=f.path.replace(GH_BASE+'/','').split('/');
+      const folder=parts[0];
+      if(ext==='pptx'&&folder==='closing_ppt'){const key=f.path.replace(/\.[^.]+$/,'');pdfMap[key]=f.path;}
+      if(folder==='special_report'&&parts.length>=3&&(parts[1]==='개인'||parts[1]==='법인')){
+        const baseName=parts[parts.length-1].replace(/\.[^.]+$/,'');
+        if(ext==='pdf')reportPdfMap[baseName]={path:f.path,subType:parts[1]};
+        if(ext==='pptx')reportPptxMap[baseName]={path:f.path,subType:parts[1]};
+      }
     });
     for(const f of files){
       const ext=f.path.split('.').pop().toLowerCase();
-      if(ext==='pptx'){skipped++;continue;}
-      const rawUrl=ext==='html'?`https://kfpc0808.github.io/${GH_REPO.split('/')[1]}/${f.path}`:`https://raw.githubusercontent.com/${GH_REPO}/main/${f.path}`;
-      if(existUrls.has(rawUrl)){skipped++;continue;}
       const parts=f.path.replace(GH_BASE+'/','').split('/');
       const folder=parts[0];
+      if(ext==='pptx'){skipped++;continue;}
+      if(folder==='special_report'&&parts.length>=3&&(parts[1]==='개인'||parts[1]==='법인')&&ext==='pdf'){skipped++;continue;}
+      const rawUrl=ext==='html'?`https://kfpc0808.github.io/${GH_REPO.split('/')[1]}/${f.path}`:`https://raw.githubusercontent.com/${GH_REPO}/main/${f.path}`;
+      if(existUrls.has(rawUrl)){skipped++;continue;}
       const type=FOLDER_TYPE_MAP[folder];
       if(!type){skipped++;continue;}
       let subType=null;
@@ -669,6 +680,14 @@ async function syncGitHub(){
       const cid=gid();
       const contData={contentId:cid,title,categoryId:'',type,price:1000,url:rawUrl,thumbnailUrl:null,summary:'',sortOrder:0,isActive:true,viewCount:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
       if(type==='report'||type==='closing')contData.subType=subType;
+      if(type==='report'){
+        const baseName=title;
+        const pdfInfo=reportPdfMap[baseName];
+        const pptxInfo=reportPptxMap[baseName];
+        if(pdfInfo)contData.pdfUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pdfInfo.path}`;
+        if(pptxInfo)contData.pptxUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pptxInfo.path}`;
+        if(!subType&&(pdfInfo||pptxInfo))contData.subType=(pdfInfo||pptxInfo).subType;
+      }
       if(type==='closing'){
         const pdfKey=f.path.replace(/\.[^.]+$/,'');
         const pptxPath=pdfMap[pdfKey];
