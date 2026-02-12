@@ -586,7 +586,8 @@ function renderConts(){
   const total=list.length,pages=Math.max(1,Math.ceil(total/CONT_PER));
   if(_contPage>pages)_contPage=pages;
   const start=(_contPage-1)*CONT_PER,paged=list.slice(start,start+CONT_PER);
-  $('tb-conts').innerHTML=paged.length?paged.map((c,i)=>{const ext=((c.url||'').split('.').pop()||'').split('?')[0].toUpperCase();return`<tr><td><input type="checkbox" class="c-chk" value="${c.contentId}"></td><td>${start+i+1}</td><td class="ov">${esc(c.title)}</td><td>${esc(_contCatMap[c.categoryId]||'')}</td><td>${typeBadge(c.type)}</td><td>${ext||'-'}</td><td>${c.subType||'-'}</td><td>${fmt(c.price)}원</td><td>${c.viewCount||0}</td><td>${fdate(c.createdAt)}</td><td>${c.isActive?'<span class="st-active">노출</span>':'<span class="st-suspended">비노출</span>'}</td><td><button class="btn btn-sm" onclick="editCont('${c.contentId}')">수정</button> <button class="btn-danger" onclick="delCont('${c.contentId}')">삭제</button></td></tr>`}).join(''):'<tr><td colspan="12" class="tc">검색 결과가 없습니다.</td></tr>';
+  const _exts=new Set(['HTML','PDF','PPTX','PPT','MP3','MP4','WAV','M4A','MOV','AVI','DOCX','XLSX','CSV','PNG','JPG']);
+  $('tb-conts').innerHTML=paged.length?paged.map((c,i)=>{const raw=((c.url||'').split('/').pop()||'').split('?')[0];const e=raw.includes('.')?raw.split('.').pop().toUpperCase():'';const ext=_exts.has(e)?e:'-';return`<tr><td><input type="checkbox" class="c-chk" value="${c.contentId}"></td><td>${start+i+1}</td><td class="ov">${esc(c.title)}</td><td>${esc(_contCatMap[c.categoryId]||'')}</td><td>${typeBadge(c.type)}</td><td>${ext}</td><td>${c.subType||'-'}</td><td>${fmt(c.price)}원</td><td>${c.viewCount||0}</td><td>${fdate(c.createdAt)}</td><td>${c.isActive?'<span class="st-active">노출</span>':'<span class="st-suspended">비노출</span>'}</td><td><button class="btn btn-sm" onclick="editCont('${c.contentId}')">수정</button> <button class="btn-danger" onclick="delCont('${c.contentId}')">삭제</button></td></tr>`}).join(''):'<tr><td colspan="12" class="tc">검색 결과가 없습니다.</td></tr>';
   if($('c-all-chk'))$('c-all-chk').checked=false;
   let pg=`<span style="font-size:13px;color:#666">총 ${total}건</span> `;
   if(pages>1){pg+=`<button class="btn btn-sm" onclick="contPg(1)" ${_contPage===1?'disabled':''}>«</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage-1})" ${_contPage===1?'disabled':''}>‹</button>`;const st=Math.max(1,_contPage-5),en=Math.min(pages,_contPage+4);for(let i=st;i<=en;i++)pg+=`<button class="btn btn-sm" onclick="contPg(${i})" style="${i===_contPage?'background:var(--accent);color:#fff;font-weight:700':''}">${i}</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${_contPage+1})" ${_contPage===pages?'disabled':''}>›</button>`;pg+=`<button class="btn btn-sm" onclick="contPg(${pages})" ${_contPage===pages?'disabled':''}>»</button>`;}
@@ -697,7 +698,26 @@ async function syncGitHub(){
       await setDoc(doc(db,'contents',cid),contData);added++;
       ss.textContent=`동기화 중... (${added}개 추가 / ${skipped}개 건너뜀)`;
     }
-    ss.innerHTML=`<strong>✅ 동기화 완료!</strong> 신규 ${added}개 등록 / ${skipped}개 건너뜀 (이미 등록 또는 제외)`;
+    // 기존 특급보고서에 PDF/PPTX URL 매칭 업데이트
+    let updated=0;
+    if(Object.keys(reportPdfMap).length||Object.keys(reportPptxMap).length){
+      const rSnap=await getDocs(collection(db,'contents'));
+      for(const d of rSnap.docs){
+        const c=d.data();
+        if(c.type!=='report')continue;
+        const t=c.title||'';
+        const tClean=t.replace(/^\([^)]*\)/,'');
+        const pdfInfo=reportPdfMap[t]||reportPdfMap[tClean];
+        const pptxInfo=reportPptxMap[t]||reportPptxMap[tClean];
+        if(!pdfInfo&&!pptxInfo)continue;
+        const upd={};
+        if(pdfInfo&&!c.pdfUrl){upd.pdfUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pdfInfo.path}`;}
+        if(pptxInfo&&!c.pptxUrl){upd.pptxUrl=`https://raw.githubusercontent.com/${GH_REPO}/main/${pptxInfo.path}`;}
+        if(!c.subType&&(pdfInfo||pptxInfo)){upd.subType=(pdfInfo||pptxInfo).subType;}
+        if(Object.keys(upd).length){await updateDoc(doc(db,'contents',d.id),upd);updated++;}
+      }
+    }
+    ss.innerHTML=`<strong>✅ 동기화 완료!</strong> 신규 ${added}개 등록 / ${updated?updated+'개 PDF/PPTX 연결 / ':''}${skipped}개 건너뜀 (이미 등록 또는 제외)`;
     if(added>0)loadConts();
   }catch(err){ss.innerHTML=`<strong style="color:red">❌ 동기화 실패:</strong> ${err.message}`;console.error(err);}
 }
