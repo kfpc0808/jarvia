@@ -2274,7 +2274,9 @@ function saveDraft(type){
   if(!sec)return;
   const data={};
   sec.querySelectorAll('input,select,textarea').forEach(el=>{
-    if(el.id&&el.id.startsWith(prefix)){data[el.id]=el.value;}
+    if(el.id&&el.id.startsWith(prefix)){
+      data[el.id]=el.type==='checkbox'?el.checked:el.value;
+    }
   });
   // 커스텀 필드
   const customContainer=$(prefix.replace(/-$/,'').replace('pg-','pg-')+'-custom-fields');
@@ -2282,6 +2284,19 @@ function saveDraft(type){
     const cId=type==='personal'?'pg-p-custom-fields':'pg-c-custom-fields';
     data._customFields=collectCustomFields(cId);
   }
+  // 자산이전 테이블 저장
+  const p=type==='personal'?'p':'c';
+  ['inherit','gift'].forEach(planType=>{
+    const cls=planType==='inherit'?'inh':'gift';
+    const rows=[];
+    document.querySelectorAll('#pg-'+p+'-'+planType+'-rows .asset-row').forEach(row=>{
+      const rel=row.querySelector('.'+cls+'-rel');
+      const amt=row.querySelector('.'+cls+'-amt');
+      const tp=row.querySelector('.'+cls+'-type');
+      rows.push({rel:rel?rel.value:'',amt:amt?amt.value:'',type:tp?tp.value:''});
+    });
+    if(rows.length)data['_'+planType+'Rows']=rows;
+  });
   try{localStorage.setItem(type==='personal'?DRAFT_KEY_P:DRAFT_KEY_C,JSON.stringify(data));}catch(e){}
 }
 function loadDraft(type){
@@ -2291,8 +2306,10 @@ function loadDraft(type){
     const data=JSON.parse(raw);
     let hasData=false;
     for(const[id,val] of Object.entries(data)){
-      if(id==='_customFields')continue;
-      const el=$(id);if(el&&val){el.value=val;hasData=true;}
+      if(id==='_customFields'||id==='_inheritRows'||id==='_giftRows')continue;
+      const el=$(id);if(!el)continue;
+      if(el.type==='checkbox'){el.checked=!!val;hasData=true;}
+      else if(val){el.value=val;hasData=true;}
     }
     // 커스텀 필드 복원
     if(data._customFields&&data._customFields.length){
@@ -2310,15 +2327,34 @@ function loadDraft(type){
         });
       }
     }
+    // 자산이전 테이블 복원
+    const p=type==='personal'?'p':'c';
+    ['inherit','gift'].forEach(planType=>{
+      const savedRows=data['_'+planType+'Rows'];if(!savedRows||!savedRows.length)return;
+      const cls=planType==='inherit'?'inh':'gift';
+      const tbody=$('pg-'+p+'-'+planType+'-rows');if(!tbody)return;
+      tbody.innerHTML='';
+      savedRows.forEach(r=>{
+        addAssetRow(p,planType);
+        const lastRow=tbody.querySelector('.asset-row:last-child');
+        if(lastRow){
+          const rel=lastRow.querySelector('.'+cls+'-rel');if(rel)rel.value=r.rel;
+          const amt=lastRow.querySelector('.'+cls+'-amt');if(amt)amt.value=r.amt;
+          const tp=lastRow.querySelector('.'+cls+'-type');if(tp)tp.value=r.type;
+        }
+      });
+    });
+    // 체크박스 상태에 따라 섹션 표시
+    toggleAssetPlan(p);
     if(hasData){
       updateNetAsset(type);
       // 중간 섹션 자동 펼침 (데이터 있으면)
       const sec=$('calc-section-'+type);
       if(sec){
         const calcHasData=Object.entries(data).some(([id])=>{
-          if(id==='_customFields')return false;
+          if(id==='_customFields'||id==='_inheritRows'||id==='_giftRows')return false;
           const el=$(id);
-          return el&&el.closest('#calc-section-'+type)&&el.value;
+          return el&&el.closest('#calc-section-'+type)&&(el.type==='checkbox'?el.checked:el.value);
         });
         if(calcHasData){sec.style.display='block';const arrow=$('calc-arrow-'+type);if(arrow)arrow.style.transform='rotate(180deg)';}
       }
@@ -2350,19 +2386,18 @@ function showDraftBanner(){
 function initAutoSave(){
   const sec=$('pg-pptgen');if(!sec)return;
   let saveTimer=null;
-  sec.addEventListener('input',function(e){
-    if(!e.target.id)return;
+  function triggerSave(el){
     clearTimeout(saveTimer);
     saveTimer=setTimeout(()=>{
-      if(e.target.id.startsWith('pg-p-'))saveDraft('personal');
-      else if(e.target.id.startsWith('pg-c-'))saveDraft('corp');
+      // id가 있으면 prefix로 판단, 없으면 부모 폼으로 판단
+      if(el.id&&el.id.startsWith('pg-p-'))saveDraft('personal');
+      else if(el.id&&el.id.startsWith('pg-c-'))saveDraft('corp');
+      else if(el.closest('#pptgen-form-personal'))saveDraft('personal');
+      else if(el.closest('#pptgen-form-corp'))saveDraft('corp');
     },1000);
-  });
-  sec.addEventListener('change',function(e){
-    if(!e.target.id)return;
-    if(e.target.id.startsWith('pg-p-'))saveDraft('personal');
-    else if(e.target.id.startsWith('pg-c-'))saveDraft('corp');
-  });
+  }
+  sec.addEventListener('input',function(e){triggerSave(e.target);});
+  sec.addEventListener('change',function(e){triggerSave(e.target);});
 }
 window.toggleCalcSection=toggleCalcSection;window.addCustomField=addCustomField;window.loadDraft=loadDraft;window.clearDraft=clearDraft;window.toast=toast;window.toggleAssetPlan=toggleAssetPlan;window.addAssetRow=addAssetRow;
 function toggleAssetPlan(prefix){
