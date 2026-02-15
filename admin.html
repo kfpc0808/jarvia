@@ -329,6 +329,22 @@ function goPanel(el){
 
 // ═══ DASHBOARD ═══
 async function loadDash(){
+  // 만료 멤버십 자동 복원
+  try{
+    const now=new Date();
+    const expSnap=await getDocs(query(collection(db,'users'),where('role','==','jarvia_member')));
+    for(const d of expSnap.docs){
+      const u=d.data();
+      if(u.membershipExpiresAt){
+        const exp=u.membershipExpiresAt.toDate?u.membershipExpiresAt.toDate():new Date(u.membershipExpiresAt);
+        if(exp<now){
+          const restoreRole=u.originalRole||'user';
+          await updateDoc(doc(db,'users',d.id),{role:restoreRole,membershipGrantedAt:deleteField(),membershipExpiresAt:deleteField(),originalRole:deleteField(),updatedAt:serverTimestamp()});
+          console.log('멤버십 만료 복원:',u.name,'→',restoreRole);
+        }
+      }
+    }
+  }catch(e){console.error('만료 복원 오류:',e);}
   const today=new Date();today.setHours(0,0,0,0);const tTs=Timestamp.fromDate(today);
   const su=await getDocs(query(collection(db,'users'),where('createdAt','>=',tTs)));$('d-signup').textContent=su.size;
   const vw=await getDocs(query(collection(db,'view_logs'),where('createdAt','>=',tTs)));$('d-views').textContent=vw.size;
@@ -391,7 +407,7 @@ async function showMember(uid){
     <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>포인트:</label><strong style="color:var(--success);font-size:18px">${fmt(m.point||0)}P</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div><div><label>추천코드:</label>${esc(m.referralCode||'-')}</div><div><label>추천인:</label><strong style="color:var(--primary)">${esc(refByName)}</strong></div><div><label>추천포인트:</label><strong style="color:var(--success)">${fmt(m.referralPoints||0)}P</strong></div></div>
     <div style="margin:16px 0;display:flex;gap:8px"><button class="btn btn-sm" onclick="toggleStatus('${uid}','${m.status}')">${m.status==='active'?'정지하기':'해제하기'}</button></div>
     <h3>회원 정보 수정</h3>
-    <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}" onchange="(function(sel){var jArea=document.getElementById('jarvia-area-${uid}');if(jArea)jArea.style.display=sel.value==='jarvia_member'?'':'none';var expArea=document.getElementById('exp-section-${uid}');if(expArea)expArea.style.display=(sel.value==='user'||sel.value==='jarvia_member'||sel.value==='inner_circle'||sel.value==='branch_manager')?'none':'';})(this)"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>무료회원</option><option value="jarvia_member" ${m.role==='jarvia_member'?'selected':''}>JARVIA멤버십</option><option value="inner_circle" ${m.role==='inner_circle'?'selected':''}>이너서클멤버십</option><option value="branch_manager" ${m.role==='branch_manager'?'selected':''}>지사장</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
+    <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}" onchange="(function(sel){var jArea=document.getElementById('jarvia-area-${uid}');if(jArea)jArea.style.display=sel.value==='jarvia_member'?'':'none';var expArea=document.getElementById('exp-section-${uid}');if(expArea)expArea.style.display=(sel.value==='user'||sel.value==='jarvia_member'||sel.value==='inner_circle'||sel.value==='branch_manager')?'none':'';})(this)"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>무료회원</option>${m.role==='jarvia_member'?'<option value="jarvia_member" selected disabled>JARVIA멤버십 (하단에서 관리)</option>':''}<option value="inner_circle" ${m.role==='inner_circle'?'selected':''}>이너서클멤버십</option><option value="branch_manager" ${m.role==='branch_manager'?'selected':''}>지사장</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
     <div id="jarvia-area-${uid}" style="${m.role==='jarvia_member'?'':'display:none'}"><h3>JARVIA멤버십 설정</h3>
     <div class="fr" style="margin:12px 0"><div class="fg"><label>등록비 입금확인</label><select id="ed-regfee-${uid}"><option value="unpaid" ${m.regFeePaid!==true?'selected':''}>미확인</option><option value="paid" ${m.regFeePaid===true?'selected':''}>입금확인</option></select></div><div class="fg"><label>월 정기결제 금액(원)</label><input id="ed-monthly-${uid}" type="number" value="${m.monthlyFee||50000}" min="0" step="1000"></div><button class="btn btn-sm" style="align-self:end" onclick="updateJarviaMember('${uid}')">저장</button></div></div>
     <div class="fr" style="margin:0 0 16px"><div class="fg"><label>새 비밀번호</label><input id="ed-pw-${uid}" type="password" placeholder="변경 시에만 입력"></div><button class="btn btn-sm btn-warning" style="align-self:end" onclick="changeMemberPw('${uid}','${esc(m.email)}')">비밀번호 변경</button></div>
@@ -420,35 +436,16 @@ async function updateMemberInfo(uid){
   const name=$('ed-name-'+uid).value.trim();
   const role=$('ed-role-'+uid).value;
   if(!name)return toast('이름을 입력하세요.','error');
-  if(!['user','free_user','jarvia_member','inner_circle','branch_manager'].includes(role))return toast('올바른 회원유형을 선택하세요.','error');
+  if(role==='jarvia_member'){
+    // JARVIA멤버십 회원은 이름만 변경 (role은 하단 멤버십 부여에서 관리)
+    try{await updateDoc(doc(db,'users',uid),{name,updatedAt:serverTimestamp()});toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();}catch(e){toast('수정 실패: '+e.message,'error');}
+    return;
+  }
+  if(!['user','free_user','inner_circle','branch_manager'].includes(role))return toast('올바른 회원유형을 선택하세요.','error');
   try{
-    // 기존 역할 확인 (jarvia_member 변경 감지용)
-    const prevDoc=await getDoc(doc(db,'users',uid));const prevRole=prevDoc.exists()?prevDoc.data().role:'';
     const updateData={name,role,updatedAt:serverTimestamp()};
     if(role==='user'||role==='inner_circle'||role==='free_user'||role==='branch_manager'){updateData.expiresAt=deleteField();}
     await updateDoc(doc(db,'users',uid),updateData);
-    // JARVIA멤버십으로 새로 변경된 경우 → 추천인에게 포인트 지급
-    if(role!==prevRole&&role==='jarvia_member'&&prevRole!=='jarvia_member'){
-      let rwdPts=50000;
-      try{const rs=await getDoc(doc(db,'settings','referral_settings'));if(rs.exists()&&rs.data().rewardPoints)rwdPts=rs.data().rewardPoints;}catch(e){}
-      const userData=prevDoc.data();
-      if(userData.referredBy){
-        try{
-          const refSnap=await getDocs(query(collection(db,'users'),where('referralCode','==',userData.referredBy),limit(1)));
-          if(!refSnap.empty){
-            const refDoc=refSnap.docs[0];const refUid=refDoc.id;
-            const txId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
-            await runTransaction(db,async tx=>{
-              const rd=(await tx.get(doc(db,'users',refUid))).data();
-              const newPt=(rd.point||0)+rwdPts;
-              tx.update(doc(db,'users',refUid),{referralPoints:increment(rwdPts),point:increment(rwdPts),updatedAt:serverTimestamp()});
-              tx.set(doc(db,'transactions',txId),{txId,userId:refUid,type:'referral_reward',amount:rwdPts,pointAfter:newPt,memo:name+'님 '+({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클',branch_manager:'지사장'}[role]||role)+' 가입 추천보상',createdAt:serverTimestamp()});
-            });
-            toast('추천인 '+refDoc.data().name+'에게 '+fmt(rwdPts)+'P 지급 완료','success');
-          }
-        }catch(re){console.error('추천 포인트 지급 오류:',re);toast('추천 포인트 지급 오류: '+re.message,'error');}
-      }
-    }
     toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();
   }catch(e){toast('수정 실패: '+e.message,'error');}
 }
@@ -906,14 +903,37 @@ async function grantMembership(uid){
   if(!confirm('이 회원에게 JARVIA멤버십을 부여하시겠습니까?\\n기간: '+startVal+' ~ '+endVal))return;
   try{
     const userRef=doc(db,'users',uid);const snap=await getDoc(userRef);const data=snap.data();
+    const prevRole=data.role;
     const updateData={
       role:'jarvia_member',
       membershipGrantedAt:new Date(startVal+'T00:00:00'),
       membershipExpiresAt:new Date(endVal+'T23:59:59'),
       updatedAt:serverTimestamp()
     };
-    if(!data.originalRole||data.originalRole==='jarvia_member'){updateData.originalRole=data.role==='jarvia_member'?(data.originalRole||'user'):data.role;}
+    // 재부여 시 현재 role을 originalRole로 저장 (이미 jarvia_member면 기존 originalRole 유지)
+    if(prevRole!=='jarvia_member'){updateData.originalRole=prevRole;}
+    else if(!data.originalRole){updateData.originalRole='user';}
     await updateDoc(userRef,updateData);
+    // 추천 포인트: monthlyFee > 0 + 추천인 존재 시에만 지급
+    const monthlyFee=data.monthlyFee||0;
+    if(monthlyFee>0&&data.referredBy&&prevRole!=='jarvia_member'){
+      try{
+        let rwdPts=50000;
+        try{const rs=await getDoc(doc(db,'settings','referral_settings'));if(rs.exists()&&rs.data().rewardPoints)rwdPts=rs.data().rewardPoints;}catch(e){}
+        const refSnap=await getDocs(query(collection(db,'users'),where('referralCode','==',data.referredBy),limit(1)));
+        if(!refSnap.empty){
+          const refDoc=refSnap.docs[0];const refUid=refDoc.id;
+          const txId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+          await runTransaction(db,async tx=>{
+            const rd=(await tx.get(doc(db,'users',refUid))).data();
+            const newPt=(rd.point||0)+rwdPts;
+            tx.update(doc(db,'users',refUid),{referralPoints:increment(rwdPts),point:increment(rwdPts),updatedAt:serverTimestamp()});
+            tx.set(doc(db,'transactions',txId),{txId,userId:refUid,type:'referral_reward',amount:rwdPts,pointAfter:newPt,memo:(data.name||'')+'님 JARVIA멤버십 가입 추천보상',createdAt:serverTimestamp()});
+          });
+          toast('추천인 '+refDoc.data().name+'에게 '+fmt(rwdPts)+'P 지급 완료','success');
+        }
+      }catch(re){console.error('추천 포인트 지급 오류:',re);toast('추천 포인트 지급 오류: '+re.message,'error');}
+    }
     toast('멤버십 부여 완료 ('+startVal+' ~ '+endVal+')','success');
     closeM('mdl-member');loadMembers();
   }catch(e){toast('멤버십 부여 실패: '+e.message,'error');}
@@ -989,7 +1009,7 @@ function renderMsTable(){
 window.grantMembership=grantMembership;window.revokeMembership=revokeMembership;window.loadMembership=loadMembership;window.renderMsTable=renderMsTable;
 async function updateJarviaMember(uid){
   const regFee=$('ed-regfee-'+uid).value==='paid';
-  const monthlyFee=parseInt($('ed-monthly-'+uid).value)||50000;
+  const monthlyFee=parseInt($('ed-monthly-'+uid).value);if(isNaN(monthlyFee)||monthlyFee<0)return toast('월 정기결제 금액을 올바르게 입력하세요.','error');
   try{await updateDoc(doc(db,'users',uid),{regFeePaid:regFee,monthlyFee,updatedAt:serverTimestamp()});
     toast('JARVIA멤버십 정보 저장 완료','success');
   }catch(e){toast('저장 실패: '+e.message,'error');}
