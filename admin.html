@@ -57,6 +57,7 @@
     <a class="sn" data-p="p-popups" onclick="goPanel(this)">🔔 팝업관리</a>
     <a class="sn" data-p="p-pptgen" onclick="goPanel(this)">🤖 PPT생성관리</a>
     <a class="sn" data-p="p-membership" onclick="goPanel(this)">🎫 멤버십관리</a>
+    <a class="sn" data-p="p-role-history" onclick="goPanel(this)">📜 유형변경이력</a>
   </nav></aside>
   <main class="adm-main">
     <div id="p-dash" class="panel"><h2>대시보드</h2><div class="dash-row"><div class="dash-c"><span>오늘 가입</span><strong id="d-signup">0</strong></div><div class="dash-c"><span>오늘 열람</span><strong id="d-views">0</strong></div><div class="dash-c"><span>오늘 매출</span><strong id="d-rev">0</strong><em>원</em></div><div class="dash-c"><span>전체 회원</span><strong id="d-total">0</strong></div></div><div class="dash-row"><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 생성</span><strong id="d-pptgen">0</strong><em>건</em></div><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 매출</span><strong id="d-pptrev">0</strong><em>원</em></div></div></div>
@@ -261,6 +262,20 @@
         <th>이름</th><th>아이디</th><th>원래 등급</th><th>현재 등급</th><th>부여일</th><th>종료일</th><th>D-Day</th><th>상태</th><th>관리</th>
       </tr></thead><tbody id="tb-membership"></tbody></table></div>
     </div>
+    <div id="p-role-history" class="panel hidden"><h2>📜 회원유형 변경이력</h2>
+      <p style="color:#666;margin-bottom:16px">회원유형 변경, 멤버십 부여/해제, 만료 자동복원 등 모든 등급 변경 내역을 조회합니다.</p>
+      <div class="toolbar mt">
+        <div class="fg" style="min-width:130px"><label style="font-size:12px;color:#888">시작일</label><input id="rh-from" type="date"></div>
+        <div class="fg" style="min-width:130px"><label style="font-size:12px;color:#888">종료일</label><input id="rh-to" type="date"></div>
+        <select id="rh-reason" onchange="renderRoleHistory()"><option value="all">전체</option><option value="관리자 수동변경">수동변경</option><option value="멤버십 부여">멤버십 부여</option><option value="멤버십 해제">멤버십 해제</option><option value="만료 자동복원">만료 자동복원</option></select>
+        <input id="rh-search" placeholder="이름/아이디 검색..." oninput="renderRoleHistory()">
+        <button class="btn btn-sm" onclick="loadRoleHistory()">조회</button>
+      </div>
+      <div class="tbl-wrap mt"><table class="tbl"><thead><tr>
+        <th>변경일시</th><th>회원명</th><th>아이디</th><th>변경 전</th><th>→</th><th>변경 후</th><th>사유</th><th>처리자</th>
+      </tr></thead><tbody id="tb-role-history"></tbody></table></div>
+      <div id="rh-pagination" style="display:flex;gap:4px;justify-content:center;margin-top:12px"></div>
+    </div>
   </main>
 </div>
 <div id="mdl-member" class="modal hidden"><div class="mdl-bg" onclick="closeM('mdl-member')"></div><div class="mdl-box mdl-lg"><button class="mdl-x" onclick="closeM('mdl-member')">×</button><div id="member-inner"></div></div></div>
@@ -323,7 +338,7 @@ function goPanel(el){
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
   document.querySelector('.sidebar').classList.remove('show');
-  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':loadLogsAll,'p-props':loadProps,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-membership':loadMembership};
+  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':loadLogsAll,'p-props':loadProps,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-membership':loadMembership,'p-role-history':loadRoleHistory};
   if(ld[el.dataset.p])ld[el.dataset.p]();
 }
 
@@ -340,6 +355,7 @@ async function loadDash(){
         if(exp<now){
           const restoreRole=u.originalRole||'user';
           await updateDoc(doc(db,'users',d.id),{role:restoreRole,membershipGrantedAt:deleteField(),membershipExpiresAt:deleteField(),originalRole:deleteField(),updatedAt:serverTimestamp()});
+          await logRoleChange(d.id,u.name||'',u.loginId||'','jarvia_member',restoreRole,'만료 자동복원','시스템');
           console.log('멤버십 만료 복원:',u.name,'→',restoreRole);
         }
       }
@@ -396,6 +412,9 @@ async function showMember(uid){
   try{const vlSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));vlDocs=vlSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',uid)));vlDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
   try{const txSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));txDocs=txSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',uid)));txDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
   try{const pgSnap=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',uid),orderBy('createdAt','desc'),limit(20)));pgDocs=pgSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',uid)));pgDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
+  // 회원유형 변경이력 조회
+  let rhDocs=[];
+  try{const rhSnap=await getDocs(query(collection(db,'role_history'),where('uid','==',uid),orderBy('createdAt','desc'),limit(20)));rhDocs=rhSnap.docs;}catch(e){try{const all=await getDocs(query(collection(db,'role_history'),where('uid','==',uid)));rhDocs=all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,20);}catch(e2){}}
   // 추천인 이름 조회
   let refByName='-';
   if(m.referredBy){try{const rs=await getDocs(query(collection(db,'users'),where('referralCode','==',m.referredBy),limit(1)));if(!rs.empty)refByName=rs.docs[0].data().name||m.referredBy;}catch(e){refByName=m.referredBy;}}
@@ -443,9 +462,11 @@ async function updateMemberInfo(uid){
   }
   if(!['user','free_user','inner_circle','branch_manager'].includes(role))return toast('올바른 회원유형을 선택하세요.','error');
   try{
+    const prevDoc=await getDoc(doc(db,'users',uid));const prevData=prevDoc.exists()?prevDoc.data():{};
     const updateData={name,role,updatedAt:serverTimestamp()};
     if(role==='user'||role==='inner_circle'||role==='free_user'||role==='branch_manager'){updateData.expiresAt=deleteField();}
     await updateDoc(doc(db,'users',uid),updateData);
+    if(prevData.role&&prevData.role!==role){await logRoleChange(uid,name,prevData.loginId||'',prevData.role,role,'관리자 수동변경',admData?.name||'');}
     toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();
   }catch(e){toast('수정 실패: '+e.message,'error');}
 }
@@ -934,6 +955,7 @@ async function grantMembership(uid){
         }
       }catch(re){console.error('추천 포인트 지급 오류:',re);toast('추천 포인트 지급 오류: '+re.message,'error');}
     }
+    await logRoleChange(uid,data.name||'',data.loginId||'',prevRole,'jarvia_member','멤버십 부여',admData?.name||'');
     toast('멤버십 부여 완료 ('+startVal+' ~ '+endVal+')','success');
     closeM('mdl-member');loadMembers();
   }catch(e){toast('멤버십 부여 실패: '+e.message,'error');}
@@ -951,6 +973,7 @@ async function revokeMembership(uid,origRole){
       originalRole:deleteField(),
       updatedAt:serverTimestamp()
     });
+    const _rvDoc=await getDoc(doc(db,'users',uid));const _rvData=_rvDoc.exists()?_rvDoc.data():{};await logRoleChange(uid,_rvData.name||'',_rvData.loginId||'','jarvia_member',restoreRole,'멤버십 해제',admData?.name||'');
     toast('멤버십 해제 완료 → '+(rl[restoreRole]||restoreRole),'success');
     closeM('mdl-member');loadMembers();
   }catch(e){toast('멤버십 해제 실패: '+e.message,'error');}
@@ -1007,6 +1030,50 @@ function renderMsTable(){
   $('tb-membership').innerHTML=list.length?list.map(m=>'<tr><td>'+esc(m.name)+'</td><td>'+esc(m.loginId||'')+'</td><td>'+(rl[m.originalRole]||m.originalRole||'-')+'</td><td><span class="st-jarvia">JARVIA멤버십</span></td><td>'+grantDt(m)+'</td><td>'+expDt(m)+'</td><td>'+dday(m)+'</td><td>'+stBadge(m)+'</td><td><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button></td></tr>').join(''):'<tr><td colspan="9" class="tc">멤버십이 부여된 회원이 없습니다.</td></tr>';
 }
 window.grantMembership=grantMembership;window.revokeMembership=revokeMembership;window.loadMembership=loadMembership;window.renderMsTable=renderMsTable;
+
+// ═══ 회원유형 변경이력 ═══
+const _rlLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클',branch_manager:'지사장'}[r]||r||'-');
+async function logRoleChange(uid,userName,loginId,fromRole,toRole,reason,adminName){
+  try{
+    const logId='rh_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+    await setDoc(doc(db,'role_history',logId),{logId,uid,userName:userName||'',loginId:loginId||'',fromRole:fromRole||'',toRole:toRole||'',reason:reason||'',adminName:adminName||'',createdAt:serverTimestamp()});
+  }catch(e){console.error('변경이력 기록 오류:',e);}
+}
+let _rhData=[];
+async function loadRoleHistory(){
+  _rhData=[];
+  const fromD=$('rh-from')?$('rh-from').value:'';
+  const toD=$('rh-to')?$('rh-to').value:'';
+  try{
+    let q2=collection(db,'role_history');
+    let constraints=[];
+    if(fromD)constraints.push(where('createdAt','>=',Timestamp.fromDate(new Date(fromD+'T00:00:00'))));
+    if(toD)constraints.push(where('createdAt','<=',Timestamp.fromDate(new Date(toD+'T23:59:59'))));
+    constraints.push(orderBy('createdAt','desc'));
+    constraints.push(limit(200));
+    const snap=await getDocs(query(q2,...constraints));
+    _rhData=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    try{const snap=await getDocs(collection(db,'role_history'));_rhData=snap.docs.map(d=>({id:d.id,...d.data()}));_rhData.sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));_rhData=_rhData.slice(0,200);}catch(e2){console.error('변경이력 로드 오류:',e2);}
+  }
+  renderRoleHistory();
+}
+function renderRoleHistory(){
+  const reason=$('rh-reason')?$('rh-reason').value:'all';
+  const search=($('rh-search')?$('rh-search').value:'').toLowerCase();
+  let list=_rhData;
+  if(reason!=='all')list=list.filter(r=>r.reason===reason);
+  if(search)list=list.filter(r=>(r.userName||'').toLowerCase().includes(search)||(r.loginId||'').toLowerCase().includes(search));
+  if(!window._rhPage)window._rhPage=1;const perPage=15;const totalPages=Math.max(1,Math.ceil(list.length/perPage));if(window._rhPage>totalPages)window._rhPage=totalPages;const startIdx=(window._rhPage-1)*perPage;const pageList=list.slice(startIdx,startIdx+perPage);
+  $('tb-role-history').innerHTML=pageList.length?pageList.map(r=>{
+    const dt=r.createdAt?(r.createdAt.toDate?r.createdAt.toDate():new Date(r.createdAt)):null;
+    const dtStr=dt?dt.getFullYear()+'.'+(dt.getMonth()+1)+'.'+dt.getDate()+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0'):'-';
+    return'<tr><td>'+dtStr+'</td><td>'+esc(r.userName)+'</td><td>'+esc(r.loginId||'')+'</td><td>'+_rlLabel(r.fromRole)+'</td><td style="text-align:center">→</td><td>'+_rlLabel(r.toRole)+'</td><td>'+esc(r.reason||'')+'</td><td>'+esc(r.adminName||'')+'</td></tr>';
+  }).join(''):'<tr><td colspan="8" class="tc">변경이력이 없습니다.</td></tr>';
+  let pgHtml='';if(totalPages>1){pgHtml+='<button class="btn btn-sm btn-sec" '+(window._rhPage<=1?'disabled':'')+' onclick="window._rhPage=1;renderRoleHistory()">«</button>';pgHtml+='<button class="btn btn-sm btn-sec" '+(window._rhPage<=1?'disabled':'')+' onclick="window._rhPage--;renderRoleHistory()">‹</button>';for(let p=1;p<=totalPages;p++){if(p===1||p===totalPages||Math.abs(p-window._rhPage)<=2){pgHtml+='<button class="btn btn-sm'+(p===window._rhPage?' btn-primary':' btn-sec')+'" onclick="window._rhPage='+p+';renderRoleHistory()">'+p+'</button>';}else if(Math.abs(p-window._rhPage)===3){pgHtml+='<span style="padding:0 4px">…</span>';}}pgHtml+='<button class="btn btn-sm btn-sec" '+(window._rhPage>=totalPages?'disabled':'')+' onclick="window._rhPage++;renderRoleHistory()">›</button>';pgHtml+='<button class="btn btn-sm btn-sec" '+(window._rhPage>=totalPages?'disabled':'')+' onclick="window._rhPage='+totalPages+';renderRoleHistory()">»</button>';pgHtml+='<span style="margin-left:12px;font-size:13px;color:#888">총 '+list.length+'건</span>';}else if(list.length){pgHtml='<span style="font-size:13px;color:#888">총 '+list.length+'건</span>';}
+  $('rh-pagination').innerHTML=pgHtml;
+}
+window.loadRoleHistory=loadRoleHistory;window.renderRoleHistory=renderRoleHistory;
 async function updateJarviaMember(uid){
   const regFee=$('ed-regfee-'+uid).value==='paid';
   const monthlyFee=parseInt($('ed-monthly-'+uid).value);if(isNaN(monthlyFee)||monthlyFee<0)return toast('월 정기결제 금액을 올바르게 입력하세요.','error');
