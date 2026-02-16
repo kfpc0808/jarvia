@@ -741,7 +741,7 @@ let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set(),thumbSettin
 const PAGES=['login','register','resetpw','main','mypage','partnership','notices','pptgen'];
 function toggleMobMenu(){const m=$('mob-menu'),b=$('mob-menu-backdrop');if(m.classList.contains('open')){closeMobMenu();}else{m.classList.add('open');b.classList.add('show');}}
 function closeMobMenu(){$('mob-menu').classList.remove('open');$('mob-menu-backdrop').classList.remove('show');}
-function nav(p){PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-'+p).classList.remove('hidden');closeMobMenu();window.scrollTo(0,0);if(p==='main'){loadMain();loadTicker();}if(p==='login')loadTicker();if(p==='mypage')loadMyPage();if(p==='notices')loadNotices();if(p==='pptgen')loadPptGenHistory();}
+function nav(p){PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-'+p).classList.remove('hidden');closeMobMenu();window.scrollTo(0,0);if(p==='main'){loadMain();loadTicker();}if(p==='login')loadTicker();if(p==='mypage')loadMyPage();if(p==='notices')loadNotices();if(p==='pptgen'){loadPptGenHistory();checkInProgressJob();}}
 function openM(id){$(id).classList.remove('hidden');}
 function closeM(id){$(id).classList.add('hidden');}
 function mpTab(btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('#pg-mypage .tp').forEach(t=>t.classList.add('hidden'));$(btn.dataset.t).classList.remove('hidden');if(btn.dataset.t==='mp-active')loadActiveContents();if(btn.dataset.t==='mp-usage')loadUsage();if(btn.dataset.t==='mp-pptgen')loadMpPptGen();if(btn.dataset.t==='mp-charge')loadChargeHistory();if(btn.dataset.t==='mp-fav')loadFavorites();if(btn.dataset.t==='mp-referral')loadReferrals();}
@@ -914,7 +914,7 @@ function renderGridPage(){const g=$('all-grid'),n=$('no-content'),pg=$('grid-pag
 function gridPg(p){_gridPage=p;renderGridPage();window.scrollTo({top:$('sec-title-main').offsetTop-80,behavior:'smooth'});}
 let _curCat='all',_curSub='all';
 function filterCat(cat,btn){_curCat=cat;_curSub='all';document.querySelectorAll('.cat-tab').forEach(t=>t.classList.remove('active'));if(btn)btn.classList.add('active');const titles={all:'전체 콘텐츠',video:'영상콘텐츠',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT',upcoming:'게시예정 콘텐츠'};$('sec-title-main').textContent=titles[cat]||'전체 콘텐츠';
-if(cat==='pptgen'){PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-pptgen').classList.remove('hidden');loadPptGenHistory();if(!window._pptgenGuideShown){window._pptgenGuideShown=true;openM('mdl-pptgen-guide');}return;}
+if(cat==='pptgen'){PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-pptgen').classList.remove('hidden');loadPptGenHistory();checkInProgressJob();if(!window._pptgenGuideShown){window._pptgenGuideShown=true;openM('mdl-pptgen-guide');}return;}
 $('pg-pptgen').classList.add('hidden');
 if(cat==='upcoming'){$('sub-tab-area').classList.add('hidden');$('upcoming-sec').classList.remove('hidden');$('all-grid').parentElement.classList.add('hidden');loadUpcoming();return;}$('upcoming-sec').classList.add('hidden');$('all-grid').parentElement.classList.remove('hidden');if(cat!=='upcoming'){$('sub-tab-area').classList.remove('hidden');document.querySelectorAll('.sub-tab').forEach((t,i)=>t.classList.toggle('active',i===0));}else{$('sub-tab-area').classList.add('hidden');}filterList();}
 function filterSub(sub,btn){_curSub=sub;document.querySelectorAll('.sub-tab').forEach(t=>t.classList.remove('active'));if(btn)btn.classList.add('active');filterList();}
@@ -2230,13 +2230,15 @@ async function loadPptGenHistory(){
     try{snap=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(10)));}
     catch(e){const all=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid)));snap={empty:all.empty,docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,10)};}
     if(snap.empty||!snap.docs.length){el.innerHTML='<div style="text-align:center;padding:16px;color:var(--text-lt)">아직 생성된 PPT가 없습니다.</div>';return;}
-    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패',expired:'🗑 삭제됨'};
+    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_done:'🔄 생성중',step4_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패',expired:'🗑 삭제됨'};
+    const isInProgress=(s)=>['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_done','step4_processing'].includes(s);
     const now=new Date();
     el.innerHTML='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>제목</th><th>유형</th><th>상태</th><th>잔여일</th><th>다운로드</th><th>삭제</th></tr></thead><tbody>'+snap.docs.map(d=>{
       const j=d.data();
       const title=j.formData?.ptTitle||'-';
       const tp=j.clientType==='personal'?'👤 개인':'🏢 기업';
       const st=stMap[j.status]||j.status;
+      const clickAttr=isInProgress(j.status)?` style="cursor:pointer;background:#F0F7FF" onclick="resumePptGenProgress('${d.id}')" title="클릭하여 진행 상황 보기"`:'';
       // 7일 만료 계산
       let remainStr='—',dl='—';
       if(j.status==='completed'&&j.createdAt){
@@ -2251,7 +2253,7 @@ async function loadPptGenHistory(){
           dl='<span style="color:var(--text-lt);font-size:12px">삭제됨</span>';
         }
       }
-      return`<tr><td>${fdate(j.createdAt)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td><td>${tp}</td><td>${st}</td><td style="text-align:center">${remainStr}</td><td style="text-align:center">${dl}</td><td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:4px 8px;font-size:11px" onclick="deletePptJob('${d.id}')">🗑</button></td></tr>`;
+      return`<tr${clickAttr}><td>${fdate(j.createdAt)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td><td>${tp}</td><td>${st}${isInProgress(j.status)?' <span style="font-size:10px;color:var(--accent);cursor:pointer">👆 보기</span>':''}</td><td style="text-align:center">${remainStr}</td><td style="text-align:center">${dl}</td><td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:4px 8px;font-size:11px" onclick="event.stopPropagation();deletePptJob('${d.id}')">🗑</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
   }catch(e){el.innerHTML='<div style="text-align:center;padding:16px;color:var(--text-lt)">이력 로드 실패</div>';}
 }
@@ -2275,7 +2277,7 @@ async function loadMpPptGen(){
       tb.innerHTML='<tr><td colspan="7" class="tc">PPT 생성 내역이 없습니다.</td></tr>';
       sumEl.textContent='';return;
     }
-    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
+    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_done:'🔄 생성중',step4_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
     const now=new Date();
     let totalCost=0,totalCount=0,completedCount=0;
     tb.innerHTML=snap.docs.map(d=>{
@@ -2549,7 +2551,36 @@ function addAssetRow(prefix,type){
   tbody.appendChild(tr);
   tr.querySelector('.money-input').addEventListener('input',function(){const raw=this.value.replace(/[^\d]/g,'');if(raw===''){this.value='';return;}this.value=Number(raw).toLocaleString('ko-KR');});
 }
-window.pptgenTab=pptgenTab;window.submitPptGen=submitPptGen;window.confirmPptGen=confirmPptGen;window.pptgenDownload=pptgenDownload;window.pptgenReset=pptgenReset;window.loadPptGenHistory=loadPptGenHistory;window.pptgenRedownload=pptgenRedownload;window.toggleVoice=toggleVoice;window.openPptgenSample=openPptgenSample;window.deletePptJob=deletePptJob;
+window.pptgenTab=pptgenTab;window.submitPptGen=submitPptGen;window.confirmPptGen=confirmPptGen;window.pptgenDownload=pptgenDownload;window.pptgenReset=pptgenReset;window.loadPptGenHistory=loadPptGenHistory;window.pptgenRedownload=pptgenRedownload;window.toggleVoice=toggleVoice;window.openPptgenSample=openPptgenSample;window.deletePptJob=deletePptJob;window.resumePptGenProgress=resumePptGenProgress;
+// ── 진행 중인 PPT 생성 복원 ──
+function resumePptGenProgress(jobId){
+  if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
+  _pptgenJobId=jobId;
+  $('pptgen-form-personal').classList.add('hidden');
+  $('pptgen-form-corp').classList.add('hidden');
+  $('pptgen-result').classList.add('hidden');
+  $('pptgen-progress').classList.remove('hidden');
+  $('pptgen-progress').scrollIntoView({behavior:'smooth',block:'start'});
+  // 로그 초기화
+  $('pptgen-log').innerHTML='<div style="color:#4CC9F0">▶ 진행 중인 생성 작업에 다시 연결되었습니다...</div>';
+  pollPptGenJob(jobId);
+}
+async function checkInProgressJob(){
+  if(!me)return;
+  if(_pollTimer)return; // 이미 폴링 중이면 스킵
+  try{
+    const inProgressStates=['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_done','step4_processing'];
+    const snap=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(5)));
+    if(snap.empty)return;
+    for(const d of snap.docs){
+      const j=d.data();
+      if(inProgressStates.includes(j.status)){
+        resumePptGenProgress(d.id);
+        return;
+      }
+    }
+  }catch(e){console.warn('checkInProgressJob:',e);}
+}
 async function deletePptJob(jobId){if(!confirm('이 생성 이력을 삭제하시겠습니까?'))return;try{await deleteDoc(doc(db,'pptgen_jobs',jobId));toast('삭제 완료','success');loadMpPptGen();loadPptGenHistory();}catch(e){toast('삭제 실패: '+e.message,'error');}}
 // ── 엔터키로 다음 입력 필드 자동 이동 ──
 function initPptgenEnterNav(){
