@@ -2150,7 +2150,7 @@ function pollPptGenJob(jobId){
       const st=j.status;
       const pr=j.progress||0;
 
-      // status별 단계 매핑 + progress 반영 (4-Job 체이닝)
+      // status별 단계 매핑 + progress 반영 (5-Job 체이닝)
       if(st==='processing'){
         // Job 1 진행중: progress 0~30 (계산기→1차생성→자체검증)
         const step=pr<5?1:pr<20?2:3;
@@ -2177,23 +2177,36 @@ function pollPptGenJob(jobId){
         $('pptgen-substatus').textContent='✓ 2차 자료 생성 완료 — 외부 독립 검증 준비 중...';
       }
       if(st==='step3_processing'){
-        // Job 3 진행중: progress 50~78 (외부검증→3차생성)
-        const step=pr<62?5:6;
-        updatePptGenStep(step);
+        // Job 3 진행중: progress 67~78 (Gemini 외부검증)
+        updatePptGenStep(5);
         updatePptGenBar(pr);
-        const sub=pr<55?'🛡️ 외부 독립 검증 시스템 연결 중...':pr<62?'⚖️ 금융·보험·세무 규정 준수 검증 중...':pr<70?'🤝 검증 피드백 반영하여 최종 자료 생성 중...':'📊 최종 수치 정합성 확인 중...';
+        const sub=pr<70?'🛡️ 외부 독립 검증 시스템 연결 중...':'⚖️ 금융·보험·세무 규정 준수 검증 중...';
+        $('pptgen-substatus').textContent=sub;
+      }
+      if(st==='step3_gemini_done'){
+        // Job 3 완료: Gemini 검증 완료 → Job 4 대기
+        updatePptGenStep(5);
+        updatePptGenBar(78);
+        $('pptgen-substatus').textContent='✓ 외부 검증 완료 — 최종 합의 준비 중...';
+      }
+      if(st==='step4_processing'){
+        // Job 4 진행중: progress 80~93 (Claude 최종합의)
+        updatePptGenStep(6);
+        updatePptGenBar(pr);
+        const sub=pr<86?'🤝 검증 피드백 반영하여 최종 자료 생성 중...':'📊 최종 수치 정합성 확인 중...';
         $('pptgen-substatus').textContent=sub;
       }
       if(st==='step3_done'){
+        // Job 4 완료: Claude 최종합의 완료 → Job 5 대기
         updatePptGenStep(6);
-        updatePptGenBar(78);
-        $('pptgen-substatus').textContent='✓ 3차 최종 자료 완성 — PPT 파일 생성 준비 중...';
+        updatePptGenBar(95);
+        $('pptgen-substatus').textContent='✓ 최종 자료 완성 — PPT 파일 생성 준비 중...';
       }
-      if(st==='step4_processing'){
-        // Job 4 진행중: progress 82~95 (PPT 렌더링)
+      if(st==='step5_processing'){
+        // Job 5 진행중: progress 96~98 (PPT 렌더링)
         updatePptGenStep(7);
         updatePptGenBar(pr);
-        const sub=pr<88?'🎨 프리미엄 디자인 적용 및 슬라이드 렌더링 중...':'☁️ PPT 파일을 서버에 저장 중...';
+        const sub=pr<98?'🎨 프리미엄 디자인 적용 및 슬라이드 렌더링 중...':'☁️ PPT 파일을 서버에 저장 중...';
         $('pptgen-substatus').textContent=sub;
       }
       if(st==='completed'){
@@ -2227,7 +2240,7 @@ function pollPptGenJob(jobId){
       }
     }catch(e){console.warn('poll error:',e);}
     // 30분 타임아웃 (3-Job 체이닝으로 시간 늘어남)
-    if(tick>900){clearInterval(_pollTimer);_pollTimer=null;$('pptgen-progress').classList.add('hidden');pptgenReset();toast('PPT 생성 시간이 초과되었습니다. 생성 이력에서 완료 여부를 확인해 주세요.','error');}
+    if(tick>1350){clearInterval(_pollTimer);_pollTimer=null;$('pptgen-progress').classList.add('hidden');pptgenReset();toast('PPT 생성 시간이 초과되었습니다. 생성 이력에서 완료 여부를 확인해 주세요.','error');}
   },2000);
 }
 function pptgenDownload(){
@@ -2246,8 +2259,8 @@ async function loadPptGenHistory(){
     try{snap=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(10)));}
     catch(e){const all=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid)));snap={empty:all.empty,docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,10)};}
     if(snap.empty||!snap.docs.length){el.innerHTML='<div style="text-align:center;padding:16px;color:var(--text-lt)">아직 생성된 PPT가 없습니다.</div>';return;}
-    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_done:'🔄 생성중',step4_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패',expired:'🗑 삭제됨'};
-    const isInProgress=(s)=>['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_done','step4_processing'].includes(s);
+    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_gemini_done:'🔄 생성중',step4_processing:'🔄 생성중',step3_done:'🔄 생성중',step5_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패',expired:'🗑 삭제됨'};
+    const isInProgress=(s)=>['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_gemini_done','step4_processing','step3_done','step5_processing'].includes(s);
     const now=new Date();
     el.innerHTML='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>제목</th><th>유형</th><th>상태</th><th>잔여일</th><th>다운로드</th><th>삭제</th></tr></thead><tbody>'+snap.docs.map(d=>{
       const j=d.data();
@@ -2297,7 +2310,7 @@ async function loadMpPptGen(){
       tb.innerHTML='<tr><td colspan="7" class="tc">PPT 생성 내역이 없습니다.</td></tr>';
       sumEl.textContent='';return;
     }
-    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_done:'🔄 생성중',step4_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
+    const stMap={pending:'⏳ 대기중',processing:'🔄 생성중',step1_done:'🔄 생성중',step2_processing:'🔄 생성중',step2_done:'🔄 생성중',step3_processing:'🔄 생성중',step3_gemini_done:'🔄 생성중',step4_processing:'🔄 생성중',step3_done:'🔄 생성중',step5_processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
     const now=new Date();
     let totalCost=0,totalCount=0,completedCount=0;
     tb.innerHTML=snap.docs.map(d=>{
@@ -2624,7 +2637,7 @@ async function checkInProgressJob(){
   if(!me)return;
   if(_pollTimer)return; // 이미 폴링 중이면 스킵
   try{
-    const inProgressStates=['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_done','step4_processing'];
+    const inProgressStates=['pending','processing','step1_done','step2_processing','step2_done','step3_processing','step3_gemini_done','step4_processing','step3_done','step5_processing'];
     const snap=await getDocs(query(collection(db,'pptgen_jobs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(5)));
     if(snap.empty)return;
     for(const d of snap.docs){
