@@ -35,6 +35,7 @@
 @media(max-width:768px){.cat-tabs{gap:3px;flex-wrap:wrap;overflow-x:visible;padding:6px 0}.cat-tab{padding:7px 0;font-size:13px;flex:1 1 30%;text-align:center;justify-content:center}.closing-row{flex-direction:column}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+@keyframes histRowPulse{0%,100%{background:#EFF6FF;border-left-color:#2E86AB}50%{background:#DBEAFE;border-left-color:#1B3A5C}}
 .money-unit{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--text-lt);font-size:13px;font-weight:500;pointer-events:none}
 .calc-group{margin-bottom:16px;padding:16px;background:#FAFBFC;border-radius:8px;border:1px solid var(--border-lt)}.calc-group-corp{background:#FFFCF5;border-color:#FFE0B2}.calc-group-title{font-size:14px;font-weight:600;color:#1565C0;margin-bottom:12px}.net-asset-display{margin-top:8px;padding:8px 14px;background:#E8F5E9;border-radius:6px;font-size:13px;font-weight:600;color:#2E7D32;text-align:center;border:1px solid #C8E6C9}
 .btn-add-field{background:none;border:1px dashed var(--border);color:var(--text-lt);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;width:100%;transition:var(--tr);font-family:var(--font);margin-top:8px}.btn-add-field:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
@@ -436,6 +437,10 @@
         <div style="text-align:center;margin-bottom:20px">
           <div id="pptgen-spinner" style="font-size:42px;margin-bottom:8px;animation:spin 2s linear infinite">🤖</div>
           <h3 id="pptgen-status" style="font-size:18px;font-weight:700;color:var(--primary);margin-bottom:4px">고품질 PPT를 생성하고 있습니다</h3>
+          <div id="pptgen-job-info" style="display:none;margin:8px auto 4px;padding:7px 18px;background:linear-gradient(135deg,#EEF2FF,#F0F9FF);border:1px solid #C7D7F0;border-radius:20px;display:inline-flex;align-items:center;gap:8px;font-size:13px;max-width:520px">
+            <span id="pptgen-job-type-badge" style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:#1B3A5C;color:#fff;white-space:nowrap"></span>
+            <span id="pptgen-job-title-text" style="color:#1B3A5C;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:360px"></span>
+          </div>
           <p id="pptgen-substatus" style="color:var(--text-lt);font-size:13px">7단계 전문 분석 시스템이 최고 품질의 자료를 생성합니다 (약30분 소요)</p>
         </div>
 
@@ -1686,6 +1691,8 @@ function pptgenReset(){
   const log=$('pptgen-log');if(log)log.innerHTML='<div style="color:#4CC9F0">▶ JARVIA PPT Engine v3.0 대기 중...</div>';
   const bar=$('pptgen-bar');if(bar)bar.style.width='0%';
   const pct=$('pptgen-pct');if(pct)pct.textContent='0%';
+  // 주제명 초기화
+  const jobInfo=$('pptgen-job-info');if(jobInfo)jobInfo.style.display='none';
   pptgenTab('personal');
 }
 let _pptgenJobId=null,_pptgenDownloadUrl=null,_pptgenTitle=null;
@@ -1941,6 +1948,8 @@ async function confirmPptGen(){
   $('pptgen-result').classList.add('hidden');
   $('pptgen-progress').classList.remove('hidden');
   $('pptgen-progress').scrollIntoView({behavior:'smooth',block:'start'});
+  // 주제명 표시
+  showPptgenJobInfo(formData.clientType, formData.ptTitle||'');
   updatePptGenStep(1);
   try{
     // 1단계: 크레딧 임시 차감 (hold)
@@ -2245,7 +2254,9 @@ async function loadPptGenHistory(){
       const title=j.formData?.ptTitle||'-';
       const tp=j.clientType==='personal'?'👤 개인':'🏢 기업';
       const st=stMap[j.status]||j.status;
-      const clickAttr=isInProgress(j.status)?` style="cursor:pointer;background:#F0F7FF" onclick="resumePptGenProgress('${d.id}')" title="클릭하여 진행 상황 보기"`:'';
+      const inProg=isInProgress(j.status);
+      const safeTitle=title.replace(/'/g,"\'").replace(/"/g,'&quot;');
+      const safeCtype=j.clientType||'personal';
       // 7일 만료 계산
       let remainStr='—',dl='—';
       if(j.status==='completed'&&j.createdAt){
@@ -2254,13 +2265,16 @@ async function loadPptGenHistory(){
         const remain=Math.ceil((expires-now)/(1000*60*60*24));
         if(remain>0){
           remainStr=`<span style="color:${remain<=2?'var(--danger)':'var(--success)'};font-weight:600">D-${remain}</span>`;
-          dl=j.pptxUrl?`<button class="btn btn-sm" onclick="pptgenRedownload('${j.pptxUrl}','${esc(title)}')">⬇</button>`:'—';
+          dl=j.pptxUrl?`<button class="btn btn-sm" onclick="event.stopPropagation();pptgenRedownload('${j.pptxUrl}','${esc(title)}')">⬇</button>`:'—';
         }else{
           remainStr='<span style="color:var(--text-lt)">만료</span>';
           dl='<span style="color:var(--text-lt);font-size:12px">삭제됨</span>';
         }
       }
-      return`<tr${clickAttr}><td>${fdate(j.createdAt)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td><td>${tp}</td><td>${st}${isInProgress(j.status)?' <span style="font-size:10px;color:var(--accent);cursor:pointer">👆 보기</span>':''}</td><td style="text-align:center">${remainStr}</td><td style="text-align:center">${dl}</td><td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:4px 8px;font-size:11px" onclick="event.stopPropagation();deletePptJob('${d.id}')">🗑</button></td></tr>`;
+      // 행 스타일: 진행중=파란 펄스, 완료=기본, 실패=연빨강
+      const rowBg=inProg?'background:#EFF6FF;border-left:4px solid #2E86AB':j.status==='failed'?'background:#FFF5F5;border-left:4px solid var(--danger)':'background:var(--bg-card);border-left:4px solid transparent';
+      const rowAnim=inProg?'animation:histRowPulse 2s ease-in-out infinite':'';
+      return`<tr id="hist-row-${d.id}" data-jobid="${d.id}" data-ctype="${safeCtype}" data-title="${esc(title)}" data-inprog="${inProg}" style="cursor:pointer;${rowBg};${rowAnim};transition:background .2s,box-shadow .2s" onclick="selectHistRow(this,'${d.id}','${safeCtype}','${esc(title)}',${inProg})"><td>${fdate(j.createdAt)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td><td>${tp}</td><td>${st}${inProg?' <span style="font-size:10px;color:var(--accent)">👆 보기</span>':''}</td><td style="text-align:center">${remainStr}</td><td style="text-align:center">${dl}</td><td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:4px 8px;font-size:11px" onclick="event.stopPropagation();deletePptJob('${d.id}')">🗑</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
   }catch(e){el.innerHTML='<div style="text-align:center;padding:16px;color:var(--text-lt)">이력 로드 실패</div>';}
 }
@@ -2558,8 +2572,37 @@ function addAssetRow(prefix,type){
   tbody.appendChild(tr);
   tr.querySelector('.money-input').addEventListener('input',function(){const raw=this.value.replace(/[^\d]/g,'');if(raw===''){this.value='';return;}this.value=Number(raw).toLocaleString('ko-KR');});
 }
-window.pptgenTab=pptgenTab;window.submitPptGen=submitPptGen;window.confirmPptGen=confirmPptGen;window.pptgenDownload=pptgenDownload;window.pptgenReset=pptgenReset;window.loadPptGenHistory=loadPptGenHistory;window.pptgenRedownload=pptgenRedownload;window.toggleVoice=toggleVoice;window.openPptgenSample=openPptgenSample;window.deletePptJob=deletePptJob;window.resumePptGenProgress=resumePptGenProgress;
+window.pptgenTab=pptgenTab;window.submitPptGen=submitPptGen;window.confirmPptGen=confirmPptGen;window.pptgenDownload=pptgenDownload;window.pptgenReset=pptgenReset;window.loadPptGenHistory=loadPptGenHistory;window.pptgenRedownload=pptgenRedownload;window.toggleVoice=toggleVoice;window.openPptgenSample=openPptgenSample;window.deletePptJob=deletePptJob;window.resumePptGenProgress=resumePptGenProgress;window.selectHistRow=selectHistRow;window.showPptgenJobInfo=showPptgenJobInfo;
 // ── 진행 중인 PPT 생성 복원 ──
+// ── 이력 행 선택 함수 ──
+function selectHistRow(rowEl,jobId,ctype,title,inProg){
+  // 기존 선택 표시 제거
+  document.querySelectorAll('#pptgen-history-list tr[data-jobid]').forEach(r=>{
+    r.style.outline='';
+    r.style.boxShadow='';
+  });
+  // 선택된 행 강조
+  rowEl.style.outline='2px solid #2E86AB';
+  rowEl.style.boxShadow='0 0 0 3px rgba(46,134,171,0.18)';
+  // 개인/기업 탭 자동 전환
+  pptgenTab(ctype==='corp'?'corp':'personal');
+  // 진행중이면 진행화면 표시 + 주제명 업데이트
+  if(inProg){
+    showPptgenJobInfo(ctype,title);
+    resumePptGenProgress(jobId);
+  }
+}
+// 생성 진행 화면 주제명 표시
+function showPptgenJobInfo(ctype,title){
+  const infoEl=$('pptgen-job-info');
+  const badgeEl=$('pptgen-job-type-badge');
+  const titleEl=$('pptgen-job-title-text');
+  if(!infoEl||!badgeEl||!titleEl)return;
+  badgeEl.textContent=ctype==='corp'?'🏢 기업':'👤 개인';
+  badgeEl.style.background=ctype==='corp'?'#E65100':'#1B3A5C';
+  titleEl.textContent=title||'';
+  infoEl.style.display='inline-flex';
+}
 function resumePptGenProgress(jobId){
   if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
   _pptgenJobId=jobId;
