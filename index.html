@@ -706,7 +706,7 @@
       </form>
     </div>
     <div id="mp-active" class="tp hidden"><div id="active-list"></div><div id="no-active" class="empty hidden">현재 이용 가능한 콘텐츠가 없습니다.</div></div>
-    <div id="mp-usage" class="tp hidden"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠</th><th>차감액</th><th>열람만료</th><th>상태</th></tr></thead><tbody id="tb-usage"></tbody></table></div></div>
+    <div id="mp-usage" class="tp hidden"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠</th><th>유형</th><th>차감액</th><th>열람만료</th><th>상태</th></tr></thead><tbody id="tb-usage"></tbody></table></div></div>
     <div id="mp-pptgen" class="tp hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div style="font-size:14px;color:var(--text-lt)">최근 PPT 생성 내역 (최대 30건)</div>
@@ -1785,16 +1785,17 @@ async function doUpdateProfile(e){
 async function loadUsage(){
   let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
   const logs=snap.docs.map(d=>d.data());
-  if(!logs.length){$('tb-usage').innerHTML='<tr><td colspan="5" class="tc">이용 내역이 없습니다.</td></tr>';return;}
+  if(!logs.length){$('tb-usage').innerHTML='<tr><td colspan="6" class="tc">이용 내역이 없습니다.</td></tr>';return;}
   const cMap={};
-  for(const l of logs){if(!cMap[l.contentId]){const cached=allContents.find(x=>x.contentId===l.contentId);if(cached){cMap[l.contentId]=cached.title;}else{const d=await getDoc(doc(db,'contents',l.contentId));cMap[l.contentId]=d.exists()?d.data().title:'(삭제된 콘텐츠)';}}}
+  const typeNames2={video:'영상',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT'};
+  for(const l of logs){if(!cMap[l.contentId]){const cached=allContents.find(x=>x.contentId===l.contentId);if(cached){cMap[l.contentId]={title:cached.title,type:typeNames2[cached.type]||cached.type};}else{const d=await getDoc(doc(db,'contents',l.contentId));if(d.exists()){cMap[l.contentId]={title:d.data().title,type:typeNames2[d.data().type]||d.data().type};}else{cMap[l.contentId]={title:'(이전이용내역)',type:'-'};}}}}
   const now=new Date();
   $('tb-usage').innerHTML=logs.map(l=>{
     let expStr=fdate(l.expiresAt);let statusStr='';
     if(l.expiresAt){const ed=l.expiresAt.toDate?l.expiresAt.toDate():new Date(l.expiresAt);const diff=Math.ceil((ed-now)/(1000*60*60*24));
       if(diff>0){expStr+=' (D-'+diff+')';statusStr='<span style="color:var(--success);font-weight:600">이용가능</span>';}
       else{statusStr='<span style="color:var(--danger);font-weight:600">만료</span>';}}
-    return`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(cMap[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'<span class="t-free">무료</span>'}</td><td>${expStr}</td><td>${statusStr}</td></tr>`;
+    return`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(cMap[l.contentId].title)}</td><td>${cMap[l.contentId].type}</td><td>${l.price>0?fmt(l.price)+'원':'<span class="t-free">무료</span>'}</td><td>${expStr}</td><td>${statusStr}</td></tr>`;
   }).join('');
 }
 async function loadChargeHistory(){
