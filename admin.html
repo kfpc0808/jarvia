@@ -1138,17 +1138,53 @@ async function loadGroupSubs(masterUid) {
   } catch(e) { container.innerHTML = '<p style="font-size:13px;color:var(--danger)">불러오기 실패</p>'; }
 }
 
-async function addSubAccount(masterUid) {
-  const loginId = prompt('추가할 하위계정 아이디를 입력하세요:');
-  if (!loginId) return;
-  try {
-    const snap = await getDocs(query(collection(db,'users'),where('loginId','==',loginId.trim()),limit(1)));
-    if (snap.empty) { toast('해당 아이디의 회원을 찾을 수 없습니다.','error'); return; }
-    const subDoc = snap.docs[0];
-    await updateDoc(subDoc.ref,{groupMasterId:masterUid,updatedAt:serverTimestamp()});
-    toast('하위계정 추가 완료','success');
+function addSubAccount(masterUid) {
+  window._currentMasterUid = masterUid;
+  // 모달 초기화
+  document.getElementById('sub-loginid').value='';
+  document.getElementById('sub-name').value='';
+  document.getElementById('sub-pw').value='';
+  document.getElementById('sub-role-new').value='free_user';
+  document.getElementById('mdl-add-sub').classList.remove('hidden');
+}
+
+async function createSubAccount() {
+  const masterUid = window._currentMasterUid;
+  const loginId = document.getElementById('sub-loginid').value.trim();
+  const name = document.getElementById('sub-name').value.trim();
+  const pw = document.getElementById('sub-pw').value.trim();
+  const role = document.getElementById('sub-role-new').value;
+  if(!loginId||!name||!pw){toast('아이디, 이름, 비밀번호는 필수입니다.','error');return;}
+  if(pw.length<6){toast('비밀번호는 6자 이상이어야 합니다.','error');return;}
+  // 아이디 중복 확인
+  const idChk=await getDocs(query(collection(db,'users'),where('loginId','==',loginId),limit(1)));
+  if(!idChk.empty){toast('이미 사용 중인 아이디입니다.','error');return;}
+  // 이메일 자동 생성 (아이디@jarvia.group)
+  const email=loginId+'@jarvia.group';
+  try{
+    const secondApp=initializeApp(FC,'subUser'+Date.now());
+    const secondAuth=getAuth(secondApp);
+    const cred=await createUserWithEmailAndPassword(secondAuth,email,pw);
+    const uid=cred.user.uid;
+    await signOut(secondAuth);
+    await setDoc(doc(db,'users',uid),{
+      userId:uid,name,loginId,email,role,status:'active',
+      balance:0,point:0,
+      groupMasterId:masterUid,
+      expiresAt:'unlimited',
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+    });
+    document.getElementById('mdl-add-sub').classList.add('hidden');
+    toast('하위계정 생성 완료 ('+loginId+')','success');
     loadGroupSubs(masterUid);
-  } catch(e) { toast('추가 실패: '+e.message,'error'); }
+  }catch(e){
+    if(e.code==='auth/email-already-in-use')toast('이미 존재하는 아이디입니다.','error');
+    else toast('생성 실패: '+e.message,'error');
+  }
+}
+
+function closeAddSubModal(){
+  document.getElementById('mdl-add-sub').classList.add('hidden');
 }
 
 async function saveSubRole(subUid) {
@@ -1168,7 +1204,7 @@ async function removeSubAccount(subUid, masterUid) {
     loadGroupSubs(masterUid);
   } catch(e) { toast('해제 실패: '+e.message,'error'); }
 }
-window.toggleGroupSection=toggleGroupSection;window.saveGroupInfo=saveGroupInfo;window.previewGroupLogo=previewGroupLogo;window.uploadGroupLogo=uploadGroupLogo;window.loadGroupSubs=loadGroupSubs;window.addSubAccount=addSubAccount;window.saveSubRole=saveSubRole;window.removeSubAccount=removeSubAccount;
+window.toggleGroupSection=toggleGroupSection;window.saveGroupInfo=saveGroupInfo;window.previewGroupLogo=previewGroupLogo;window.uploadGroupLogo=uploadGroupLogo;window.loadGroupSubs=loadGroupSubs;window.addSubAccount=addSubAccount;window.createSubAccount=createSubAccount;window.closeAddSubModal=closeAddSubModal;window.saveSubRole=saveSubRole;window.removeSubAccount=removeSubAccount;
 
 // ═══ 회원유형 변경이력 ═══
 const _rlLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클',branch_manager:'지사장'}[r]||r||'-');
@@ -1524,5 +1560,43 @@ async function loadLogsPptGen(){
   }
 }
 </script>
+
+<!-- 하위계정 신규 생성 모달 -->
+<div id="mdl-add-sub" class="modal hidden">
+  <div class="mdl-bg" onclick="closeAddSubModal()"></div>
+  <div class="mdl-box" style="max-width:420px;padding:28px">
+    <button class="mdl-x" onclick="closeAddSubModal()">×</button>
+    <h2 style="margin-bottom:20px;font-size:18px">➕ 하위계정 생성</h2>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">아이디 <span style="color:var(--danger)">*</span></label>
+        <input id="sub-loginid" placeholder="로그인 아이디 입력" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:var(--font)">
+      </div>
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">이름 <span style="color:var(--danger)">*</span></label>
+        <input id="sub-name" placeholder="회원 이름 입력" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:var(--font)">
+      </div>
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">비밀번호 <span style="color:var(--danger)">*</span> <span style="font-weight:400;color:var(--text-lt)">(6자 이상)</span></label>
+        <input id="sub-pw" type="password" placeholder="비밀번호 입력" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:var(--font)">
+      </div>
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">권한</label>
+        <select id="sub-role-new" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:var(--font)">
+          <option value="free_user">무료회원</option>
+          <option value="user">일반회원</option>
+          <option value="inner_circle">이너서클</option>
+          <option value="branch_manager">지사장</option>
+          <option value="jarvia_member">JARVIA멤버십</option>
+        </select>
+      </div>
+      <p style="font-size:12px;color:var(--text-lt);margin:0">※ 이메일은 <b>아이디@jarvia.group</b> 으로 자동 생성됩니다.</p>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+      <button class="btn btn-sec" onclick="closeAddSubModal()">취소</button>
+      <button class="btn" onclick="createSubAccount()">생성</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
