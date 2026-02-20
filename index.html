@@ -941,13 +941,44 @@ async function doRegister(e){
     const emChk=await getDocs(query(collection(db,'users'),where('email','==',email),limit(1)));
     if(!emChk.empty)return toast('이미 가입된 이메일입니다.','error');
     const cred=await createUserWithEmailAndPassword(auth,email,pw);
+    const refCode=localStorage.getItem('jarvia_ref')||'';
+    // 추천인이 단체마스터인지 확인
+    let isGroupRef=false, groupMasterUid='';
+    if(refCode){
+      try{
+        const refSnap=await getDocs(query(collection(db,'users'),where('referralCode','==',refCode),limit(1)));
+        if(!refSnap.empty){
+          const refData=refSnap.docs[0].data();
+          if(refData.isGroup===true){
+            isGroupRef=true;
+            groupMasterUid=refSnap.docs[0].id;
+          }
+        }
+      }catch(e){console.warn('추천인 조회 실패',e);}
+    }
     await setDoc(doc(db,'users',cred.user.uid),{
       userId:cred.user.uid,name,company,title,phone,email,address:addr,loginId,
-      role:'user',status:'active',balance:0,point:0,referralCode:genRefCode(),referredBy:localStorage.getItem('jarvia_ref')||'',referralPoints:0,
+      role:isGroupRef?'jarvia_member':'user',
+      status:'active',balance:0,point:0,
+      referralCode:genRefCode(),
+      referredBy:refCode,
+      referralPoints:0,
+      monthlyFee:isGroupRef?0:undefined,
+      ...(isGroupRef&&{groupMasterId:groupMasterUid}),
       agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
       lastLoginAt:serverTimestamp(),
       createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
     });
+    // 단체 추천인이면 포인트 지급 스킵, 일반 추천인이면 포인트 지급
+    if(refCode&&!isGroupRef){
+      try{
+        const refSnap2=await getDocs(query(collection(db,'users'),where('referralCode','==',refCode),limit(1)));
+        if(!refSnap2.empty){
+          const refUid=refSnap2.docs[0].id;
+          await updateDoc(doc(db,'users',refUid),{referralPoints:increment(1),updatedAt:serverTimestamp()});
+        }
+      }catch(e){console.warn('추천 포인트 지급 실패',e);}
+    }
     localStorage.removeItem('jarvia_ref');toast('가입이 완료되었습니다!','success');
     nav('login');
   }catch(err){
