@@ -469,6 +469,10 @@ async function showMember(uid){
             <button class="btn btn-sm" onclick="uploadGroupLogo('${uid}')">업로드</button>
             <span id="grp-logo-status-${uid}" style="font-size:12px;color:var(--text-lt)"></span>
           </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--text-lt)">
+            <span id="grp-logo-filesize-${uid}"></span>
+            <span style="color:#aaa"> · 권장: PNG 투명배경, 가로형 (200×60px) · 최대 5MB</span>
+          </div>
         </div>
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1089,8 +1093,17 @@ function previewGroupLogo(uid, input) {
     const img = preview.querySelector('img') || document.createElement('img');
     img.src = URL.createObjectURL(file);
     img.style.cssText = 'height:48px;border-radius:6px;border:1px solid var(--border);background:#1B3A5C;padding:4px 8px';
-    preview.appendChild(img);
+    if (!preview.querySelector('img')) preview.appendChild(img);
     preview.style.display = '';
+  }
+  // 파일 사이즈 표시
+  const sizeEl = document.getElementById('grp-logo-filesize-'+uid);
+  if (sizeEl) {
+    const kb = (file.size / 1024).toFixed(1);
+    const mb = (file.size / 1024 / 1024).toFixed(2);
+    const sizeStr = file.size > 1024*1024 ? mb+'MB' : kb+'KB';
+    const isOver = file.size > 5*1024*1024;
+    sizeEl.innerHTML = '선택된 파일: <strong style="color:'+(isOver?'var(--danger)':'var(--success)')+'">'+sizeStr+(isOver?' (5MB 초과!)')+'</strong>';
   }
 }
 
@@ -1098,19 +1111,56 @@ async function uploadGroupLogo(uid) {
   const fileInput = document.getElementById('grp-logo-file-'+uid);
   const file = fileInput?.files[0];
   if (!file) { toast('파일을 먼저 선택해주세요.','error'); return; }
+  // 파일 타입 검증
+  if (!file.type.startsWith('image/')) { toast('이미지 파일만 업로드 가능합니다.','error'); return; }
+  // 파일 크기 검증 (5MB 이하)
+  if (file.size > 5 * 1024 * 1024) { toast('파일 크기는 5MB 이하만 가능합니다.','error'); return; }
   const status = document.getElementById('grp-logo-status-'+uid);
+  const btn = document.querySelector('[onclick="uploadGroupLogo(''+uid+'')"]');
   if (status) status.textContent = '업로드 중...';
+  if (btn) btn.disabled = true;
   try {
-    const sRef = stRef(storage, 'jarvia/group_logos/'+uid+'/logo_'+Date.now());
+    const ext = file.name.split('.').pop() || 'png';
+    const sRef = stRef(storage, 'jarvia/group_logos/'+uid+'/logo_'+Date.now()+'.'+ext);
     const task = uploadBytesResumable(sRef, file, {contentType: file.type});
-    task.on('state_changed', null, (err)=>{ toast('업로드 실패: '+err.message,'error'); },
-      async ()=>{
-        const url = await getDownloadURL(task.snapshot.ref);
-        await updateDoc(doc(db,'users',uid),{groupLogoUrl:url,updatedAt:serverTimestamp()});
-        if (status) status.textContent = '✅ 업로드 완료';
-        toast('로고 업로드 완료','success');
-      });
-  } catch(e) { toast('업로드 실패: '+e.message,'error'); }
+    task.on('state_changed',
+      (snap) => {
+        const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+        if (status) status.textContent = '업로드 중... '+pct+'%';
+      },
+      (err) => {
+        if (status) status.textContent = '❌ 업로드 실패';
+        if (btn) btn.disabled = false;
+        toast('업로드 실패: '+err.message,'error');
+      },
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref);
+          await updateDoc(doc(db,'users',uid),{groupLogoUrl:url,updatedAt:serverTimestamp()});
+          if (status) status.textContent = '✅ 업로드 완료';
+          if (btn) btn.disabled = false;
+          // 미리보기 업데이트
+          const preview = document.getElementById('grp-logo-preview-'+uid);
+          if (preview) {
+            const img = preview.querySelector('img') || document.createElement('img');
+            img.src = url;
+            img.style.cssText = 'height:48px;border-radius:6px;border:1px solid var(--border);background:#1B3A5C;padding:4px 8px';
+            if (!preview.querySelector('img')) preview.appendChild(img);
+            preview.style.display = '';
+          }
+          toast('로고 업로드 완료','success');
+        } catch(e2) {
+          if (status) status.textContent = '❌ 저장 실패';
+          if (btn) btn.disabled = false;
+          toast('저장 실패: '+e2.message,'error');
+        }
+      }
+    );
+  } catch(e) {
+    if (status) status.textContent = '❌ 업로드 실패';
+    if (btn) btn.disabled = false;
+    toast('업로드 실패: '+e.message,'error');
+  }
 }
 
 async function loadGroupSubs(masterUid) {
