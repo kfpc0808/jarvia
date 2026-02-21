@@ -424,6 +424,10 @@ async function showMember(uid){
   const _pgStMap={pending:'⏳ 대기',processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
   const _pgPayMap={hold:'🟡 대기',confirmed:'🟢 확정',refunded:'🔵 환불'};
   const pgHtml=pgDocs.map(d=>{const j=d.data();const tp=j.clientType==='personal'?'👤 개인':'🏢 기업';const title=j.formData?.ptTitle||'-';const cost=j.genPrice>0?fmt(j.genPrice)+'원':'무료';return'<tr><td>'+fdatetime(j.createdAt)+'</td><td>'+tp+'</td><td class="ov">'+esc(title)+'</td><td>'+(_pgStMap[j.status]||j.status)+'</td><td style="text-align:right">'+cost+'</td><td>'+(_pgPayMap[j.paymentStatus]||j.paymentStatus||'-')+'</td></tr>';}).join('')||'<tr><td colspan="6" class="tc">내역 없음</td></tr>';
+  // 이용내역 콘텐츠 제목 조회
+  const _ctTitleCache={};
+  for(const vd of vlDocs){const l=vd.data();if(l.contentId&&!_ctTitleCache[l.contentId]){try{const cd=await getDoc(doc(db,'contents',l.contentId));_ctTitleCache[l.contentId]=cd.exists()?cd.data().title:l.contentId;}catch(e){_ctTitleCache[l.contentId]=l.contentId;}}}
+  const vlHtml=vlDocs.map(d=>{const l=d.data();return`<tr><td>${fdatetime(l.createdAt)}</td><td class="ov">${esc(_ctTitleCache[l.contentId]||l.contentId)}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`;}).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>';
   $('member-inner').innerHTML=`<h2>${esc(m.name)} 회원 수정</h2>
     <div class="info-grid"><div><label>아이디:</label>${esc(m.loginId)}</div><div><label>소속:</label>${esc(m.company||'')}</div><div><label>직함:</label>${esc(m.title||'')}</div><div><label>연락처:</label>${esc(m.phone||'')}</div><div><label>이메일:</label>${esc(m.email||'')}</div><div><label>상태:</label><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></div><div><label>잔액:</label><strong style="color:var(--accent);font-size:18px">${fmt(m.balance)}원</strong></div><div><label>포인트:</label><strong style="color:var(--success);font-size:18px">${fmt(m.point||0)}P</strong></div><div><label>이용만료:</label><span class="${es.cls}" style="font-weight:600">${es.text}</span></div><div><label>가입일:</label>${fdate(m.createdAt)}</div><div><label>마지막 로그인:</label>${fdatetime(m.lastLoginAt)}</div><div><label>추천코드:</label>${esc(m.referralCode||'-')}</div><div><label>추천인:</label><strong style="color:var(--primary)">${esc(refByName)}</strong></div><div><label>추천포인트:</label><strong style="color:var(--success)">${fmt(m.referralPoints||0)}P</strong></div></div>
     <div style="margin:16px 0;display:flex;gap:8px"><button class="btn btn-sm" onclick="toggleStatus('${uid}','${m.status}')">${m.status==='active'?'정지하기':'해제하기'}</button></div>
@@ -445,7 +449,7 @@ async function showMember(uid){
         ${m.membershipGrantedAt?'<button class="btn btn-sm btn-danger" onclick="revokeMembership(\x27'+uid+'\x27,\x27'+(m.originalRole||m.role)+'\x27)">멤버십 해제 (원래등급 복원)</button>':''}
       </div>
     </div>
-    <h3>이용 내역(최근 20건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠ID</th><th>차감액</th></tr></thead><tbody>${vlDocs.map(d=>{const l=d.data();return`<tr><td>${fdatetime(l.createdAt)}</td><td class="ov">${l.contentId}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`;}).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>'}</tbody></table></div>
+    <h3>이용 내역(최근 20건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>콘텐츠명칭</th><th>차감액</th></tr></thead><tbody>${vlHtml}</tbody></table></div>
     <h3 class="mt">트랜잭션(최근 20건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>유형</th><th>금액</th><th>잔액</th><th>포인트</th><th>메모</th></tr></thead><tbody>${txDocs.map(d=>{const t=d.data();return`<tr><td>${fdatetime(t.createdAt)}</td><td>${t.type}</td><td style="color:${t.amount>=0?'var(--success)':'var(--danger)'}"> ${t.amount>=0?'+':''}${fmt(t.amount)}원</td><td>${t.balanceAfter!=null?fmt(t.balanceAfter)+'원':'-'}</td><td>${t.pointAfter!=null?fmt(t.pointAfter)+'P':'-'}</td><td>${esc(t.memo||'')}</td></tr>`;}).join('')||'<tr><td colspan="6" class="tc">내역 없음</td></tr>'}</tbody></table></div>
     <h3 class="mt">🤖 PPT 생성 내역(최근 20건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>유형</th><th>PT 제목</th><th>상태</th><th>비용</th><th>결제상태</th></tr></thead><tbody>${pgHtml}</tbody></table></div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:28px;padding-top:20px;border-top:2px solid var(--border-lt)">
@@ -868,7 +872,7 @@ async function toggleCat(id,cur){await updateDoc(doc(db,'categories',id),{isActi
 async function delCat(id,name){if(!confirm('카테고리 "'+name+'"을(를) 삭제하시겠습니까?\n\n⚠️ 해당 카테고리를 사용 중인 콘텐츠가 있으면 카테고리가 표시되지 않을 수 있습니다.'))return;await deleteDoc(doc(db,'categories',id));toast('삭제 완료','success');loadCats();}
 
 // ═══ PAYMENTS ═══
-async function loadPays(){const snap=await getDocs(query(collection(db,'payments'),orderBy('createdAt','desc'),limit(100)));const uc={};const rows=[];for(const d of snap.docs){const p=d.data();if(!uc[p.userId]){const u=await getDoc(doc(db,'users',p.userId));uc[p.userId]=u.exists()?u.data().name:p.userId;}rows.push(`<tr><td>${fdatetime(p.createdAt)}</td><td>${esc(uc[p.userId])}</td><td>${fmt(p.paidAmount)}원</td><td>${fmt(p.chargeAmount)}원</td><td>${p.status}</td></tr>`);}$('tb-pays').innerHTML=rows.join('');}
+async function loadPays(){try{const snap=await getDocs(query(collection(db,'payments'),orderBy('createdAt','desc'),limit(100)));const uc={};const rows=[];for(const d of snap.docs){const p=d.data();if(!uc[p.userId]){const u=await getDoc(doc(db,'users',p.userId));uc[p.userId]=u.exists()?u.data().name:p.userId;}rows.push(`<tr><td>${fdatetime(p.createdAt)}</td><td>${esc(uc[p.userId])}</td><td>${fmt(p.paidAmount)}원</td><td>${fmt(p.chargeAmount)}원</td><td>${p.status}</td></tr>`);}$('tb-pays').innerHTML=rows.join('');}catch(e){console.error('결제내역 로드 실패:',e);$('tb-pays').innerHTML=`<tr><td colspan="5" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;}}
 
 // ═══ LOGS ═══
 let _logs=[],_logCT={},_logAct={};
@@ -877,10 +881,12 @@ async function loadLogs(){
   if(f)constraints.push(where('createdAt','>=',Timestamp.fromDate(new Date(f))));
   if(t){const td=new Date(t);td.setHours(23,59,59,999);constraints.push(where('createdAt','<=',Timestamp.fromDate(td)));}
   constraints.push(limit(500));
-  const snap=await getDocs(query(collection(db,'view_logs'),...constraints));_logs=snap.docs.map(d=>({...d.data(),_id:d.id}));
-  const uc={},cc={};_logCT={};_logAct={};let total=0;const rows=[];
-  for(const l of _logs){if(!uc[l.userId]){const u=await getDoc(doc(db,'users',l.userId));uc[l.userId]=u.exists()?u.data().name:l.userId;}if(!cc[l.contentId]){const c=await getDoc(doc(db,'contents',l.contentId));if(c.exists()){cc[l.contentId]=c.data().title;_logCT[l.contentId]=c.data().type||'';}else{cc[l.contentId]=l.contentId;_logCT[l.contentId]='';}}const act=l.action||'view';_logAct[l._id]=act;total+=(l.price||0);rows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${typeBadge(_logCT[l.contentId],act)}</td><td class="ov">${esc(cc[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`);}
-  $('lg-summary').innerHTML=`<div class="dash-c"><span>총 열람수</span><strong>${_logs.length}</strong></div><div class="dash-c"><span>총 매출</span><strong>${fmt(total)}</strong><em>원</em></div>`;$('tb-logs').innerHTML=rows.join('');
+  try{
+    const snap=await getDocs(query(collection(db,'view_logs'),...constraints));_logs=snap.docs.map(d=>({...d.data(),_id:d.id}));
+    const uc={},cc={};_logCT={};_logAct={};let total=0;const rows=[];
+    for(const l of _logs){if(!uc[l.userId]){const u=await getDoc(doc(db,'users',l.userId));uc[l.userId]=u.exists()?u.data().name:l.userId;}if(!cc[l.contentId]){const c=await getDoc(doc(db,'contents',l.contentId));if(c.exists()){cc[l.contentId]=c.data().title;_logCT[l.contentId]=c.data().type||'';}else{cc[l.contentId]=l.contentId;_logCT[l.contentId]='';}}const act=l.action||'view';_logAct[l._id]=act;total+=(l.price||0);rows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${typeBadge(_logCT[l.contentId],act)}</td><td class="ov">${esc(cc[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`);}
+    $('lg-summary').innerHTML=`<div class="dash-c"><span>총 열람수</span><strong>${_logs.length}</strong></div><div class="dash-c"><span>총 매출</span><strong>${fmt(total)}</strong><em>원</em></div>`;$('tb-logs').innerHTML=rows.join('');
+  }catch(e){console.error('이용로그 로드 실패:',e);$('tb-logs').innerHTML=`<tr><td colspan="5" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;$('lg-summary').innerHTML='';}
 }
 function exportCSV(){if(!_logs.length)return toast('데이터 없음','error');const typeNm={video:'영상콘텐츠',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PDF'};let csv='\uFEFF날짜,사용자ID,콘텐츠명칭,콘텐츠ID,차감액\n';_logs.forEach(l=>{let tName=typeNm[_logCT[l.contentId]]||'';if(_logCT[l.contentId]==='closing'&&_logAct[l._id]==='ppt_download')tName='클로징PPT';csv+=`${fdatetime(l.createdAt)},${l.userId},${tName},${l.contentId},${l.price||0}\n`;});const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='javia_logs_'+new Date().toISOString().slice(0,10)+'.csv';a.click();}
 
@@ -1651,8 +1657,8 @@ function exportPptGenCSV(){
 window.loadPptGenAdmin=loadPptGenAdmin;window.exportPptGenCSV=exportPptGenCSV;
 
 // ═══ 결제/이용로그 래퍼 (기존 + PPT) ═══
-function loadPaysAll(){loadPays();loadPaysPptGen().catch(e=>console.warn('PPT결제로드실패:',e));}
-function loadLogsAll(){loadLogs();loadLogsPptGen().catch(e=>console.warn('PPT로그로드실패:',e));}
+async function loadPaysAll(){await loadPays().catch(e=>console.error('결제로드실패:',e));loadPaysPptGen().catch(e=>console.warn('PPT결제로드실패:',e));}
+async function loadLogsAll(){await loadLogs().catch(e=>console.error('콘텐츠로그로드실패:',e));loadLogsPptGen().catch(e=>console.warn('PPT로그로드실패:',e));}
 
 // ═══ 결제관리 - PPT 결제 내역 ═══
 async function loadPaysPptGen(){
