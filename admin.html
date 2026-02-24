@@ -887,7 +887,7 @@ async function loadLogs(){
   try{
     const snap=await getDocs(query(collection(db,'view_logs'),...constraints));_logs=snap.docs.map(d=>({...d.data(),_id:d.id}));
     const uc={},cc={};_logCT={};_logAct={};let total=0;_logsRows=[];
-    for(const l of _logs){if(!uc[l.userId]){if(l.userName){uc[l.userId]=l.userName;}else{try{const u=await getDoc(doc(db,'users',l.userId));uc[l.userId]=u.exists()?u.data().name:l.userId;}catch(e){uc[l.userId]=l.userId;}}}if(!cc[l.contentId]){const c=await getDoc(doc(db,'contents',l.contentId));if(c.exists()){cc[l.contentId]=c.data().title;_logCT[l.contentId]=c.data().type||'';}else{cc[l.contentId]=l.contentId;_logCT[l.contentId]='';}}const act=l.action||'view';_logAct[l._id]=act;total+=(l.price||0);_logsRows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${typeBadge(_logCT[l.contentId],act)}</td><td class="ov">${esc(cc[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`);}
+    for(const l of _logs){if(!uc[l.userId]){uc[l.userId]=await resolveUserName(l.userId,l.userName||'');}if(!cc[l.contentId]){const c=await getDoc(doc(db,'contents',l.contentId));if(c.exists()){cc[l.contentId]=c.data().title;_logCT[l.contentId]=c.data().type||'';}else{cc[l.contentId]=l.contentId;_logCT[l.contentId]='';}}const act=l.action||'view';_logAct[l._id]=act;total+=(l.price||0);_logsRows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${typeBadge(_logCT[l.contentId],act)}</td><td class="ov">${esc(cc[l.contentId])}</td><td>${l.price>0?fmt(l.price)+'원':'무료'}</td></tr>`);}
     $('lg-summary').innerHTML=`<div class="dash-c"><span>총 열람수</span><strong>${_logs.length}</strong></div><div class="dash-c"><span>총 매출</span><strong>${fmt(total)}</strong><em>원</em></div>`;renderLogsPage(1);
   }catch(e){console.error('이용로그 로드 실패:',e);$('tb-logs').innerHTML=`<tr><td colspan="5" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;$('lg-summary').innerHTML='';}
 }
@@ -1737,7 +1737,7 @@ async function loadPaysPptGen(){
     for(const d of snap.docs){
       const j=d.data();
       if(!j.genPrice||j.genPrice<=0)continue;
-      if(!uc[j.userId]){if(j.userName){uc[j.userId]=j.userName;}else{try{const u=await getDoc(doc(db,'users',j.userId));uc[j.userId]=u.exists()?u.data().name:j.userId;}catch(e){uc[j.userId]=j.userId;}}}
+      if(!uc[j.userId]){uc[j.userId]=await resolveUserName(j.userId,j.userName||'');}
       rows.push(`<tr><td style="white-space:nowrap">${fdatetime(j.createdAt)}</td><td>${esc(uc[j.userId])}</td><td class="ov">${esc(j.formData?.ptTitle||'-')}</td><td style="text-align:right">${fmt(j.genPrice)}원</td><td>${payMap[j.paymentStatus]||j.paymentStatus||'-'}</td></tr>`);
     }
     tb.innerHTML=rows.length?rows.join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text-lt)">유료 PPT 내역이 없습니다.</td></tr>';
@@ -1764,7 +1764,7 @@ async function loadLogsPptGen(){
     for(const d of snap.docs){
       const j=d.data();totalCount++;
       if(j.paymentStatus==='confirmed')totalRev+=(j.genPrice||0);
-      if(!uc[j.userId]){if(j.userName){uc[j.userId]=j.userName;}else{try{const u=await getDoc(doc(db,'users',j.userId));uc[j.userId]=u.exists()?u.data().name:j.userId;}catch(e){uc[j.userId]=j.userId;}}}
+      if(!uc[j.userId]){uc[j.userId]=await resolveUserName(j.userId,j.userName||'');}
       const tp=j.clientType==='personal'?'👤 개인':'🏢 기업';
       const cost=j.genPrice>0&&j.paymentStatus==='confirmed'?fmt(j.genPrice)+'원':(j.paymentStatus==='refunded'?'환불':'무료');
       _pptRows.push(`<tr><td style="white-space:nowrap">${fdatetime(j.createdAt)}</td><td>${esc(uc[j.userId])}</td><td>${tp}</td><td class="ov">${esc(j.formData?.ptTitle||'-')}</td><td>${stMap[j.status]||j.status}</td><td style="text-align:right">${cost}</td></tr>`);
@@ -1776,6 +1776,15 @@ async function loadLogsPptGen(){
     sumEl.innerHTML='';
   }
 }
+// ═══ 사용자명 조회 헬퍼: users → admins 순서로 fallback ═══
+async function resolveUserName(userId, storedName){
+  // 저장된 이름이 있고 역할 레이블(총괄관리자/관리자)이 아닌 경우 그대로 사용
+  if(storedName && storedName!=='총괄관리자' && storedName!=='관리자') return storedName;
+  try{const u=await getDoc(doc(db,'users',userId));if(u.exists()&&u.data().name) return u.data().name;}catch(e){}
+  try{const a=await getDoc(doc(db,'admins',userId));if(a.exists()&&a.data().name) return a.data().name;}catch(e){}
+  return storedName||userId;
+}
+
 async function loadCalcLogs(){
   const tb=$('tb-logs-calc');const sumEl=$('lg-calc-summary');
   try{
@@ -1784,8 +1793,7 @@ async function loadCalcLogs(){
     for(const d of snap.docs){
       const l=d.data();
       if(!uc[l.userId]){
-        if(l.userName){uc[l.userId]=l.userName;}
-        else{try{const u=await getDoc(doc(db,'users',l.userId));uc[l.userId]=u.exists()?u.data().name:l.userId;}catch(e){uc[l.userId]=l.userId;}}
+        uc[l.userId]=await resolveUserName(l.userId,l.userName||'');
       }
       rows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${esc(l.calcTitle)}</td></tr>`);
     }
