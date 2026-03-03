@@ -1137,6 +1137,10 @@ async function applyGroupSettings(uid, userData) {
         // 마스터 잔액/포인트를 meData에 반영
         meData.balance = _groupMasterData.balance || 0;
         meData.point = _groupMasterData.point || 0;
+        // 하위계정 표시명: 회사명(성명)
+        const _grpDispName = (_groupMasterData.groupCenterName||_groupMasterData.groupName||'단체')+'('+userData.name+')';
+        if($('hdr-name'))$('hdr-name').textContent=_grpDispName;
+        if($('mob-name'))$('mob-name').textContent=_grpDispName;
         if (_groupMasterData.groupLogoUrl) {
           applyGroupLogo(_groupMasterData.groupLogoUrl);
         }
@@ -1148,6 +1152,12 @@ async function applyGroupSettings(uid, userData) {
     if (logoText) logoText.style.display = '';
     if (logoSub) logoSub.style.display = '';
   }
+  // 단체회원 푸터 적용 (마스터 본인 또는 하위계정 모두)
+  if (userData.isGroup) {
+    applyGroupFooter(userData);
+  } else if (_groupMasterData) {
+    applyGroupFooter(_groupMasterData);
+  }
 }
 
 function applyGroupLogo(url) {
@@ -1157,6 +1167,23 @@ function applyGroupLogo(url) {
   if (logoImg) { logoImg.src = url; logoImg.style.display = ''; }
   if (logoText) logoText.style.display = 'none';
   if (logoSub) logoSub.style.display = 'none';
+}
+
+function applyGroupFooter(masterData) {
+  const ft = document.getElementById('site-footer');
+  if (!ft || !masterData) return;
+  const gf = masterData.groupFooter || {};
+  const companyName = masterData.groupCenterName || masterData.groupName || '';
+  if (!companyName && !gf.ceo && !gf.address && !gf.tel && !gf.email && !gf.bizNo) return;
+  let lines = [];
+  if (companyName) lines.push('Copyright © ' + new Date().getFullYear() + ' ' + companyName + ' All Rights Reserved');
+  if (gf.ceo) lines.push('대표: ' + gf.ceo + (gf.bizNo ? ' | 사업자등록번호: ' + gf.bizNo : ''));
+  if (gf.address) lines.push(gf.address);
+  let contact = [];
+  if (gf.tel) contact.push('T. ' + gf.tel);
+  if (gf.email) contact.push('E. ' + gf.email);
+  if (contact.length) lines.push(contact.join(' | '));
+  ft.innerHTML = lines.map(l => '<div>' + l + '</div>').join('');
 }
 
 // ── Auth Observer ──
@@ -1201,9 +1228,16 @@ onAuthStateChanged(auth,async u=>{
       }
       $('app-header').classList.remove('hidden');
       const _roleMap={free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클멤버십',branch_manager:'지사장'};
-      const _roleLabel=meData.isGroup===true?'단체회원':meData.groupMasterId?'JARVIA멤버십(Gr)':(_roleMap[meData.role]||meData.role);
-      $('hdr-name').textContent=meData.name+'님 ('+_roleLabel+')';
-      if($('mob-name'))$('mob-name').textContent=meData.name+'님 ('+_roleLabel+')';
+      let _displayName;
+      if(meData.isGroup===true){
+        _displayName=(meData.groupCenterName||meData.groupName||'단체')+'('+meData.name+')';
+      }else if(meData.groupMasterId){
+        _displayName=meData.name+'님'; // 하위계정은 applyGroupSettings에서 갱신
+      }else{
+        _displayName=meData.name+'님 ('+(_roleMap[meData.role]||meData.role)+')';
+      }
+      $('hdr-name').textContent=_displayName;
+      if($('mob-name'))$('mob-name').textContent=_displayName;
       // 추천코드 없으면 생성
       if(!meData.referralCode){const rc=genRefCode();await updateDoc(doc(db,'users',me.uid),{referralCode:rc});meData.referralCode=rc;}
       // JARVIA멤버십이면 공유버튼/추천탭 표시
@@ -1322,15 +1356,21 @@ async function showDetail(cid){
     }catch(e){canReview=false;}
   }
   var isFreeRole=me&&meData&&(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager');
-  var viewLabel=canReview?'\uC7AC\uC5F4\uB78C\uAC00\uB2A5 (D-'+reviewDays+')':(isFreeRole?'(\uBB34\uB8CC)':'('+fmt(c.price)+'\uC6D0)');
-  var dlPriceLabel=me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member')?'무료':'+5,000원';
-  var dlNoticePrice=me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member')?'관리자/JARVIA멤버십은 PPTX 다운로드가 무료입니다.':'PPTX 다운로드 시 추가 5,000원이 차감됩니다.';
+  // 단체회원: 권한에 따라 라벨 분기
+  var _isGrp=isGroupMember();
+  var _grpCanView=_isGrp?checkGroupPerm(c.type,'view'):true;
+  var _grpCanDl=_isGrp?checkGroupPerm(c.type,'download'):true;
+  var viewLabel=canReview?'\uC7AC\uC5F4\uB78C\uAC00\uB2A5 (D-'+reviewDays+')':(_isGrp?(_grpCanView?'(\uBB34\uB8CC)':'(권한없음)'):(isFreeRole?'(\uBB34\uB8CC)':'('+fmt(c.price)+'\uC6D0)'));
+  var dlPriceLabel=_isGrp?(_grpCanDl?'무료':'권한없음'):(me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member')?'무료':'+5,000원');
+  var dlNoticePrice=_isGrp?(_grpCanDl?'단체회원은 PPTX 다운로드가 무료입니다.':(_grpCanView?'열람만 가능합니다. PPTX 다운로드 권한이 없습니다.':'이 콘텐츠의 이용 권한이 없습니다. 관리자에게 문의하세요.')):(me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member')?'관리자/JARVIA멤버십은 PPTX 다운로드가 무료입니다.':'PPTX 다운로드 시 추가 5,000원이 차감됩니다.');
   let actionsHTML='';
   if(c.type==='closing'){
     const previewBtn=c.videoUrl?`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`:`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`;
+    const _viewDis=_isGrp&&!_grpCanView?' disabled style="opacity:.5;cursor:not-allowed"':'';
+    const _dlDis=_isGrp&&!_grpCanDl?' disabled style="opacity:.5;cursor:not-allowed"':'';
     actionsHTML=`<div class="closing-actions">
       <div class="cd-notice">📑 클로징PPT는 PDF 열람, 영상 보기, PPTX 다운로드가 가능합니다.<br>${dlNoticePrice}</div>
-      <div class="closing-row">${previewBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">📄 PDF 열람 ${viewLabel}</button>${c.videoUrl?`<button class="btn btn-sec" onclick="doViewVideo('${cid}')">🎬 영상 보기</button>`:''}<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${cid}')">⬇ PPTX 다운로드 (${dlPriceLabel})</button></div>
+      <div class="closing-row">${previewBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')"${_viewDis}>📄 PDF 열람 ${viewLabel}</button>${c.videoUrl?`<button class="btn btn-sec" onclick="doViewVideo('${cid}')"${_viewDis}>🎬 영상 보기</button>`:''}<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${cid}')"${_dlDis}>⬇ PPTX 다운로드 (${dlPriceLabel})</button></div>
       <div class="closing-row"><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>
     </div>`;
   }else if(c.type==='report'&&c.url&&(c.url.toLowerCase().endsWith('.pptx')||c.url.toLowerCase().endsWith('.pdf'))){
@@ -1347,18 +1387,18 @@ async function showDetail(cid){
     }else{
       const _nf=s=>(s||'').replace(/^\([^)]*\)/,'').replace(/[_ ]/g,'').toLowerCase();
       const _rpptx=allContents.find(x=>x.contentId!==cid&&x.type==='report'&&x.url&&x.url.toLowerCase().endsWith('.pptx')&&_nf(x.title)===_nf(c.title));
-      const _rpptxBtn=_rpptx?`<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${_rpptx.contentId}')">⬇ PPTX 다운로드 (${dlPriceLabel})</button>`:'';
+      const _rpptxBtn=_rpptx?`<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${_rpptx.contentId}')"${_isGrp&&!_grpCanDl?' disabled style="opacity:.5;cursor:not-allowed"':''}>⬇ PPTX 다운로드 (${dlPriceLabel})</button>`:'';
       actionsHTML=`<div class="closing-actions">
       <div class="cd-notice">📑 특급보고서는 PDF 열람, PPTX 다운로드가 가능합니다.<br>${dlNoticePrice}</div>
-      <div class="closing-row">${_pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">📄 PDF 열람 ${viewLabel}</button>${_rpptxBtn}</div>
+      <div class="closing-row">${_pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')"${_isGrp&&!_grpCanView?' disabled style="opacity:.5;cursor:not-allowed"':''}>📄 PDF 열람 ${viewLabel}</button>${_rpptxBtn}</div>
       <div class="closing-row"><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>
       </div>`;
     }
   }else if(c.type==='audio'){
-    actionsHTML=`<div class="cd-actions"><button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button><button class="btn" id="btn-view" onclick="doView('${cid}')">🎧 오디오 재생 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
+    actionsHTML=`<div class="cd-actions"><button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button><button class="btn" id="btn-view" onclick="doView('${cid}')"${_isGrp&&!_grpCanView?' disabled style="opacity:.5;cursor:not-allowed"':''}>🎧 오디오 재생 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
   }else{
     const pvBtn=c.type==='ppt'?'':`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`;
-    actionsHTML=`<div class="cd-notice">⚠️ 모든 콘텐츠는 다운로드 불가입니다. 웹 뷰어를 통한 열람만 가능하며, 결제 후 30일간 재열람 가능합니다.</div><div class="cd-actions">${pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')">열람하기 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
+    actionsHTML=`<div class="cd-notice">⚠️ 모든 콘텐츠는 다운로드 불가입니다. 웹 뷰어를 통한 열람만 가능하며, 결제 후 30일간 재열람 가능합니다.</div><div class="cd-actions">${pvBtn}<button class="btn" id="btn-view" onclick="doView('${cid}')"${_isGrp&&!_grpCanView?' disabled style="opacity:.5;cursor:not-allowed"':''}>열람하기 ${viewLabel}</button><button class="fav-btn ${isFav?'active':''}" onclick="doFav('${cid}',this)">${isFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>`;
   }
   const subLabel=c.subType?` <span class="badge" style="background:#E8EAF6;color:#283593">${esc(c.subType)}</span>`:'';
   const _cRaw=((c.url||'').split('/').pop()||'').split('?')[0];const _cE=_cRaw.includes('.')?_cRaw.split('.').pop().toUpperCase():'';const _cExt=['HTML','PDF','PPTX','MP3','MP4'].includes(_cE)?_cE:({'video':'영상','audio':'오디오','closing':'PDF','report':'HTML'}[c.type]||'');const _extColors={HTML:'#1565C0',PDF:'#C62828',PPTX:'#E65100',MP3:'#4A148C',MP4:'#6A1B9A','영상':'#6A1B9A','오디오':'#4A148C'};const fmtBadge=_cExt?`<span style="display:inline-block;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;color:#fff;background:${_extColors[_cExt]||'#546E7A'};margin-bottom:8px">${_cExt}</span> `:'';
@@ -1369,6 +1409,21 @@ async function showDetail(cid){
 
 async function checkSession(){return true;}
 let _viewing=false;
+// ── 단체회원 콘텐츠 권한 체크 ──
+const _permTypeMap={html:'brief',doc:'brief',ppt:'closing'}; // DB type → 권한 key 매핑
+function isGroupMember(){return meData&&(meData.isGroup===true||!!meData.groupMasterId);}
+function checkGroupPerm(contentType,action){
+  if(!meData)return false;
+  let perms=null;
+  if(meData.isGroup)perms=meData.groupPermissions;
+  else if(meData.groupMasterId&&_groupMasterData)perms=_groupMasterData.groupPermissions;
+  if(!perms)return true; // 권한 미설정 시 기본 허용
+  const mappedType=_permTypeMap[contentType]||contentType;
+  if(!perms[mappedType])return true; // 권한 목록에 없는 type은 기본 허용
+  return perms[mappedType][action]===true;
+}
+window.isGroupMember=isGroupMember;window.checkGroupPerm=checkGroupPerm;
+
 async function doView(cid){
   _lastDetailCid=cid;
   if(_viewing)return;
@@ -1378,6 +1433,15 @@ async function doView(cid){
   const btn=$('btn-view');if(btn){btn.disabled=true;btn.textContent='처리중...';}
   try{
     if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+    // 단체회원 권한 체크
+    if(isGroupMember()){
+      const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
+      if(!checkGroupPerm(c.type,'view')){toast('이 콘텐츠 유형의 열람 권한이 없습니다. 관리자에게 문의하세요.','warning');return;}
+      try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+          await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+        }catch(e){}
+      closeM('mdl-detail');openViewer(c.url,c.title,c.type);return;
+    }
     if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
@@ -1622,6 +1686,15 @@ async function doViewVideo(cid){
   _viewing=true;
   try{
     if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+    // 단체회원 권한 체크
+    if(isGroupMember()){
+      const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
+      if(!checkGroupPerm(c.type,'view')){toast('이 콘텐츠의 영상 열람 권한이 없습니다. 관리자에게 문의하세요.','warning');return;}
+      try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+          await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+        }catch(e){}
+      closeM('mdl-detail');openViewer(c.videoUrl||c.url,c.title,'video');return;
+    }
     if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='inner_circle'||meData.role==='branch_manager'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
@@ -1648,6 +1721,12 @@ async function doDownloadPPTX(cid){
   if(!await checkSession())return;
   const c=allContents.find(x=>x.contentId===cid);const _pptxDlUrl=c&&(c.pptxUrl||(c.url&&c.url.toLowerCase().endsWith('.pptx')?c.url:null));if(!c||!_pptxDlUrl){toast('PPTX 파일이 등록되지 않았습니다.','error');return;}
   if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+  // 단체회원 다운로드 권한 체크
+  if(isGroupMember()){
+    if(!checkGroupPerm(c.type,'download')){toast('이 콘텐츠 유형의 다운로드 권한이 없습니다. 관리자에게 문의하세요.','warning');return;}
+    const a=document.createElement('a');a.href=_pptxDlUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
+    toast('다운로드를 시작합니다.','success');return;
+  }
   // 관리자 및 JARVIA멤버십: 무료 다운로드
   if(meData.role==='admin'||meData.role==='jarvia_member'){
     const a=document.createElement('a');a.href=_pptxDlUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
@@ -3342,7 +3421,7 @@ function requestUpgrade(){
 }
 </script>
 
-<footer style="background:var(--primary-dk);color:rgba(255,255,255,.6);text-align:center;padding:24px 16px;font-size:13px;line-height:1.8;margin-top:40px">
+<footer id="site-footer" style="background:var(--primary-dk);color:rgba(255,255,255,.6);text-align:center;padding:24px 16px;font-size:13px;line-height:1.8;margin-top:40px">
 <div>Copyright © 2026 (주)KFPC All Rights Reserved</div>
 <div>E. &#107;&#102;&#112;&#95;&#99;&#101;&#110;&#116;&#101;&#114;&#64;&#110;&#97;&#118;&#101;&#114;&#46;&#99;&#111;&#109;</div>
 </footer>

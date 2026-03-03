@@ -397,6 +397,9 @@ async function loadMembers(){
     const snapAll=await getDocs(collection(db,'users'));
     list=snapAll.docs.map(d=>({id:d.id,...d.data()})).filter(m=>m.role==='free_user'||m.role==='user'||m.role==='jarvia_member'||m.role==='inner_circle'||m.role==='branch_manager');
     list.sort((a,b)=>{const at=a.createdAt?.toDate?a.createdAt.toDate():new Date(0);const bt=b.createdAt?.toDate?b.createdAt.toDate():new Date(0);return bt-at;});
+    // 단체 마스터 이름 매핑 (하위계정 표시용)
+    const _grpNameMap={};list.filter(m=>m.isGroup).forEach(m=>{_grpNameMap[m.id]=m.groupName||m.name||'';});
+    list.forEach(m=>{if(m.groupMasterId)m.groupMasterName=_grpNameMap[m.groupMasterId]||'';});
   }catch(e){
     console.warn('회원 조회 오류:',e.message);
     list=[];
@@ -407,7 +410,7 @@ async function loadMembers(){
   const regFeeIcon=m=>m.role==='jarvia_member'?(m.regFeePaid?' ✅입금확인':' ❌미확인'):'';
   const refName=rc=>{if(!rc)return'-';const f=list.find(x=>x.referralCode===rc);return f?esc(f.name):rc;};
   if(!window._mPage)window._mPage=1;const perPage=10;const totalPages=Math.max(1,Math.ceil(list.length/perPage));if(window._mPage>totalPages)window._mPage=totalPages;const startIdx=(window._mPage-1)*perPage;const pageList=list.slice(startIdx,startIdx+perPage);
-  $('tb-members').innerHTML=pageList.length?pageList.map((m,i)=>{const no=startIdx+i+1;const es=expiryStatus(m);return`<tr><td><input type="checkbox" class="m-chk" value="${m.id}"></td><td style="text-align:center">${no}</td><td>${fdatetime(m.createdAt)}</td><td><span class="${m.isGroup?'st-group':m.groupMasterId?'st-groupsub':roleClass(m.role)}">${m.isGroup?'단체회원':m.groupMasterId?'JARVIA멤버십(Gr)':roleLabel(m.role)}</span>${regFeeIcon(m)}</td><td>${esc(m.name)}</td><td>${esc(m.loginId||'')}</td><td>${esc(m.company||'')}</td><td>${esc(m.phone||'')}</td><td><span class="${es.cls}">${es.text}</span></td><td>${fmt(m.balance)}원</td><td>${fmt(m.point||0)}P</td><td>${m.groupMasterId?'0원':m.isGroup?fmt(m.groupMonthlyFee||0)+'원':m.role==='jarvia_member'?fmt(m.monthlyFee!=null?m.monthlyFee:50000)+'원':'-'}</td><td><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></td><td>${refName(m.referredBy)}</td><td><button class="btn btn-sm" onclick="showMember('${m.id}')">수정</button></td></tr>`;}).join(''):'<tr><td colspan="15" class="tc">등록된 회원이 없습니다.</td></tr>';
+  $('tb-members').innerHTML=pageList.length?pageList.map((m,i)=>{const no=startIdx+i+1;const es=expiryStatus(m);return`<tr><td><input type="checkbox" class="m-chk" value="${m.id}"></td><td style="text-align:center">${no}</td><td>${fdatetime(m.createdAt)}</td><td><span class="${m.isGroup?'st-group':m.groupMasterId?'st-groupsub':roleClass(m.role)}">${m.isGroup?'단체('+(m.groupName||'미설정')+')':m.groupMasterId?'소속('+(m.groupMasterName||'단체')+')':roleLabel(m.role)}</span>${regFeeIcon(m)}</td><td>${esc(m.name)}</td><td>${esc(m.loginId||'')}</td><td>${esc(m.company||'')}</td><td>${esc(m.phone||'')}</td><td><span class="${es.cls}">${es.text}</span></td><td>${fmt(m.balance)}원</td><td>${fmt(m.point||0)}P</td><td>${m.groupMasterId?'0원':m.isGroup?fmt(m.groupMonthlyFee||0)+'원':m.role==='jarvia_member'?fmt(m.monthlyFee!=null?m.monthlyFee:50000)+'원':'-'}</td><td><span class="st-${m.status}">${m.status==='active'?'정상':'정지'}</span></td><td>${refName(m.referredBy)}</td><td><button class="btn btn-sm" onclick="showMember('${m.id}')">수정</button></td></tr>`;}).join(''):'<tr><td colspan="15" class="tc">등록된 회원이 없습니다.</td></tr>';
   let pgHtml='';if(totalPages>1){pgHtml+='<button class="btn btn-sm btn-sec" '+(window._mPage<=1?'disabled':'')+' onclick="window._mPage=1;loadMembers()">«</button>';pgHtml+='<button class="btn btn-sm btn-sec" '+(window._mPage<=1?'disabled':'')+' onclick="window._mPage--;loadMembers()">‹</button>';for(let p=1;p<=totalPages;p++){if(p===1||p===totalPages||Math.abs(p-window._mPage)<=2){pgHtml+='<button class="btn btn-sm'+(p===window._mPage?' btn-primary':' btn-sec')+'" onclick="window._mPage='+p+';loadMembers()">'+p+'</button>';}else if(Math.abs(p-window._mPage)===3){pgHtml+='<span style="padding:0 4px">…</span>';}}pgHtml+='<button class="btn btn-sm btn-sec" '+(window._mPage>=totalPages?'disabled':'')+' onclick="window._mPage++;loadMembers()">›</button>';pgHtml+='<button class="btn btn-sm btn-sec" '+(window._mPage>=totalPages?'disabled':'')+' onclick="window._mPage='+totalPages+';loadMembers()">»</button>';pgHtml+='<span style="margin-left:12px;font-size:13px;color:#888">총 '+list.length+'명</span>';}else if(list.length){pgHtml='<span style="font-size:13px;color:#888">총 '+list.length+'명</span>';}
   $('m-pagination').innerHTML=pgHtml;
   if($('m-chk-all'))$('m-chk-all').checked=false;
@@ -463,7 +466,7 @@ async function showMember(uid){
     <h3 class="mt">🤖 PPT 생성 내역(최근 20건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>유형</th><th>PT 제목</th><th>상태</th><th>비용</th><th>결제상태</th></tr></thead><tbody>${pgHtml}</tbody></table></div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:28px;padding-top:20px;border-top:2px solid var(--border-lt)">
       <h3 class="mt" style="margin:0">🏢 단체계정 설정</h3>
-      ${m.isGroup&&m.referralCode?`<button class="btn btn-sm btn-sec" onclick="shareGroupLink('${m.referralCode}','${esc(m.groupName||'단체')}')">🔗 초대링크 공유</button>`:''}
+      ${m.isGroup?`<button class="btn btn-sm btn-sec" onclick="shareGroupLink('${m.referralCode||''}','${esc(m.groupName||'단체')}','${esc(m.subdomain||'')}')">🔗 전용URL 공유</button>`:''}
     </div>
     <div style="background:#F8F9FA;border-radius:10px;padding:20px;border:1px solid var(--border-lt);margin-top:12px">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:16px">
@@ -471,11 +474,34 @@ async function showMember(uid){
         <span style="font-size:15px;font-weight:600;color:var(--primary)">이 회원을 단체계정(마스터)으로 설정</span>
       </label>
       <div id="grp-section-${uid}" style="${m.isGroup?'':'display:none'}">
-        <div class="fr" style="margin-bottom:16px">
-          <div class="fg"><label>단체명</label><input id="grp-name-${uid}" value="${esc(m.groupName||'')}" placeholder="예: 메가자산관리연구소"></div>
-          <div class="fg"><label>월이용료(원)</label><input id="grp-fee-${uid}" type="text" value="${(m.groupMonthlyFee||0).toLocaleString('ko-KR')}" placeholder="0" oninput="fmtComma(this)" style="ime-mode:disabled"></div>
-          <button class="btn btn-sm" style="align-self:end" onclick="saveGroupInfo('${uid}')">저장</button>
+        <div class="fr" style="margin-bottom:12px">
+          <div class="fg"><label>단체명 <i>*</i></label><input id="grp-name-${uid}" value="${esc(m.groupName||'')}" placeholder="예: 메가자산관리연구소"></div>
+          <div class="fg"><label>센터표시명</label><input id="grp-center-${uid}" value="${esc(m.groupCenterName||'')}" placeholder="예: 메가자산 교육센터"></div>
         </div>
+        <div class="fr" style="margin-bottom:12px">
+          <div class="fg"><label>서브도메인</label><div style="display:flex;align-items:center;gap:4px"><input id="grp-subdomain-${uid}" value="${esc(m.subdomain||'')}" placeholder="영문만 (예: mega)" style="flex:1" oninput="this.value=this.value.replace(/[^a-z0-9-]/g,'')"><span style="font-size:12px;color:var(--text-lt);white-space:nowrap">.jarvia.co.kr</span></div></div>
+          <div class="fg"><label>월이용료(원)</label><input id="grp-fee-${uid}" type="text" value="${(m.groupMonthlyFee||0).toLocaleString('ko-KR')}" placeholder="0" oninput="fmtComma(this)" style="ime-mode:disabled"></div>
+        </div>
+        ${m.subdomain?'<div style="margin-bottom:12px;padding:8px 12px;background:#E3F2FD;border-radius:6px;font-size:13px"><strong>🔗 전용 URL:</strong> <a href="https://'+esc(m.subdomain)+'.jarvia.co.kr" target="_blank" style="color:#1565C0">'+esc(m.subdomain)+'.jarvia.co.kr</a> &nbsp;|&nbsp; <a href="https://jarvia.co.kr/'+esc(m.subdomain)+'" target="_blank" style="color:#1565C0">jarvia.co.kr/'+esc(m.subdomain)+'</a> <button class="btn btn-sm btn-sec" style="margin-left:8px" onclick="navigator.clipboard.writeText(\'https://'+esc(m.subdomain)+'.jarvia.co.kr\');toast(\'복사됨\',\'success\')">URL 복사</button></div>':''}
+        <div style="background:#fff;border:1px solid var(--border-lt);border-radius:8px;padding:16px;margin-bottom:16px">
+          <h4 style="margin:0 0 12px;font-size:14px;font-weight:600;color:var(--primary)">📋 하단(푸터) 회사정보</h4>
+          <div class="fr"><div class="fg"><label>대표자</label><input id="grp-ceo-${uid}" value="${esc(m.groupFooter?.ceo||'')}" placeholder="대표자명"></div><div class="fg"><label>사업자등록번호</label><input id="grp-bizno-${uid}" value="${esc(m.groupFooter?.bizNo||'')}" placeholder="000-00-00000"></div></div>
+          <div class="fg"><label>주소</label><input id="grp-addr-${uid}" value="${esc(m.groupFooter?.address||'')}" placeholder="회사 주소"></div>
+          <div class="fr"><div class="fg"><label>전화번호</label><input id="grp-tel-${uid}" value="${esc(m.groupFooter?.tel||'')}" placeholder="02-0000-0000"></div><div class="fg"><label>이메일</label><input id="grp-femail-${uid}" value="${esc(m.groupFooter?.email||'')}" placeholder="info@company.co.kr"></div></div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--border-lt);border-radius:8px;padding:16px;margin-bottom:16px">
+          <h4 style="margin:0 0 12px;font-size:14px;font-weight:600;color:var(--primary)">🔐 콘텐츠 이용 권한</h4>
+          <p style="font-size:12px;color:var(--text-lt);margin-bottom:12px">이 단체 소속 직원이 이용할 수 있는 콘텐츠 유형과 권한을 설정합니다.</p>
+          <table class="tbl" style="font-size:13px"><thead><tr><th>콘텐츠 유형</th><th style="text-align:center;width:80px">열람</th><th style="text-align:center;width:80px">다운로드</th></tr></thead><tbody>
+          <tr><td>📑 클로징PPT</td><td style="text-align:center"><input type="checkbox" id="gp-closing-view-${uid}" ${m.groupPermissions?.closing?.view?'checked':''}></td><td style="text-align:center"><input type="checkbox" id="gp-closing-dl-${uid}" ${m.groupPermissions?.closing?.download?'checked':''}></td></tr>
+          <tr><td>🎬 영상콘텐츠</td><td style="text-align:center"><input type="checkbox" id="gp-video-view-${uid}" ${m.groupPermissions?.video?.view?'checked':''}></td><td style="text-align:center"><input type="checkbox" id="gp-video-dl-${uid}" ${m.groupPermissions?.video?.download?'checked':''}></td></tr>
+          <tr><td>🎧 오디오</td><td style="text-align:center"><input type="checkbox" id="gp-audio-view-${uid}" ${m.groupPermissions?.audio?.view?'checked':''}></td><td style="text-align:center"><input type="checkbox" id="gp-audio-dl-${uid}" ${m.groupPermissions?.audio?.download?'checked':''}></td></tr>
+          <tr><td>📰 이슈브리핑(HTML)</td><td style="text-align:center"><input type="checkbox" id="gp-brief-view-${uid}" ${m.groupPermissions?.brief?.view?'checked':''}></td><td style="text-align:center"><input type="checkbox" id="gp-brief-dl-${uid}" ${m.groupPermissions?.brief?.download?'checked':''}></td></tr>
+          <tr><td>📊 특급보고서</td><td style="text-align:center"><input type="checkbox" id="gp-report-view-${uid}" ${m.groupPermissions?.report?.view?'checked':''}></td><td style="text-align:center"><input type="checkbox" id="gp-report-dl-${uid}" ${m.groupPermissions?.report?.download?'checked':''}></td></tr>
+          </tbody></table>
+          <div style="margin-top:8px;display:flex;gap:6px"><button class="btn btn-sm btn-sec" onclick="grpPermAll('${uid}',true)">전체 선택</button><button class="btn btn-sm btn-sec" onclick="grpPermAll('${uid}',false)">전체 해제</button></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:16px"><button class="btn" onclick="saveGroupInfo('${uid}')">💾 단체정보 저장</button></div>
         <div style="margin-bottom:16px">
           <label style="font-size:13px;font-weight:500;color:var(--text);display:block;margin-bottom:8px">단체 로고 이미지</label>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -1116,23 +1142,49 @@ function toggleGroupSection(uid, checked) {
 
 async function saveGroupInfo(uid) {
   const name = document.getElementById('grp-name-'+uid)?.value?.trim();
+  const centerName = document.getElementById('grp-center-'+uid)?.value?.trim();
+  const subdomain = document.getElementById('grp-subdomain-'+uid)?.value?.trim().toLowerCase();
   const fee = parseInt((document.getElementById('grp-fee-'+uid)?.value||'0').replace(/,/g,''));
   const isGroup = document.getElementById('grp-chk-'+uid)?.checked;
   if (!name && isGroup) { toast('단체명을 입력해주세요.','error'); return; }
+  // 서브도메인 유효성 검사
+  if (subdomain && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain)) { toast('서브도메인은 영문 소문자, 숫자, 하이픈만 가능합니다.','error'); return; }
+  // 서브도메인 중복 검사
+  if (subdomain) {
+    try {
+      const sdSnap = await getDocs(query(collection(db,'users'),where('subdomain','==',subdomain)));
+      const dup = sdSnap.docs.filter(d=>d.id!==uid);
+      if (dup.length>0) { toast('이미 사용 중인 서브도메인입니다: '+subdomain,'error'); return; }
+    } catch(e) { console.warn('서브도메인 중복검사 실패',e); }
+  }
+  // 푸터 정보
+  const groupFooter = {
+    ceo: document.getElementById('grp-ceo-'+uid)?.value?.trim()||'',
+    bizNo: document.getElementById('grp-bizno-'+uid)?.value?.trim()||'',
+    address: document.getElementById('grp-addr-'+uid)?.value?.trim()||'',
+    tel: document.getElementById('grp-tel-'+uid)?.value?.trim()||'',
+    email: document.getElementById('grp-femail-'+uid)?.value?.trim()||''
+  };
+  // 콘텐츠 권한
+  const _gpTypes = ['closing','video','audio','brief','report'];
+  const groupPermissions = {};
+  _gpTypes.forEach(t => {
+    groupPermissions[t] = {
+      view: document.getElementById('gp-'+t+'-view-'+uid)?.checked||false,
+      download: document.getElementById('gp-'+t+'-dl-'+uid)?.checked||false
+    };
+  });
   try {
-    // 현재 회원 데이터 조회
     const uDoc = await getDoc(doc(db,'users',uid));
     if (!uDoc.exists()) { toast('회원 정보를 찾을 수 없습니다.','error'); return; }
     const uData = uDoc.data();
-    let updateData = {isGroup,groupName:name||'',groupMonthlyFee:fee,updatedAt:serverTimestamp()};
+    let updateData = {isGroup,groupName:name||'',groupCenterName:centerName||'',subdomain:subdomain||'',groupMonthlyFee:fee,groupFooter,groupPermissions,updatedAt:serverTimestamp()};
     if (isGroup) {
-      // 단체 설정: role을 jarvia_member로 변경, 기존 role 백업
       if (uData.role !== 'jarvia_member') {
         updateData.originalGroupRole = uData.role;
         updateData.role = 'jarvia_member';
       }
     } else {
-      // 단체 해제: 기존 role 복원
       if (uData.originalGroupRole) {
         updateData.role = uData.originalGroupRole;
         updateData.originalGroupRole = deleteField();
@@ -1141,7 +1193,6 @@ async function saveGroupInfo(uid) {
     await updateDoc(doc(db,'users',uid),updateData);
     toast('단체계정 정보 저장 완료','success');
     loadMembers();
-    // 회원 상세 모달 내 배지 즉시 갱신
     const badgeEl = document.getElementById('member-role-badge-'+uid);
     if (badgeEl) {
       if (isGroup) {
@@ -1356,9 +1407,10 @@ async function removeSubAccount(subUid, masterUid) {
   } catch(e) { toast('해제 실패: '+e.message,'error'); }
 }
 function fmtComma(el){const v=el.value.replace(/[^0-9]/g,'');el.value=v.replace(/\B(?=(\d{3})+(?!\d))/g,',');}
-function shareGroupLink(refCode, groupName) {
-  const url = 'https://jarvia.co.kr?ref=' + refCode;
-  const msg = '[' + groupName + '] JARVIA 초대링크\n' + url;
+function grpPermAll(uid,checked){const types=['closing','video','audio','brief','report'];types.forEach(t=>{const v=document.getElementById('gp-'+t+'-view-'+uid);const d=document.getElementById('gp-'+t+'-dl-'+uid);if(v)v.checked=checked;if(d)d.checked=checked;});}
+function shareGroupLink(refCode, groupName, subdomain) {
+  const url = subdomain ? 'https://' + subdomain + '.jarvia.co.kr' : 'https://jarvia.co.kr?ref=' + refCode;
+  const msg = '[' + groupName + '] 전용 접속 주소\n' + url;
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   if (isMobile) {
     // 모바일: 카카오톡 공유
@@ -1384,7 +1436,7 @@ function shareGroupLink(refCode, groupName) {
       });
   }
 }
-window.shareGroupLink=shareGroupLink;window.fmtComma=fmtComma;window.toggleGroupSection=toggleGroupSection;window.saveGroupInfo=saveGroupInfo;window.previewGroupLogo=previewGroupLogo;window.uploadGroupLogo=uploadGroupLogo;window.loadGroupSubs=loadGroupSubs;window.addSubAccount=addSubAccount;window.createSubAccount=createSubAccount;window.closeAddSubModal=closeAddSubModal;window.saveSubInfo=saveSubInfo;window.saveSubRole=saveSubRole;window.removeSubAccount=removeSubAccount;
+window.shareGroupLink=shareGroupLink;window.fmtComma=fmtComma;window.grpPermAll=grpPermAll;window.toggleGroupSection=toggleGroupSection;window.saveGroupInfo=saveGroupInfo;window.previewGroupLogo=previewGroupLogo;window.uploadGroupLogo=uploadGroupLogo;window.loadGroupSubs=loadGroupSubs;window.addSubAccount=addSubAccount;window.createSubAccount=createSubAccount;window.closeAddSubModal=closeAddSubModal;window.saveSubInfo=saveSubInfo;window.saveSubRole=saveSubRole;window.removeSubAccount=removeSubAccount;
 
 // ═══ 회원유형 변경이력 ═══
 const _rlLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',inner_circle:'이너서클',branch_manager:'지사장'}[r]||r||'-');
