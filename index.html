@@ -1945,8 +1945,7 @@ window.innopay_result=function(data){
   console.log('💳 INNOPAY 결과:',data);
   const resultCode=String(data.ResultCode||'').trim();
   if(resultCode==='0000'||resultCode==='3001'){
-    // 결제 성공 → 포인트 적립 (PC 콜백 성공이므로 localStorage 정리)
-    try{localStorage.removeItem('_pendingCharge');}catch(e){}
+    // 결제 성공 → localStorage는 chargeAfterPayment 내부에서 처리 (삭제 전 pending 참조 필요)
     chargeAfterPayment({tid:data.TID,amt:data.Amt,moid:data.MOID,authCode:data.AuthCode||'',cardNum:data.CardNum||'',cardName:data.fn_name||''});
   }else if(resultCode==='U000'){
     console.log('💳 결제 취소됨');
@@ -2000,8 +1999,8 @@ async function chargeAfterPayment(payData){
       const ud=(await tx.get(uRef)).data();
       const nb=(ud.balance||0)+chargeAmount;
       tx.update(uRef,{balance:nb,updatedAt:serverTimestamp()});
-      const tid=gid();
-      tx.set(doc(db,'transactions',tid),{txId:tid,userId:me.uid,type:'charge',amount:chargeAmount,balanceAfter:nb,refType:'payment',refId:pid,createdAt:serverTimestamp()});
+      const txDocId=gid();
+      tx.set(doc(db,'transactions',txDocId),{txId:txDocId,userId:me.uid,type:'charge',amount:chargeAmount,balanceAfter:nb,refType:'payment',refId:pid,createdAt:serverTimestamp()});
     });
     await refreshMe();closeM('mdl-charge');
     toast(`${fmt(chargeAmount)}원 충전 완료! 잔액: ${fmt(meData.balance)}원`,'success');
@@ -2016,17 +2015,20 @@ async function chargeAfterPayment(payData){
 // 페이지 로드 시 결제 결과 확인 (URL 파라미터 + localStorage 미처리 결제)
 function checkPaymentResult(){
   // 1) URL 파라미터 방식 (PC 리다이렉트 백업)
+  // INNOPAY는 대문자 파라미터(TID, ResultCode 등)로 전달하므로 모든 케이스 처리
   const urlParams=new URLSearchParams(window.location.search);
-  const hasResult=urlParams.get('payment')==='result'||urlParams.get('tid')||urlParams.get('ResultCode');
+  const hasResult=urlParams.get('payment')==='result'
+    ||urlParams.get('tid')||urlParams.get('TID')
+    ||urlParams.get('ResultCode')||urlParams.get('resultCode')||urlParams.get('RESULTCODE');
   if(hasResult){
     const payData={
-      tid:urlParams.get('tid')||urlParams.get('TID'),
-      amt:urlParams.get('amt')||urlParams.get('Amt'),
-      moid:urlParams.get('moid')||urlParams.get('Moid'),
-      resultCode:urlParams.get('resultCode')||urlParams.get('ResultCode'),
-      resultMsg:urlParams.get('resultMsg')||urlParams.get('ResultMsg'),
-      authCode:urlParams.get('authCode')||urlParams.get('AuthCode'),
-      cardNum:urlParams.get('cardNum')||urlParams.get('CardNum')
+      tid:urlParams.get('TID')||urlParams.get('tid'),
+      amt:urlParams.get('Amt')||urlParams.get('amt'),
+      moid:urlParams.get('MOID')||urlParams.get('Moid')||urlParams.get('moid'),
+      resultCode:urlParams.get('ResultCode')||urlParams.get('resultCode')||urlParams.get('RESULTCODE'),
+      resultMsg:urlParams.get('ResultMsg')||urlParams.get('resultMsg'),
+      authCode:urlParams.get('AuthCode')||urlParams.get('authCode'),
+      cardNum:urlParams.get('CardNum')||urlParams.get('cardNum')
     };
     console.log('💳 URL 결제 결과:',payData);
     window.history.replaceState({},document.title,window.location.pathname);
@@ -2035,15 +2037,28 @@ function checkPaymentResult(){
     else if(rc&&rc!=='U000'){toast('결제가 완료되지 않았습니다. ['+ rc+'] '+(payData.resultMsg||''),'error');}
     return;
   }
-  // 2) localStorage 미처리 결제 정리 (모바일은 ReturnURL로 TID를 받아 처리됨)
+  // 2) localStorage 미처리 결제 발견 — TID를 URL로 못 받은 경우 (모바일 앱 전환 등)
   try{
     const s=localStorage.getItem('_pendingCharge');
     if(!s)return;
     const pending=JSON.parse(s);
     // 10분 이상 지난 건은 정리
     if(!pending.ts||Date.now()-pending.ts>600000){localStorage.removeItem('_pendingCharge');return;}
-    // TID 없이 자동 적립하지 않음 — 결제가 실제 완료되었다면 URL 파라미터로 TID가 전달됨
-    console.log('💳 미처리 pending 발견 (TID 대기중):',pending.moid);
+    // 미처리 결제 발견: Firestore에 미확인 결제 기록을 남겨 관리자가 확인할 수 있도록 처리
+    console.warn('💳 미처리 pending 발견 (TID 미수신):',pending.moid);
+    try{
+      const unconfirmedId='unconf_'+pending.moid;
+      setDoc(doc(db,'payments',unconfirmedId),{
+        paymentId:unconfirmedId,userId:pending.userId||me?.uid||'',
+        paidAmount:pending.paid,chargeAmount:pending.credit,
+        provider:'INNOPAY',status:'unconfirmed',
+        moid:pending.moid,tid:'',
+        memo:'모바일 결제 후 TID 미수신 — 수동 확인 필요',
+        createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+      }).catch(()=>{});
+    }catch(e){}
+    toast('결제 처리 중 문제가 발생했습니다.\n결제가 진행되었다면 카카오톡 채널로 문의해 주세요.','warning');
+    localStorage.removeItem('_pendingCharge');
   }catch(e){}
 }
 // checkPaymentResult는 onAuthStateChanged에서 로그인 완료 후 호출됨
