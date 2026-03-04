@@ -526,6 +526,58 @@ input, select { font-size: 16px; /* iOS 자동줌 방지 */ }
   /* 푸터 */
   .snap-footer { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
 }
+/* ── 100대 통계지표 테이블 ── */
+.snap-sidebar__keystat-btn {
+  display: flex; align-items: center; gap: 8px;
+  width: calc(100% - 24px); margin: 12px 12px 8px;
+  padding: 10px 14px; border-radius: 8px;
+  background: linear-gradient(135deg, #1a3a5c, #2563eb);
+  color: #fff; font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; transition: var(--transition);
+  border: none; text-align: left;
+}
+.snap-sidebar__keystat-btn:hover { opacity: 0.9; }
+.snap-sidebar__keystat-btn.active { box-shadow: 0 0 0 2px #60a5fa; }
+
+.keystat-table-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.keystat-table {
+  width: 100%; border-collapse: collapse; font-size: 0.82rem;
+  background: #fff; border-radius: 8px; overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.keystat-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--primary); color: #fff;
+  padding: 10px 12px; font-weight: 600; text-align: left;
+  white-space: nowrap; font-size: 0.78rem;
+}
+.keystat-table tbody td {
+  padding: 8px 12px; border-bottom: 1px solid #f1f3f5;
+  color: var(--text); vertical-align: middle;
+}
+.keystat-table tbody tr:hover { background: #f0f7ff; }
+.keystat-table .td-class { color: var(--text-secondary); font-size: 0.75rem; white-space: nowrap; }
+.keystat-table .td-name { font-weight: 500; min-width: 160px; }
+.keystat-table .td-value { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--primary); white-space: nowrap; }
+.keystat-table .td-unit { color: var(--text-secondary); font-size: 0.75rem; white-space: nowrap; }
+.keystat-table .td-period { color: var(--text-secondary); font-size: 0.75rem; white-space: nowrap; }
+.keystat-class-header td {
+  background: #f8fafc; font-weight: 700; color: var(--primary);
+  padding: 10px 12px; font-size: 0.8rem;
+  border-bottom: 2px solid var(--primary-light);
+}
+.keystat-loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+.keystat-loading .spinner { display: inline-block; width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 768px) {
+  .keystat-table { font-size: 0.75rem; }
+  .keystat-table thead th { padding: 8px 8px; font-size: 0.72rem; }
+  .keystat-table tbody td { padding: 6px 8px; }
+  .keystat-table .td-name { min-width: 120px; }
+}
 </style>
 </head>
 <body>
@@ -1139,7 +1191,7 @@ function renderSidebar() {
       </div>
     </div>`;
   });
-  sidebar.innerHTML = html;
+  sidebar.innerHTML = html + `<button class="snap-sidebar__keystat-btn ${activeCategory === '__keystat__' ? 'active' : ''}" onclick="selectKeyStats()">📋 100대 통계지표</button>`;
 }
 
 function toggleGroup(groupId) {
@@ -1813,7 +1865,7 @@ function renderMobileNav() {
         </div>
       </div>`;
   });
-  nav.innerHTML = html;
+  nav.innerHTML = html + `<div style="padding:8px 12px"><button class="snap-sidebar__keystat-btn ${activeCategory === '__keystat__' ? 'active' : ''}" onclick="selectKeyStats()" style="width:100%">📋 100대 통계지표</button></div>`;
 }
 
 function toggleMobileGroup(groupId) {
@@ -1892,6 +1944,100 @@ setInterval(() => {
     refreshCurrentCharts();
   }
 }, 5 * 60 * 1000); // 5분마다 체크
+
+// ═══════════════════════════════════════════
+// 100대 통계지표 테이블 뷰
+// ═══════════════════════════════════════════
+function selectKeyStats() {
+  activeCategory = '__keystat__';
+  renderSidebar();
+  renderMobileNav();
+  renderKeyStatsContent();
+  const mainEl = document.getElementById('mainContent');
+  if (mainEl && window.innerWidth <= 768) {
+    setTimeout(() => mainEl.scrollIntoView({ behavior: 'smooth' }), 100);
+  }
+  window.scrollTo(0, 0);
+}
+
+async function renderKeyStatsContent() {
+  Object.values(chartInstances).forEach(c => { try { c.destroy(); } catch(e){} });
+  chartInstances = {};
+  chartConfigs = {};
+
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="snap-category-header">
+      <h2>┃ 100대 통계지표</h2>
+      <span class="breadcrumb">한국은행 경제통계시스템(ECOS) 100대 주요 통계지표</span>
+    </div>
+    <div class="keystat-loading" id="keystatLoading">
+      <div class="spinner"></div>
+      <p style="margin-top:12px">100대 통계지표를 불러오는 중...</p>
+    </div>
+    <div class="snap-footer">
+      본 데이터는 한국은행 경제통계시스템(ECOS)에서 제공하는 자료를 활용하였습니다.<br>
+      데이터의 정확성 및 최신 현황은 한국은행 경제통계시스템(ecos.bok.or.kr)을 통해 확인하시기 바랍니다.
+    </div>
+  `;
+
+  try {
+    const resp = await fetch(`${CONFIG.PROXY_URL}?action=keystat`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    let rows = [];
+    if (data.KeyStatisticList && data.KeyStatisticList.row) {
+      rows = data.KeyStatisticList.row;
+    }
+
+    if (rows.length === 0) {
+      document.getElementById('keystatLoading').innerHTML = '<p style="color:#e74c3c">데이터를 불러올 수 없습니다.</p>';
+      return;
+    }
+
+    // 분류별 그룹핑
+    const groups = {};
+    rows.forEach(r => {
+      const cls = r.CLASS_NAME || '기타';
+      if (!groups[cls]) groups[cls] = [];
+      groups[cls].push(r);
+    });
+
+    let tableHTML = `<div class="keystat-table-wrap"><table class="keystat-table">
+      <thead><tr>
+        <th>분류</th><th>지표명</th><th>수치</th><th>단위</th><th>기간</th>
+      </tr></thead><tbody>`;
+
+    Object.keys(groups).forEach(cls => {
+      tableHTML += `<tr class="keystat-class-header"><td colspan="5">${cls}</td></tr>`;
+      groups[cls].forEach(r => {
+        const val = r.DATA_VALUE || '-';
+        const unit = r.UNIT_NAME || '';
+        const cycle = r.CYCLE || '';
+        const time = r.TIME || '';
+        const cycleName = cycle === 'D' ? '일' : cycle === 'M' ? '월' : cycle === 'Q' ? '분기' : cycle === 'A' ? '연' : cycle;
+        const displayTime = time.length === 8 ? `${time.slice(0,4)}.${time.slice(4,6)}.${time.slice(6,8)}` :
+                           time.length === 6 ? `${time.slice(0,4)}.${time.slice(4,6)}` :
+                           time.length === 5 ? `${time.slice(0,4)} ${time.slice(4)}Q` : time;
+        tableHTML += `<tr>
+          <td class="td-class">${cls}</td>
+          <td class="td-name">${r.KEYSTAT_NAME || ''}</td>
+          <td class="td-value">${val}</td>
+          <td class="td-unit">${unit}</td>
+          <td class="td-period">${displayTime} (${cycleName})</td>
+        </tr>`;
+      });
+    });
+
+    tableHTML += '</tbody></table></div>';
+    document.getElementById('keystatLoading').outerHTML = tableHTML;
+
+  } catch (err) {
+    console.error('KeyStat fetch error:', err);
+    document.getElementById('keystatLoading').innerHTML = `<p style="color:#e74c3c">데이터 로드 실패: ${err.message}</p>`;
+  }
+}
 
 function refreshCurrentCharts() {
   lastRefreshTime = Date.now();
