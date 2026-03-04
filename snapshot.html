@@ -595,6 +595,7 @@ input, select { font-size: 16px; /* iOS 자동줌 방지 */ }
   <div class="snap-header__right">
     <span class="snap-header__update" id="lastUpdate"></span>
     <button class="snap-header__back" onclick="location.href='/'">← 메인으로</button>
+    <button class="snap-header__back" onclick="runDiagnostic()" style="background:#e74c3c;color:#fff;margin-left:6px" title="전체 API 진단">🔍 진단</button>
   </div>
 </header>
 
@@ -2088,6 +2089,97 @@ if (window.location.hash) {
       mobileOpenGroups[cat.parent] = true;
     }
   }
+}
+
+// ═══════════════════════════════════════════
+// 전체 API 진단
+// ═══════════════════════════════════════════
+async function runDiagnostic() {
+  const apiCharts = CHARTS.filter(ch => !ch.static);
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="snap-category-header">
+      <h2>┃ API 전체 진단</h2>
+      <span class="breadcrumb">전체 ${apiCharts.length}개 차트의 API 시리즈 테스트</span>
+    </div>
+    <div id="diagResult" style="padding:16px">
+      <div class="keystat-loading" id="diagLoading">
+        <div class="spinner"></div>
+        <p style="margin-top:12px" id="diagProgress">진단 시작 중...</p>
+      </div>
+    </div>`;
+
+  const results = [];
+  let done = 0;
+  const allSeries = [];
+
+  apiCharts.forEach(ch => {
+    ch.series.filter(s => s.api && !s.computed).forEach(s => {
+      allSeries.push({ chartId: ch.id, chartTitle: ch.title, seriesName: s.name, api: s.api });
+    });
+  });
+
+  const total = allSeries.length;
+
+  for (const item of allSeries) {
+    const { chartId, chartTitle, seriesName, api } = item;
+    try {
+      const data = await fetchEcosData(api, '5Y');
+      const count = data ? data.length : 0;
+      const err = data && data._error ? data._error : null;
+      results.push({ chartId, chartTitle, seriesName, stat: api.stat, item: api.item, cycle: api.cycle, count, error: err });
+    } catch (e) {
+      results.push({ chartId, chartTitle, seriesName, stat: api.stat, item: api.item, cycle: api.cycle, count: 0, error: e.message });
+    }
+    done++;
+    const el = document.getElementById('diagProgress');
+    if (el) el.textContent = `진단 중... ${done}/${total}`;
+  }
+
+  const fail = results.filter(r => r.count === 0);
+  const pass = results.filter(r => r.count > 0);
+
+  let html = `<h3 style="color:#27ae60;margin:16px 0 8px">✅ 성공: ${pass.length}개 시리즈</h3>`;
+  html += `<h3 style="color:#e74c3c;margin:16px 0 8px">❌ 실패: ${fail.length}개 시리즈</h3>`;
+
+  if (fail.length > 0) {
+    html += `<div class="keystat-table-wrap"><table class="keystat-table">
+      <thead><tr><th>차트</th><th>시리즈</th><th>stat</th><th>item</th><th>cycle</th><th>오류</th></tr></thead><tbody>`;
+    fail.forEach(r => {
+      html += `<tr>
+        <td class="td-name">${r.chartTitle}</td>
+        <td>${r.seriesName}</td>
+        <td style="font-family:monospace;font-size:0.75rem">${r.stat}</td>
+        <td style="font-family:monospace;font-size:0.75rem">${r.item}</td>
+        <td>${r.cycle}</td>
+        <td style="color:#e74c3c;font-size:0.75rem">${r.error || '빈 결과'}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (pass.length > 0) {
+    html += `<details style="margin-top:16px"><summary style="cursor:pointer;font-weight:600;color:#27ae60">성공 목록 보기</summary>`;
+    html += `<div class="keystat-table-wrap"><table class="keystat-table">
+      <thead><tr><th>차트</th><th>시리즈</th><th>stat</th><th>item</th><th>cycle</th><th>건수</th></tr></thead><tbody>`;
+    pass.forEach(r => {
+      html += `<tr>
+        <td class="td-name">${r.chartTitle}</td>
+        <td>${r.seriesName}</td>
+        <td style="font-family:monospace;font-size:0.75rem">${r.stat}</td>
+        <td style="font-family:monospace;font-size:0.75rem">${r.item}</td>
+        <td>${r.cycle}</td>
+        <td class="td-value">${r.count}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></details>';
+  }
+
+  console.log('=== ECOS API 진단 결과 ===');
+  console.log(`성공: ${pass.length}, 실패: ${fail.length}`);
+  fail.forEach(r => console.log(`❌ ${r.chartTitle} > ${r.seriesName} [${r.stat}/${r.item}/${r.cycle}]: ${r.error || '빈 결과'}`));
+
+  document.getElementById('diagResult').innerHTML = html;
 }
 
 window.addEventListener('DOMContentLoaded', init);
