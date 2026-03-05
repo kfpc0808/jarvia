@@ -64,9 +64,8 @@
 .ppt-banner-mob{display:none}
 @media(max-width:768px){.ppt-banner-pc{display:none}.ppt-banner-mob{display:block}}
   </style>
-  <!-- INNOPAY PG SDK (구버전) -->
-  <script src="https://pg.innopay.co.kr/ipay/js/jquery-2.1.4.min.js"></script>
-  <script src="https://pg.innopay.co.kr/ipay/js/innopay-2.0.js"></script>
+  <!-- INNOPAY PG SDK (v2) -->
+  <script type="text/javascript" src="https://pg.innopay.co.kr/tpay/js/v1/innopay.js"></script>
   <script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js"></script>
   <script>if(window.Kakao&&!Kakao.isInitialized())Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
 </head>
@@ -1926,37 +1925,22 @@ async function doCharge(){
     // Noti 수신 대비: Firestore에 pending 기록 저장 (서버에서 userId/chargeAmount 조회용)
     try{await setDoc(doc(db,'pending_charges',moid),{moid,userId:me.uid,paid:_selOpt.paid,credit:_selOpt.credit,optionId:_selOpt.id,createdAt:serverTimestamp()});}catch(e){console.warn('pending_charges 저장 실패:',e);}
     innopay.goPay({
-      PayMethod:'CARD',
-      MID:'pgkfpcen5m',
-      MerchantKey:'c/odh029sWya/US4LINs89lb/8PD0qlbZjEkckW5L3toSMCpD4TQ8IWquueuKFpZm8XY/mVuxrsygQD9P9CooQ==',
-      GoodsName:'크레딧 충전 '+fmt(_selOpt.credit)+'원',
-      Amt:String(_selOpt.paid),
-      Moid:moid,
-      BuyerName:meData.name||me.email.split('@')[0],
-      BuyerEmail:meData.email||me.email,
-      BuyerTel:(meData.phone||'01000000000').replace(/-/g,''),
-      ResultYN:'Y',
-      ReturnURL:'https://jarvia.co.kr/'
+      payMethod:'CARD',
+      mid:'pgkfpcen5m',
+      moid:moid,
+      goodsName:'크레딧 충전 '+fmt(_selOpt.credit)+'원',
+      amt:_selOpt.paid,
+      goodsCnt:1,
+      buyerName:meData.name||me.email.split('@')[0],
+      buyerEmail:meData.email||me.email,
+      buyerTel:(meData.phone||'01000000000').replace(/-/g,''),
+      returnUrl:window.location.origin+'/'
     });
   }catch(err){toast('결제 요청 실패: '+err.message,'error');}
   finally{btn.disabled=false;btn.textContent='결제하기';}
 }
 
-// INNOPAY 결제 결과 콜백 (전역 함수 - SDK가 호출, 함수명 변경불가)
-window.innopay_result=function(data){
-  console.log('💳 INNOPAY 결과:',data);
-  const resultCode=String(data.ResultCode||'').trim();
-  if(resultCode==='0000'||resultCode==='3001'){
-    // 결제 성공 → localStorage는 chargeAfterPayment 내부에서 처리 (삭제 전 pending 참조 필요)
-    chargeAfterPayment({tid:data.TID,amt:data.Amt,moid:data.MOID,authCode:data.AuthCode||'',cardNum:data.CardNum||'',cardName:data.fn_name||''});
-  }else if(resultCode==='U000'){
-    console.log('💳 결제 취소됨');
-    try{localStorage.removeItem('_pendingCharge');}catch(e){}
-  }else{
-    toast('결제가 완료되지 않았습니다. ['+resultCode+'] '+(data.ResultMsg||''),'error');
-    try{localStorage.removeItem('_pendingCharge');}catch(e){}
-  }
-};
+// INNOPAY v2: 결제 인증 후 returnUrl로 리다이렉트 → checkPaymentResult에서 처리
 
 // 결제 성공 후 크레딧 적립 (Firestore 트랜잭션)
 async function chargeAfterPayment(payData){
@@ -2014,52 +1998,72 @@ async function chargeAfterPayment(payData){
   }
 }
 
-// 페이지 로드 시 결제 결과 확인 (URL 파라미터 + localStorage 미처리 결제)
-function checkPaymentResult(){
-  // 1) URL 파라미터 방식 (PC 리다이렉트 백업)
-  // INNOPAY는 대문자 파라미터(TID, ResultCode 등)로 전달하므로 모든 케이스 처리
+// 페이지 로드 시 결제 결과 확인 (v2: returnUrl에서 paymentToken 수신 → 서버 승인)
+async function checkPaymentResult(){
   const urlParams=new URLSearchParams(window.location.search);
-  const hasResult=urlParams.get('payment')==='result'
-    ||urlParams.get('tid')||urlParams.get('TID')
-    ||urlParams.get('ResultCode')||urlParams.get('resultCode')||urlParams.get('RESULTCODE');
-  if(hasResult){
-    const payData={
-      tid:urlParams.get('TID')||urlParams.get('tid'),
-      amt:urlParams.get('Amt')||urlParams.get('amt'),
-      moid:urlParams.get('MOID')||urlParams.get('Moid')||urlParams.get('moid'),
-      resultCode:urlParams.get('ResultCode')||urlParams.get('resultCode')||urlParams.get('RESULTCODE'),
-      resultMsg:urlParams.get('ResultMsg')||urlParams.get('resultMsg'),
-      authCode:urlParams.get('AuthCode')||urlParams.get('authCode'),
-      cardNum:urlParams.get('CardNum')||urlParams.get('cardNum')
-    };
-    console.log('💳 URL 결제 결과:',payData);
+  const paymentToken=urlParams.get('paymentToken');
+  const tid=urlParams.get('tid');
+  const chargeResult=urlParams.get('charge');
+
+  // 서버 승인 완료 후 리다이렉트된 경우 (charge=success/fail)
+  if(chargeResult==='success'){
+    const amt=urlParams.get('amount')||'';
     window.history.replaceState({},document.title,window.location.pathname);
-    const rc=String(payData.resultCode||'').trim();
-    if(rc==='0000'||rc==='3001'){chargeAfterPayment(payData);}
-    else if(rc&&rc!=='U000'){toast('결제가 완료되지 않았습니다. ['+ rc+'] '+(payData.resultMsg||''),'error');}
+    toast(`${amt?fmt(parseInt(amt))+'원 ':''}충전 완료!`,'success');
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
+    await refreshMe();
     return;
   }
-  // 2) localStorage 미처리 결제 발견 — TID를 URL로 못 받은 경우 (모바일 앱 전환 등)
+  if(chargeResult==='fail'){
+    const msg=urlParams.get('msg')||'결제 처리 실패';
+    window.history.replaceState({},document.title,window.location.pathname);
+    toast('결제 오류: '+decodeURIComponent(msg),'error');
+    try{localStorage.removeItem('_pendingCharge');}catch(e){}
+    return;
+  }
+
+  // v2 인증 완료 → 서버에 승인 요청
+  if(paymentToken&&tid){
+    console.log('💳 v2 인증 완료, 서버 승인 요청...',{tid,paymentToken:paymentToken.substring(0,20)+'...'});
+    window.history.replaceState({},document.title,window.location.pathname);
+    toast('결제 승인 처리 중...','info');
+    try{
+      const approveUrl='https://asia-northeast3-kfpc-company-support-project.cloudfunctions.net/innopayApprove';
+      const resp=await fetch(approveUrl,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          paymentToken,
+          tid,
+          moid:urlParams.get('moid')||'',
+          mid:urlParams.get('mid')||'pgkfpcen5m',
+          amt:parseInt(urlParams.get('amt')||'0'),
+          taxFreeAmt:parseInt(urlParams.get('taxFreeAmt')||'0')
+        })
+      });
+      const result=await resp.json();
+      if(result.success){
+        toast(`${fmt(result.chargeAmount)}원 충전 완료! 잔액: ${fmt(result.newBalance)}원`,'success');
+        try{localStorage.removeItem('_pendingCharge');}catch(e){}
+        await refreshMe();closeM('mdl-charge');
+      }else{
+        toast('결제 승인 실패: '+(result.error||'알 수 없는 오류'),'error');
+      }
+    }catch(err){
+      console.error('❌ 승인 요청 오류:',err);
+      toast('결제 승인 요청 중 오류가 발생했습니다. 고객센터에 문의해주세요.','error');
+    }
+    return;
+  }
+
+  // localStorage 미처리 결제 (10분 이내)
   try{
     const s=localStorage.getItem('_pendingCharge');
     if(!s)return;
     const pending=JSON.parse(s);
-    // 10분 이상 지난 건은 정리
     if(!pending.ts||Date.now()-pending.ts>600000){localStorage.removeItem('_pendingCharge');return;}
-    // 미처리 결제 발견: Firestore에 미확인 결제 기록을 남겨 관리자가 확인할 수 있도록 처리
-    console.warn('💳 미처리 pending 발견 (TID 미수신):',pending.moid);
-    try{
-      const unconfirmedId='unconf_'+pending.moid;
-      setDoc(doc(db,'payments',unconfirmedId),{
-        paymentId:unconfirmedId,userId:pending.userId||me?.uid||'',
-        paidAmount:pending.paid,chargeAmount:pending.credit,
-        provider:'INNOPAY',status:'unconfirmed',
-        moid:pending.moid,tid:'',
-        memo:'모바일 결제 후 TID 미수신 — 수동 확인 필요',
-        createdAt:serverTimestamp(),updatedAt:serverTimestamp()
-      }).catch(()=>{});
-    }catch(e){}
-    toast('결제 처리 중 문제가 발생했습니다.\n결제가 진행되었다면 카카오톡 채널로 문의해 주세요.','warning');
+    console.warn('💳 미처리 pending 발견:',pending.moid);
+    toast('이전 결제 처리 중 문제가 있었습니다.\n결제가 진행되었다면 카카오톡 채널로 문의해 주세요.','warning');
     localStorage.removeItem('_pendingCharge');
   }catch(e){}
 }
