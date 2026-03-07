@@ -380,7 +380,7 @@
             <th style="width:60px">오디오1</th>
             <th style="width:60px">오디오2</th>
             <th style="width:70px">상태</th>
-            <th style="width:200px">관리</th>
+            <th style="width:240px">관리</th>
           </tr></thead>
           <tbody id="tb-weekly-lectures"></tbody>
         </table>
@@ -2240,7 +2240,7 @@ function renderWlTable(){
   $('tb-weekly-lectures').innerHTML=_wlList.length?_wlList.map((l,i)=>{
     const st=l.status==='published'?'<span class="st-active">게시중</span>':'<span style="color:var(--warning);font-weight:600">대기</span>';
     const vol='Vol.'+String(l.weekNumber||'?');
-    return`<tr><td>${i+1}</td><td><strong>${vol}</strong></td><td class="ov">${esc(l.title||'')}</td><td>${l.scheduledDate||'-'}</td><td style="text-align:center">${ck(l.url)}</td><td style="text-align:center">${ck(l.part1AudioUrl)}</td><td style="text-align:center">${ck(l.part2AudioUrl)}</td><td style="text-align:center">${st}</td><td>${l.url?'<button class="btn btn-sm btn-sec" onclick="window.open(\''+l.url+'\',\'_blank\')">👁 미리보기</button> ':''}<button class="btn btn-sm" onclick="editWlLecture('${l.id}')">수정</button> <button class="btn btn-sm ${l.status==='published'?'btn-warning':'btn-success'}" onclick="toggleWlStatus('${l.id}','${l.status}')">${l.status==='published'?'비공개':'게시'}</button> <button class="btn btn-sm btn-danger" onclick="deleteWlLecture('${l.id}')">삭제</button></td></tr>`;
+    return`<tr><td>${i+1}</td><td><strong>${vol}</strong></td><td class="ov">${esc(l.title||'')}</td><td>${l.scheduledDate||'-'}</td><td style="text-align:center">${ck(l.url)}</td><td style="text-align:center">${ck(l.part1AudioUrl)}</td><td style="text-align:center">${ck(l.part2AudioUrl)}</td><td style="text-align:center">${st}</td><td><div style="display:flex;gap:4px;flex-wrap:nowrap">${l.url?'<button class="btn btn-sm btn-sec" onclick="window.open(\''+l.url+'\',\'_blank\')">👁</button>':''}<button class="btn btn-sm" onclick="editWlLecture('${l.id}')">수정</button><button class="btn btn-sm ${l.status==='published'?'btn-warning':'btn-success'}" onclick="toggleWlStatus('${l.id}','${l.status}')">${l.status==='published'?'비공개':'게시'}</button><button class="btn btn-sm btn-danger" onclick="deleteWlLecture('${l.id}')">삭제</button></div></td></tr>`;
   }).join(''):'<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-lt)">등록된 특강이 없습니다.</td></tr>';
 }
 
@@ -2274,19 +2274,12 @@ async function saveWeeklyLecture(){
     const volStr=String(vol);
     const contentId='weekly_lecture_vol'+volStr;
     let htmlUrl='',part1AudioUrl='',part2AudioUrl='';
+    let _htmlContent=null;
     if(editId){const ex=_wlList.find(l=>l.id===editId);if(ex){htmlUrl=ex.url||'';part1AudioUrl=ex.part1AudioUrl||'';part2AudioUrl=ex.part2AudioUrl||'';}}
 
-    // HTML 업로드
+    // HTML 파일 읽기 (메모리에 보관)
     if(_wlFiles.html){
-      progress.textContent='📄 HTML 업로드 중...';
-      let htmlContent=await _wlFiles.html.text();
-      if(part1AudioUrl)htmlContent=htmlContent.replace("part1: ''","part1: '"+part1AudioUrl+"'");
-      if(part2AudioUrl)htmlContent=htmlContent.replace("part2: ''","part2: '"+part2AudioUrl+"'");
-      const htmlBlob=new Blob([htmlContent],{type:'text/html'});
-      const htmlRef=stRef(storage,'weekly-lectures/vol'+volStr+'/lecture.html');
-      const htmlTask=uploadBytesResumable(htmlRef,htmlBlob,{contentType:'text/html',cacheControl:'public, max-age=300'});
-      await new Promise((res,rej)=>{htmlTask.on('state_changed',null,rej,res);});
-      htmlUrl=await getDownloadURL(htmlTask.snapshot.ref);
+      _htmlContent=await _wlFiles.html.text();
     }
     // 오디오1 업로드
     if(_wlFiles.audio1){
@@ -2304,8 +2297,18 @@ async function saveWeeklyLecture(){
       await new Promise((res,rej)=>{a2Task.on('state_changed',null,rej,res);});
       part2AudioUrl=await getDownloadURL(a2Task.snapshot.ref);
     }
-    // 오디오 URL 업데이트 → HTML에 반영
-    if((_wlFiles.audio1||_wlFiles.audio2)&&htmlUrl){
+    // HTML 업로드 (오디오 URL 삽입 후)
+    if(_htmlContent){
+      progress.textContent='📄 HTML 업로드 중 (오디오 반영)...';
+      _htmlContent=_htmlContent.replace(/part1:\s*'[^']*'/,"part1: '"+part1AudioUrl+"'");
+      _htmlContent=_htmlContent.replace(/part2:\s*'[^']*'/,"part2: '"+part2AudioUrl+"'");
+      const htmlBlob=new Blob([_htmlContent],{type:'text/html'});
+      const htmlRef=stRef(storage,'weekly-lectures/vol'+volStr+'/lecture.html');
+      const htmlTask=uploadBytesResumable(htmlRef,htmlBlob,{contentType:'text/html',cacheControl:'public, max-age=300'});
+      await new Promise((res,rej)=>{htmlTask.on('state_changed',null,rej,res);});
+      htmlUrl=await getDownloadURL(htmlTask.snapshot.ref);
+    } else if((_wlFiles.audio1||_wlFiles.audio2)&&htmlUrl){
+      // HTML 새로 안 올렸지만 오디오만 교체한 경우 → Storage에서 HTML 가져와 URL 교체
       progress.textContent='📄 HTML에 오디오 반영 중...';
       try{
         const resp=await fetch(htmlUrl);let hc=await resp.text();
