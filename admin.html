@@ -1035,6 +1035,7 @@ async function delCO(id){if(!confirm('삭제?'))return;await deleteDoc(doc(db,'c
 // ═══ WINDOW EXPORTS ═══
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;
+window.copyAudioScript=copyAudioScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
 window.nuEmailSel=nuEmailSel;window.nuUnlimitedChk=nuUnlimitedChk;window.initNuDates=initNuDates;
 
@@ -1994,7 +1995,7 @@ function renderDailyReports(){
     if(r.section08_mindset)sections.push('🌟');
     const secStr=sections.join(' ')||'-';
     const url=r.htmlUrl||'';
-    const hasScript=!!r.audioScript;
+    const hasScript=!!(r.audioScript||r.section01_market||r.section02_news);
     const hasAudio=!!r.audioUrl;
     const fd=r.fileDate||r.id||'';
     return `<tr>
@@ -2057,13 +2058,37 @@ let _drAudioTarget=''; // 현재 업로드 대상 fileDate
 
 function copyAudioScript(fileDate){
   const r=_drList.find(d=>(d.fileDate||d.id)===fileDate);
-  if(!r||!r.audioScript){toast('스크립트가 없습니다.','warning');return;}
-  navigator.clipboard.writeText(r.audioScript).then(()=>{
+  if(!r){toast('리포트를 찾을 수 없습니다.','warning');return;}
+  let script=r.audioScript||'';
+  // audioScript 필드 없으면 JSON에서 실시간 생성
+  if(!script){
+    const lines=[];
+    lines.push('JARVIA Daily Report — '+(r.date||'')+' '+(r.edition||''));
+    lines.push('보험·재무 컨설턴트를 위한 5분 인사이트\n');
+    const inds=r.section01_market?.indicators||[];
+    if(inds.length){lines.push('[오늘의 경제지표]');inds.forEach(ind=>{const u=(ind.unit&&!ind.unit.includes('='))?' '+ind.unit:'';lines.push(ind.label+': '+ind.value+u+' ('+(ind.period||'')+' 기준)');});lines.push('');}
+    const news=r.section02_news||[];
+    if(news.length){lines.push('[주요 금융·보험 뉴스]');news.forEach((n,i)=>{const b=(n.body||'').replace(/<[^>]*>/g,'').trim();const ins=(n.insight||'').replace(/^💡\s*/i,'').trim();lines.push((i+1)+'번째 뉴스. ['+(n.tag||'')+'] '+(n.title||''));lines.push(b);lines.push('컨설턴트 포인트: '+ins+'\n');});}
+    const hot=r.section03_hotissue||{};
+    if(hot.title){lines.push('[오늘의 핫이슈]');lines.push(hot.title);lines.push((hot.body||'').replace(/<[^>]*>/g,'').trim());lines.push('쉬운 해설: '+(hot.insight||'').replace(/^💡\s*/i,'').trim()+'\n');}
+    const ins2=r.section04_insurance||{};
+    if(ins2.title){lines.push('[보험정보]');lines.push(ins2.title);lines.push((ins2.body||'').replace(/<[^>]*>/g,'').trim());lines.push('영업 활용 포인트: '+(ins2.insight||'').replace(/^💡\s*/i,'').trim()+'\n');}
+    const con=r.section05_consulting||{};
+    if(con.personal||con.corporate){lines.push('[상담 포커스]');if(con.personal){lines.push('개인고객: '+(con.personal.title||''));lines.push(con.personal.description||'');lines.push('상담 접근법: '+(con.personal.tip||'').replace(/^💡\s*/i,'').trim());}if(con.corporate){lines.push('법인고객: '+(con.corporate.title||''));lines.push(con.corporate.description||'');lines.push('상담 접근법: '+(con.corporate.tip||'').replace(/^💡\s*/i,'').trim());}lines.push('');}
+    const sk=r.section06_skillup||{};
+    if(sk.skillName){lines.push('[오늘의 스킬업: '+sk.skillName+']');(sk.steps||[]).forEach((s,i)=>{lines.push((i+1)+'단계. '+s.title+': '+s.content);});lines.push('');}
+    const cl=r.section07_closing||{};
+    if(cl.quote){lines.push('[클로징 톡]');lines.push('"'+cl.quote+'"');lines.push('— '+(cl.source||'')+'\n');}
+    const mi=r.section08_mindset||{};
+    if(mi.message){lines.push('[오늘의 마인드셋]');lines.push(mi.message);if(mi.subtitle)lines.push(mi.subtitle);}
+    script=lines.join('\n');
+  }
+  if(!script.trim()){toast('생성할 스크립트 데이터가 없습니다.','warning');return;}
+  navigator.clipboard.writeText(script).then(()=>{
     toast('📋 스크립트가 클립보드에 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
   }).catch(()=>{
-    // fallback
     const ta=document.createElement('textarea');
-    ta.value=r.audioScript;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
     toast('📋 스크립트 복사 완료!','success');
   });
 }
