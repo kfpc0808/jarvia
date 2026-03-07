@@ -304,12 +304,13 @@
               <th>날짜</th>
               <th>에디션</th>
               <th>섹션</th>
-              <th style="width:180px">관리</th>
+              <th style="width:340px">관리</th>
             </tr>
           </thead>
           <tbody id="tb-daily-reports"></tbody>
         </table>
       </div>
+      <input type="file" id="dr-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleDrAudioUpload(this)">
     </div>
   </main>
 </div>
@@ -1993,14 +1994,21 @@ function renderDailyReports(){
     if(r.section08_mindset)sections.push('🌟');
     const secStr=sections.join(' ')||'-';
     const url=r.htmlUrl||'';
+    const hasScript=!!r.audioScript;
+    const hasAudio=!!r.audioUrl;
+    const fd=r.fileDate||r.id||'';
     return `<tr>
       <td style="text-align:center">${i+1}</td>
       <td><strong>${date}</strong></td>
       <td>${edition}</td>
       <td>${secStr} <span style="font-size:11px;color:var(--text-lt)">(${sections.length}/8)</span></td>
-      <td>
+      <td style="white-space:nowrap">
         ${url?`<button class="btn btn-sm" onclick="window.open('${url}?t='+Date.now(),'_blank')">열기</button>`:''}
-        ${url?`<button class="btn btn-sm btn-sec" onclick="downloadDR('${url}','${r.fileDate||"report"}')">다운</button>`:''}
+        ${url?`<button class="btn btn-sm btn-sec" onclick="downloadDR('${url}','${fd||"report"}')">다운</button>`:''}
+        ${hasScript?`<button class="btn btn-sm btn-sec" onclick="copyAudioScript('${fd}')" title="NotebookLM용 스크립트 복사">📋 스크립트</button>`:''}
+        ${hasAudio
+          ?`<button class="btn btn-sm btn-success" onclick="playDrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteDrAudio('${fd}')" title="오디오 삭제">✕</button>`
+          :`<button class="btn btn-sm btn-sec" onclick="triggerDrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
       </td>
     </tr>`;
   }).join('');
@@ -2041,6 +2049,71 @@ async function triggerDailyReport(){
     msg.textContent='❌ 오류: '+e.message;
   }
   btn.disabled=false;btn.textContent='🚀 수동 생성 (트리거)';
+}
+
+// ── Daily Report 오디오 관련 함수 ──
+
+let _drAudioTarget=''; // 현재 업로드 대상 fileDate
+
+function copyAudioScript(fileDate){
+  const r=_drList.find(d=>(d.fileDate||d.id)===fileDate);
+  if(!r||!r.audioScript){toast('스크립트가 없습니다.','warning');return;}
+  navigator.clipboard.writeText(r.audioScript).then(()=>{
+    toast('📋 스크립트가 클립보드에 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
+  }).catch(()=>{
+    // fallback
+    const ta=document.createElement('textarea');
+    ta.value=r.audioScript;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('📋 스크립트 복사 완료!','success');
+  });
+}
+
+function triggerDrAudioUpload(fileDate){
+  _drAudioTarget=fileDate;
+  const inp=$('dr-audio-file');
+  inp.value='';
+  inp.click();
+}
+
+async function handleDrAudioUpload(input){
+  const file=input.files[0];
+  if(!file||!_drAudioTarget)return;
+  const fd=_drAudioTarget;
+  const ext=file.name.split('.').pop()||'m4a';
+  const path=`daily-reports/${fd}_audio.${ext}`;
+  toast('🎧 오디오 업로드 중...','');
+  try{
+    const sRef2=stRef(storage,path);
+    const task=uploadBytesResumable(sRef2,file,{contentType:file.type||'audio/mp4'});
+    task.on('state_changed',null,
+      (err)=>{toast('업로드 실패: '+err.message,'error');},
+      async()=>{
+        const url=await getDownloadURL(task.snapshot.ref);
+        await updateDoc(doc(db,'daily_reports',fd),{audioUrl:url});
+        toast('🎧 오디오 등록 완료!','success');
+        // _drList 업데이트
+        const idx=_drList.findIndex(d=>(d.fileDate||d.id)===fd);
+        if(idx>=0)_drList[idx].audioUrl=url;
+        renderDailyReports();
+      }
+    );
+  }catch(e){toast('업로드 오류: '+e.message,'error');}
+}
+
+function playDrAudio(url){
+  const w=window.open('','_blank','width=400,height=120');
+  w.document.write('<html><head><title>🎧 Daily Report Audio</title></head><body style="margin:20px;font-family:sans-serif"><p style="font-size:14px;margin-bottom:12px">🎧 Daily Report 오디오</p><audio controls autoplay style="width:100%" src="'+url+'"></audio></body></html>');
+}
+
+async function deleteDrAudio(fileDate){
+  if(!confirm('이 리포트의 오디오를 삭제할까요?'))return;
+  try{
+    await updateDoc(doc(db,'daily_reports',fileDate),{audioUrl:''});
+    const idx=_drList.findIndex(d=>(d.fileDate||d.id)===fileDate);
+    if(idx>=0)_drList[idx].audioUrl='';
+    renderDailyReports();
+    toast('오디오 삭제 완료','success');
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
 </script>
