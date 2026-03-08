@@ -2531,6 +2531,7 @@ async function loadPremiumReports(){
       const pptxUrl=r.pptxUrl||null;
       const pdfUrl=r.pdfUrl||null;
       const prAudioUrl=r.audioUrl||null;
+      const isPublic=r.adminOnly===false;
       const hasError=r.status==='error';
       const failedJob=hasError&&r.errorDetail?.job?r.errorDetail.job.replace('Job',''):'1';
 
@@ -2545,6 +2546,9 @@ async function loadPremiumReports(){
         if(pptxUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="prDownload('${pptxUrl}','${r._id}.pptx')">⬇ PPT</button> `;
         if(pdfUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="prDownload('${pdfUrl}','${r._id}.pdf')">⬇ PDF</button> `;
         if(prAudioUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="window.open('${prAudioUrl}','_blank')">🔊 듣기</button> `;
+        actions+=isPublic
+          ?`<button class="btn btn-sm" style="background:#C62828;color:#fff" onclick="togglePrVisibility('${r._id}',true)">🔒 비공개로</button> `
+          :`<button class="btn btn-sm" style="background:#2E7D32;color:#fff" onclick="togglePrVisibility('${r._id}',false)">🔓 사용자 공개</button> `;
       }
       if(hasError){
         actions+=`<button class="btn btn-sm btn-warning" onclick="retryPremiumReport('${r._id}',${failedJob})">🔄 Job${failedJob}부터 재시작</button> `;
@@ -2706,7 +2710,27 @@ async function pollPrStatus(){
   }catch(e){console.error('폴링 오류:',e);}
 }
 
-window.loadPremiumReports=loadPremiumReports;window.triggerPremiumReport=triggerPremiumReport;window.retryPremiumReport=retryPremiumReport;window.deletePremiumReport=deletePremiumReport;window.prDownload=prDownload;window.prTriggerUpload=prTriggerUpload;window.handlePrFileUpload=handlePrFileUpload;
+window.loadPremiumReports=loadPremiumReports;window.triggerPremiumReport=triggerPremiumReport;window.retryPremiumReport=retryPremiumReport;window.deletePremiumReport=deletePremiumReport;window.prDownload=prDownload;window.prTriggerUpload=prTriggerUpload;window.handlePrFileUpload=handlePrFileUpload;window.togglePrVisibility=togglePrVisibility;
+
+async function togglePrVisibility(reportId,currentlyPublic){
+  const action=currentlyPublic?'비공개로 전환':'사용자에게 공개';
+  if(!confirm(`이 보고서를 ${action}합니다.\n\n진행할까요?`))return;
+  try{
+    const newVal=!currentlyPublic;
+    // premium_reports 업데이트
+    await updateDoc(doc(db,'premium_reports',reportId),{adminOnly:newVal,updatedAt:serverTimestamp()});
+    // contents 컬렉션도 동기화
+    try{
+      const contRef=doc(db,'contents',reportId);
+      const contSnap=await getDoc(contRef);
+      if(contSnap.exists()){
+        await updateDoc(contRef,{adminOnly:newVal,isActive:!newVal,updatedAt:serverTimestamp()});
+      }
+    }catch(ce){console.warn('contents 동기화 실패:',ce);}
+    toast(currentlyPublic?'🔒 비공개로 전환됨':'🔓 사용자 공개됨','success');
+    loadPremiumReports();
+  }catch(e){toast('전환 실패: '+e.message,'error');}
+}
 
 // ── PPT/PDF 수동 업로드 ──
 let _prUploadTarget=null; // { reportId, type }
