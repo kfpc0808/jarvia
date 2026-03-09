@@ -2569,12 +2569,13 @@ async function loadPremiumReports(){
       return;
     }
 
-    // 진행중인 Job이 있으면 폴링 시작
-    const activeJob=list.find(r=>r.status&&!['published','error','pending'].includes(r.status));
-    if(activeJob){
-      startPrPolling(activeJob._id,activeJob.title||'');
-    }else{
-      stopPrPolling();
+    // 진행중인 Job이 있으면 폴링 시작 — ★ 이미 폴링 중이면 덮어쓰지 않음
+    if(!_prActiveId){
+      const activeJob=list.find(r=>r.status&&!['published','error','pending'].includes(r.status));
+      if(activeJob){
+        const st=activeJob.createdAt?.toDate?activeJob.createdAt.toDate().getTime():Date.now();
+        startPrPolling(activeJob._id,activeJob.title||'',st);
+      }
     }
 
     tb.innerHTML=list.map((r,i)=>{
@@ -2611,17 +2612,17 @@ async function loadPremiumReports(){
       actions+=`<button class="btn btn-sm btn-danger" onclick="deletePremiumReport('${r._id}')">삭제</button>`;
 
       const isTerminal=r.status==='published'||r.status==='error'||r.status==='pending';
+      const createdMs=r.createdAt?.toDate?r.createdAt.toDate().getTime():Date.now();
       let progDisp='';
       if(r.status==='published'){progDisp='<span style="font-size:12px;color:var(--success);font-weight:600">✅ 완료</span>';}
       else if(r.status==='error'){progDisp='<span style="font-size:12px;color:var(--danger);font-weight:600">❌ 에러</span>';}
       else if(r.status==='pending'){progDisp='<span style="font-size:12px;color:var(--text-lt)">대기</span>';}
       else{
-        const ca=r.createdAt?.toDate?r.createdAt.toDate():null;
-        const elapsed=ca?Math.round((Date.now()-ca.getTime())/1000):0;
+        const elapsed=Math.round((Date.now()-createdMs)/1000);
         progDisp=`<span style="font-size:12px;color:var(--accent);font-weight:600">⏱ ${elapsed}초</span>`;
       }
 
-      return`<tr${!isTerminal?' style="cursor:pointer" onclick="startPrPolling(\''+r._id+'\',\''+esc(r.title||'').replace(/'/g,"\\'")+'\');" title="클릭하면 진행 상황을 볼 수 있습니다"':''}>
+      return`<tr${!isTerminal?' style="cursor:pointer" onclick="startPrPolling(\''+r._id+'\',\''+esc(r.title||'').replace(/'/g,"\\'")+'\','+createdMs+');" title="클릭하면 진행 상황을 볼 수 있습니다"':''}>
         <td>${i+1}</td>
         <td class="ov" title="${esc(r.title||'')}" style="max-width:250px">${esc(r.title||'-')}</td>
         <td>${st}</td>
@@ -2715,18 +2716,21 @@ let _prLastStatus='';
 let _prElapsedTimer=null,_prRunningStep=0,_prStepStartTime=0;
 let _prTotalStartTime=0;
 
-function openPrModal(title){
+function openPrModal(title,startTime){
   const m=$('pr-progress-modal');
   m.style.display='block';
   $('pr-modal-title').textContent=title||'';
-  $('pr-modal-pct').textContent='0초';
   $('pr-modal-bar').style.width='0%';
   $('pr-modal-bar').style.background='linear-gradient(90deg,#2E86AB,#58A6FF)';
   $('pr-modal-substatus').textContent='⏳ 생성 대기 중...';
   $('pr-modal-actions').style.display='none';
   $('pr-modal-log').innerHTML='<div style="color:#58A6FF">▶ 특급보고서 생성 파이프라인 시작...</div>';
   _prBarTarget=0;_prBarCurrent=0;_prLastStatus='';
-  _prRunningStep=0;_prStepStartTime=0;_prTotalStartTime=Date.now();
+  _prRunningStep=0;_prStepStartTime=0;
+  // ★ startTime이 전달되면 실제 생성 시작 시간 사용, 없으면 Date.now()
+  _prTotalStartTime=startTime||Date.now();
+  const initElapsed=Math.round((Date.now()-_prTotalStartTime)/1000);
+  $('pr-modal-pct').textContent=initElapsed+'초';
   // 스텝 아이콘 초기화
   for(let j=1;j<=6;j++){
     const row=$('pr-ms-'+j);
@@ -2806,10 +2810,10 @@ function updatePrStep(jobNum,state,timeText){
   }
 }
 
-function startPrPolling(reportId,title){
+function startPrPolling(reportId,title,startTime){
   stopPrPolling();
   _prActiveId=reportId;
-  openPrModal(title);
+  openPrModal(title,startTime);
   pollPrStatus();
   _prPollTimer=setInterval(pollPrStatus,3000);
 }
