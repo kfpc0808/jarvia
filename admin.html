@@ -340,12 +340,13 @@
               <th>딥다이브</th>
               <th>핫이슈</th>
               <th>상태</th>
-              <th style="width:200px">관리</th>
+              <th style="width:340px">관리</th>
             </tr>
           </thead>
           <tbody id="tb-client-dr"></tbody>
         </table>
       </div>
+      <input type="file" id="cdr-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleCdrAudioUpload(this)">
     </div>
 
     <!-- ═══ 특급보고서 관리 패널 ═══ -->
@@ -1260,7 +1261,7 @@ async function delCO(id){if(!confirm('삭제?'))return;await deleteDoc(doc(db,'c
 // ═══ WINDOW EXPORTS ═══
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;
-window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteClientDR=deleteClientDR;
+window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteClientDR=deleteClientDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
 window.copyAudioScript=copyAudioScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
 window.nuEmailSel=nuEmailSel;window.nuUnlimitedChk=nuUnlimitedChk;window.initNuDates=initNuDates;
@@ -2428,6 +2429,8 @@ function renderClientDailyReports(){
         ?`<span class="st-suspended" title="${esc(r.error||'')}">에러</span>`
         :'<span style="color:var(--text-lt)">대기</span>';
     const fd=r.fileDate||r.id||'';
+    const hasScript=!!(r.audioScript);
+    const hasAudio=!!r.audioUrl;
     return `<tr>
       <td style="text-align:center">${i+1}</td>
       <td><strong>${date}</strong></td>
@@ -2437,6 +2440,10 @@ function renderClientDailyReports(){
       <td style="text-align:center">${status}</td>
       <td style="white-space:nowrap">
         ${fd?`<button class="btn btn-sm" onclick="previewClientDR('${fd}')">미리보기</button>`:''}
+        ${hasScript?`<button class="btn btn-sm btn-sec" onclick="copyCdrAudioScript('${fd}')" title="NotebookLM용 스크립트 복사">📋 스크립트</button>`:''}
+        ${hasAudio
+          ?`<button class="btn btn-sm btn-success" onclick="playCdrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteCdrAudio('${fd}')" title="오디오 삭제">✕</button>`
+          :`<button class="btn btn-sm btn-sec" onclick="triggerCdrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
         ${fd?`<button class="btn btn-sm btn-danger" onclick="deleteClientDR('${fd}')">삭제</button>`:''}
       </td>
     </tr>`;
@@ -2492,6 +2499,71 @@ async function deleteClientDR(fileDate){
   }catch(e){
     toast('❌ 삭제 실패: '+e.message,'error');
   }
+}
+
+// ── 고객 데일리리포트 오디오/스크립트 관련 함수 ──
+
+let _cdrAudioTarget='';
+
+function copyCdrAudioScript(fileDate){
+  const r=_cdrList.find(d=>(d.fileDate||d.id)===fileDate);
+  if(!r){toast('리포트를 찾을 수 없습니다.','warning');return;}
+  const script=r.audioScript||'';
+  if(!script.trim()){toast('생성할 스크립트 데이터가 없습니다.','warning');return;}
+  navigator.clipboard.writeText(script).then(()=>{
+    toast('📋 고객용 오디오 스크립트가 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
+  }).catch(()=>{
+    const ta=document.createElement('textarea');
+    ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('📋 스크립트 복사 완료!','success');
+  });
+}
+
+function triggerCdrAudioUpload(fileDate){
+  _cdrAudioTarget=fileDate;
+  const inp=$('cdr-audio-file');
+  inp.value='';
+  inp.click();
+}
+
+async function handleCdrAudioUpload(input){
+  const file=input.files[0];
+  if(!file||!_cdrAudioTarget)return;
+  const fd=_cdrAudioTarget;
+  const ext=file.name.split('.').pop()||'m4a';
+  const path=`client-daily-reports/${fd}_audio.${ext}`;
+  toast('🎧 오디오 업로드 중...','');
+  try{
+    const sRef2=stRef(storage,path);
+    const task=uploadBytesResumable(sRef2,file,{contentType:file.type||'audio/mp4'});
+    task.on('state_changed',null,
+      (err)=>{toast('업로드 실패: '+err.message,'error');},
+      async()=>{
+        const url=await getDownloadURL(task.snapshot.ref);
+        await updateDoc(doc(db,'client_daily_reports',fd),{audioUrl:url});
+        toast('🎧 고객용 오디오 등록 완료!','success');
+        const idx=_cdrList.findIndex(d=>(d.fileDate||d.id)===fd);
+        if(idx>=0)_cdrList[idx].audioUrl=url;
+        renderClientDailyReports();
+      }
+    );
+  }catch(e){toast('업로드 오류: '+e.message,'error');}
+}
+
+function playCdrAudio(url){
+  const w=window.open('','_blank','width=400,height=120');
+  w.document.write('<html><head><title>🎧 고객 데일리리포트 Audio</title></head><body style="margin:20px;font-family:sans-serif"><p style="font-size:14px;margin-bottom:12px">🎧 고객 데일리리포트 오디오</p><audio controls autoplay style="width:100%" src="'+url+'"></audio></body></html>');
+}
+
+async function deleteCdrAudio(fileDate){
+  if(!confirm('이 리포트의 오디오를 삭제할까요?'))return;
+  try{
+    await updateDoc(doc(db,'client_daily_reports',fileDate),{audioUrl:''});
+    const idx=_cdrList.findIndex(d=>(d.fileDate||d.id)===fileDate);
+    if(idx>=0)_cdrList[idx].audioUrl='';
+    renderClientDailyReports();
+    toast('오디오 삭제 완료','success');
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
 // ════════════════════════════════════════
