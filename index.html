@@ -904,6 +904,32 @@
         </div>
       </form>
 
+      <!-- ▼ 카톡 공유 설정 (별도 컬렉션 fc_share_profiles 저장) -->
+      <div style="margin-top:20px;border:1px solid #FDE68A;border-radius:12px;padding:20px;background:#FFFBEB">
+        <h4 style="font-size:14px;font-weight:700;color:#92400E;margin:0 0 4px">💬 카톡 공유 설정</h4>
+        <p style="font-size:12px;color:#B45309;margin:0 0 14px">카카오톡 공유 카드에 표시될 내용입니다. 별도 저장됩니다.</p>
+        <div class="fg" style="margin-bottom:12px">
+          <label style="font-size:13px;font-weight:600;color:#374151">공유 제목</label>
+          <input id="fc-share-title" placeholder="예: GA Korea 홍길동 팀장의 금융 브리핑" style="width:100%;padding:8px 10px;border:1px solid #D1D5DB;border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div class="fg" style="margin-bottom:12px">
+          <label style="font-size:13px;font-weight:600;color:#374151">공유 설명</label>
+          <input id="fc-share-desc" placeholder="예: 매일 아침 전해드리는 금융 인사이트" style="width:100%;padding:8px 10px;border:1px solid #D1D5DB;border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div class="fg" style="margin-bottom:14px">
+          <label style="font-size:13px;font-weight:600;color:#374151">공유 이미지</label>
+          <p style="font-size:12px;color:#6B7280;margin:2px 0 8px">권장 800×400px · jpg/png · 5MB 이하</p>
+          <label style="display:inline-block;padding:7px 14px;background:#F3F4F6;border:1px solid #D1D5DB;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600">
+            📁 이미지 선택
+            <input type="file" accept="image/*" style="display:none" onchange="handleFcShareImage(this)">
+          </label>
+          <div id="fc-share-img-progress" style="display:none;margin-top:6px;font-size:12px;color:#6B7280">⏳ 업로드 중...</div>
+          <img id="fc-share-img-preview" style="display:none;width:100%;max-width:280px;height:auto;border-radius:8px;margin-top:10px;border:1px solid #E5E7EB" alt="공유 이미지 미리보기">
+          <input type="hidden" id="fc-share-img-url">
+        </div>
+        <button type="button" class="btn" onclick="doSaveShareProfile()" style="background:#D97706;border-color:#D97706">공유 설정 저장</button>
+      </div>
+
       <!-- 상태 메시지 -->
       <div id="fc-status" style="display:none;margin-top:16px;padding:14px 16px;border-radius:10px;font-size:13px;line-height:1.6"></div>
     </div>
@@ -2395,6 +2421,20 @@ async function loadClientProfile(){
       // 미리보기+링크 자동 표시
       renderFcPreview(_fcData);
       showFcStatus('success','✅ 프로필이 등록되어 있습니다. 고객 브리핑 링크가 활성화되었습니다.');
+      // ▼ 카톡 공유 설정 로드 (fc_share_profiles 컬렉션)
+      try{
+        const spDoc=await getDoc(doc(db,'fc_share_profiles',meData.loginId));
+        if(spDoc.exists()){
+          const sp=spDoc.data();
+          if($('fc-share-title'))$('fc-share-title').value=sp.shareTitle||'';
+          if($('fc-share-desc'))$('fc-share-desc').value=sp.shareDesc||'';
+          if(sp.shareImageUrl&&$('fc-share-img-preview')){
+            $('fc-share-img-preview').src=sp.shareImageUrl;
+            $('fc-share-img-preview').style.display='block';
+            $('fc-share-img-url').value=sp.shareImageUrl;
+          }
+        }
+      }catch(_e){}
     }else{
       _fcData=null;
       // 기본값으로 users 정보 채우기
@@ -2540,20 +2580,9 @@ function copyFcLink(){
 function shareFcKakao(){
   const link=$('fc-pv-link').value;
   if(!link){toast('먼저 프로필을 저장해주세요.','error');return;}
-  const data=_fcData||{};
-  const cardTitle=`${data.company||''} ${data.name||''} ${data.title||''}의 금융 브리핑`.trim();
   if(window.Kakao&&Kakao.isInitialized()){
-    Kakao.Share.sendDefault({
-      objectType:'feed',
-      content:{
-        title:cardTitle,
-        description:'매일 아침 전해드리는 금융 인사이트',
-        imageUrl:'https://jarvia.co.kr/client_report_share_v2.png',
-        link:{mobileWebUrl:link,webUrl:link}
-      },
-      buttons:[{title:'브리핑 보러가기',link:{mobileWebUrl:link,webUrl:link}}],
-      installTalk:true
-    });
+    // sendScrap: URL의 OG태그를 그대로 읽어서 카드 생성 → 이미지 크롭 없음
+    Kakao.Share.sendScrap({requestUrl:link});
   }else{
     if(navigator.clipboard){navigator.clipboard.writeText(link).then(()=>toast('카카오 SDK 오류 — 링크를 복사했습니다.','info'));}
   }
@@ -3438,7 +3467,54 @@ function spEditorClear(){const el=$('fc-spmsg');if(!el)return;if(!confirm('특�
 function updateSpCount(){const el=$('fc-spmsg');const sc=$('fc-spmsg-count');if(!el||!sc)return;const len=(el.textContent||'').length;sc.textContent=len+' / 200자';sc.style.color=len>=180?'#DC2626':'#9CA3AF';}
 function updateSpMsgBadge(){const badge=$('fc-spmsg-status-badge');if(!badge)return;const s=$('fc-spmsg-start'),e=$('fc-spmsg-end'),el=$('fc-spmsg');const hasTxt=el&&(el.textContent||'').trim().length>0;const sv=s?s.value:'',ev=e?e.value:'';if(!hasTxt||!sv||!ev){badge.style.display='none';return;}badge.style.display='';const today=new Date().toISOString().slice(0,10);if(today<sv){badge.textContent='📅 예약됨 ('+sv+' ~)';badge.style.background='#EFF6FF';badge.style.color='#1D4ED8';}else if(today>=sv&&today<=ev){badge.textContent='✅ 게시중 (~ '+ev+')';badge.style.background='#F0FDF4';badge.style.color='#16A34A';}else{badge.textContent='⏰ 만료됨 ('+ev+')';badge.style.background='#FEF2F2';badge.style.color='#DC2626';}}
 window.spEditorCmd=spEditorCmd;window.spEditorClear=spEditorClear;window.updateSpCount=updateSpCount;window.updateSpMsgBadge=updateSpMsgBadge;
-window.doSaveClientProfile=doSaveClientProfile;window.handleFcPhoto=handleFcPhoto;window.previewFcProfile=previewFcProfile;window.copyFcLink=copyFcLink;window.shareFcKakao=shareFcKakao;
+// ── 카톡 공유 이미지 업로드 ──
+async function handleFcShareImage(input){
+  const file=input.files[0];
+  if(!file||!me)return;
+  if(file.size>5*1024*1024){toast('이미지 크기는 5MB 이하로 해주세요.','error');return;}
+  if(!file.type.startsWith('image/')){toast('이미지 파일만 업로드 가능합니다.','error');return;}
+  $('fc-share-img-progress').style.display='block';
+  try{
+    const ext=file.name.split('.').pop()||'jpg';
+    const path='consultants/'+me.uid+'/share_image.'+ext;
+    const sRef2=stRef(storage,path);
+    await uploadBytes(sRef2,file,{contentType:file.type});
+    const url=await getDownloadURL(sRef2);
+    $('fc-share-img-preview').src=url;
+    $('fc-share-img-preview').style.display='block';
+    $('fc-share-img-url').value=url;
+    toast('공유 이미지가 업로드되었습니다!','success');
+  }catch(e){
+    console.error('share image upload error:',e);
+    toast('이미지 업로드 실패: '+e.message,'error');
+  }finally{
+    $('fc-share-img-progress').style.display='none';
+  }
+}
+
+// ── 카톡 공유 설정 저장 (fc_share_profiles 컬렉션) ──
+async function doSaveShareProfile(){
+  if(!me)return;
+  const shareTitle=$('fc-share-title').value.trim();
+  const shareDesc=$('fc-share-desc').value.trim();
+  const shareImageUrl=$('fc-share-img-url').value.trim();
+  if(!shareTitle){toast('공유 제목을 입력해주세요.','error');return;}
+  try{
+    const data={
+      shareTitle,
+      shareDesc:shareDesc||'',
+      shareImageUrl:shareImageUrl||'https://jarvia.co.kr/client_report_share_v2.png',
+      updatedAt:serverTimestamp()
+    };
+    await setDoc(doc(db,'fc_share_profiles',meData.loginId),data,{merge:true});
+    if(me.uid!==meData.loginId){await setDoc(doc(db,'fc_share_profiles',me.uid),data,{merge:true});}
+    toast('공유 설정이 저장되었습니다!','success');
+  }catch(e){
+    console.error('saveShareProfile error:',e);
+    toast('저장 실패: '+e.message,'error');
+  }
+}
+window.doSaveClientProfile=doSaveClientProfile;window.handleFcPhoto=handleFcPhoto;window.previewFcProfile=previewFcProfile;window.copyFcLink=copyFcLink;window.shareFcKakao=shareFcKakao;window.handleFcShareImage=handleFcShareImage;window.doSaveShareProfile=doSaveShareProfile;
 window.filterList=filterList;window.filterCat=filterCat;window.filterSub=filterSub;window.showTerms=showTerms;window.closeViewer=closeViewer;window.gridPg=gridPg;window.loadUpcoming=loadUpcoming;
 window.rgEmailSel=rgEmailSel;window.doShare=doShare;window.loadReferrals=loadReferrals;window.copyRefCode=copyRefCode;
 // ── 중간 섹션 토글 ──
