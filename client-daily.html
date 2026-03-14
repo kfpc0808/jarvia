@@ -164,7 +164,7 @@ body{
 }
 .audio-play-btn svg{width:20px;height:20px;color:var(--accent);margin-left:2px}
 .audio-meta{flex:1;position:relative;z-index:1}
-.audio-title{font-size:15px;font-weight:700;color:#fff;margin-bottom:3px;letter-spacing:-.2px}
+.audio-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:3px;letter-spacing:-.2px;white-space:nowrap}
 .audio-sub{font-size:12px;color:rgba(255,255,255,.6);font-weight:400}
 .audio-dur{font-family:var(--font-mono);font-size:13px;color:rgba(255,255,255,.45);font-weight:500;position:relative;z-index:1}
 .audio-expanded{display:none;margin-top:-4px;background:var(--accent);border-radius:0 0 var(--radius) var(--radius);padding:18px 22px 20px}
@@ -530,9 +530,10 @@ body{
       </div>
       <div class="audio-expanded" id="audioExpanded">
         <audio id="audioEl"></audio>
-        <div id="audioProgressWrap" style="margin-bottom:8px;cursor:pointer;height:6px;background:rgba(255,255,255,.15);border-radius:3px" onclick="seekAudio(event)">
-          <div id="audioProgress" style="height:100%;width:0%;background:var(--accent);border-radius:3px;transition:width .1s"></div>
+        <div id="audioProgressWrap" style="margin-bottom:4px;cursor:pointer;height:8px;background:rgba(255,255,255,.15);border-radius:4px;position:relative;touch-action:none" onclick="seekAudio(event)">
+          <div id="audioProgress" style="height:100%;width:0%;background:linear-gradient(90deg,var(--gold),#D4AF37);border-radius:4px;transition:width .1s;position:relative"><div style="position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div></div>
         </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-family:var(--font-mono);font-size:11px;font-weight:500;color:rgba(255,255,255,.5)"><span id="audioCurrentTime">0:00</span><span id="audioRemainTime">-0:00</span></div>
         <div class="audio-controls">
           <div class="audio-skip-group">
             <button class="audio-skip-btn" onclick="skipAudio(-15)">◀15</button>
@@ -543,7 +544,6 @@ body{
             <button class="audio-speed-btn active" onclick="setSpeed(1)">1×</button>
             <button class="audio-speed-btn" onclick="setSpeed(1.25)">1.25×</button>
             <button class="audio-speed-btn" onclick="setSpeed(1.5)">1.5×</button>
-            <button class="audio-speed-btn" onclick="setSpeed(2)">2×</button>
           </div>
         </div>
       </div>
@@ -1104,11 +1104,18 @@ window.setSpeed=function(rate){
 };
 window.seekAudio=function(e){
   const wrap=document.getElementById('audioProgressWrap');
-  audioEl.currentTime=(e.offsetX/wrap.offsetWidth)*(audioEl.duration||0);
+  const rect=wrap.getBoundingClientRect();
+  const x=e.clientX!==undefined?e.clientX-rect.left:e.offsetX;
+  audioEl.currentTime=Math.max(0,(x/rect.width)*(audioEl.duration||0));
 };
+function fmtTime(sec){if(!sec||!isFinite(sec))return'0:00';const m=Math.floor(sec/60);const s=Math.floor(sec%60);return m+':'+String(s).padStart(2,'0');}
 audioEl.addEventListener('timeupdate',()=>{
   if(!audioEl.duration)return;
-  document.getElementById('audioProgress').style.width=(audioEl.currentTime/audioEl.duration*100)+'%';
+  const pct=audioEl.currentTime/audioEl.duration*100;
+  document.getElementById('audioProgress').style.width=pct+'%';
+  document.getElementById('audioCurrentTime').textContent=fmtTime(audioEl.currentTime);
+  const remain=audioEl.duration-audioEl.currentTime;
+  document.getElementById('audioRemainTime').textContent='-'+fmtTime(remain);
 });
 audioEl.addEventListener('ended',()=>{document.getElementById('playPauseBtn').textContent='▶';});
 audioEl.addEventListener('loadedmetadata',()=>{
@@ -1118,6 +1125,27 @@ audioEl.addEventListener('loadedmetadata',()=>{
     document.getElementById('audioDur').textContent=`${m}:${String(s).padStart(2,'0')}`;
   }
 });
+
+// ═══ Progress Bar Touch/Mouse Drag ═══
+(function(){
+  const wrap=document.getElementById('audioProgressWrap');
+  if(!wrap)return;
+  let dragging=false;
+  function seek(clientX){
+    const rect=wrap.getBoundingClientRect();
+    const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));
+    if(audioEl.duration&&isFinite(audioEl.duration)){
+      audioEl.currentTime=ratio*audioEl.duration;
+      document.getElementById('audioProgress').style.width=(ratio*100)+'%';
+    }
+  }
+  wrap.addEventListener('mousedown',function(e){dragging=true;seek(e.clientX);e.preventDefault();});
+  document.addEventListener('mousemove',function(e){if(dragging)seek(e.clientX);});
+  document.addEventListener('mouseup',function(){dragging=false;});
+  wrap.addEventListener('touchstart',function(e){dragging=true;seek(e.touches[0].clientX);e.preventDefault();},{passive:false});
+  document.addEventListener('touchmove',function(e){if(dragging)seek(e.touches[0].clientX);},{passive:true});
+  document.addEventListener('touchend',function(){dragging=false;});
+})();
 
 // ═══ Share ═══
 window.shareKakao=function(){
