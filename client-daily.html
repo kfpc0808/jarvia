@@ -459,6 +459,7 @@ const fileDate=dateParam||getTodayKST();
 let fcData=null;
 let reportData=null;
 let prevIndicators=null; // ★ 전일 경제지표 (전일비 표시용)
+let spData=null; // ★ 컨설턴트 카톡 공유 설정 (fc_share_profiles)
 
 // ═══ Main Init ═══
 async function init(){
@@ -524,6 +525,12 @@ async function init(){
         prevIndicators=prevDocs[0].data().indicators||null;
       }
     }catch(pe){console.warn('prev indicators load fail:',pe);}
+
+    // 2.7 ★ 컨설턴트 카톡 공유 설정 로드 (fc_share_profiles)
+    try{
+      const spSnap=await getDoc(doc(db,'fc_share_profiles',fcId));
+      if(spSnap.exists())spData=spSnap.data();
+    }catch(spe){console.warn('share profile load fail:',spe);}
 
     // 3. 렌더링
     renderConsultant();
@@ -880,14 +887,27 @@ audioEl.addEventListener('loadedmetadata',()=>{
 
 // ═══ Share ═══
 window.shareKakao=function(){
-  // index.html 마이페이지와 동일한 sendScrap 방식 사용
-  // URL의 OG태그를 카카오가 직접 읽어서 카드 생성 → 별도 설정 불필요
   const url=`https://jarvia.co.kr/client-daily.html?fc=${encodeURIComponent(fcId)}`;
-  if(window.Kakao&&Kakao.isInitialized()){
-    Kakao.Share.sendScrap({requestUrl:url});
-  }else{
+  if(!window.Kakao||!Kakao.isInitialized()){
     if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>showToast('카카오 SDK 오류 — 링크를 복사했습니다.'));}
+    return;
   }
+  // ★ fc_share_profiles에서 컨설턴트가 설정한 제목·설명·이미지 사용
+  const fc=fcData||{};
+  const title=(spData&&spData.shareTitle)||`${fc.company||''} ${fc.name||''} ${fc.title||''}의 금융 브리핑`.trim();
+  const desc=(spData&&spData.shareDesc)||'매일 아침 전해드리는 금융 인사이트';
+  const imageUrl=(spData&&spData.shareImageUrl)||'https://jarvia.co.kr/client_report_share_v2.png';
+  Kakao.Share.sendDefault({
+    objectType:'feed',
+    content:{
+      title,
+      description:desc,
+      imageUrl,
+      link:{mobileWebUrl:url,webUrl:url}
+    },
+    buttons:[{title:'브리핑 보러가기',link:{mobileWebUrl:url,webUrl:url}}],
+    installTalk:true
+  });
 };
 window.copyLink=function(){
   const url=`https://jarvia.co.kr/client-daily.html?fc=${encodeURIComponent(fcId)}`;
