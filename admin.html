@@ -335,12 +335,14 @@
       <div class="toolbar">
         <button class="btn" onclick="triggerClientDR()" id="btn-cdr-trigger">🚀 고객 리포트 수동 생성</button>
         <button class="btn btn-sec" onclick="loadClientDailyReports()">🔄 새로고침</button>
+        <button class="btn btn-danger" onclick="deleteSelectedCDR()">🗑 선택삭제</button>
       </div>
       <div id="cdr-trigger-msg" style="display:none;margin:12px 0;padding:12px 16px;border-radius:8px;font-size:13px"></div>
       <div class="tbl-wrap mt">
         <table class="tbl">
           <thead>
             <tr>
+              <th style="width:40px"><input type="checkbox" id="cdr-chk-all" onchange="toggleAllCDR()"></th>
               <th style="width:50px">No</th>
               <th>날짜</th>
               <th>뉴스</th>
@@ -1301,7 +1303,7 @@ async function delCO(id){if(!confirm('삭제?'))return;await deleteDoc(doc(db,'c
 // ═══ WINDOW EXPORTS ═══
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteSelectedDR=deleteSelectedDR;window.toggleAllDR=toggleAllDR;
-window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteClientDR=deleteClientDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
+window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteSelectedCDR=deleteSelectedCDR;window.toggleAllCDR=toggleAllCDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
 window.copyAudioScript=copyAudioScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
 window.nuEmailSel=nuEmailSel;window.nuUnlimitedChk=nuUnlimitedChk;window.initNuDates=initNuDates;
@@ -2558,16 +2560,17 @@ async function loadClientDailyReports(){
     renderClientDailyReports();
   }catch(e){
     console.error('고객 데일리리포트 로드 실패:',e);
-    $('tb-client-dr').innerHTML=`<tr><td colspan="7" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
+    $('tb-client-dr').innerHTML=`<tr><td colspan="8" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
   }
 }
 
 function renderClientDailyReports(){
   const tb=$('tb-client-dr');
   if(!_cdrList.length){
-    tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-lt)">생성된 고객 데일리리포트가 없습니다.</td></tr>';
+    tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-lt)">생성된 고객 데일리리포트가 없습니다.</td></tr>';
     return;
   }
+  const allChk=$('cdr-chk-all');if(allChk)allChk.checked=false;
   tb.innerHTML=_cdrList.map((r,i)=>{
     const date=r.date||r.fileDate||'-';
     const newsCount=(r.news||[]).length;
@@ -2582,6 +2585,7 @@ function renderClientDailyReports(){
     const hasScript=!!(r.audioScript);
     const hasAudio=!!r.audioUrl;
     return `<tr>
+      <td style="text-align:center"><input type="checkbox" class="cdr-chk" value="${fd}"></td>
       <td style="text-align:center">${i+1}</td>
       <td><strong>${date}</strong></td>
       <td style="text-align:center">${newsCount}건</td>
@@ -2594,7 +2598,6 @@ function renderClientDailyReports(){
         ${hasAudio
           ?`<button class="btn btn-sm btn-success" onclick="playCdrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteCdrAudio('${fd}')" title="오디오 삭제">✕</button>`
           :`<button class="btn btn-sm btn-sec" onclick="triggerCdrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
-        ${fd?`<button class="btn btn-sm btn-danger" onclick="deleteClientDR('${fd}')">삭제</button>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -2630,15 +2633,40 @@ async function previewClientDR(fileDate){
   window.open('./client-daily.html?fc=gildong&d='+fileDate,'_blank');
 }
 
-async function deleteClientDR(fileDate){
-  if(!confirm(`${fileDate} 고객 데일리리포트를 삭제할까요?`))return;
-  try{
-    await deleteDoc(doc(db,'client_daily_reports',fileDate));
-    toast('✅ 삭제 완료','success');
-    loadClientDailyReports();
-  }catch(e){
-    toast('❌ 삭제 실패: '+e.message,'error');
+function toggleAllCDR(){
+  const all=$('cdr-chk-all').checked;
+  document.querySelectorAll('.cdr-chk').forEach(c=>c.checked=all);
+}
+
+async function deleteSelectedCDR(){
+  const ids=[...document.querySelectorAll('.cdr-chk:checked')].map(c=>c.value);
+  if(!ids.length)return toast('삭제할 리포트를 선택하세요.','error');
+  if(!confirm(`${ids.length}건의 고객 데일리리포트를 삭제하시겠습니까?`))return;
+  const deleted=[];let fail=0;
+  for(const fd of ids){
+    try{
+      console.log('[CDR삭제] 시도:',fd,'→ client_daily_reports/'+fd);
+      await deleteDoc(doc(db,'client_daily_reports',fd));
+      const verify=await getDoc(doc(db,'client_daily_reports',fd));
+      if(verify.exists()){
+        console.error('[CDR삭제] 검증실패: client_daily_reports/'+fd+' 여전히 존재');
+        fail++;
+      }else{
+        console.log('[CDR삭제] 검증성공: client_daily_reports/'+fd+' 삭제됨');
+        deleted.push(fd);
+      }
+    }catch(e){console.error('[CDR삭제] 오류:',fd,e);fail++;}
   }
+  if(fail>0){
+    toast(`⚠️ ${fail}건 삭제 실패 — 브라우저 콘솔(F12)을 확인하세요`,'error');
+  }
+  if(deleted.length>0){
+    _cdrList=_cdrList.filter(r=>!deleted.includes(r.fileDate||r.id||''));
+    toast(`✅ ${deleted.length}건 삭제 완료`,'success');
+  }
+  $('cdr-total').textContent=_cdrList.length;
+  if(_cdrList.length>0){$('cdr-latest').textContent=_cdrList[0].date||_cdrList[0].fileDate||'-';}else{$('cdr-latest').textContent='-';}
+  renderClientDailyReports();
 }
 
 // ── 고객 데일리리포트 오디오/스크립트 관련 함수 ──
