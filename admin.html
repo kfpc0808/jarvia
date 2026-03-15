@@ -302,12 +302,14 @@
       <div class="toolbar">
         <button class="btn" onclick="triggerDailyReport()" id="btn-dr-trigger">🚀 수동 생성 (트리거)</button>
         <button class="btn btn-sec" onclick="loadDailyReports()">🔄 새로고침</button>
+        <button class="btn btn-danger" onclick="deleteSelectedDR()">🗑 선택삭제</button>
       </div>
       <div id="dr-trigger-msg" style="display:none;margin:12px 0;padding:12px 16px;border-radius:8px;font-size:13px"></div>
       <div class="tbl-wrap mt">
         <table class="tbl">
           <thead>
             <tr>
+              <th style="width:40px"><input type="checkbox" id="dr-chk-all" onchange="toggleAllDR()"></th>
               <th style="width:50px">No</th>
               <th>날짜</th>
               <th>에디션</th>
@@ -1298,7 +1300,7 @@ async function delCO(id){if(!confirm('삭제?'))return;await deleteDoc(doc(db,'c
 
 // ═══ WINDOW EXPORTS ═══
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
-window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteDailyReport=deleteDailyReport;
+window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteSelectedDR=deleteSelectedDR;window.toggleAllDR=toggleAllDR;
 window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteClientDR=deleteClientDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
 window.copyAudioScript=copyAudioScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
@@ -2320,16 +2322,17 @@ async function loadDailyReports(){
     renderDailyReports();
   }catch(e){
     console.error('Daily Report 로드 실패:',e);
-    $('tb-daily-reports').innerHTML=`<tr><td colspan="5" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
+    $('tb-daily-reports').innerHTML=`<tr><td colspan="6" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
   }
 }
 
 function renderDailyReports(){
   const tb=$('tb-daily-reports');
   if(!_drList.length){
-    tb.innerHTML='<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-lt)">생성된 Daily Report가 없습니다.</td></tr>';
+    tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-lt)">생성된 Daily Report가 없습니다.</td></tr>';
     return;
   }
+  const allChk=$('dr-chk-all');if(allChk)allChk.checked=false;
   tb.innerHTML=_drList.map((r,i)=>{
     const date=r.date||r.fileDate||'-';
     const edition=r.edition||'-';
@@ -2348,6 +2351,7 @@ function renderDailyReports(){
     const hasAudio=!!r.audioUrl;
     const fd=r.fileDate||r.id||'';
     return `<tr>
+      <td style="text-align:center"><input type="checkbox" class="dr-chk" value="${fd}"></td>
       <td style="text-align:center">${i+1}</td>
       <td><strong>${date}</strong></td>
       <td>${edition}</td>
@@ -2360,7 +2364,6 @@ function renderDailyReports(){
         ${hasAudio
           ?`<button class="btn btn-sm btn-success" onclick="playDrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteDrAudio('${fd}')" title="오디오 삭제">✕</button>`
           :`<button class="btn btn-sm btn-sec" onclick="triggerDrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
-        ${fd?`<button class="btn btn-sm btn-danger" onclick="deleteDailyReport('${fd}')">삭제</button>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -2501,15 +2504,25 @@ async function deleteDrAudio(fileDate){
   }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
-async function deleteDailyReport(fileDate){
-  if(!confirm(`${fileDate} Daily Report를 삭제할까요?`))return;
-  try{
-    await deleteDoc(doc(db,'daily_reports',fileDate));
-    toast('✅ 삭제 완료','success');
-    loadDailyReports();
-  }catch(e){
-    toast('❌ 삭제 실패: '+e.message,'error');
+function toggleAllDR(){
+  const all=$('dr-chk-all').checked;
+  document.querySelectorAll('.dr-chk').forEach(c=>c.checked=all);
+}
+
+async function deleteSelectedDR(){
+  const ids=[...document.querySelectorAll('.dr-chk:checked')].map(c=>c.value);
+  if(!ids.length)return toast('삭제할 리포트를 선택하세요.','error');
+  if(!confirm(`${ids.length}건의 Daily Report를 삭제하시겠습니까?\n(콘텐츠 목록에서도 함께 제거됩니다)`))return;
+  let cnt=0;
+  for(const fd of ids){
+    try{
+      await deleteDoc(doc(db,'daily_reports',fd));
+      try{await deleteDoc(doc(db,'contents','dr_'+fd));}catch(e){}
+      cnt++;
+    }catch(e){console.error('삭제 실패:',fd,e);}
   }
+  toast(`✅ ${cnt}건 삭제 완료`,'success');
+  loadDailyReports();
 }
 
 // ════════════════════════════════════════
