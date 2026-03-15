@@ -554,7 +554,7 @@ import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-ap
 import{getAuth,onAuthStateChanged,signOut,createUserWithEmailAndPassword}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-import{getStorage,ref as stRef,uploadBytesResumable,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+import{getStorage,ref as stRef,uploadBytesResumable,getDownloadURL,deleteObject}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const FC={apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",authDomain:"kfpc-company-support-project.firebaseapp.com",projectId:"kfpc-company-support-project",storageBucket:"kfpc-company-support-project.firebasestorage.app",messagingSenderId:"1012609333373",appId:"1:1012609333373:web:7b6c207c81ff10d156d914",measurementId:"G-CMW6QQ470G"};
 const app=initializeApp(FC);
@@ -2498,6 +2498,8 @@ function playDrAudio(url){
 async function deleteDrAudio(fileDate){
   if(!confirm('이 리포트의 오디오를 삭제할까요?'))return;
   try{
+    const r=_drList.find(d=>(d.fileDate||d.id)===fileDate);
+    if(r&&r.audioUrl){try{const p=decodeURIComponent(r.audioUrl.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 오디오 삭제 스킵:',e.code);}}
     await updateDoc(doc(db,'daily_reports',fileDate),{audioUrl:''});
     const idx=_drList.findIndex(d=>(d.fileDate||d.id)===fileDate);
     if(idx>=0)_drList[idx].audioUrl='';
@@ -2514,10 +2516,16 @@ function toggleAllDR(){
 async function deleteSelectedDR(){
   const ids=[...document.querySelectorAll('.dr-chk:checked')].map(c=>c.value);
   if(!ids.length)return toast('삭제할 리포트를 선택하세요.','error');
-  if(!confirm(`${ids.length}건의 Daily Report를 삭제하시겠습니까?\n(콘텐츠 목록에서도 함께 제거됩니다)`))return;
+  if(!confirm(`${ids.length}건의 Daily Report를 삭제하시겠습니까?\n(Firestore + Storage + 콘텐츠 모두 삭제됩니다)`))return;
   let cnt=0;
   for(const fd of ids){
     try{
+      // 1) Storage: HTML 파일 삭제
+      try{await deleteObject(stRef(storage,`daily-reports/${fd}_daily-report.html`));}catch(e){console.log('Storage HTML 삭제 스킵:',e.code);}
+      // 2) Storage: 오디오 파일 삭제 (URL에서 경로 추출)
+      const r=_drList.find(d=>(d.fileDate||d.id)===fd);
+      if(r&&r.audioUrl){try{const p=decodeURIComponent(r.audioUrl.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 오디오 삭제 스킵:',e.code);}}
+      // 3) Firestore: daily_reports + contents 삭제
       await deleteDoc(doc(db,'daily_reports',fd));
       try{await deleteDoc(doc(db,'contents','dr_'+fd));}catch(e){}
       cnt++;
@@ -2527,7 +2535,7 @@ async function deleteSelectedDR(){
   $('dr-total').textContent=_drList.length;
   if(_drList.length>0){$('dr-latest').textContent=_drList[0].date||_drList[0].fileDate||'-';}else{$('dr-latest').textContent='-';}
   renderDailyReports();
-  toast(`✅ ${cnt}건 삭제 완료`,'success');
+  toast(`✅ ${cnt}건 완전 삭제 완료 (Firestore + Storage)`,'success');
 }
 
 // ════════════════════════════════════════
@@ -2641,18 +2649,20 @@ function toggleAllCDR(){
 async function deleteSelectedCDR(){
   const ids=[...document.querySelectorAll('.cdr-chk:checked')].map(c=>c.value);
   if(!ids.length)return toast('삭제할 리포트를 선택하세요.','error');
-  if(!confirm(`${ids.length}건의 고객 데일리리포트를 삭제하시겠습니까?`))return;
+  if(!confirm(`${ids.length}건의 고객 데일리리포트를 삭제하시겠습니까?\n(Firestore + Storage 모두 삭제됩니다)`))return;
   const deleted=[];let fail=0;
   for(const fd of ids){
     try{
-      console.log('[CDR삭제] 시도:',fd,'→ client_daily_reports/'+fd);
+      // Storage: 오디오 파일 삭제
+      const r=_cdrList.find(d=>(d.fileDate||d.id)===fd);
+      if(r&&r.audioUrl){try{const p=decodeURIComponent(r.audioUrl.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 오디오 삭제 스킵:',e.code);}}
+      // Firestore 삭제
       await deleteDoc(doc(db,'client_daily_reports',fd));
       const verify=await getDoc(doc(db,'client_daily_reports',fd));
       if(verify.exists()){
         console.error('[CDR삭제] 검증실패: client_daily_reports/'+fd+' 여전히 존재');
         fail++;
       }else{
-        console.log('[CDR삭제] 검증성공: client_daily_reports/'+fd+' 삭제됨');
         deleted.push(fd);
       }
     }catch(e){console.error('[CDR삭제] 오류:',fd,e);fail++;}
@@ -2662,7 +2672,7 @@ async function deleteSelectedCDR(){
   }
   if(deleted.length>0){
     _cdrList=_cdrList.filter(r=>!deleted.includes(r.fileDate||r.id||''));
-    toast(`✅ ${deleted.length}건 삭제 완료`,'success');
+    toast(`✅ ${deleted.length}건 완전 삭제 완료 (Firestore + Storage)`,'success');
   }
   $('cdr-total').textContent=_cdrList.length;
   if(_cdrList.length>0){$('cdr-latest').textContent=_cdrList[0].date||_cdrList[0].fileDate||'-';}else{$('cdr-latest').textContent='-';}
@@ -2726,6 +2736,8 @@ function playCdrAudio(url){
 async function deleteCdrAudio(fileDate){
   if(!confirm('이 리포트의 오디오를 삭제할까요?'))return;
   try{
+    const r=_cdrList.find(d=>(d.fileDate||d.id)===fileDate);
+    if(r&&r.audioUrl){try{const p=decodeURIComponent(r.audioUrl.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 오디오 삭제 스킵:',e.code);}}
     await updateDoc(doc(db,'client_daily_reports',fileDate),{audioUrl:''});
     const idx=_cdrList.findIndex(d=>(d.fileDate||d.id)===fileDate);
     if(idx>=0)_cdrList[idx].audioUrl='';
