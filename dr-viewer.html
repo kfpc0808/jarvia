@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JARVIA Daily Report</title>
+<script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js"></script>
+<script>if(window.Kakao&&!Kakao.isInitialized())Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9FC;height:100vh;overflow:hidden}
@@ -60,8 +62,10 @@ if(!id){
   onAuthStateChanged(auth,async u=>{
     document.getElementById('dr-loading').style.display='none';
     if(u){
-      // ★ 무료회원 접근 차단
+      // ★ 무료회원 접근 차단 + 회원명/공유설정 로드
       let _userName='';
+      let _loginId='';
+      let _shareData=null;
       try{
         const uDoc=await getDoc(doc(db,'users',u.uid));
         if(uDoc.exists()&&uDoc.data().role==='free_user'){
@@ -70,15 +74,56 @@ if(!id){
           document.querySelector('.lock-sub').textContent='유료회원 전용 콘텐츠입니다.';
           return;
         }
-        if(uDoc.exists())_userName=uDoc.data().name||'';
+        if(uDoc.exists()){
+          _userName=uDoc.data().name||'';
+          _loginId=uDoc.data().loginId||'';
+        }
       }catch(e){}
+      // ★ fc_share_profiles에서 공유 설정 로드
+      if(_loginId){
+        try{
+          const spDoc=await getDoc(doc(db,'fc_share_profiles',_loginId));
+          if(spDoc.exists()){
+            const sp=spDoc.data();
+            _shareData={
+              title:sp.shareTitle||'',
+              desc:sp.shareDesc||'',
+              imageUrl:sp.shareImageUrl||'',
+              link:'https://jarvia.co.kr/briefing?fc='+_loginId
+            };
+          }
+        }catch(e){}
+      }
+      if(!_shareData&&_loginId){
+        _shareData={title:'',desc:'',imageUrl:'',link:'https://jarvia.co.kr/briefing?fc='+_loginId};
+      }
       const url='https://firebasestorage.googleapis.com/v0/b/kfpc-company-support-project.firebasestorage.app/o/daily-reports%2F'+id+'_daily-report.html?alt=media';
       const viewer=document.getElementById('dr-viewer');
       viewer.src=url+'&share=1';
       viewer.style.display='block';
-      // ★ 회원명 전달
+      // ★ 회원명 + 공유설정 전달
       viewer.addEventListener('load',function(){
-        if(_userName)viewer.contentWindow.postMessage({type:'setMemberName',name:_userName},'*');
+        viewer.contentWindow.postMessage({type:'setMemberData',name:_userName,share:_shareData},'*');
+      });
+      // ★ iframe에서 카카오 공유 요청 수신
+      window.addEventListener('message',function(e){
+        if(!e.data||e.data.type!=='requestKakaoShare')return;
+        var sd=e.data.share||_shareData;
+        if(!sd||!sd.link){alert('공유 설정이 없습니다. 마이페이지에서 카톡 공유 설정을 저장해주세요.');return;}
+        var title=sd.title||(_userName?_userName+'의 Daily Briefing':'Daily Briefing');
+        var desc=sd.desc||'매일 아침 전해드리는 금융 인사이트';
+        var imgUrl=sd.imageUrl||'https://jarvia.co.kr/client_report_share_v2.png';
+        if(window.Kakao&&Kakao.isInitialized()){
+          Kakao.Share.sendDefault({
+            objectType:'feed',
+            content:{title:title,description:desc,imageUrl:imgUrl,imageWidth:800,imageHeight:400,link:{mobileWebUrl:sd.link,webUrl:sd.link}},
+            buttons:[{title:'브리핑 보러가기',link:{mobileWebUrl:sd.link,webUrl:sd.link}}],
+            installTalk:true
+          });
+        }else{
+          if(navigator.clipboard){navigator.clipboard.writeText(sd.link).then(function(){alert('링크를 복사했습니다.\n'+sd.link);});}
+          else{prompt('링크를 복사하세요:',sd.link);}
+        }
       });
     }else{
       document.getElementById('dr-lock').style.display='flex';
