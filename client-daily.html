@@ -693,33 +693,39 @@ async function init(){
       return;
     }
 
-    // 1. 컨설턴트 프로필 조회
-    const fcSnap=await getDoc(doc(db,'consultants',fcId));
+    // ★ 1단계: 프로필 + 역할 체크 병렬 조회
+    let fcSnap,userQ;
+    try{
+      [fcSnap,userQ]=await Promise.all([
+        getDoc(doc(db,'consultants',fcId)),
+        getDocs(query(collection(db,'users'),where('loginId','==',fcId),limit(1)))
+      ]);
+    }catch(e){
+      console.warn('init parallel-1 fail:',e);
+      showError('현재 이용할 수 없는 서비스입니다','담당 컨설턴트에게 문의해주세요.');
+      return;
+    }
     if(!fcSnap.exists()){
       showError('컨설턴트 정보를 찾을 수 없어요','링크를 다시 확인해주세요.');
       return;
     }
     fcData=fcSnap.data();
-
-    // ★ 역할 실시간 체크 — jarvia_member, jarvia_inner, jarvia_report만 허용
-    // users 컬렉션은 uid 기반이므로 loginId 필드로 쿼리 (강등 즉시 차단)
-    try{
-      const userQ=await getDocs(query(collection(db,'users'),where('loginId','==',fcId),limit(1)));
-      const userRole=(!userQ.empty)?userQ.docs[0].data().role:'';
-      if(userRole!=='jarvia_member'&&userRole!=='jarvia_inner'&&userRole!=='jarvia_report'&&userRole!=='inner_circle'){
-        showError('현재 이용할 수 없는 서비스입니다','담당 컨설턴트에게 문의해주세요.');
-        return;
-      }
-    }catch(roleErr){
-      // users 조회 실패 시 차단 (안전 우선)
-      console.warn('role check failed:',roleErr);
+    const userRole=(!userQ.empty)?userQ.docs[0].data().role:'';
+    if(userRole!=='jarvia_member'&&userRole!=='jarvia_inner'&&userRole!=='jarvia_report'&&userRole!=='inner_circle'){
       showError('현재 이용할 수 없는 서비스입니다','담당 컨설턴트에게 문의해주세요.');
       return;
     }
 
-    // 2. 고객 데일리리포트 조회 (오늘 없으면 최근 발행본 fallback)
-    const drSnap=await getDoc(doc(db,'client_daily_reports',fileDate));
-    if(drSnap.exists()&&drSnap.data().status==='published'){
+    // ★ 2단계: 리포트 + 전일지표 + 공유설정 병렬 조회
+    const [drResult,prevResult,spResult]=await Promise.allSettled([
+      getDoc(doc(db,'client_daily_reports',fileDate)),
+      getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(2))),
+      getDoc(doc(db,'fc_share_profiles',fcId))
+    ]);
+
+    // 2-1. 리포트 처리
+    const drSnap=(drResult.status==='fulfilled')?drResult.value:null;
+    if(drSnap&&drSnap.exists()&&drSnap.data().status==='published'){
       reportData=drSnap.data();
     } else {
       // 오늘 리포트 미발행 → 최근 published 리포트로 fallback
@@ -736,24 +742,14 @@ async function init(){
       reportData=latest.data();
     }
 
-    // 2.5 ★ 전일 경제지표 로드 (전일비 표시용)
-    try{
-      const prevSnap=await getDocs(query(
-        collection(db,'client_daily_reports'),
-        orderBy('createdAt','desc'),
-        limit(2)
-      ));
-      const prevDocs=prevSnap.docs.filter(d=>d.id!==fileDate);
-      if(prevDocs.length>0){
-        prevIndicators=prevDocs[0].data().indicators||null;
-      }
-    }catch(pe){console.warn('prev indicators load fail:',pe);}
+    // 2-2. 전일 경제지표
+    if(prevResult.status==='fulfilled'){
+      const prevDocs=prevResult.value.docs.filter(d=>d.id!==fileDate);
+      if(prevDocs.length>0) prevIndicators=prevDocs[0].data().indicators||null;
+    }
 
-    // 2.7 ★ 컨설턴트 카톡 공유 설정 로드 (fc_share_profiles)
-    try{
-      const spSnap=await getDoc(doc(db,'fc_share_profiles',fcId));
-      if(spSnap.exists())spData=spSnap.data();
-    }catch(spe){console.warn('share profile load fail:',spe);}
+    // 2-3. 카톡 공유 설정
+    if(spResult.status==='fulfilled'&&spResult.value.exists()) spData=spResult.value.data();
 
     // 3. 렌더링
     renderConsultant();
