@@ -220,6 +220,17 @@
     </div>
     <button class="btn" style="background:#2E7D32" onclick="triggerEduCustomGen()">🤖 AI 배경설명 생성</button>
   </div>
+  <!-- ★ 실시간 진행률 표시 영역 -->
+  <div id="edu-progress-area" style="display:none;margin-top:14px;padding:16px;background:#1B3A5C;border-radius:8px;color:#fff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span id="edu-progress-label" style="font-size:14px;font-weight:600">⏳ 준비 중...</span>
+      <span id="edu-progress-timer" style="font-size:13px;color:#48A6CB;font-family:monospace">0:00</span>
+    </div>
+    <div style="background:rgba(255,255,255,0.15);border-radius:6px;height:8px;overflow:hidden;margin-bottom:8px">
+      <div id="edu-progress-bar" style="height:100%;background:linear-gradient(90deg,#48A6CB,#2E86AB);border-radius:6px;transition:width 0.5s ease;width:0%"></div>
+    </div>
+    <div id="edu-progress-steps" style="font-size:11px;color:rgba(255,255,255,0.6);line-height:1.8"></div>
+  </div>
   <!-- Preview Area (담당자 확인 후 특급보고서 시작) -->
   <div id="edu-preview-area" style="display:none;margin-top:14px;padding:14px;background:#fff;border:1px solid #C5D0E8;border-radius:8px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
@@ -668,7 +679,7 @@
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,signOut,createUserWithEmailAndPassword}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
-import{getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField,onSnapshot}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getStorage,ref as stRef,uploadBytesResumable,getDownloadURL,deleteObject}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const FC={apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",authDomain:"kfpc-company-support-project.firebaseapp.com",projectId:"kfpc-company-support-project",storageBucket:"kfpc-company-support-project.firebasestorage.app",messagingSenderId:"1012609333373",appId:"1:1012609333373:web:7b6c207c81ff10d156d914",measurementId:"G-CMW6QQ470G"};
@@ -2124,12 +2135,84 @@ const EDU_PREVIEW_URL='https://asia-northeast3-kfpc-company-support-project.clou
 const EDU_API_KEY='WFNGIJEATZH0MXUYZEU6';
 
 let _eduPreviewData=null; // 미리보기 데이터 임시 저장
+let _eduProgressUnsub=null; // onSnapshot 구독 해제용
+let _eduTimerInterval=null; // 타이머 인터벌
+let _eduStartTime=null; // 시작 시각
 
 function setEduStatus(msg,color){
   const el=$('edu-gen-status');
   if(!el)return;
   el.textContent=msg;
   el.style.color=color||'var(--text-lt)';
+}
+
+/** 진행률 표시 시작 — Firestore onSnapshot 구독 */
+function startEduProgress(progressId){
+  const area=$('edu-progress-area');
+  if(!area)return;
+  area.style.display='block';
+  $('edu-progress-label').textContent='⏳ 준비 중...';
+  $('edu-progress-bar').style.width='0%';
+  $('edu-progress-steps').innerHTML='';
+  $('edu-progress-timer').textContent='0:00';
+  _eduStartTime=Date.now();
+
+  // 타이머 (1초마다 경과시간 갱신)
+  if(_eduTimerInterval)clearInterval(_eduTimerInterval);
+  _eduTimerInterval=setInterval(()=>{
+    const sec=Math.round((Date.now()-_eduStartTime)/1000);
+    const m=Math.floor(sec/60);
+    const s=sec%60;
+    const el=$('edu-progress-timer');
+    if(el)el.textContent=`${m}:${String(s).padStart(2,'0')}`;
+  },1000);
+
+  // 완료된 Step 이력
+  const stepHistory=[];
+
+  // Firestore onSnapshot
+  if(_eduProgressUnsub)_eduProgressUnsub();
+  const docRef=doc(db,'edu_gen_progress',progressId);
+  _eduProgressUnsub=onSnapshot(docRef,(snap)=>{
+    if(!snap.exists())return;
+    const d=snap.data();
+    const label=d.stepLabel||'';
+    const step=d.step||0;
+    const total=d.totalSteps||4;
+    const pct=d.status==='complete'?100:Math.round((step/total)*100);
+
+    $('edu-progress-label').textContent=label;
+    $('edu-progress-bar').style.width=pct+'%';
+
+    // Step 이력 추가 (중복 방지)
+    if(label && !stepHistory.includes(label)){
+      stepHistory.push(label);
+      const elapsed=d.elapsed||0;
+      const m=Math.floor(elapsed/60);
+      const s=elapsed%60;
+      $('edu-progress-steps').innerHTML=stepHistory.map((h,i)=>{
+        const icon=i<stepHistory.length-1?'✅':'⏳';
+        return `${icon} ${h}`;
+      }).join('<br>');
+    }
+
+    if(d.status==='complete'||d.status==='error'){
+      $('edu-progress-bar').style.width='100%';
+      $('edu-progress-bar').style.background=d.status==='complete'?'linear-gradient(90deg,#27AE60,#2ECC71)':'linear-gradient(90deg,#E74C3C,#C0392B)';
+      // 5초 후 자동 닫기
+      setTimeout(()=>{
+        const a=$('edu-progress-area');
+        if(a)a.style.display='none';
+      },5000);
+      stopEduProgress();
+    }
+  });
+}
+
+/** 진행률 추적 중단 */
+function stopEduProgress(){
+  if(_eduProgressUnsub){_eduProgressUnsub();_eduProgressUnsub=null;}
+  if(_eduTimerInterval){clearInterval(_eduTimerInterval);_eduTimerInterval=null;}
 }
 
 // ── 익월 제목 일괄 생성 ──────────────────────────────
@@ -2184,14 +2267,18 @@ async function triggerEduDailyGen(){
   // 오늘 날짜 예약 콘텐츠 사전 확인
   const todaySnap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',today)));
   if(todaySnap.empty){alert(`오늘(${today}) 날짜의 예약 콘텐츠가 없습니다.`);return;}
-  if(!confirm(`오늘(${today}) 예약된 제목의 배경 설명을 생성합니다.\n(약 2~3분 소요)\n\n생성 후 확인하시고 특급보고서를 시작하실 수 있습니다.\n\n진행하시겠습니까?`))return;
+  if(!confirm(`오늘(${today}) 예약된 제목의 배경 설명을 생성합니다.\n(약 2~4분 소요)\n\n생성 후 확인하시고 특급보고서를 시작하실 수 있습니다.\n\n진행하시겠습니까?`))return;
   const btn=document.querySelector('button[onclick="triggerEduDailyGen()"]');
   if(btn){btn.disabled=true;btn.textContent='⏳ 생성 중...';}
-  setEduStatus(`오늘(${today}) 배경 설명 생성 중... (2~3분 소요)`,'#1565C0');
+  setEduStatus('','');
   closeEduPreview();
+  // ★ progressId 생성 + 실시간 진행률 시작
+  const progressId='edp_'+Date.now()+'_'+Math.random().toString(36).substring(2,6);
+  startEduProgress(progressId);
   try{
-    const res=await fetch(`${EDU_PREVIEW_URL}?key=${EDU_API_KEY}`,{method:'GET',signal:AbortSignal.timeout(600000)});
+    const res=await fetch(`${EDU_PREVIEW_URL}?key=${EDU_API_KEY}&progressId=${progressId}`,{method:'GET',signal:AbortSignal.timeout(600000)});
     const data=await res.json();
+    stopEduProgress();
     if(data.success){
       showEduPreview(data);
       setEduStatus('✅ 배경 설명 생성 완료 — 아래에서 확인 후 특급보고서를 시작하세요','#2E7D32');
@@ -2203,6 +2290,7 @@ async function triggerEduDailyGen(){
       toast(`생성 실패: ${data.error||'오류 발생'}`,'error');
     }
   }catch(e){
+    stopEduProgress();
     setEduStatus('❌ 요청 오류 — 콘솔 확인','#C62828');
     toast('생성 요청 오류','error');
     console.error('[EduTopic/Daily] 요청 오류:',e);
@@ -2216,15 +2304,19 @@ async function triggerEduCustomGen(){
   const title=($('edu-custom-title').value||'').trim();
   const salesType=$('edu-custom-type').value;
   if(!title){toast('제목을 입력해 주세요.','error');$('edu-custom-title').focus();return;}
-  if(!confirm(`입력하신 제목으로 배경 설명을 생성합니다.\n\n제목: "${title}"\n유형: ${salesType==='personal'?'개인':salesType==='corp'?'법인':'자동판별'}\n(약 2~3분 소요)\n\n진행하시겠습니까?`))return;
+  if(!confirm(`입력하신 제목으로 배경 설명을 생성합니다.\n\n제목: "${title}"\n유형: ${salesType==='personal'?'개인':salesType==='corp'?'법인':'자동판별'}\n(약 2~4분 소요)\n\n진행하시겠습니까?`))return;
   const btn=document.querySelector('button[onclick="triggerEduCustomGen()"]');
   if(btn){btn.disabled=true;btn.textContent='⏳ 생성 중...';}
-  setEduStatus(`"${title.substring(0,20)}..." 배경 설명 생성 중...`,'#2E7D32');
+  setEduStatus('','');
   closeEduPreview();
+  // ★ progressId 생성 + 실시간 진행률 시작
+  const progressId='edp_'+Date.now()+'_'+Math.random().toString(36).substring(2,6);
+  startEduProgress(progressId);
   try{
-    const params=new URLSearchParams({key:EDU_API_KEY,title,salesType});
+    const params=new URLSearchParams({key:EDU_API_KEY,title,salesType,progressId});
     const res=await fetch(`${EDU_PREVIEW_URL}?${params.toString()}`,{method:'GET',signal:AbortSignal.timeout(600000)});
     const data=await res.json();
+    stopEduProgress();
     if(data.success){
       showEduPreview(data);
       setEduStatus('✅ 배경 설명 생성 완료 — 아래에서 확인 후 특급보고서를 시작하세요','#2E7D32');
@@ -2233,6 +2325,7 @@ async function triggerEduCustomGen(){
       toast(`생성 실패: ${data.error||'오류 발생'}`,'error');
     }
   }catch(e){
+    stopEduProgress();
     setEduStatus('❌ 요청 오류 — 콘솔 확인','#C62828');
     toast('생성 요청 오류','error');
     console.error('[EduTopic/Custom] 요청 오류:',e);
