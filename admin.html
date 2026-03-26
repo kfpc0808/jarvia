@@ -543,6 +543,7 @@
       <input type="file" id="pr-ppt-file" accept=".pptx,.ppt" style="display:none" onchange="handlePrFileUpload(this,'ppt')">
       <input type="file" id="pr-pdf-file" accept=".pdf" style="display:none" onchange="handlePrFileUpload(this,'pdf')">
       <input type="file" id="pr-audio-file" accept=".m4a,.mp3,.wav,audio/*" style="display:none" onchange="handlePrFileUpload(this,'audio')">
+      <input type="file" id="pr-html-file" accept=".html,.htm" style="display:none" onchange="handlePrFileUpload(this,'html')">
     </div>
 
     <!-- ═══ 토요특강관리 패널 ═══ -->
@@ -3416,6 +3417,7 @@ async function loadPremiumReports(){
       if(r.status==='published'){
         if(htmlUrl)actions+=`<button class="btn btn-sm" onclick="window.open('${htmlUrl}','_blank')">📄 보기</button> `;
         if(htmlUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="prDownload('${htmlUrl}','${r._id}.html')">📥 HTML</button> `;
+        if(htmlUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="prTriggerUpload('${r._id}','html')">📄 HTML 교체</button> `;
         if(audioUrl)actions+=`<button class="btn btn-sm btn-sec" onclick="prDownload('${audioUrl}','${r._id}_audio.txt')">🎧 음성원본</button> `;
         if(pptxUrl)actions+=`<button class="btn btn-sm" style="background:#E65100;color:#fff" onclick="prDownload('${pptxUrl}','${r._id}.pptx')">📊 PPT 다운로드</button> `;
         if(!pptxUrl)actions+=`<button class="btn btn-sm" style="background:#E65100;color:#fff" onclick="prTriggerUpload('${r._id}','ppt')">📊 PPT 업로드</button> `;
@@ -3790,6 +3792,7 @@ function prTriggerUpload(reportId,type){
   _prUploadTarget={reportId,type};
   if(type==='ppt') $('pr-ppt-file').click();
   else if(type==='audio') $('pr-audio-file').click();
+  else if(type==='html') $('pr-html-file').click();
   else $('pr-pdf-file').click();
 }
 
@@ -3797,16 +3800,17 @@ async function handlePrFileUpload(input,type){
   if(!input.files[0]||!_prUploadTarget)return;
   const file=input.files[0];
   const{reportId}=_prUploadTarget;
-  const fileExt=type==='ppt'?'pptx':type==='audio'?'m4a':'pdf';
-  const fmtKey=type==='ppt'?'ppt':type==='audio'?'audio':'pdf';
-  const contentType=type==='ppt'?'application/vnd.openxmlformats-officedocument.presentationml.presentation':type==='audio'?(file.type||'audio/mp4'):'application/pdf';
+  const fileExt=type==='ppt'?'pptx':type==='audio'?'m4a':type==='html'?'html':'pdf';
+  const fmtKey=type==='ppt'?'ppt':type==='audio'?'audio':type==='html'?'html':'pdf';
+  const contentType=type==='ppt'?'application/vnd.openxmlformats-officedocument.presentationml.presentation':type==='audio'?(file.type||'audio/mp4'):type==='html'?'text/html':'application/pdf';
   const storagePath=`premium-reports/${reportId}.${fileExt}`;
 
   toast(`📤 ${type.toUpperCase()} 업로드 중...`,'info');
 
   try{
     const sRef2=stRef(storage,storagePath);
-    const task=uploadBytesResumable(sRef2,file,{contentType});
+    const uploadMeta=type==='html'?{contentType,cacheControl:'public, max-age=300'}:{contentType};
+    const task=uploadBytesResumable(sRef2,file,uploadMeta);
     await new Promise((resolve,reject)=>{
       task.on('state_changed',
         (snap)=>{const pct=Math.round((snap.bytesTransferred/snap.totalBytes)*100);console.log(`[PR Upload] ${pct}%`);},
@@ -3817,7 +3821,7 @@ async function handlePrFileUpload(input,type){
     const dlUrl=await getDownloadURL(stRef(storage,storagePath));
 
     // Firestore premium_reports 문서 업데이트
-    const updateData=type==='ppt'?{pptxUrl:dlUrl}:type==='audio'?{audioUrl:dlUrl}:{pdfUrl:dlUrl};
+    const updateData=type==='ppt'?{pptxUrl:dlUrl}:type==='audio'?{audioUrl:dlUrl}:type==='html'?{'job4.htmlUrl':dlUrl}:{pdfUrl:dlUrl};
     await updateDoc(doc(db,'premium_reports',reportId),{...updateData,updatedAt:serverTimestamp()});
 
     // Firestore contents 문서도 업데이트 (contentId === reportId)
@@ -3828,7 +3832,7 @@ async function handlePrFileUpload(input,type){
         const contData=contSnap.data();
         const formats=contData.formats||[];
         if(!formats.includes(fmtKey))formats.push(fmtKey);
-        const contUpdate=type==='audio'?{audioUrl:dlUrl}:updateData;
+        const contUpdate=type==='audio'?{audioUrl:dlUrl}:type==='html'?{url:dlUrl}:type==='ppt'?{pptUrl:dlUrl}:{pdfUrl:dlUrl};
         await updateDoc(contRef,{...contUpdate,formats,updatedAt:serverTimestamp()});
       }
     }catch(ce){console.warn('contents 업데이트 실패 (무시):',ce);}
