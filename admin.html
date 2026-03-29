@@ -656,16 +656,17 @@
         </div>
       </div>
       <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <table class="tbl mt" style="min-width:700px;table-layout:fixed;border-collapse:collapse">
+        <table class="tbl mt" style="min-width:1000px;table-layout:fixed;border-collapse:collapse">
           <thead><tr>
             <th style="text-align:center;width:40px">No</th>
-            <th style="text-align:center;width:50px">주차</th>
-            <th style="text-align:center;width:90px">발행일</th>
-            <th style="text-align:center;width:50px">구분</th>
-            <th style="text-align:center;width:80px">분야</th>
+            <th style="text-align:center;width:70px">주차</th>
+            <th style="text-align:center;width:110px">발행일</th>
+            <th style="text-align:center;width:70px">구분</th>
+            <th style="text-align:center;width:100px">분야</th>
             <th style="text-align:left">제목</th>
-            <th style="text-align:center;width:60px">유형</th>
-            <th style="text-align:center;width:60px">상태</th>
+            <th style="text-align:center;width:80px">유형</th>
+            <th style="text-align:center;width:70px">상태</th>
+            <th style="text-align:center;width:100px">관리</th>
           </tr></thead>
           <tbody id="tb-tax-weekly"></tbody>
         </table>
@@ -3431,7 +3432,7 @@ async function loadTaxWeeklyTopics(){
   const month=parseInt($('tw-month-sel')?.value||'0');
   const tb=$('tb-tax-weekly');
   if(!tb)return;
-  tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:#999">로딩 중...</td></tr>';
+  tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:20px;color:#999">로딩 중...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'tax_weekly_topics'),orderBy('week','asc')));
     _twAll=snap.docs.map(d=>({id:d.id,...d.data()})).filter(t=>t.year===year);
@@ -3453,7 +3454,7 @@ async function loadTaxWeeklyTopics(){
     $('tw-corporate').textContent=_twAll.filter(t=>t.type==='corporate').length;
 
     if(!filtered.length){
-      tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:#999">해당 조건의 주제가 없습니다.</td></tr>';
+      tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:20px;color:#999">해당 조건의 주제가 없습니다.</td></tr>';
       return;
     }
 
@@ -3470,19 +3471,48 @@ async function loadTaxWeeklyTopics(){
       const bg=i%2===1?'background:#f8f9fa':'';
       const st=t.status||'pending';
       return`<tr style="${bg};border-bottom:1px solid #e9ecef">
-        <td style="text-align:center">${i+1}</td>
-        <td style="text-align:center">${t.week}주</td>
-        <td style="text-align:center">${date}</td>
-        <td style="text-align:center">${dayBadge(t.day)}</td>
-        <td style="text-align:center;font-size:11px">${t.category||''}</td>
+        <td style="text-align:center;white-space:nowrap">${i+1}</td>
+        <td style="text-align:center;white-space:nowrap">${t.week}주</td>
+        <td style="text-align:center;white-space:nowrap">${date}</td>
+        <td style="text-align:center;white-space:nowrap">${dayBadge(t.day)}</td>
+        <td style="text-align:center;font-size:11px;white-space:nowrap">${t.category||''}</td>
         <td style="text-align:left;font-size:12px">${esc(t.title||'')}</td>
-        <td style="text-align:center"><span style="font-size:10px;font-weight:700;color:${typeColor[t.insuranceType]||'#888'}">${typeLabel[t.insuranceType]||'-'}</span></td>
-        <td style="text-align:center"><span style="font-size:10px;font-weight:700;color:${statusColor[st]}">${statusLabel[st]||st}</span></td>
+        <td style="text-align:center;white-space:nowrap"><span style="font-size:10px;font-weight:700;color:${typeColor[t.insuranceType]||'#888'}">${typeLabel[t.insuranceType]||'-'}</span></td>
+        <td style="text-align:center;white-space:nowrap"><span style="font-size:10px;font-weight:700;color:${statusColor[st]}">${statusLabel[st]||st}</span></td>
+        <td style="text-align:center;white-space:nowrap">${t.scriptUrl?`<button class="btn btn-sm btn-sec" onclick="copyTcwAudioScript('${t.contentId||t.id}')" title="NotebookLM용 스크립트 복사" style="font-size:11px;padding:3px 8px">📋 스크립트</button>`:'<span style="color:#ccc;font-size:11px">미생성</span>'}</td>
       </tr>`;
     }).join('');
   }catch(e){
     console.error('택스컨설팅위클리 로드 오류:',e);
-    tb.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
+    tb.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
+  }
+}
+
+async function copyTcwAudioScript(contentId){
+  // tax_weekly_topics에서 scriptUrl 조회
+  const snap=await getDocs(query(collection(db,'tax_weekly_topics'),where('contentId','==',contentId),limit(1)));
+  if(snap.empty){toast('해당 주제를 찾을 수 없습니다.','warning');return;}
+  const scriptUrl=snap.docs[0].data().scriptUrl||'';
+  if(!scriptUrl){toast('아직 생성된 스크립트가 없습니다.','warning');return;}
+  try{
+    toast('📋 스크립트 로딩 중...','info');
+    const res=await fetch(scriptUrl);
+    if(!res.ok)throw new Error('스크립트 파일 로드 실패');
+    const script=await res.text();
+    if(!script.trim()){toast('스크립트 내용이 비어있습니다.','warning');return;}
+    await navigator.clipboard.writeText(script);
+    toast('📋 스크립트가 클립보드에 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
+  }catch(err){
+    // clipboard API 실패 시 폴백
+    try{
+      const res=await fetch(scriptUrl);
+      const script=await res.text();
+      const ta=document.createElement('textarea');
+      ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+      toast('📋 스크립트 복사 완료!','success');
+    }catch(e2){
+      toast('스크립트 복사 실패: '+e2.message,'error');
+    }
   }
 }
 
@@ -3494,7 +3524,7 @@ function twFilter(day,btn){
   if(btn){btn.classList.add('active');btn.style.background='var(--primary)';btn.style.color='#fff';}
   loadTaxWeeklyTopics();
 }
-window.loadTaxWeeklyTopics=loadTaxWeeklyTopics;window.twFilter=twFilter;
+window.loadTaxWeeklyTopics=loadTaxWeeklyTopics;window.twFilter=twFilter;window.copyTcwAudioScript=copyTcwAudioScript;
 
 // ════════════════════════════════════════
 // ═══ 특급보고서 관리 ═══
