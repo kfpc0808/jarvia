@@ -771,7 +771,7 @@
     <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:20px">
       <div id="tcw-ms-1" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:#161B22;border:1px solid #21262D">
         <span class="tcw-ms-icon" style="font-size:16px;width:22px;text-align:center">⏳</span>
-        <div style="flex:1"><div style="font-size:12px;font-weight:600;color:#C9D1D9">Step 1 · TaxNavi 예규/판례 검색</div><div style="font-size:11px;color:#8B949E;margin-top:1px">국세법령정보시스템에서 관련 예규를 실시간 수집합니다</div></div>
+        <div style="flex:1"><div style="font-size:12px;font-weight:600;color:#C9D1D9">Step 1 · TaxNavi 예규/판례 검색</div><div style="font-size:11px;color:#8B949E;margin-top:1px">국세법령정보시스템·조세심판원·대법원 판례에서 예규와 판례를 실시간 수집합니다</div></div>
         <span class="tcw-ms-time" style="font-size:11px;color:#484F58"></span>
       </div>
       <div id="tcw-ms-2" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:#161B22;border:1px solid #21262D">
@@ -786,7 +786,7 @@
       </div>
       <div id="tcw-ms-4" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:#161B22;border:1px solid #21262D">
         <span class="tcw-ms-icon" style="font-size:16px;width:22px;text-align:center">⏳</span>
-        <div style="flex:1"><div style="font-size:12px;font-weight:600;color:#C9D1D9">Step 4 · Storage 저장</div><div style="font-size:11px;color:#8B949E;margin-top:1px">생성된 HTML을 Firebase Storage에 저장합니다</div></div>
+        <div style="flex:1"><div style="font-size:12px;font-weight:600;color:#C9D1D9">Step 4 · Perplexity 세무 팩트체크</div><div style="font-size:11px;color:#8B949E;margin-top:1px">현행 세율·공제액·요건을 실시간 검증하고 오류 발견 시 자동 교정합니다</div></div>
         <span class="tcw-ms-time" style="font-size:11px;color:#484F58"></span>
       </div>
       <div id="tcw-ms-5" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:#161B22;border:1px solid #21262D">
@@ -3804,6 +3804,11 @@ function stopTcwProgress(){
 
 function startTcwProgress(progressId){
   if(_tcwProgressUnsub)_tcwProgressUnsub();
+
+  // 스텝별 시작 시간 추적
+  const _stepStartTimes={};
+  let _prevDoneSteps=[];
+
   const docRef=doc(db,'tcw_gen_progress',progressId);
   _tcwProgressUnsub=onSnapshot(docRef,(snap)=>{
     if(!snap.exists())return;
@@ -3812,25 +3817,52 @@ function startTcwProgress(progressId){
     const total=d.totalSteps||10;
     const label=d.stepLabel||'';
     const pct=d.status==='complete'?100:Math.round((step/total)*100);
+    const now=Date.now();
 
     $('tcw-pm-label').textContent=label;
     $('tcw-pm-bar').style.width=pct+'%';
     $('tcw-pm-pct').textContent=pct+'%';
 
-    // 완료된 스텝 시각화
+    // 완료된 스텝 시각화 + 경과 시간
     const doneSteps=TCW_STEP_MAP[step]||[];
+
     for(let i=1;i<=7;i++){
       const row=$('tcw-ms-'+i);if(!row)continue;
       const icon=row.querySelector('.tcw-ms-icon');
       const timeEl=row.querySelector('.tcw-ms-time');
+
+      const wasActive=(_prevDoneSteps.length>0&&i===_prevDoneSteps[_prevDoneSteps.length-1]+1);
+      const isActive=(doneSteps.length>0&&i===doneSteps[doneSteps.length-1]+1);
+      const justDone=(doneSteps.includes(i)&&!_prevDoneSteps.includes(i));
+
+      // 스텝이 active로 전환될 때 시작 시간 기록
+      if(isActive&&!wasActive&&!_stepStartTimes[i]){
+        _stepStartTimes[i]=now;
+      }
+
       if(doneSteps.includes(i)){
         icon.textContent='✅';
         row.style.borderColor='#238636';row.style.background='#0f1f0f';
-      } else if(doneSteps.length>0&&i===doneSteps[doneSteps.length-1]+1){
+        // 완료 시 소요 시간 표시
+        if(timeEl&&_stepStartTimes[i]){
+          const sec=Math.round((now-_stepStartTimes[i])/1000);
+          const m=Math.floor(sec/60),s=sec%60;
+          timeEl.textContent=m>0?`${m}분${s}초`:`${s}초`;
+          timeEl.style.color='#3FB950';
+        }
+      } else if(isActive){
         icon.textContent='⚡';
         row.style.borderColor='#c9a84c';row.style.background='#1a1500';
+        // 진행 중인 스텝은 현재까지 경과 시간 실시간 표시
+        if(timeEl&&_stepStartTimes[i]){
+          const sec=Math.round((now-_stepStartTimes[i])/1000);
+          const m=Math.floor(sec/60),s=sec%60;
+          timeEl.textContent=m>0?`${m}분${s}초...`:`${s}초...`;
+          timeEl.style.color='#c9a84c';
+        }
       }
     }
+    _prevDoneSteps=[...doneSteps];
 
     if(d.status==='complete'){
       stopTcwProgress();
