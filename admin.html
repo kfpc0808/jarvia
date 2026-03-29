@@ -3683,8 +3683,10 @@ async function handleTcwHtmlUpload(input){
         if($('tcw-iframe')&&document.getElementById('mdl-tcw').classList.contains('hidden')===false){
           $('tcw-iframe').src=url;
         }
-        toast('✅ HTML 업로드 완료! 기존 파일이 덮어씌워졌습니다.','success');
+        toast('✅ HTML 업로드 완료! 카드 이미지 재생성 중...','success');
         loadTaxWeeklyTopics();
+        // ★ 카드 이미지 자동 재생성
+        tcwRegenerateCards(topicId,contentId,url);
       }
     );
   }catch(e){toast('업로드 오류: '+e.message,'error');}
@@ -3732,6 +3734,43 @@ async function handleTcwAudioUpload(input){
 }
 
 window.tcwOpenDetail=tcwOpenDetail;window.tcwTab=tcwTab;window.tcwReuploadHtml=tcwReuploadHtml;window.tcwUploadAudio=tcwUploadAudio;window.tcwCopyScript=tcwCopyScript;window.tcwReuploadHtmlDirect=tcwReuploadHtmlDirect;window.tcwUploadAudioDirect=tcwUploadAudioDirect;window.handleTcwHtmlUpload=handleTcwHtmlUpload;window.handleTcwAudioUpload=handleTcwAudioUpload;
+
+// ── JARVIA Renderer URL (배포 후 실제 URL로 교체) ──
+const JARVIA_RENDERER_URL='https://jarvia-renderer-1012609333373.asia-northeast3.run.app';
+
+async function tcwRegenerateCards(topicId,contentId,htmlUrl){
+  try{
+    toast('🖼 카드 이미지 생성 중... (최대 3분 소요)','info');
+    const INTERNAL_KEY='tcw-jarvia-2026-kfpc'; // functions/.env의 INTERNAL_API_KEY와 동일
+    const res=await fetch(`${JARVIA_RENDERER_URL}/generate-cards`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contentId,htmlUrl,apiKey:INTERNAL_KEY}),
+      signal:AbortSignal.timeout(300000),
+    });
+    if(!res.ok){toast('카드 생성 서버 오류: '+res.status,'error');return;}
+    const data=await res.json();
+    if(!data.success||!data.cardUrls?.length){toast('카드 생성 결과 없음','warning');return;}
+    // Firestore 업데이트
+    await updateDoc(doc(db,'tax_weekly_topics',topicId),{cardUrls:data.cardUrls,updatedAt:serverTimestamp()});
+    if(contentId){
+      try{
+        await updateDoc(doc(db,'contents',contentId),{
+          cardUrls:data.cardUrls,
+          formats:['html','image'],
+          updatedAt:serverTimestamp(),
+        });
+      }catch(e){}
+    }
+    // 모달 카드 탭 갱신
+    _tcwCurrent.cardUrls=data.cardUrls;
+    toast(`✅ 카드 ${data.count}장 재생성 완료!`,'success');
+    loadTaxWeeklyTopics();
+  }catch(e){
+    toast('카드 재생성 오류: '+e.message,'error');
+  }
+}
+window.tcwRegenerateCards=tcwRegenerateCards;
 
 // ════════════════════════════════════════
 // ═══ 특급보고서 관리 ═══
