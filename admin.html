@@ -3627,6 +3627,8 @@ async function loadTaxWeeklyTopics(){
             <button class="btn btn-sm btn-sec" onclick="tcwReuploadHtmlDirect('${t.id}')" style="font-size:10px;padding:2px 6px" title="HTML 재업로드">⬆HTML</button>
             ${t.scriptUrl?`<button class="btn btn-sm btn-sec" onclick="copyTcwAudioScript('${t.contentId||t.id}')" style="font-size:10px;padding:2px 6px" title="스크립트 복사">📋</button>`:''}
             <button class="btn btn-sm btn-sec" onclick="tcwUploadAudioDirect('${t.id}')" style="font-size:10px;padding:2px 6px" title="오디오 업로드">🎵</button>
+            ${t.status==='generated'?`<button class="btn btn-sm" onclick="tcwPublishContent('${t.contentId||t.id}','${t.id}')" style="font-size:10px;padding:2px 6px;background:#2e7d32;color:#fff" title="사용자 화면에 즉시 게시">🚀 게시</button>`:''}
+            ${t.status==='published'?`<button class="btn btn-sm" onclick="tcwUnpublishContent('${t.contentId||t.id}','${t.id}')" style="font-size:10px;padding:2px 6px;background:#b71c1c;color:#fff" title="비공개로 전환">🔒 비공개</button>`:''}
             ${(t.status==='generated'||t.status==='published')?`<button class="btn btn-sm btn-danger" onclick="tcwDeleteContent('${t.id}','${t.contentId||''}','${esc(t.title||'')}')" style="font-size:10px;padding:2px 6px" title="생성 콘텐츠 삭제">🗑</button>`:''}
           </div>
         </td>
@@ -4106,6 +4108,55 @@ async function tcwDownloadAllCards(){
 window.tcwOpenDetail=tcwOpenDetail;window.tcwTab=tcwTab;window.tcwReuploadHtml=tcwReuploadHtml;window.tcwUploadAudio=tcwUploadAudio;window.tcwCopyScript=tcwCopyScript;window.tcwReuploadHtmlDirect=tcwReuploadHtmlDirect;window.tcwUploadAudioDirect=tcwUploadAudioDirect;window.handleTcwHtmlUpload=handleTcwHtmlUpload;window.handleTcwAudioUpload=handleTcwAudioUpload;window.tcwDownloadHtml=tcwDownloadHtml;window.tcwDownloadCard=tcwDownloadCard;window.tcwDownloadAllCards=tcwDownloadAllCards;
 
 // ── TCW 콘텐츠 삭제 ──────────────────────────────────
+
+// ── TCW 수동 게시 ──────────────────────────────────────
+async function tcwPublishContent(contentId, topicId){
+  if(!contentId){toast('contentId 없음','warning');return;}
+  if(!confirm('사용자 화면에 즉시 게시하시겠습니까?\n검토가 완료된 콘텐츠만 게시해 주세요.'))return;
+  try{
+    const ref=doc(db,'contents',contentId);
+    await updateDoc(ref,{
+      isPublished:  true,
+      isActive:     true,
+      adminOnly:    false,
+      publishedAt:  serverTimestamp(),
+      updatedAt:    serverTimestamp(),
+    });
+    // tax_weekly_topics 상태도 published로 업데이트
+    if(topicId){
+      const topicRef=doc(db,'tax_weekly_topics',topicId);
+      await updateDoc(topicRef,{status:'published',updatedAt:serverTimestamp()});
+    }
+    toast('✅ 사용자 화면에 게시됐습니다.','success');
+    loadTaxWeeklyTopics();
+  }catch(e){
+    toast('게시 실패: '+e.message,'error');
+  }
+}
+
+// ── TCW 비공개 전환 ─────────────────────────────────────
+async function tcwUnpublishContent(contentId, topicId){
+  if(!contentId){toast('contentId 없음','warning');return;}
+  if(!confirm('비공개로 전환하시겠습니까?\n사용자 화면에서 즉시 숨겨집니다.'))return;
+  try{
+    const ref=doc(db,'contents',contentId);
+    await updateDoc(ref,{
+      isPublished:  false,
+      isActive:     false,
+      adminOnly:    true,
+      updatedAt:    serverTimestamp(),
+    });
+    if(topicId){
+      const topicRef=doc(db,'tax_weekly_topics',topicId);
+      await updateDoc(topicRef,{status:'generated',updatedAt:serverTimestamp()});
+    }
+    toast('🔒 비공개로 전환됐습니다.','success');
+    loadTaxWeeklyTopics();
+  }catch(e){
+    toast('비공개 전환 실패: '+e.message,'error');
+  }
+}
+
 async function tcwDeleteContent(topicId, contentId, title){
   if(!confirm(`"${title}"\n\n생성된 콘텐츠를 삭제하시겠습니까?\n\n삭제 대상:\n• tax_weekly_topics 상태 초기화\n• contents 컬렉션 문서 삭제\n• Storage 파일 삭제 (HTML·스크립트·카드·오디오)\n\n⚠️ 이 작업은 되돌릴 수 없습니다.`))return;
 
