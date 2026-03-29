@@ -632,6 +632,7 @@
         <div class="dash-c"><span>법인편</span><strong id="tw-corporate">0</strong><em>개</em></div>
       </div>
       <div class="toolbar" style="margin-bottom:12px">
+        <button class="btn" onclick="showTcwManualForm()" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">✏️ 수동 생성</button>
         <button class="btn btn-sec" onclick="loadTaxWeeklyTopics()">🔄 새로고침</button>
         <select id="tw-year-sel" onchange="loadTaxWeeklyTopics()" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
           <option value="2026">2026년</option>
@@ -655,6 +656,31 @@
           <button class="sub-tab" id="tw-tab-thu" onclick="twFilter('thu',this)" style="padding:6px 14px;border-radius:16px;border:1px solid var(--border);background:#fff;font-size:12px;cursor:pointer;font-family:var(--font)">목(법인)</button>
         </div>
       </div>
+      <!-- ★ 수동 생성 폼 -->
+      <div id="tcw-manual-form" class="hidden form-box" style="margin-bottom:16px">
+        <h3 style="margin-bottom:12px;font-size:14px">✏️ TCW 수동 생성</h3>
+        <div class="fr">
+          <div class="fg">
+            <label>주제 선택 <i>*</i></label>
+            <select id="tcw-manual-topic" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
+              <option value="">-- 주제를 선택하세요 --</option>
+            </select>
+          </div>
+          <div class="fg">
+            <label>키워드 (선택)</label>
+            <input id="tcw-manual-keyword" placeholder="비워두면 주제 기본 키워드 사용" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-top:8px;padding:10px 14px;background:#FFF8E1;border-radius:6px;border-left:3px solid #F9A825;font-size:12px;color:#5D4037">
+          ⚠️ 해당 날짜에 이미 생성된 콘텐츠가 있어도 <strong>추가로 새 콘텐츠를 생성</strong>합니다. 기존 콘텐츠는 유지됩니다.
+        </div>
+        <div id="tcw-manual-progress" style="display:none;margin-top:10px;padding:10px 14px;background:#E8F0FE;border-radius:6px;font-size:13px;color:#1A5276"></div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="btn" onclick="runTcwManual()" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">🚀 생성 시작</button>
+          <button class="btn btn-sec" onclick="hideTcwManualForm()">취소</button>
+        </div>
+      </div>
+
       <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table class="tbl mt" style="min-width:1100px;table-layout:fixed;border-collapse:collapse">
           <thead><tr>
@@ -3572,6 +3598,87 @@ function twFilter(day,btn){
   loadTaxWeeklyTopics();
 }
 window.loadTaxWeeklyTopics=loadTaxWeeklyTopics;window.twFilter=twFilter;window.copyTcwAudioScript=copyTcwAudioScript;
+
+// ── TCW 수동 생성 ────────────────────────────────────────
+const TCW_TRIGGER_URL='https://asia-northeast3-kfpc-company-support-project.cloudfunctions.net/triggerTaxWeekly';
+const TCW_API_KEY='tcw-jarvia-2026-kfpc';
+
+function showTcwManualForm(){
+  // 주제 드롭다운 채우기
+  const sel=$('tcw-manual-topic');
+  sel.innerHTML='<option value="">-- 주제를 선택하세요 --</option>';
+  if(_twAll.length===0){toast('먼저 주제 목록을 로드해주세요.','warning');return;}
+  _twAll.forEach(t=>{
+    const opt=document.createElement('option');
+    opt.value=t.id;
+    const dayLabel=t.day==='wed'?'수(개인)':'목(법인)';
+    opt.textContent=`[${t.week}주 ${dayLabel}] ${t.title}`;
+    opt.dataset.keyword=t.keyword||'';
+    sel.appendChild(opt);
+  });
+  // 주제 선택 시 키워드 자동 채우기
+  sel.onchange=function(){
+    const opt=sel.options[sel.selectedIndex];
+    $('tcw-manual-keyword').value=opt?.dataset?.keyword||'';
+  };
+  $('tcw-manual-form').classList.remove('hidden');
+  $('tcw-manual-progress').style.display='none';
+}
+
+function hideTcwManualForm(){
+  $('tcw-manual-form').classList.add('hidden');
+  $('tcw-manual-topic').value='';
+  $('tcw-manual-keyword').value='';
+  $('tcw-manual-progress').style.display='none';
+}
+
+async function runTcwManual(){
+  const topicId=$('tcw-manual-topic').value;
+  if(!topicId){toast('주제를 선택해주세요.','warning');return;}
+
+  const topic=_twAll.find(t=>t.id===topicId);
+  if(!topic){toast('주제 정보를 찾을 수 없습니다.','error');return;}
+
+  const keyword=$('tcw-manual-keyword').value.trim()||topic.keyword||'';
+  const dayKey=topic.day||'wed';
+
+  if(!confirm(`"${topic.title}"\n\n이 주제로 TCW 콘텐츠를 생성하시겠습니까?\n(기존 콘텐츠와 별개로 추가 생성됩니다)`))return;
+
+  const prog=$('tcw-manual-progress');
+  prog.style.display='block';
+  prog.innerHTML='⏳ 생성 중... (약 3~5분 소요됩니다. 창을 닫지 마세요.)';
+
+  try{
+    const res=await fetch(TCW_TRIGGER_URL,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:TCW_API_KEY,topicId,keyword,day:dayKey}),
+      signal:AbortSignal.timeout(360000),
+    });
+    const data=await res.json();
+    if(data.success){
+      prog.innerHTML=`✅ 생성 완료!<br>
+        contentId: <strong>${data.contentId||'-'}</strong><br>
+        ${data.htmlUrl?`<a href="${data.htmlUrl}" target="_blank" style="color:#1A5276">HTML 보기</a>`:''}`;
+      prog.style.background='#E8F5E9';
+      prog.style.color='#1B5E20';
+      toast('✅ TCW 콘텐츠 생성 완료!','success');
+      loadTaxWeeklyTopics();
+    } else if(data.skipped){
+      prog.innerHTML=`⚠️ 스킵됨: ${data.reason||'알 수 없음'}`;
+      prog.style.background='#FFF8E1';prog.style.color='#5D4037';
+    } else {
+      prog.innerHTML=`❌ 오류: ${data.error||'알 수 없는 오류'}`;
+      prog.style.background='#FFEBEE';prog.style.color='#B71C1C';
+    }
+  }catch(e){
+    prog.innerHTML=`❌ 요청 실패: ${e.message}`;
+    prog.style.background='#FFEBEE';prog.style.color='#B71C1C';
+    toast('생성 요청 실패: '+e.message,'error');
+  }
+}
+
+window.showTcwManualForm=showTcwManualForm;window.hideTcwManualForm=hideTcwManualForm;window.runTcwManual=runTcwManual;
 
 // ── TCW 상세 모달 ──────────────────────────────────────────
 let _tcwCurrent={id:'',contentId:'',htmlUrl:'',cardUrls:[],audioUrl:'',scriptUrl:'',title:''};
