@@ -3622,6 +3622,7 @@ async function loadTaxWeeklyTopics(){
             <button class="btn btn-sm btn-sec" onclick="tcwReuploadHtmlDirect('${t.id}')" style="font-size:10px;padding:2px 6px" title="HTML 재업로드">⬆HTML</button>
             ${t.scriptUrl?`<button class="btn btn-sm btn-sec" onclick="copyTcwAudioScript('${t.contentId||t.id}')" style="font-size:10px;padding:2px 6px" title="스크립트 복사">📋</button>`:''}
             <button class="btn btn-sm btn-sec" onclick="tcwUploadAudioDirect('${t.id}')" style="font-size:10px;padding:2px 6px" title="오디오 업로드">🎵</button>
+            ${(t.status==='generated'||t.status==='published')?`<button class="btn btn-sm btn-danger" onclick="tcwDeleteContent('${t.id}','${t.contentId||''}','${esc(t.title||'')}')" style="font-size:10px;padding:2px 6px" title="생성 콘텐츠 삭제">🗑</button>`:''}
           </div>
         </td>
       </tr>`;
@@ -4065,6 +4066,59 @@ async function tcwDownloadAllCards(){
 }
 
 window.tcwOpenDetail=tcwOpenDetail;window.tcwTab=tcwTab;window.tcwReuploadHtml=tcwReuploadHtml;window.tcwUploadAudio=tcwUploadAudio;window.tcwCopyScript=tcwCopyScript;window.tcwReuploadHtmlDirect=tcwReuploadHtmlDirect;window.tcwUploadAudioDirect=tcwUploadAudioDirect;window.handleTcwHtmlUpload=handleTcwHtmlUpload;window.handleTcwAudioUpload=handleTcwAudioUpload;window.tcwDownloadHtml=tcwDownloadHtml;window.tcwDownloadCard=tcwDownloadCard;window.tcwDownloadAllCards=tcwDownloadAllCards;
+
+// ── TCW 콘텐츠 삭제 ──────────────────────────────────
+async function tcwDeleteContent(topicId, contentId, title){
+  if(!confirm(`"${title}"\n\n생성된 콘텐츠를 삭제하시겠습니까?\n\n삭제 대상:\n• tax_weekly_topics 상태 초기화\n• contents 컬렉션 문서 삭제\n• Storage 파일 삭제 (HTML·스크립트·카드·오디오)\n\n⚠️ 이 작업은 되돌릴 수 없습니다.`))return;
+
+  toast('🗑 삭제 중...','info');
+  try{
+    // 1) tax_weekly_topics 조회
+    const topicSnap=await getDoc(doc(db,'tax_weekly_topics',topicId));
+    if(!topicSnap.exists()){toast('주제를 찾을 수 없습니다.','error');return;}
+    const t=topicSnap.data();
+    const cid=contentId||t.contentId||'';
+
+    // 2) Storage 파일 삭제 (실패해도 계속 진행)
+    const storagePaths=[];
+    if(t.htmlUrl)   storagePaths.push(`tax-weekly/${cid}.html`);
+    if(t.scriptUrl) storagePaths.push(`tax-weekly/scripts/${cid}.txt`);
+    if(t.audioUrl){
+      const ext=t.audioUrl.split('.').pop().split('?')[0]||'mp3';
+      storagePaths.push(`tax-weekly/audio/${cid}.${ext}`);
+    }
+    (t.cardUrls||[]).forEach((_,i)=>{
+      storagePaths.push(`tax-weekly/cards/${cid}/card_${String(i+1).padStart(2,'0')}.png`);
+    });
+    for(const path of storagePaths){
+      try{await deleteObject(stRef(storage,path));}
+      catch(e){console.log(`Storage 삭제 스킵 (${path}):`,e.code);}
+    }
+
+    // 3) contents 컬렉션 삭제
+    if(cid){
+      try{await deleteDoc(doc(db,'contents',cid));}
+      catch(e){console.warn('contents 삭제 실패:',e.message);}
+    }
+
+    // 4) tax_weekly_topics 상태 초기화 (주제 자체는 보존)
+    await updateDoc(doc(db,'tax_weekly_topics',topicId),{
+      status:'pending',
+      contentId:deleteField(),
+      htmlUrl:deleteField(),
+      scriptUrl:deleteField(),
+      audioUrl:deleteField(),
+      cardUrls:deleteField(),
+      generatedAt:deleteField(),
+    });
+
+    toast('✅ 삭제 완료. 주제는 대기 상태로 초기화됐습니다.','success');
+    loadTaxWeeklyTopics();
+  }catch(e){
+    toast('삭제 실패: '+e.message,'error');
+  }
+}
+window.tcwDeleteContent=tcwDeleteContent;
 
 // ── JARVIA Renderer URL (배포 후 실제 URL로 교체) ──
 const JARVIA_RENDERER_URL='https://jarvia-renderer-1012609333373.asia-northeast3.run.app';
