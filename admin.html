@@ -4661,17 +4661,32 @@ async function togglePrVisibility(reportId,currentlyPublic){
     :'📢 이 보고서를 사용자에게 즉시 공개합니다.\n\n• HTML, PPT, 오디오 내용을 모두 확인하셨나요?\n• 공개 후에도 "비공개로" 버튼으로 되돌릴 수 있습니다.\n\n진행하시겠습니까?';
   if(!confirm(msg))return;
   try{
-    const newVal=!currentlyPublic;
+    // ★ currentlyPublic=true(현재공개→비공개): adminOnly=true, isActive=false
+    //   currentlyPublic=false(현재비공개→공개): adminOnly=false, isActive=true
+    const makePrivate=currentlyPublic;
     // premium_reports 업데이트
-    await updateDoc(doc(db,'premium_reports',reportId),{adminOnly:newVal,updatedAt:serverTimestamp()});
+    await updateDoc(doc(db,'premium_reports',reportId),{adminOnly:makePrivate,updatedAt:serverTimestamp()});
     // contents 컬렉션도 동기화
     try{
       const contRef=doc(db,'contents',reportId);
       const contSnap=await getDoc(contRef);
       if(contSnap.exists()){
-        await updateDoc(contRef,{adminOnly:newVal,isActive:!newVal,updatedAt:serverTimestamp()});
+        await updateDoc(contRef,{adminOnly:makePrivate,isActive:!makePrivate,updatedAt:serverTimestamp()});
       }
     }catch(ce){console.warn('contents 동기화 실패:',ce);}
+    // ★ 사용자 공개 시 → upcoming_contents 게시완료 처리
+    if(!makePrivate){
+      try{
+        const prSnap=await getDoc(doc(db,'premium_reports',reportId));
+        const prData=prSnap.exists()?prSnap.data():{};
+        const rDate=prData.date||prData.eduDate||'';
+        if(rDate){
+          const upSnap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',rDate)));
+          for(const udoc of upSnap.docs){await updateDoc(udoc.ref,{completed:true,updatedAt:serverTimestamp()});}
+          if(!upSnap.empty)console.log('upcoming_contents',upSnap.size,'건 → 완료');
+        }
+      }catch(ue){console.warn('upcoming_contents 처리 실패:',ue);}
+    }
     toast(currentlyPublic?'🔒 비공개로 전환됨':'🔓 사용자 공개됨','success');
     loadPremiumReports();
   }catch(e){toast('전환 실패: '+e.message,'error');}
