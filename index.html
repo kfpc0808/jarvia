@@ -1808,44 +1808,29 @@ async function showDetail(cid){
     try{await updateDoc(doc(db,'contents',cid),{viewCount:increment(1)});}catch(e){}
     window.open('./daily-report.html','_blank');return;
   }
-  /* ★ 택스컨설팅위클리: free_user/user → 2,000P 차감, 나머지 무료 */
+  /* ★ 택스컨설팅위클리: 샘플 미리보기 후 열람 시 결제 */
   if(c.type==='tax_weekly'){
-    const _isFreeOnly=me&&meData&&(meData.role==='free_user'||meData.role==='user');
-    if(_isFreeOnly){
-      // 포인트 잔액 확인
-      const _pt=meData.point||0;
-      if(_pt<2000){toast('포인트가 부족합니다. 2,000P 필요합니다.','warning');return;}
-      if(!confirm(`택스컨설팅위클리 열람 시 2,000P가 차감됩니다.\n현재 포인트: ${fmt(_pt)}P\n\n계속하시겠습니까?`))return;
-      try{
-        await updateDoc(doc(db,'users',me.uid),{point:increment(-2000)});
-        meData.point=_pt-2000;updateBal();
-        const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
-        await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:2000,txId:'point',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
-      }catch(e){toast('처리 중 오류가 발생했습니다.','error');return;}
-    }else{
-      try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
-        await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
-      }catch(e){}
-    }
-    try{await updateDoc(doc(db,'contents',cid),{viewCount:increment(1)});}catch(e){}
-    // 상세 모달 표시
     const _twCat=allCats.find(x=>x.categoryId===c.categoryId);
     const _twFav=myFavSet.has(cid);
     const _hasAudio=!!(c.audioUrl);
     const _hasCards=!!(c.cardUrls&&c.cardUrls.length);
+    const _isFreeOnly=me&&meData&&(meData.role==='free_user'||meData.role==='user');
+    const _previewImg=_hasCards?`<div style="margin:12px 0;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.12);max-height:400px;overflow-y:hidden;position:relative"><img src="${c.cardUrls[0]}" style="width:100%;display:block" alt="미리보기">${c.cardUrls.length>1?'<div style="position:absolute;bottom:0;left:0;right:0;height:80px;background:linear-gradient(transparent,#fff);display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px"><span style="font-size:11px;color:#666;background:rgba(255,255,255,.9);padding:2px 10px;border-radius:10px">샘플 미리보기 (1/${c.cardUrls.length}장)</span></div>':''}</div>`:'';
+    const _payNotice=_isFreeOnly?`<div style="background:#FFF8E1;border-left:4px solid #F39C12;padding:10px 14px;border-radius:4px;font-size:12px;color:#795548;margin-bottom:12px">🔒 전체 콘텐츠 열람 시 <b>2,000P</b>가 차감됩니다. (현재: ${fmt(meData.point||0)}P)</div>`:'';
     let twActions=`<div class="closing-actions">
       <div class="cd-notice" style="background:#E8F0FE;border-left-color:#1A5276">📚 택스컨설팅위클리 — 국세청 예규 기반 세무 상담 시나리오</div>
+      ${_payNotice}
       <div class="closing-row">
-        ${c.url?`<button class="btn" onclick="openTaxWeeklyHtml('${cid}')">📄 HTML 열람</button>`:''}
-        ${_hasAudio?`<button class="btn btn-sec" onclick="openTaxWeeklyAudio('${cid}')">🎧 오디오 듣기</button>`:''}
-        ${_hasCards?`<button class="btn btn-sec" onclick="openTaxWeeklyCards('${cid}')">🖼 카드 이미지</button>`:''}
+        ${c.url?`<button class="btn" onclick="twPayAndOpen('${cid}','html')">📄 HTML 열람</button>`:''}
+        ${_hasAudio?`<button class="btn btn-sec" onclick="twPayAndOpen('${cid}','audio')">🎧 오디오 듣기</button>`:''}
+        ${_hasCards?`<button class="btn btn-sec" onclick="twPayAndOpen('${cid}','cards')">🖼 카드 이미지</button>`:''}
       </div>
       <div class="closing-row">
         <button class="btn btn-sec" onclick="window.location.href='./tax-weekly-archive.html'" style="width:100%;justify-content:center">📋 아카이브 전체보기</button>
       </div>
       <div class="closing-row"><button class="fav-btn ${_twFav?'active':''}" onclick="doFav('${cid}',this)">${_twFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>
     </div>`;
-    $('detail-inner').innerHTML=`<div class="cd"><span style="display:inline-block;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;color:#fff;background:linear-gradient(135deg,#0f2545,#1a3a6b);margin-bottom:8px">TCW</span> <h2>${esc(c.title)}</h2><div class="cd-meta">${typeBadge(c.type)}${c.subType?` <span class="badge" style="background:#E8EAF6;color:#283593">${esc(c.subType)}</span>`:''} ${_twCat?`<span class="cd-cat">${esc(_twCat.name)}</span>`:''} <span class="cd-date">업데이트: ${fdate(c.updatedAt)}</span></div><p class="cd-summary">${esc(c.summary||'')}</p>${twActions}</div>`;
+    $('detail-inner').innerHTML=`<div class="cd"><span style="display:inline-block;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;color:#fff;background:linear-gradient(135deg,#0f2545,#1a3a6b);margin-bottom:8px">TCW</span> <h2>${esc(c.title)}</h2><div class="cd-meta">${typeBadge(c.type)}${c.subType?` <span class="badge" style="background:#E8EAF6;color:#283593">${esc(c.subType)}</span>`:''} ${_twCat?`<span class="cd-cat">${esc(_twCat.name)}</span>`:''} <span class="cd-date">업데이트: ${fdate(c.updatedAt)}</span></div><p class="cd-summary">${esc(c.summary||'')}</p>${_previewImg}${twActions}</div>`;
     openM('mdl-detail');$('detail-inner').scrollTop=0;const _mb=$('mdl-detail').querySelector('.mdl-box');if(_mb)_mb.scrollTop=0;
     return;
   }
@@ -3821,6 +3806,31 @@ function openTaxWeeklyCardsSeamless(cid){
     <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch">${imgs}</div>`;
   document.body.appendChild(wrap);
 }
+// ★ 택스컨설팅위클리 결제 게이트 (버튼 클릭 시 결제 후 콘텐츠 열기)
+async function twPayAndOpen(cid,action){
+  const c=allContents.find(x=>x.contentId===cid);if(!c)return;
+  const _isFreeOnly=me&&meData&&(meData.role==='free_user'||meData.role==='user');
+  if(_isFreeOnly){
+    const _pt=meData.point||0;
+    if(_pt<2000){toast('포인트가 부족합니다. 2,000P 필요합니다.','warning');return;}
+    if(!confirm(`택스컨설팅위클리 열람 시 2,000P가 차감됩니다.\n현재 포인트: ${fmt(_pt)}P\n\n계속하시겠습니까?`))return;
+    try{
+      await updateDoc(doc(db,'users',me.uid),{point:increment(-2000)});
+      meData.point=_pt-2000;updateBal();
+      const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+      await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:2000,txId:'point',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+    }catch(e){toast('처리 중 오류가 발생했습니다.','error');return;}
+  }else{
+    try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+      await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+    }catch(e){}
+  }
+  try{await updateDoc(doc(db,'contents',cid),{viewCount:increment(1)});}catch(e){}
+  if(action==='html')openTaxWeeklyHtml(cid);
+  else if(action==='audio')openTaxWeeklyAudio(cid);
+  else if(action==='cards')openTaxWeeklyCards(cid);
+}
+window.twPayAndOpen=twPayAndOpen;
 window.openTaxWeeklyAudio=openTaxWeeklyAudio;window.openTaxWeeklyCards=openTaxWeeklyCards;window.openTaxWeeklyCardsSeamless=openTaxWeeklyCardsSeamless;window.openTaxWeeklyHtml=openTaxWeeklyHtml;
 window.showDetail=showDetail;window.doView=doView;window.doFav=doFav;window.doViewVideo=doViewVideo;window.doDownloadPPTX=doDownloadPPTX;window.doPreview=doPreview;
 window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;window.pptgenStart=pptgenStart;
