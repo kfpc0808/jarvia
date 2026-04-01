@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JARVIA 시스템 활동 로그</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0D1117;color:#C9D1D9;min-height:100vh}
+.header{background:#161B22;border-bottom:1px solid #21262D;padding:14px 20px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-size:16px;font-weight:700;color:#fff;letter-spacing:1px}
+.logo span{color:#c9a84c;font-size:11px;margin-left:8px;font-weight:400}
+.refresh-btn{background:#21262D;color:#C9D1D9;border:1px solid #30363D;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer}
+.refresh-btn:hover{background:#30363D}
+.container{max-width:900px;margin:0 auto;padding:16px}
+.toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.toolbar select{background:#161B22;color:#C9D1D9;border:1px solid #30363D;padding:6px 10px;border-radius:6px;font-size:12px}
+.count{font-size:12px;color:#8B949E;margin-bottom:12px}
+.log-list{display:flex;flex-direction:column;gap:8px}
+.log-item{background:#161B22;border:1px solid #21262D;border-radius:8px;padding:12px 14px;display:flex;gap:10px;align-items:flex-start}
+.log-item:hover{border-color:#30363D}
+.log-status{font-size:18px;flex-shrink:0;margin-top:2px}
+.log-body{flex:1;min-width:0}
+.log-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.log-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap}
+.log-title{font-size:13px;font-weight:600;color:#E6EDF3;line-height:1.4}
+.log-detail{font-size:11px;color:#8B949E;margin-top:3px}
+.log-meta{display:flex;gap:12px;margin-top:6px;font-size:11px;color:#6E7681}
+.log-meta span{white-space:nowrap}
+.pager{display:flex;gap:4px;justify-content:center;margin-top:16px;flex-wrap:wrap}
+.pg-btn{background:#21262D;color:#C9D1D9;border:1px solid #30363D;padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer}
+.pg-btn:hover{background:#30363D}
+.pg-btn.active{background:#c9a84c;color:#0D1117;border-color:#c9a84c;font-weight:700}
+.empty{text-align:center;padding:40px;color:#6E7681;font-size:14px}
+.auth-wall{display:flex;align-items:center;justify-content:center;min-height:80vh;text-align:center;color:#6E7681;font-size:14px}
+@media(max-width:600px){
+  .log-item{padding:10px 12px}
+  .log-meta{flex-direction:column;gap:4px}
+  .container{padding:12px}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">JARVIA <span>시스템 활동 로그</span></div>
+  <button class="refresh-btn" onclick="loadLogs()">🔄 새로고침</button>
+</div>
+
+<div id="auth-wall" class="auth-wall">
+  <div>🔒 접근 권한을 확인 중입니다...</div>
+</div>
+
+<div id="main-content" class="container" style="display:none">
+  <div class="toolbar">
+    <select id="sl-type" onchange="renderLogs(1)">
+      <option value="">전체</option>
+      <option value="daily_report">데일리 리포트</option>
+      <option value="client_daily">고객 데일리</option>
+      <option value="weekly_lecture">토요특강</option>
+      <option value="edu_topic">교육콘텐츠</option>
+      <option value="premium_report">특급보고서</option>
+      <option value="tax_weekly">택스위클리</option>
+    </select>
+    <select id="sl-status" onchange="renderLogs(1)">
+      <option value="">전체상태</option>
+      <option value="success">성공</option>
+      <option value="error">오류</option>
+    </select>
+  </div>
+  <div id="sl-count" class="count"></div>
+  <div id="sl-list" class="log-list"></div>
+  <div id="sl-pager" class="pager"></div>
+</div>
+
+<script type="module">
+import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getAuth,signInAnonymously}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getFirestore,collection,getDocs,query,orderBy,limit}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+const FC={apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",authDomain:"kfpc-company-support-project.firebaseapp.com",projectId:"kfpc-company-support-project",storageBucket:"kfpc-company-support-project.firebasestorage.app",messagingSenderId:"1012609333373",appId:"1:1012609333373:web:7b6c207c81ff10d156d914"};
+const app=initializeApp(FC);
+const auth=getAuth(app);
+const db=getFirestore(app,'javia-db');
+
+// URL 키 인증
+const ACCESS_KEY='jarvia2026';
+const params=new URLSearchParams(window.location.search);
+const key=params.get('key');
+
+if(key!==ACCESS_KEY){
+  document.getElementById('auth-wall').innerHTML='<div>🔒 접근 권한이 없습니다.<br><br><span style="font-size:12px;color:#484F58">올바른 링크로 접속해 주세요.</span></div>';
+}else{
+  init();
+}
+
+const BADGE={
+  daily_report:{label:"데일리 리포트",bg:"#1C3A5C",fg:"#7EB8E0"},
+  client_daily:{label:"고객 데일리",bg:"#1A3D1A",fg:"#7ECC7E"},
+  weekly_lecture:{label:"토요특강",bg:"#2D2A4A",fg:"#A9A3D8"},
+  edu_topic:{label:"교육콘텐츠",bg:"#3D2E1A",fg:"#D4A84C"},
+  premium_report:{label:"특급보고서",bg:"#3D1A1A",fg:"#E08A7E"},
+  tax_weekly:{label:"택스위클리",bg:"#3D1A2E",fg:"#D87EAA"},
+};
+const PER=20;
+let allLogs=[];
+
+async function init(){
+  try{
+    await signInAnonymously(auth);
+  }catch(e){
+    console.warn('익명 인증 실패:',e.message);
+  }
+  document.getElementById('auth-wall').style.display='none';
+  document.getElementById('main-content').style.display='block';
+  await loadLogs();
+}
+
+window.loadLogs=async function(){
+  const list=document.getElementById('sl-list');
+  list.innerHTML='<div class="empty">로딩 중...</div>';
+  try{
+    const snap=await getDocs(query(collection(db,'system_activity_log'),orderBy('no','desc'),limit(200)));
+    allLogs=snap.docs.map(d=>({id:d.id,...d.data()}));
+    renderLogs(1);
+  }catch(e){
+    list.innerHTML='<div class="empty">로드 실패: '+e.message+'<br><br><span style="font-size:11px">Firestore 보안 규칙에서 system_activity_log 읽기 허용이 필요할 수 있습니다.</span></div>';
+  }
+};
+
+window.renderLogs=function(page){
+  const typeF=document.getElementById('sl-type').value;
+  const statusF=document.getElementById('sl-status').value;
+  let list=allLogs;
+  if(typeF)list=list.filter(r=>r.type===typeF);
+  if(statusF)list=list.filter(r=>r.status===statusF);
+
+  document.getElementById('sl-count').textContent='총 '+list.length+'건';
+
+  const pages=Math.max(1,Math.ceil(list.length/PER));
+  if(page>pages)page=pages;
+  const start=(page-1)*PER;
+  const rows=list.slice(start,start+PER);
+  const el=document.getElementById('sl-list');
+
+  if(!rows.length){
+    el.innerHTML='<div class="empty">기록 없음</div>';
+    document.getElementById('sl-pager').innerHTML='';
+    return;
+  }
+
+  el.innerHTML=rows.map(r=>{
+    const b=BADGE[r.type]||{label:r.type||'기타',bg:'#21262D',fg:'#8B949E'};
+    const sd=r.status==='success'?'🟢':r.status==='error'?'🔴':'🟡';
+    const ts=r.createdAt?.toDate?r.createdAt.toDate().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'';
+    const dur=r.duration?r.duration+'초':'';
+    const det=r.detail?'<div class="log-detail">'+esc(r.detail)+'</div>':'';
+    return `<div class="log-item">
+      <div class="log-status">${sd}</div>
+      <div class="log-body">
+        <div class="log-top">
+          <span class="log-badge" style="background:${b.bg};color:${b.fg}">${b.label}</span>
+        </div>
+        <div class="log-title">${esc(r.title||'')}</div>
+        ${det}
+        <div class="log-meta">
+          <span>📅 ${ts}</span>
+          ${dur?'<span>⏱ '+dur+'</span>':''}
+          ${r.no?'<span>#'+r.no+'</span>':''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // 페이저
+  const pg=document.getElementById('sl-pager');
+  if(pages<=1){pg.innerHTML='';return;}
+  let h='';
+  for(let i=1;i<=pages;i++){
+    h+=`<button class="pg-btn ${i===page?'active':''}" onclick="renderLogs(${i})">${i}</button>`;
+  }
+  pg.innerHTML=h;
+};
+
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+</script>
+</body>
+</html>
