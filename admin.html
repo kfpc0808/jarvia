@@ -3639,6 +3639,21 @@ async function loadTaxWeeklyTopics(){
   const tb=$('tb-tax-weekly');
   if(!tb)return;
   tb.innerHTML='<tr><td colspan="11" style="text-align:center;padding:20px;color:#999">로딩 중...</td></tr>';
+  // ★ 새로고침 후 "생성 중" 복원: tcw_gen_progress에서 미완료 문서 조회
+  if(!_tcwActiveGen){
+    try{
+      const pgSnap=await getDocs(query(collection(db,'tcw_gen_progress'),where('status','in',['running','starting']),limit(5)));
+      if(!pgSnap.empty){
+        // 가장 최근 문서 선택
+        const sorted=pgSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
+        const pg=sorted[0];
+        if(pg.topicId){
+          _tcwActiveGen={progressId:pg.id,topicId:pg.topicId,title:pg.title||''};
+          startTcwProgress(pg.id);
+        }
+      }
+    }catch(e){console.warn('[TCW] progress 복원 실패:',e);}
+  }
   try{
     const snap=await getDocs(query(collection(db,'tax_weekly_topics'),orderBy('week','asc')));
     _twAll=snap.docs.map(d=>({id:d.id,...d.data()})).filter(t=>t.year===year);
@@ -3797,6 +3812,8 @@ async function runTcwManual(){
   // progressId를 미리 만들어서 onSnapshot 구독 시작
   const progressId=`tcw_manual_${Date.now()}`;
   _tcwActiveGen={progressId,topicId,title:topic.title};
+  // ★ Firestore에 즉시 기록 → 새로고침 후에도 "생성 중" 복원 가능
+  try{await setDoc(doc(db,'tcw_gen_progress',progressId),{topicId,title:topic.title,status:'starting',createdAt:serverTimestamp()});}catch(e){console.warn('[TCW] progress 초기 기록 실패:',e);}
   startTcwProgress(progressId);
 
   try{
@@ -3973,6 +3990,9 @@ window.closeTcwProgressModal=closeTcwProgressModal;
 // ── 생성 중 모달 재오픈 ──
 function tcwReopenProgress(){
   if(!_tcwActiveGen)return;
+  // ★ 모달 제목 복원 (새로고침 후에도)
+  const titleEl=$('tcw-pm-title');
+  if(titleEl&&(!titleEl.textContent||titleEl.textContent===''))titleEl.textContent=_tcwActiveGen.title||'';
   $('tcw-progress-modal').style.display='block';
 }
 
