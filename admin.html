@@ -2386,17 +2386,15 @@ async function loadUpcomingAdm(){
   // active report 찾기 (진행 중인 건)
   const terminalStatuses=['published','error','pending'];
   const activeReports=Object.values(prMap).filter(r=>r.status&&!terminalStatuses.includes(r.status));
-  // 최근 10분 내 완료/에러 건
+  // 최근 10분 내 완료/에러 건 (updatedAt 기준 — 완료된 시점)
   const now10=Date.now()-10*60*1000;
   const recentDone=Object.values(prMap).filter(r=>{
     if(r.status!=='published'&&r.status!=='error')return false;
-    const ca=r.createdAt?.toDate?r.createdAt.toDate().getTime():0;
-    return ca>now10;
+    const ua=r.updatedAt?.toDate?r.updatedAt.toDate().getTime():(r.createdAt?.toDate?r.createdAt.toDate().getTime():0);
+    return ua>now10;
   });
   // ★ 배너 표시
   updateUpcomingBanner(activeReports,recentDone);
-  // ★ premiumReportId → status 매핑 (행 뱃지용)
-  const prIdStatus={};// upcoming_contents의 premiumReportId → premium_reports status
   const ck=v=>v?'<span style="color:#2e86ab;font-weight:700">✓</span>':'';
   const fmtDate=d=>(d||'').replace(/-/g,'.');
   const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910'],'택스컨설팅위클리':['#e8f0fe','#1a5276']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${c}</span>`;};
@@ -2451,8 +2449,8 @@ function updateUpcomingBanner(activeReports,recentDone){
     banner.style.border=isErr?'1px solid #EF9A9A':'1px solid #A5D6A7';
     banner.style.alignItems='center';banner.style.justifyContent='space-between';
     const errJob=isErr&&rd.errorDetail?.job?rd.errorDetail.job.replace('Job',''):'1';
-    banner.innerHTML=isErr?`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:16px">❌</span><div><div style="font-size:13px;font-weight:600;color:#C62828">특급보고서 생성 실패</div><div style="font-size:12px;color:#E57373;margin-top:2px">「${esc(rd.title||'')}」· ${rd.errorDetail?.job||'알 수 없는'} 에러</div></div></div><div style="display:flex;align-items:center;gap:10px"><button class="btn btn-sm btn-danger" onclick="event.stopPropagation();retryPremiumReport('${rd._id}','${errJob}')">Job${errJob}부터 재시도</button><span style="font-size:12px;color:#2E86AB;font-weight:500">상세 로그 ›</span><span style="font-size:16px;color:#999;cursor:pointer;padding:4px" onclick="event.stopPropagation();$('pr-upcoming-banner').style.display='none'">✕</span></div>`
-    :`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:16px">🎉</span><div><div style="font-size:13px;font-weight:600;color:#2E7D32">특급보고서 생성 완료</div><div style="font-size:12px;color:#66BB6A;margin-top:2px">「${esc(rd.title||'')}」${rd.job5?.elapsed?' · '+rd.job5.elapsed+' 소요':''}</div></div></div><div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:#2E7D32;font-weight:500">결과 보기 ›</span><span style="font-size:16px;color:#999;cursor:pointer;padding:4px" onclick="event.stopPropagation();$('pr-upcoming-banner').style.display='none'">✕</span></div>`;
+    banner.innerHTML=isErr?`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:16px">❌</span><div><div style="font-size:13px;font-weight:600;color:#C62828">특급보고서 생성 실패</div><div style="font-size:12px;color:#E57373;margin-top:2px">「${esc(rd.title||'')}」· ${rd.errorDetail?.job||'알 수 없는'} 에러</div></div></div><div style="display:flex;align-items:center;gap:10px"><button class="btn btn-sm btn-danger" onclick="event.stopPropagation();retryPremiumReport('${rd._id}','${errJob}')">Job${errJob}부터 재시도</button><span style="font-size:12px;color:#2E86AB;font-weight:500">상세 로그 ›</span><span style="font-size:16px;color:#999;cursor:pointer;padding:4px" onclick="event.stopPropagation();document.getElementById('pr-upcoming-banner').style.display='none'">✕</span></div>`
+    :`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:16px">🎉</span><div><div style="font-size:13px;font-weight:600;color:#2E7D32">특급보고서 생성 완료</div><div style="font-size:12px;color:#66BB6A;margin-top:2px">「${esc(rd.title||'')}」${rd.job5?.elapsed?' · '+rd.job5.elapsed+' 소요':''}</div></div></div><div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:#2E7D32;font-weight:500">결과 보기 ›</span><span style="font-size:16px;color:#999;cursor:pointer;padding:4px" onclick="event.stopPropagation();document.getElementById('pr-upcoming-banner').style.display='none'">✕</span></div>`;
     banner._prData=rd;
     // 완료 배너 10초 후 자동 소멸
     if(!isErr)setTimeout(()=>{const b=$('pr-upcoming-banner');if(b)b.style.display='none';},10000);
@@ -2743,11 +2741,12 @@ async function startPremiumFromPreview(){
         const now=new Date();const kstNow=new Date(now.getTime()+9*60*60*1000);
         const isoDate=`${kstNow.getUTCFullYear()}-${String(kstNow.getUTCMonth()+1).padStart(2,'0')}-${String(kstNow.getUTCDate()).padStart(2,'0')}`;
         const field=clientType==='personal'?'개인':clientType==='corp'?'법인':'법인';
-        // 동일 제목+날짜 기존 문서 확인 (이미 있으면 premiumReportId만 업데이트)
-        const existSnap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',isoDate),where('title','==',title)));
-        if(!existSnap.empty){
+        // 동일 날짜 기존 문서 확인 → 제목 매칭 시 premiumReportId만 업데이트
+        const existSnap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',isoDate)));
+        const matched=existSnap.docs.filter(ed=>ed.data().title===title);
+        if(matched.length>0){
           // 기존 문서에 premiumReportId 추가
-          for(const ed of existSnap.docs){await updateDoc(doc(db,'upcoming_contents',ed.id),{premiumReportId:reportId,updatedAt:serverTimestamp()});}
+          for(const ed of matched){await updateDoc(doc(db,'upcoming_contents',ed.id),{premiumReportId:reportId,updatedAt:serverTimestamp()});}
         }else{
           // 새 문서 생성
           const newId=doc(collection(db,'upcoming_contents')).id;
