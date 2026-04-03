@@ -2419,6 +2419,8 @@ async function loadUpcomingAdm(){
     const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">—</td>';return`<tr style="${rowStyle};border-bottom:1px solid #e9ecef"><td style="text-align:center"><input type="checkbox" class="uf-chk" value="${d.id}"></td><td style="text-align:center">${i+1}</td><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center">${c.field||''}</td><td style="text-align:left">${c.title||''}${rowBadge}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}<td style="text-align:center"><div style="display:flex;gap:4px;justify-content:center;flex-wrap:nowrap"><button class="btn btn-sm" onclick="editUpcoming('${d.id}')">수정</button><button class="btn btn-sm btn-danger" onclick="delUpcoming('${d.id}')">삭제</button></div></td></tr>`;}).join('');
   if($('uf-chk-all'))$('uf-chk-all').checked=false;
   // ★ active report 있으면 배너로만 표시 (모달은 배너 클릭 시에만 열림)
+  // ★ 배경설명 생성 상태 복원
+  restoreEduGenState();
 }
 // ★ 게시예정 배너 업데이트
 function updateUpcomingBanner(activeReports,recentDone){
@@ -2542,6 +2544,14 @@ function startEduProgress(progressId){
     if(d.status==='complete'||d.status==='error'){
       $('edu-progress-bar').style.width='100%';
       $('edu-progress-bar').style.background=d.status==='complete'?'linear-gradient(90deg,#27AE60,#2ECC71)':'linear-gradient(90deg,#E74C3C,#C0392B)';
+      // ★ 완료 시 result 데이터 있으면 미리보기 자동 복원 (재연결 시 HTTP 응답 유실 대비)
+      if(d.status==='complete'&&d.result&&!_eduPreviewData){
+        const r=d.result;
+        showEduPreview({success:true,title:r.title||'',salesType:r.salesType||'',backgroundDescription:r.backgroundDescription||'',keyPoints:r.keyPoints||[],targetAudience:r.targetAudience||'',openingSuggestion:r.openingSuggestion||'',forbiddenExpressions:r.forbiddenExpressions||[],consultingContext:r.consultingContext||''});
+        setEduStatus('✅ 배경 설명 생성 완료 — 아래에서 확인 후 특급보고서를 시작하세요','#2E7D32');
+      }else if(d.status==='error'){
+        setEduStatus('❌ 배경 설명 생성 실패 — 다시 시도해 주세요','#C62828');
+      }
       // 5초 후 자동 닫기
       setTimeout(()=>{
         const a=$('edu-progress-area');
@@ -2556,6 +2566,49 @@ function startEduProgress(progressId){
 function stopEduProgress(){
   if(_eduProgressUnsub){_eduProgressUnsub();_eduProgressUnsub=null;}
   if(_eduTimerInterval){clearInterval(_eduTimerInterval);_eduTimerInterval=null;}
+}
+
+/** ★ 페이지 재진입 시 배경설명 생성 상태 복원 */
+async function restoreEduGenState(){
+  // 이미 진행 중이거나 미리보기가 열려 있으면 복원 불필요
+  if(_eduProgressUnsub||_eduPreviewData)return;
+  try{
+    // 최근 30분 이내 edu_gen_progress 문서 조회
+    const cutoff=new Date(Date.now()-30*60*1000);
+    const snap=await getDocs(query(collection(db,'edu_gen_progress'),orderBy('createdAt','desc'),limit(1)));
+    if(snap.empty)return;
+    const d=snap.docs[0];
+    const data=d.data();
+    const ca=data.createdAt?.toDate?data.createdAt.toDate():null;
+    if(!ca||ca<cutoff)return;// 30분 이상 지난 건은 무시
+    const status=data.status||'';
+    const progressId=d.id;
+
+    if(status==='started'||status==='running'){
+      // ★ Case 1: 진행 중 → onSnapshot 재연결
+      console.log('[EduRestore] 진행 중인 배경설명 생성 발견:',progressId);
+      if(data.title){$('edu-custom-title').value=data.title;if(data.salesType==='personal')$('edu-custom-type').value='personal';else if(data.salesType==='corporate'||data.salesType==='corp')$('edu-custom-type').value='corp';}
+      setEduStatus('🔄 배경 설명 생성 진행 중 (자동 복원됨)','#E65100');
+      startEduProgress(progressId);
+    }else if(status==='complete'&&data.result){
+      // ★ Case 2: 완료됨 → 미리보기 복원
+      console.log('[EduRestore] 완료된 배경설명 발견:',progressId);
+      const r=data.result;
+      const previewData={success:true,title:r.title||'',salesType:r.salesType||'',backgroundDescription:r.backgroundDescription||'',keyPoints:r.keyPoints||[],targetAudience:r.targetAudience||'',openingSuggestion:r.openingSuggestion||'',forbiddenExpressions:r.forbiddenExpressions||[],consultingContext:r.consultingContext||''};
+      showEduPreview(previewData);
+      // 제목 입력란 복원
+      if(r.title)$('edu-custom-title').value=r.title;
+      if(r.salesType==='personal')$('edu-custom-type').value='personal';
+      else if(r.salesType==='corporate'||r.salesType==='corp')$('edu-custom-type').value='corp';
+      const ago=Math.round((Date.now()-ca.getTime())/60000);
+      setEduStatus(`✅ 배경 설명 생성 완료 (${ago}분 전) — 아래에서 확인 후 특급보고서를 시작하세요`,'#2E7D32');
+    }else if(status==='error'){
+      // ★ Case 3: 에러 → 에러 메시지 표시
+      console.log('[EduRestore] 에러 상태 배경설명 발견:',progressId);
+      if(data.title)$('edu-custom-title').value=data.title;
+      setEduStatus(`❌ 배경 설명 생성 실패 — 다시 시도해 주세요`,'#C62828');
+    }
+  }catch(e){console.warn('[EduRestore] 복원 실패 (비치명적):',e);}
 }
 
 // ── 익월 제목 일괄 생성 ──────────────────────────────
