@@ -5321,6 +5321,10 @@ async function sendKakaoTest(){
 window.loadSysLog=loadSysLog;window.renderSysLog=renderSysLog;
 window.loadKakaoSettings=loadKakaoSettings;window.saveKakaoRestKey=saveKakaoRestKey;window.startKakaoAuth=startKakaoAuth;window.handleKakaoCallback=handleKakaoCallback;window.removeKakaoRecipient=removeKakaoRecipient;window.sendKakaoTest=sendKakaoTest;
 
+
+// ── edb 함수용 전역 노출 ──
+window._db = db;
+window._functions = functions;
 </script>
 
 <!-- 하위계정 신규 생성 모달 -->
@@ -5576,6 +5580,8 @@ window.loadKakaoSettings=loadKakaoSettings;window.saveKakaoRestKey=saveKakaoRest
 
 <!-- DART DB JS -->
 <script>
+// edb 함수용 Firestore 레퍼런스 (module script에서 노출)
+// _db: getFirestore(app,'javia-db')
 // ── DART API 프록시 URL ──
 var DART_PROXY = 'https://taxnavi-backend-1012609333373.asia-northeast3.run.app';
 // DART_KEY는 Cloud Function 서버에서만 사용 (보안)
@@ -5613,12 +5619,12 @@ function edbLog(msg, type){
 async function edbLoadStats(){
   try {
     // 임원 수
-    var snap = await db.collection('exec_officers').get();
+    var snap = await getDocs(collection(window._db, 'exec_officers'));
     var total = snap.size;
     var sCount = 0;
     var corpSet = new Set();
     var lastDate = '-';
-    snap.forEach(function(d){
+    snap.docs.forEach(function(d){
       var data = d.data();
       if(data.grade === 'S') sCount++;
       if(data.corpName) corpSet.add(data.corpName);
@@ -5680,7 +5686,7 @@ async function edbResetCollect(){
   if(!confirm('전체 재수집을 시작합니다.\n기존 진행 위치가 초기화되고 처음부터 다시 수집합니다.\n\n계속하시겠습니까?')) return;
   edbLog('재수집 초기화 중...', 'info');
   try {
-    await setDoc(doc(db, 'exec_collect_job', 'current'), {
+    await setDoc(doc(window._db, 'exec_collect_job', 'current'), {
       status:'idle', doneCorps:0, lastCorpCode:'', resetAt:Date.now(), triggeredBy:'manual_reset'
     });
     edbLog('✅ 초기화 완료. 다음 정각에 자동으로 처음부터 수집 시작됩니다.', 'ok');
@@ -5710,7 +5716,7 @@ async function edbCollectSingleCorp(){
 // ── 수집 작업 현황 로드 ──
 async function edbLoadJobStatus(){
   try {
-    const snap = await getDoc(doc(db, 'exec_collect_job', 'current'));
+    const snap = await getDoc(doc(window._db, 'exec_collect_job', 'current'));
     if(!snap.exists){ return; }
     var d = snap.data();
 
@@ -5819,7 +5825,7 @@ async function edbCollectSingle(query, year){
 async function edbCalcGrades(){
   edbLog('등급 재산정 시작...','info');
   try {
-    var snap = await db.collection('exec_officers').get();
+    var snap = await getDocs(collection(window._db, 'exec_officers'));
     var batch = db.batch();
     var cnt = 0;
     snap.forEach(function(doc){
@@ -5851,7 +5857,7 @@ async function edbSearch(q){
   var issue   = document.getElementById('edb-filter-issue').value;
 
   try {
-    var ref = db.collection('exec_officers').orderBy('score','desc').limit(200);
+    var ref = getDocs(collection(window._db, 'exec_officers').orderBy('score','desc').limit(200);
     var snap = await ref.get();
     _edbListData = [];
 
@@ -5956,7 +5962,7 @@ var _edbJobUnsubscribe = null;
 function edbStartJobWatch(){
   if(_edbJobUnsubscribe) return;
   try {
-    const jobDocRef = doc(db, 'exec_collect_job', 'current');
+    const jobDocRef = doc(window._db, 'exec_collect_job', 'current');
     _edbJobUnsubscribe = onSnapshot(jobDocRef, function(snap){
       if(!snap.exists()) return;
       var d = snap.data();
