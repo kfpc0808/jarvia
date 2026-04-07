@@ -5424,7 +5424,7 @@ window.loadKakaoSettings=loadKakaoSettings;window.saveKakaoRestKey=saveKakaoRest
     <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--primary);">DART 데이터 수집</div>
 
     <!-- 자동수집 상태 카드 -->
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;">
       <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:12px 14px;">
         <div style="font-size:10px;color:#166534;font-weight:600;margin-bottom:4px;">🤖 자동수집 상태</div>
         <div style="font-size:14px;font-weight:700;color:#166534;" id="edb-auto-status">확인 중...</div>
@@ -5467,7 +5467,7 @@ window.loadKakaoSettings=loadKakaoSettings;window.saveKakaoRestKey=saveKakaoRest
     </div>
 
     <!-- 단일 법인 수집 (비상용) -->
-    <div style="margin-top:12px;padding:10px 14px;background:#F8FAFF;border-radius:8px;border:1px solid #E2E8F0;">
+    <div style="margin-top:12px;padding:10px 14px;background:#F8FAFF;border-radius:8px;border:1px solid #E2E8F0;overflow:hidden;">
       <div style="font-size:11px;font-weight:600;color:#64748B;margin-bottom:8px;">🔍 특정 법인 즉시 수집 (비상용)</div>
       <div style="display:flex;gap:8px;">
         <input id="edb-single-query" class="form-control" placeholder="법인명 또는 종목코드" style="font-size:12px;flex:1;"/>
@@ -5612,7 +5612,6 @@ function edbLog(msg, type){
 // ── Firestore 통계 로드 ──
 async function edbLoadStats(){
   try {
-    var db = firebase.firestore();
     // 임원 수
     var snap = await db.collection('exec_officers').get();
     var total = snap.size;
@@ -5681,8 +5680,7 @@ async function edbResetCollect(){
   if(!confirm('전체 재수집을 시작합니다.\n기존 진행 위치가 초기화되고 처음부터 다시 수집합니다.\n\n계속하시겠습니까?')) return;
   edbLog('재수집 초기화 중...', 'info');
   try {
-    var db2 = firebase.firestore();
-    await db2.collection('exec_collect_job').doc('current').set({
+    await setDoc(doc(db, 'exec_collect_job', 'current'), {
       status:'idle', doneCorps:0, lastCorpCode:'', resetAt:Date.now(), triggeredBy:'manual_reset'
     });
     edbLog('✅ 초기화 완료. 다음 정각에 자동으로 처음부터 수집 시작됩니다.', 'ok');
@@ -5712,8 +5710,7 @@ async function edbCollectSingleCorp(){
 // ── 수집 작업 현황 로드 ──
 async function edbLoadJobStatus(){
   try {
-    var db2 = firebase.firestore();
-    var snap = await db2.collection('exec_collect_job').doc('current').get();
+    const snap = await getDoc(doc(db, 'exec_collect_job', 'current'));
     if(!snap.exists){ return; }
     var d = snap.data();
 
@@ -5782,7 +5779,7 @@ function edbDone(){
 var _edbProgressUnsubscribe = null;
 function edbStartProgressWatch(){
   try {
-    var db2 = firebase.firestore();
+    var db2 = db;
     _edbProgressUnsubscribe = db2.collection('exec_collect_job').doc('current')
       .onSnapshot(function(snap){
         if(!snap.exists) return;
@@ -5822,7 +5819,6 @@ async function edbCollectSingle(query, year){
 async function edbCalcGrades(){
   edbLog('등급 재산정 시작...','info');
   try {
-    var db = firebase.firestore();
     var snap = await db.collection('exec_officers').get();
     var batch = db.batch();
     var cnt = 0;
@@ -5855,7 +5851,6 @@ async function edbSearch(q){
   var issue   = document.getElementById('edb-filter-issue').value;
 
   try {
-    var db = firebase.firestore();
     var ref = db.collection('exec_officers').orderBy('score','desc').limit(200);
     var snap = await ref.get();
     _edbListData = [];
@@ -5959,43 +5954,38 @@ document.addEventListener('DOMContentLoaded', function(){
 // ── exec_collect_job 실시간 구독 ──
 var _edbJobUnsubscribe = null;
 function edbStartJobWatch(){
-  if(_edbJobUnsubscribe) return; // 이미 구독 중
+  if(_edbJobUnsubscribe) return;
   try {
-    var db2 = firebase.firestore();
-    _edbJobUnsubscribe = db2.collection('exec_collect_job').doc('current')
-      .onSnapshot(function(snap){
-        if(!snap.exists) return;
-        var d = snap.data();
-        if(!d) return;
+    const jobDocRef = doc(db, 'exec_collect_job', 'current');
+    _edbJobUnsubscribe = onSnapshot(jobDocRef, function(snap){
+      if(!snap.exists()) return;
+      var d = snap.data();
+      if(!d) return;
 
-        var total = d.totalCorps || 0;
-        var done  = d.doneCorps  || 0;
-        var pct   = total > 0 ? Math.round(done/total*100) : 0;
+      var total = d.totalCorps || 0;
+      var done  = d.doneCorps  || 0;
+      var pct   = total > 0 ? Math.round(done/total*100) : 0;
 
-        var barEl = document.getElementById('edb-progress-bar');
-        var pctEl = document.getElementById('edb-progress-pct');
-        var txtEl = document.getElementById('edb-progress-text');
-        var stsEl = document.getElementById('edb-auto-status');
+      var barEl = document.getElementById('edb-progress-bar');
+      var pctEl = document.getElementById('edb-progress-pct');
+      var txtEl = document.getElementById('edb-progress-text');
+      var stsEl = document.getElementById('edb-auto-status');
 
-        if(barEl) barEl.style.width = pct+'%';
-        if(pctEl) pctEl.textContent = pct+'%';
-        if(txtEl) txtEl.textContent = done.toLocaleString()+'/'+total.toLocaleString()+'개'
-          +(d.currentCorp ? ' · '+d.currentCorp : '');
+      if(barEl) barEl.style.width = pct+'%';
+      if(pctEl) pctEl.textContent = pct+'%';
+      if(txtEl) txtEl.textContent = done.toLocaleString()+'/'+total.toLocaleString()+'개'
+        +(d.currentCorp ? ' · '+d.currentCorp : '');
 
-        var statusMap = {
-          'running':'🟢 수집 중',
-          'idle':'🟡 대기 중',
-          'done':'✅ 완료'
-        };
-        if(stsEl) stsEl.textContent = statusMap[d.status] || d.status || '-';
+      var statusMap = {'running':'🟢 수집 중','idle':'🟡 대기 중','done':'✅ 완료'};
+      if(stsEl) stsEl.textContent = statusMap[d.status] || d.status || '-';
 
-        if(d.status === 'running'){
-          edbLog('[자동] '+d.currentCorp+' 처리 중 ('+done+'/'+total+')', 'info');
-        }
-        if(d.status === 'done' && done > 0){
-          edbLog('🎉 전체 수집 완료! '+total.toLocaleString()+'개 법인 처리됨', 'ok');
-        }
-      });
+      if(d.status === 'running'){
+        edbLog('[자동] '+(d.currentCorp||'')+' 처리 중 ('+done+'/'+total+')', 'info');
+      }
+      if(d.status === 'done' && done > 0){
+        edbLog('🎉 전체 수집 완료! '+total.toLocaleString()+'개 법인 처리됨', 'ok');
+      }
+    });
   } catch(e){ console.warn('실시간 구독 실패:', e); }
 }
 </script>
