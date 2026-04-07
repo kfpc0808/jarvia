@@ -69,6 +69,7 @@
     <a class="sn" data-p="p-sms" onclick="goPanel(this)">📱 문자발송</a>
     <a class="sn" data-p="p-syslog" onclick="goPanel(this)">📋 시스템로그</a>
     <a class="sn" data-p="p-kakao-notify" onclick="goPanel(this)">💬 카카오알림설정</a>
+    <a class="sn" data-p="p-exec-db" onclick="goPanel(this)">🏢 법인임원DB</a>
   </nav></aside>
   <main class="adm-main">
     <div id="p-dash" class="panel"><h2>대시보드</h2><div class="dash-row"><div class="dash-c"><span>오늘 가입</span><strong id="d-signup">0</strong></div><div class="dash-c"><span>오늘 열람</span><strong id="d-views">0</strong></div><div class="dash-c"><span>오늘 매출</span><strong id="d-rev">0</strong><em>원</em></div><div class="dash-c"><span>전체 회원</span><strong id="d-total">0</strong></div></div><div class="dash-row"><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 생성</span><strong id="d-pptgen">0</strong><em>건</em></div><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 매출</span><strong id="d-pptrev">0</strong><em>원</em></div></div></div>
@@ -5369,5 +5370,676 @@ window.loadKakaoSettings=loadKakaoSettings;window.saveKakaoRestKey=saveKakaoRest
     </div>
   </div>
 </div>
+<!-- ★ 법인 임원 DB 관리 패널 -->
+<div id="p-exec-db" class="panel hidden">
+  <h2>🏢 법인 임원 DB 관리</h2>
+
+  <style>
+  .edb-stat{background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;text-align:center;}
+  .edb-stat-num{font-size:28px;font-weight:700;color:var(--primary);margin:6px 0 2px;}
+  .edb-stat-label{font-size:11px;color:#64748B;}
+  .edb-progress{background:#E2E8F0;border-radius:4px;height:8px;overflow:hidden;margin:8px 0;}
+  .edb-progress-bar{height:100%;background:var(--primary);border-radius:4px;transition:width .3s;}
+  .edb-log{background:#0F172A;color:#94A3B8;font-size:11px;font-family:monospace;padding:12px 14px;border-radius:8px;height:200px;overflow-y:auto;line-height:1.8;}
+  .edb-log .ok{color:#4ADE80;}
+  .edb-log .err{color:#F87171;}
+  .edb-log .info{color:#60A5FA;}
+  .edb-table{width:100%;border-collapse:collapse;font-size:12px;}
+  .edb-table th{background:#F8FAFF;padding:8px 12px;text-align:left;font-weight:600;color:#64748B;border-bottom:2px solid #E2E8F0;white-space:nowrap;}
+  .edb-table td{padding:8px 12px;border-bottom:1px solid #F1F5F9;vertical-align:middle;}
+  .edb-table tr:hover td{background:#F8FAFF;}
+  .edb-grade{display:inline-block;width:22px;height:22px;border-radius:50%;text-align:center;line-height:22px;font-size:11px;font-weight:700;}
+  .edb-grade-S{background:#FCEBEB;color:#A32D2D;}
+  .edb-grade-A{background:#FAEEDA;color:#854F0B;}
+  .edb-grade-B{background:#EFF6FF;color:#1D4ED8;}
+  .edb-grade-C{background:#F1F5F9;color:#64748B;}
+  </style>
+
+  <!-- 통계 카드 -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+    <div class="edb-stat">
+      <div class="edb-stat-label">수집 법인</div>
+      <div class="edb-stat-num" id="edb-cnt-corp">0</div>
+      <div class="edb-stat-label">개 법인</div>
+    </div>
+    <div class="edb-stat">
+      <div class="edb-stat-label">등록 임원</div>
+      <div class="edb-stat-num" id="edb-cnt-exec">0</div>
+      <div class="edb-stat-label">명</div>
+    </div>
+    <div class="edb-stat">
+      <div class="edb-stat-label">S등급 임원</div>
+      <div class="edb-stat-num" id="edb-cnt-s" style="color:#A32D2D;">0</div>
+      <div class="edb-stat-label">명</div>
+    </div>
+    <div class="edb-stat">
+      <div class="edb-stat-label">마지막 수집</div>
+      <div class="edb-stat-num" id="edb-last-collect" style="font-size:14px;">-</div>
+      <div class="edb-stat-label">수집일</div>
+    </div>
+  </div>
+
+  <!-- 수집 제어 -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--primary);">DART 데이터 수집</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:5px;">수집 대상</label>
+        <select id="edb-collect-type" class="form-control" style="font-size:12px;">
+          <option value="listed">상장법인만 (약 2,500개 · 빠름)</option>
+          <option value="all">전체 공시법인 (10만+ · 느림)</option>
+          <option value="single">특정 법인 1개</option>
+        </select>
+      </div>
+      <div id="edb-single-wrap" style="display:none;">
+        <label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:5px;">법인명 또는 종목코드</label>
+        <input id="edb-single-query" class="form-control" placeholder="예: 삼성전자 또는 005930" style="font-size:12px;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:5px;">사업보고서 기준연도</label>
+        <select id="edb-collect-year" class="form-control" style="font-size:12px;">
+          <option value="2023" selected>2023년</option>
+          <option value="2022">2022년</option>
+          <option value="2024">2024년</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      <button class="btn" onclick="edbStartCollect()" id="edb-btn-start">▶ 수집 시작</button>
+      <button class="btn btn-sec" onclick="edbStopCollect()" id="edb-btn-stop" disabled>■ 중단</button>
+      <button class="btn btn-sec" onclick="edbLoadStats()">🔄 현황 새로고침</button>
+      <button class="btn btn-sec" onclick="edbCalcGrades()">⭐ 등급 재산정</button>
+      <span id="edb-collect-status" style="font-size:12px;color:#64748B;"></span>
+    </div>
+
+    <div class="edb-progress" id="edb-progress-wrap" style="display:none;">
+      <div class="edb-progress-bar" id="edb-progress-bar" style="width:0%"></div>
+    </div>
+    <div style="font-size:11px;color:#64748B;margin-top:4px;" id="edb-progress-text"></div>
+  </div>
+
+  <!-- 수집 로그 -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:600;color:var(--primary);">수집 로그</div>
+      <button class="btn btn-sec" onclick="document.getElementById('edb-log').innerHTML=''" style="font-size:11px;padding:3px 10px;">로그 지우기</button>
+    </div>
+    <div class="edb-log" id="edb-log"></div>
+  </div>
+
+  <!-- 임원 목록 조회 -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--primary);">임원 목록 조회</div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      <input id="edb-search" class="form-control" placeholder="임원명 또는 법인명 검색..." style="flex:1;min-width:200px;font-size:12px;" oninput="edbSearch(this.value)"/>
+      <select id="edb-filter-grade" class="form-control" style="font-size:12px;width:120px;" onchange="edbSearch()">
+        <option value="">전체 등급</option>
+        <option value="S">S등급</option>
+        <option value="A">A등급</option>
+        <option value="B">B등급</option>
+        <option value="C">C등급</option>
+      </select>
+      <select id="edb-filter-issue" class="form-control" style="font-size:12px;width:140px;" onchange="edbSearch()">
+        <option value="">전체 이슈</option>
+        <option value="loan">가지급금</option>
+        <option value="retire">퇴직충당금 미적립</option>
+        <option value="expire">임기만료 1년 내</option>
+        <option value="inherit">가업승계 필요</option>
+      </select>
+      <button class="btn" onclick="edbSearch()">검색</button>
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table class="edb-table">
+        <thead>
+          <tr>
+            <th>등급</th>
+            <th>성명</th>
+            <th>법인명</th>
+            <th>직위</th>
+            <th>나이</th>
+            <th>임기만료</th>
+            <th>지분율</th>
+            <th>가지급금</th>
+            <th>매출액</th>
+            <th>이슈</th>
+            <th>수집일</th>
+          </tr>
+        </thead>
+        <tbody id="edb-tbody">
+          <tr><td colspan="11" style="text-align:center;color:#94A3B8;padding:30px;">수집된 데이터가 없습니다. 수집을 시작해주세요.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:12px;color:#64748B;" id="edb-list-info"></div>
+      <div style="display:flex;gap:4px;" id="edb-pagination"></div>
+    </div>
+  </div>
+
+  <!-- 데이터 품질 현황 -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--primary);">데이터 품질 현황</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;" id="edb-quality">
+      <div style="background:#F8FAFF;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:11px;color:#64748B;">나이 수집률</div>
+        <div style="font-size:20px;font-weight:700;color:var(--primary);" id="edb-q-age">-</div>
+      </div>
+      <div style="background:#F8FAFF;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:11px;color:#64748B;">임기 수집률</div>
+        <div style="font-size:20px;font-weight:700;color:var(--primary);" id="edb-q-expire">-</div>
+      </div>
+      <div style="background:#F8FAFF;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:11px;color:#64748B;">가지급금 수집률</div>
+        <div style="font-size:20px;font-weight:700;color:var(--primary);" id="edb-q-loan">-</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- DART DB JS -->
+<script>
+// ── DART API 프록시 URL ──
+var DART_PROXY = 'https://taxnavi-backend-1012609333373.asia-northeast3.run.app';
+var DART_KEY   = '5a4ce0bc11d1957f46aad0bbeaab2dd211998051';
+var DART_BASE  = 'https://opendart.fss.or.kr/api';
+
+// ── 수집 상태 ──
+var _edbRunning  = false;
+var _edbAbort    = false;
+var _edbTotal    = 0;
+var _edbDone     = 0;
+var _edbPage     = 1;
+var _edbPageSize = 20;
+var _edbListData = [];
+
+// ── 타입 선택 토글 ──
+document.getElementById('edb-collect-type').addEventListener('change', function(){
+  document.getElementById('edb-single-wrap').style.display =
+    this.value === 'single' ? 'block' : 'none';
+});
+
+// ── 로그 출력 ──
+function edbLog(msg, type){
+  var el = document.getElementById('edb-log');
+  var cls = type === 'ok' ? 'ok' : type === 'err' ? 'err' : 'info';
+  var t = new Date().toTimeString().slice(0,8);
+  el.innerHTML += '<span class="'+cls+'">['+t+'] '+msg+'</span>
+';
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── Firestore 통계 로드 ──
+async function edbLoadStats(){
+  try {
+    var db = firebase.firestore();
+    // 임원 수
+    var snap = await db.collection('exec_officers').get();
+    var total = snap.size;
+    var sCount = 0;
+    var corpSet = new Set();
+    var lastDate = '-';
+    snap.forEach(function(d){
+      var data = d.data();
+      if(data.grade === 'S') sCount++;
+      if(data.corpName) corpSet.add(data.corpName);
+      if(data.collectedAt){
+        var dt = data.collectedAt.toDate ? data.collectedAt.toDate().toLocaleDateString('ko-KR') : '-';
+        if(lastDate === '-') lastDate = dt;
+      }
+    });
+    document.getElementById('edb-cnt-corp').textContent = corpSet.size.toLocaleString();
+    document.getElementById('edb-cnt-exec').textContent = total.toLocaleString();
+    document.getElementById('edb-cnt-s').textContent = sCount.toLocaleString();
+    document.getElementById('edb-last-collect').textContent = lastDate;
+
+    // 데이터 품질
+    if(total > 0){
+      var ageOk=0, expOk=0, loanOk=0;
+      snap.forEach(function(d){
+        var v = d.data();
+        if(v.birthYear) ageOk++;
+        if(v.termEndDate) expOk++;
+        if(v.shortTermLoans && v.shortTermLoans > 0) loanOk++;
+      });
+      document.getElementById('edb-q-age').textContent    = Math.round(ageOk/total*100)+'%';
+      document.getElementById('edb-q-expire').textContent = Math.round(expOk/total*100)+'%';
+      document.getElementById('edb-q-loan').textContent   = Math.round(loanOk/total*100)+'%';
+    }
+    edbLog('통계 로드 완료 · 임원 '+total+'명 / 법인 '+corpSet.size+'개', 'ok');
+  } catch(e){
+    edbLog('통계 로드 실패: '+e.message, 'err');
+  }
+}
+
+// ── 수집 시작 ──
+async function edbStartCollect(){
+  if(_edbRunning){ edbLog('이미 수집 중입니다.','err'); return; }
+  _edbRunning = true;
+  _edbAbort   = false;
+  document.getElementById('edb-btn-start').disabled = true;
+  document.getElementById('edb-btn-stop').disabled  = false;
+  document.getElementById('edb-progress-wrap').style.display = 'block';
+
+  var type  = document.getElementById('edb-collect-type').value;
+  var year  = document.getElementById('edb-collect-year').value;
+  var query = document.getElementById('edb-single-query').value.trim();
+
+  edbLog('수집 시작 · 유형: '+type+' · 기준연도: '+year, 'info');
+
+  try {
+    if(type === 'single'){
+      if(!query){ edbLog('법인명을 입력해주세요.','err'); edbDone(); return; }
+      await edbCollectSingle(query, year);
+    } else {
+      await edbCollectBatch(type, year);
+    }
+  } catch(e){
+    edbLog('수집 오류: '+e.message, 'err');
+  }
+  edbDone();
+}
+
+function edbStopCollect(){
+  _edbAbort = true;
+  edbLog('중단 요청됨...', 'info');
+}
+
+function edbDone(){
+  _edbRunning = false;
+  document.getElementById('edb-btn-start').disabled = false;
+  document.getElementById('edb-btn-stop').disabled  = true;
+  document.getElementById('edb-collect-status').textContent = '완료';
+  edbLoadStats();
+}
+
+// ── 배치 수집 ──
+async function edbCollectBatch(type, year){
+  // 1. corpCode.xml 다운로드 (프록시 경유)
+  edbLog('법인 목록 다운로드 중...', 'info');
+  var res = await fetch(DART_PROXY+'/dart/corps?type='+type);
+  var corpList = [];
+  if(res.ok){
+    var j = await res.json();
+    corpList = j.list || [];
+  } else {
+    // 직접 DART API 호출
+    edbLog('프록시 미응답 · DART 직접 호출 시도...', 'info');
+    var r2 = await fetch(DART_BASE+'/corpCode.xml?crtfc_key='+DART_KEY);
+    if(!r2.ok){ edbLog('법인 목록 다운로드 실패','err'); return; }
+    edbLog('DART에서 법인 목록 수신 완료','ok');
+    // XML 파싱은 Cloud Function에서 처리
+  }
+
+  _edbTotal = corpList.length;
+  _edbDone  = 0;
+  edbLog('총 '+_edbTotal+'개 법인 처리 예정', 'info');
+
+  for(var i=0; i<corpList.length; i++){
+    if(_edbAbort){ edbLog('수집 중단됨 ('+i+'/'+_edbTotal+')','info'); break; }
+    var corp = corpList[i];
+    await edbCollectOneCorp(corp.corp_code, corp.corp_name, corp.stock_code, year);
+    _edbDone = i+1;
+
+    // 진행률 업데이트
+    var pct = Math.round(_edbDone/_edbTotal*100);
+    document.getElementById('edb-progress-bar').style.width = pct+'%';
+    document.getElementById('edb-progress-text').textContent =
+      _edbDone+'/'+_edbTotal+' ('+pct+'%) · '+corp.corp_name;
+    document.getElementById('edb-collect-status').textContent = pct+'%';
+
+    if(_edbDone % 10 === 0) edbLog(_edbDone+'/'+_edbTotal+' 완료','info');
+    await new Promise(r=>setTimeout(r,300)); // API 속도 제한
+  }
+  edbLog('배치 수집 완료 · '+_edbDone+'개 법인 처리','ok');
+}
+
+// ── 단일 법인 수집 ──
+async function edbCollectSingle(query, year){
+  edbLog('"'+query+'" 검색 중...','info');
+  var searchRes = await fetch(DART_BASE+'/company.json?crtfc_key='+DART_KEY+'&corp_name='+encodeURIComponent(query));
+  if(!searchRes.ok){ edbLog('법인 검색 실패','err'); return; }
+  var sj = await searchRes.json();
+  if(!sj.corp_code){ edbLog('법인을 찾을 수 없습니다','err'); return; }
+  await edbCollectOneCorp(sj.corp_code, sj.corp_name, sj.stock_code, year);
+}
+
+// ── 법인 1개 전체 수집 ──
+async function edbCollectOneCorp(corpCode, corpName, stockCode, year){
+  try {
+    var db = firebase.firestore();
+
+    // 1. 기업개황
+    var compRes = await fetch(DART_BASE+'/company.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode);
+    var compData = compRes.ok ? await compRes.json() : {};
+
+    // 2. 임원 현황
+    var execRes = await fetch(DART_BASE+'/exctvSttus.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011');
+    var execData = execRes.ok ? await execRes.json() : {};
+    var execList = (execData.status==='000' && execData.list) ? execData.list : [];
+
+    // 3. 재무제표 (주요 항목)
+    var fsRes = await fetch(DART_BASE+'/fnlttSinglAcntAll.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011&fs_div=CFS');
+    var fsData = fsRes.ok ? await fsRes.json() : {};
+    var fsList = (fsData.status==='000' && fsData.list) ? fsData.list : [];
+
+    // 4. 주주 현황
+    var mstRes = await fetch(DART_BASE+'/majorstock.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011');
+    var mstData = mstRes.ok ? await mstRes.json() : {};
+    var mstList = (mstData.status==='000' && mstData.list) ? mstData.list : [];
+
+    // 5. 임원 보수
+    var emolRes = await fetch(DART_BASE+'/indvdlByPay.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011');
+    var emolData = emolRes.ok ? await emolRes.json() : {};
+    var emolList = (emolData.status==='000' && emolData.list) ? emolData.list : [];
+
+    // 6. 직원 현황
+    var empRes = await fetch(DART_BASE+'/empSttus.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011');
+    var empData = empRes.ok ? await empRes.json() : {};
+    var empList = (empData.status==='000' && empData.list) ? empData.list : [];
+
+    // 7. 배당 현황
+    var divRes = await fetch(DART_BASE+'/alotMatter.json?crtfc_key='+DART_KEY+'&corp_code='+corpCode+'&bsns_year='+year+'&reprt_code=11011');
+    var divData = divRes.ok ? await divRes.json() : {};
+
+    // 재무 핵심 항목 추출
+    function getFs(nm){
+      var item = fsList.find(function(x){ return x.account_nm && x.account_nm.replace(/\s/g,'').includes(nm.replace(/\s/g,'')); });
+      return item ? parseInt((item.thstrm_amount||'0').replace(/[,\s]/g,''))||0 : 0;
+    }
+    var revenue       = getFs('매출액');
+    var operProfit    = getFs('영업이익');
+    var netProfit     = getFs('당기순이익');
+    var totalAsset    = getFs('자산총계');
+    var totalDebt     = getFs('부채총계');
+    var retainEarning = getFs('미처분이익잉여금');
+    var shortLoan     = getFs('단기대여금');      // 가지급금
+    var retireLiab    = getFs('퇴직급여충당부채');
+
+    // 직원 정보
+    var empTotal = 0, empAvgSalary = 0;
+    if(empList.length > 0){
+      empTotal     = parseInt((empList[0].fo_bbm||'0').replace(/[,\s]/g,''))||0;
+      empAvgSalary = parseInt((empList[0].avrg_annl_salary||'0').replace(/[,\s]/g,''))||0;
+    }
+
+    // 임원별 저장
+    if(execList.length > 0){
+      var batch = db.batch();
+      var batchCount = 0;
+
+      for(var i=0; i<execList.length; i++){
+        var ex = execList[i];
+        if(!ex.nm || ex.nm.trim() === '') continue;
+
+        // 주주 현황에서 해당 임원 지분율 찾기
+        var shareRate = 0;
+        var mstItem = mstList.find(function(m){ return m.nm === ex.nm; });
+        if(mstItem) shareRate = parseFloat((mstItem.posesn_stock_co||'0').replace(/[,\s]/g,''))||0;
+
+        // 개인 보수
+        var personalPay = 0;
+        var emolItem = emolList.find(function(e){ return e.nm === ex.nm; });
+        if(emolItem) personalPay = parseInt((emolItem.pay_am||'0').replace(/[,\s]/g,''))||0;
+
+        // 취임일·임기만료일
+        var apptDate = ex.rgist_exctv_at === 'Y' ?
+          (ex.·取 || ex.take_offc_dt || '') : '';
+        var termEnd  = ex.tenure_end_dt || ex.rm || '';
+
+        // 생년월 파싱
+        var birthYear = 0;
+        if(ex.birth_dt){
+          birthYear = parseInt(ex.birth_dt.slice(0,4))||0;
+        }
+
+        // 재임기간 계산 (취임일 기준)
+        var tenureMonths = 0;
+        var apptDtStr = ex.take_offc_dt || '';
+        if(apptDtStr && apptDtStr.length >= 6){
+          var apptY = parseInt(apptDtStr.slice(0,4));
+          var apptM = parseInt(apptDtStr.slice(4,6));
+          var now = new Date();
+          tenureMonths = (now.getFullYear()-apptY)*12 + (now.getMonth()+1-apptM);
+        }
+
+        // 임기 D-day
+        var dday = null;
+        if(termEnd && termEnd.length >= 8){
+          var tY = parseInt(termEnd.slice(0,4));
+          var tM = parseInt(termEnd.slice(4,6));
+          var tD = parseInt(termEnd.slice(6,8));
+          var diff = Math.round((new Date(tY,tM-1,tD)-new Date())/(1000*60*60*24));
+          dday = diff;
+        }
+
+        // 등급 산정
+        var score = 0;
+        if(shortLoan > 0) score += 3;                              // 가지급금
+        if(retireLiab === 0 && tenureMonths > 12) score += 2;     // 퇴직충당금 미적립
+        if(dday !== null && dday >= 0 && dday <= 365) score += 3; // 임기만료 임박
+        if(shareRate >= 10) score += 2;                            // 대주주
+        if(tenureMonths >= 120) score += 1;                        // 재임 10년↑
+        if(retainEarning > 1000000000) score += 1;                 // 이익잉여금 과다
+
+        var grade = score >= 8 ? 'S' : score >= 6 ? 'A' : score >= 4 ? 'B' : 'C';
+
+        // 이슈 태그
+        var issues = [];
+        if(shortLoan > 0) issues.push('가지급금');
+        if(retireLiab === 0 && tenureMonths > 12) issues.push('퇴직충당금미적립');
+        if(dday !== null && dday >= 0 && dday <= 365) issues.push('임기만료임박');
+        if(shareRate >= 5 && mstList.some(function(m){ return m.relate && m.relate.includes('자'); })) issues.push('가업승계필요');
+
+        var docId = corpCode + '_' + ex.nm.replace(/\s/g,'') + '_' + (ex.ofcps||'');
+        var ref   = db.collection('exec_officers').doc(docId);
+        batch.set(ref, {
+          // 기업 기본
+          corpCode:        corpCode,
+          corpName:        corpName || compData.corp_name || '',
+          stockCode:       stockCode || compData.stock_code || '',
+          industry:        compData.induty_code || '',
+          establishDate:   compData.est_dt || '',
+          ceoName:         compData.ceo_nm || '',
+          address:         compData.adres || '',
+          homepage:        compData.hm_url || '',
+          isListed:        (stockCode && stockCode.trim() !== ''),
+
+          // 임원 개인
+          name:            ex.nm || '',
+          gender:          ex.sexdstn || '',
+          birthYear:       birthYear,
+          position:        ex.ofcps || '',
+          isRegistered:    ex.rgist_exctv_at === 'Y',
+          isFullTime:      ex.fte_at === 'Y',
+          duties:          ex.main_career || '',
+          appointDate:     ex.take_offc_dt || '',
+          termEndDate:     termEnd,
+          tenureMonths:    tenureMonths,
+          dday:            dday,
+          shareCount:      shareRate,
+          shareRate:       shareRate,
+          personalPay:     personalPay,
+          majorRelation:   mstItem ? (mstItem.relate||'') : '',
+
+          // 재무
+          revenue:         revenue,
+          operatingProfit: operProfit,
+          netProfit:       netProfit,
+          totalAsset:      totalAsset,
+          totalDebt:       totalDebt,
+          retainedEarning: retainEarning,
+          shortTermLoans:  shortLoan,
+          retireLiability: retireLiab,
+          employeeCount:   empTotal,
+          avgSalary:       empAvgSalary,
+
+          // 분석
+          grade:           grade,
+          score:           score,
+          issues:          issues,
+          collectedAt:     firebase.firestore.FieldValue.serverTimestamp(),
+          baseYear:        parseInt(year),
+        }, {merge:true});
+
+        batchCount++;
+        if(batchCount >= 400){
+          await batch.commit();
+          batch = db.batch();
+          batchCount = 0;
+        }
+      }
+      if(batchCount > 0) await batch.commit();
+      edbLog('✓ '+corpName+' · 임원 '+execList.length+'명 저장','ok');
+    } else {
+      edbLog('- '+corpName+' · 임원 정보 없음','info');
+    }
+  } catch(e){
+    edbLog('✗ '+corpName+' 오류: '+e.message,'err');
+  }
+}
+
+// ── 등급 재산정 ──
+async function edbCalcGrades(){
+  edbLog('등급 재산정 시작...','info');
+  try {
+    var db = firebase.firestore();
+    var snap = await db.collection('exec_officers').get();
+    var batch = db.batch();
+    var cnt = 0;
+    snap.forEach(function(doc){
+      var v = doc.data();
+      var score = 0;
+      if(v.shortTermLoans > 0) score += 3;
+      if(v.retireLiability === 0 && v.tenureMonths > 12) score += 2;
+      if(v.dday !== null && v.dday !== undefined && v.dday >= 0 && v.dday <= 365) score += 3;
+      if(v.shareRate >= 10) score += 2;
+      if(v.tenureMonths >= 120) score += 1;
+      if(v.retainedEarning > 1000000000) score += 1;
+      var grade = score >= 8 ? 'S' : score >= 6 ? 'A' : score >= 4 ? 'B' : 'C';
+      batch.update(doc.ref, {grade:grade, score:score});
+      cnt++;
+      if(cnt % 400 === 0){ batch.commit(); batch = db.batch(); }
+    });
+    if(cnt % 400 !== 0) await batch.commit();
+    edbLog('등급 재산정 완료 · '+cnt+'건','ok');
+    edbLoadStats();
+  } catch(e){
+    edbLog('등급 재산정 오류: '+e.message,'err');
+  }
+}
+
+// ── 임원 검색 ──
+async function edbSearch(q){
+  var keyword = q || document.getElementById('edb-search').value.trim();
+  var grade   = document.getElementById('edb-filter-grade').value;
+  var issue   = document.getElementById('edb-filter-issue').value;
+
+  try {
+    var db = firebase.firestore();
+    var ref = db.collection('exec_officers').orderBy('score','desc').limit(200);
+    var snap = await ref.get();
+    _edbListData = [];
+
+    snap.forEach(function(doc){
+      var v = doc.data();
+      if(keyword && !v.name.includes(keyword) && !v.corpName.includes(keyword)) return;
+      if(grade && v.grade !== grade) return;
+      if(issue && (!v.issues || !v.issues.includes(
+        issue==='loan'?'가지급금':issue==='retire'?'퇴직충당금미적립':
+        issue==='expire'?'임기만료임박':'가업승계필요'
+      ))) return;
+      _edbListData.push(v);
+    });
+
+    _edbPage = 1;
+    edbRenderList();
+    document.getElementById('edb-list-info').textContent = '총 '+_edbListData.length+'명 조회';
+  } catch(e){
+    edbLog('검색 오류: '+e.message,'err');
+  }
+}
+
+// ── 리스트 렌더링 ──
+function edbRenderList(){
+  var tbody = document.getElementById('edb-tbody');
+  var start = (_edbPage-1)*_edbPageSize;
+  var items = _edbListData.slice(start, start+_edbPageSize);
+
+  if(items.length === 0){
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#94A3B8;padding:30px;">조회된 임원이 없습니다.</td></tr>';
+    return;
+  }
+
+  var html = '';
+  items.forEach(function(v){
+    var gradeClass = 'edb-grade-'+(v.grade||'C');
+    var age = v.birthYear ? (new Date().getFullYear()-v.birthYear)+'세' : '-';
+    var dday = v.dday !== null && v.dday !== undefined ?
+      (v.dday < 0 ? '만료' : 'D-'+v.dday) : '-';
+    var ddayColor = v.dday >= 0 && v.dday <= 180 ? '#DC2626' :
+                    v.dday >= 0 && v.dday <= 365 ? '#D97706' : '#64748B';
+    var loanStr = v.shortTermLoans > 0 ?
+      (v.shortTermLoans >= 100000000 ?
+        Math.round(v.shortTermLoans/100000000)+'억' :
+        Math.round(v.shortTermLoans/10000)+'만') : '-';
+    var revStr = v.revenue > 0 ?
+      (v.revenue >= 1000000000000 ?
+        Math.round(v.revenue/100000000000)/10+'조' :
+        Math.round(v.revenue/100000000)+'억') : '-';
+    var issueHtml = (v.issues||[]).map(function(iss){
+      var bg = iss.includes('가지급금') ? '#FCEBEB' : iss.includes('퇴직') ? '#FAEEDA' : '#EFF6FF';
+      var cl = iss.includes('가지급금') ? '#A32D2D' : iss.includes('퇴직') ? '#854F0B' : '#1D4ED8';
+      return '<span style="background:'+bg+';color:'+cl+';font-size:10px;padding:1px 6px;border-radius:20px;margin:1px;display:inline-block;">'+iss+'</span>';
+    }).join('');
+    var collectedStr = v.collectedAt && v.collectedAt.toDate ?
+      v.collectedAt.toDate().toLocaleDateString('ko-KR') : '-';
+
+    html += '<tr>'
+      +'<td><span class="edb-grade '+gradeClass+'">'+(v.grade||'C')+'</span></td>'
+      +'<td style="font-weight:600;">'+v.name+'</td>'
+      +'<td>'+v.corpName+'</td>'
+      +'<td style="font-size:11px;color:#64748B;">'+v.position+'</td>'
+      +'<td>'+age+'</td>'
+      +'<td style="font-weight:600;color:'+ddayColor+';">'+dday+'</td>'
+      +'<td>'+(v.shareRate > 0 ? v.shareRate+'%' : '-')+'</td>'
+      +'<td style="color:#A32D2D;font-weight:500;">'+loanStr+'</td>'
+      +'<td>'+revStr+'</td>'
+      +'<td>'+issueHtml+'</td>'
+      +'<td style="color:#94A3B8;">'+collectedStr+'</td>'
+      +'</tr>';
+  });
+  tbody.innerHTML = html;
+
+  // 페이지네이션
+  var totalPages = Math.ceil(_edbListData.length/_edbPageSize);
+  var pgHtml = '';
+  for(var i=1;i<=Math.min(totalPages,10);i++){
+    pgHtml += '<button onclick="edbGoPage('+i+')" style="padding:3px 9px;font-size:11px;border:1px solid '+(i===_edbPage?'var(--primary)':'#E2E8F0')+';background:'+(i===_edbPage?'var(--primary)':'#fff')+';color:'+(i===_edbPage?'#fff':'#64748B')+';border-radius:4px;cursor:pointer;">'+i+'</button>';
+  }
+  document.getElementById('edb-pagination').innerHTML = pgHtml;
+}
+
+function edbGoPage(p){
+  _edbPage = p;
+  edbRenderList();
+}
+
+// ── 패널 진입 시 자동 로드 ──
+document.addEventListener('DOMContentLoaded', function(){
+  var origGoPanel = window.goPanel;
+  // goPanel 후킹: p-exec-db 진입 시 통계 로드
+  document.querySelectorAll('[data-p="p-exec-db"]').forEach(function(el){
+    el.addEventListener('click', function(){
+      setTimeout(edbLoadStats, 300);
+    });
+  });
+});
+</script>
+
 </body>
 </html>
