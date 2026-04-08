@@ -1245,6 +1245,23 @@ async function loadDash(){
       }
     }
   }catch(e){console.error('리포트회원 만료 복원 오류:',e);}
+  // 이너서클 만료 자동 복원
+  try{
+    const now3=new Date();
+    const expSnap3=await getDocs(query(collection(db,'users'),where('role','==','inner_circle')));
+    for(const d of expSnap3.docs){
+      const u=d.data();
+      if(u.innerCircleExpiresAt&&u.innerCircleExpiresAt!=='unlimited'){
+        const exp=u.innerCircleExpiresAt.toDate?u.innerCircleExpiresAt.toDate():new Date(u.innerCircleExpiresAt);
+        if(exp<now3){
+          const restoreRole=u.originalRole||'user';
+          await updateDoc(doc(db,'users',d.id),{role:restoreRole,originalRole:deleteField(),innerCircleGrantedAt:deleteField(),innerCircleExpiresAt:deleteField(),updatedAt:serverTimestamp()});
+          await logRoleChange(d.id,u.name||'',u.loginId||'','inner_circle',restoreRole,'이너서클 만료 자동복원','시스템');
+          console.log('이너서클 만료 복원:',u.name,'→',restoreRole);
+        }
+      }
+    }
+  }catch(e){console.error('이너서클 만료 복원 오류:',e);}
   const today=new Date();today.setHours(0,0,0,0);const tTs=Timestamp.fromDate(today);
   const su=await getDocs(query(collection(db,'users'),where('createdAt','>=',tTs)));$('d-signup').textContent=su.size;
   const vw=await getDocs(query(collection(db,'view_logs'),where('createdAt','>=',tTs)));$('d-views').textContent=vw.size;
@@ -1458,6 +1475,7 @@ async function updateMemberInfo(uid){
     const prevDoc=await getDoc(doc(db,'users',uid));const prevData=prevDoc.exists()?prevDoc.data():{};
     const updateData={name,phone,role,updatedAt:serverTimestamp()};
     if(role==='user'||role==='jarvia_inner'||role==='free_user'||role==='branch_manager'){updateData.expiresAt=deleteField();}
+    if(prevData.role==='inner_circle'){updateData.innerCircleGrantedAt=deleteField();updateData.innerCircleExpiresAt=deleteField();updateData.originalRole=deleteField();}
     await updateDoc(doc(db,'users',uid),updateData);
     if(prevData.role&&prevData.role!==role){await logRoleChange(uid,name,prevData.loginId||'',prevData.role,role,'관리자 수동변경',admData?.name||'');}
     toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();loadMembership();
