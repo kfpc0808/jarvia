@@ -970,6 +970,7 @@ function renderAudio(){
   window._audioScriptEn=d.audioScriptEn||'';
   window._audioTranscriptKo=d.audioTranscriptKo||'';
   window._audioTranscriptEn=d.audioTranscriptEn||'';
+  window._audioTranscriptEnTimed=d.audioTranscriptEnTimed||null;
   if(d.audioUrlEn){
     document.getElementById('enAudioEl').src=d.audioUrlEn;
     document.getElementById('audioLangTabs').style.display='block';
@@ -1008,6 +1009,7 @@ window.switchAudioLang=function(lang){
       scriptBtn.textContent='📜 스크립트 보기';
       scriptBtn.style.background='rgba(255,255,255,.1)';
       scriptBtn.style.color='rgba(255,255,255,.7)';
+      if(_syncCleanup) _syncCleanup();
     }
   }
   // ★ 활성 오디오 duration 업데이트
@@ -1039,11 +1041,58 @@ window.toggleScript=function(){
     btn.textContent='📜 스크립트 보기';
     btn.style.background='rgba(255,255,255,.1)';
     btn.style.color='rgba(255,255,255,.7)';
+    if(_syncCleanup) _syncCleanup();
   }
 };
 function updateScriptContent(){
   var content=document.getElementById('scriptContent');
-  content.textContent=window._audioTranscriptEn||window._audioScriptEn||'English script is not available yet.';
+  var timed=window._audioTranscriptEnTimed;
+  // ★ 타임스탬프 데이터가 있으면 문장별 span으로 렌더링
+  if(timed&&timed.length>0){
+    content.innerHTML=timed.map(function(s,i){
+      return '<span class="stt-sentence" data-idx="'+i+'" data-start="'+s.start+'" data-end="'+s.end+'" style="display:inline;transition:background .2s,color .2s;border-radius:3px;padding:1px 2px">'+
+        s.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</span>';
+    }).join(' ');
+    _initScriptSync();
+  } else {
+    content.textContent=window._audioTranscriptEn||window._audioScriptEn||'English script is not available yet.';
+  }
+}
+// ★ 오디오 재생 위치에 맞춰 현재 문장 하이라이트
+var _syncCleanup=null;
+function _initScriptSync(){
+  if(_syncCleanup) _syncCleanup();
+  var audio=document.getElementById('enAudioEl');
+  if(!audio) return;
+  var container=document.getElementById('scriptPanel');
+  var lastIdx=-1;
+  function onTime(){
+    var t=audio.currentTime;
+    var timed=window._audioTranscriptEnTimed;
+    if(!timed) return;
+    var idx=-1;
+    for(var i=0;i<timed.length;i++){
+      if(t>=timed[i].start&&t<timed[i].end){idx=i;break;}
+      if(t>=timed[i].start) idx=i;  // 가장 가까운 문장
+    }
+    if(idx===lastIdx) return;
+    lastIdx=idx;
+    var spans=container.querySelectorAll('.stt-sentence');
+    for(var j=0;j<spans.length;j++){
+      if(j===idx){
+        spans[j].style.background='rgba(24,95,165,.25)';
+        spans[j].style.color='#fff';
+        // ★ 자동 스크롤
+        var st=spans[j].offsetTop-container.offsetTop-60;
+        if(st>0) container.scrollTop=st;
+      } else {
+        spans[j].style.background='';
+        spans[j].style.color='';
+      }
+    }
+  }
+  audio.addEventListener('timeupdate',onTime);
+  _syncCleanup=function(){audio.removeEventListener('timeupdate',onTime);lastIdx=-1;};
 }
 
 // ═══ Render: Sections ═══
