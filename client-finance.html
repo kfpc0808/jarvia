@@ -1250,163 +1250,37 @@ button,input{font-family:var(--font);outline:none;border:none}
 <div class="toast" id="toast"></div>
 
 <!-- Firebase SDK -->
-<script type="module">
-/* ═══════════════════════════════════════════════════════
-   Firebase 실서비스 연동
-   - Auth: 이메일 방식 (phone@jf-client-{fcId}.internal)
-   - Firestore: javia-db
-   - Cloud Functions: sendVerifyCode / checkVerifyCode
-   - Cloud Functions: generateFinanceReport (AI 진단)
-═══════════════════════════════════════════════════════ */
-import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,signOut}
-  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
-  where,limit,serverTimestamp}
-  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-import{getFunctions,httpsCallable}
-  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
-
-/* Firebase 초기화 */
-const fbApp  = initializeApp({
-  apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",
-  authDomain:"kfpc-company-support-project.firebaseapp.com",
-  projectId:"kfpc-company-support-project",
-  storageBucket:"kfpc-company-support-project.firebasestorage.app",
-  messagingSenderId:"1012609333373",
-  appId:"1:1012609333373:web:7b6c207c81ff10d156d914"
-});
-const fbAuth = getAuth(fbApp);
-const fbDb   = getFirestore(fbApp,'javia-db');
-const fbFns  = getFunctions(fbApp,'asia-northeast3');
-
-/* URL 파라미터 */
-const _params = new URLSearchParams(location.search);
-const _fcId   = _params.get('fc') || '';
-const _refId  = _params.get('ref') || '';
-
-/* Firebase 함수 window 노출 (기존 <script>와 연결) */
+<script>
+/* window._fb 로컬 스텁 — Firebase 없이 localStorage만 사용 */
 window._fb = {
-  auth: fbAuth,
-  db:   fbDb,
-  fns:  fbFns,
-  fcId: _fcId,
-  refId:_refId,
-
-  /* 계정 가입 */
   async register(name, phone, pw) {
-    const email = `${phone}@jf-client-${_fcId}.internal`;
-    const cred  = await createUserWithEmailAndPassword(fbAuth, email, pw);
-    const uid   = cred.user.uid;
-    await setDoc(doc(fbDb,'client_accounts',uid),{
-      clientId:uid, name, phone, fcId:_fcId,
-      referredBy: _refId||null,
-      createdAt: serverTimestamp(), lastLoginAt: serverTimestamp()
-    });
-    return { clientId:uid, name, phone };
+    const clientId = 'local_' + Date.now().toString(36);
+    return { clientId, name, phone };
   },
-
-  /* 로그인 */
   async login(phone, pw) {
-    const email = `${phone}@jf-client-${_fcId}.internal`;
-    const cred  = await signInWithEmailAndPassword(fbAuth, email, pw);
-    const uid   = cred.user.uid;
-    // 이름 조회
-    const snap  = await getDoc(doc(fbDb,'client_accounts',uid));
-    const name  = snap.exists() ? snap.data().name : '';
-    // lastLoginAt 업데이트
-    await setDoc(doc(fbDb,'client_accounts',uid),
-      {lastLoginAt:serverTimestamp()},{merge:true});
-    return { clientId:uid, name, phone };
+    return null; // 로컬 방식은 메인 doLogin에서 처리
   },
-
-  /* 로그아웃 */
-  async logout() { await signOut(fbAuth); },
-
-  /* FC 프로필 조회 */
+  async logout() {},
   async getFcData(fcId) {
-    // 1. consultants 컬렉션 우선
-    const snap = await getDoc(doc(fbDb,'consultants',fcId));
-    if(snap.exists()) return snap.data();
-    // 2. admins 컬렉션 폴백
-    const aq = await getDocs(query(
-      collection(fbDb,'admins'),where('loginId','==',fcId),limit(1)));
-    if(!aq.empty) {
-      const ad = aq.docs[0].data();
-      return {name:ad.name||fcId, title:ad.title||'', company:ad.company||'', fcId};
-    }
-    // 3. users 컬렉션 폴백
-    const uq = await getDocs(query(
-      collection(fbDb,'users'),where('loginId','==',fcId),limit(1)));
-    if(!uq.empty) {
-      const ud = uq.docs[0].data();
-      return {name:ud.name||fcId, title:ud.title||'', company:ud.company||'', fcId};
-    }
-    return null;
+    return { name:'', title:'', company:'', fcId };
   },
-
-  /* FC 역할 검증 */
-  async checkFcRole(fcId) {
-    // 1. users 컬렉션에서 역할 확인
-    const q = await getDocs(query(
-      collection(fbDb,'users'),
-      where('loginId','==',fcId),limit(1)));
-    if(!q.empty) {
-      const role = q.docs[0].data().role||'';
-      const VALID = ['jarvia_member','jarvia_inner','jarvia_report',
-                     'inner_circle','branch_manager'];
-      if(VALID.includes(role)) return true;
-    }
-    // 2. admins 컬렉션 확인 (관리자도 FC로 사용 가능)
-    const aq = await getDocs(query(
-      collection(fbDb,'admins'),
-      where('loginId','==',fcId),limit(1)));
-    if(!aq.empty && aq.docs[0].data().status==='active') return true;
-    return false;
-  },
-
-  /* OTP 발송 (기존 Cloud Function 재사용) */
+  async checkFcRole(fcId) { return true; },
   async sendOtp(phone) {
-    const fn = httpsCallable(fbFns,'sendVerifyCode');
-    await fn({phone});
+    // 테스트용: 4자리 코드 생성 후 alert
+    const code = String(Math.floor(1000+Math.random()*9000));
+    window._testOtp = code;
+    alert('📱 테스트 인증번호: ' + code);
   },
-
-  /* OTP 검증 */
   async checkOtp(phone, code) {
-    const fn = httpsCallable(fbFns,'checkVerifyCode');
-    await fn({phone, code});
+    if(window._testOtp && code === window._testOtp) return true;
+    throw new Error('인증번호가 올바르지 않습니다');
   },
-
-  /* FC 공유 데이터 동기화 */
-  async syncToFC(clientId, fcId, sharedData) {
-    await setDoc(
-      doc(fbDb,'consultants',fcId,'clients',clientId),
-      {...sharedData, updatedAt:serverTimestamp()},
-      {merge:true}
-    );
-  },
-
-  /* AI 진단 리포트 조회 */
-  async getReport(clientId) {
-    const snap = await getDoc(doc(fbDb,'finance_reports',clientId));
-    return snap.exists() ? snap.data() : null;
-  },
-
-  /* AI 진단 리포트 수동 재생성 */
-  async generateReport(clientId, fcId) {
-    const fn = httpsCallable(fbFns,'generateFinanceReport');
-    const result = await fn({clientId, fcId});
-    return result.data;
-  },
-
-  /* Auth 상태 변화 구독 */
-  onAuthChange(cb) {
-    return onAuthStateChanged(fbAuth, cb);
-  }
+  async syncToFC() {},
+  async getReport() { return null; },
+  async generateReport() { return null; },
+  onAuthChange(cb) {}
 };
-
-console.log('[client-finance] Firebase 초기화 완료');
+console.log('[client-finance] 로컬 모드 초기화 완료');
 </script>
 
 <script>
@@ -1567,7 +1441,7 @@ async function verifyOtp(ctx) {
   }
 }
 
-/* ── 가입 (Firebase) ── */
+/* ── 가입 (로컬 localStorage) ── */
 window.doRegister = async function() {
   const name = document.getElementById('rgName').value.trim();
   const rp   = rawPhone('rgPhone1','rgPhone2');
@@ -1586,24 +1460,29 @@ window.doRegister = async function() {
   if (!otpOk) return;
 
   btn.disabled = true; btn.innerHTML = '<span>처리 중...</span>';
-  try {
-    const sess = await fb().register(name, rp, pw);
-    saveSess(sess);
-    toast(name+'님, 환영합니다 🎉','ok');
-    setTimeout(enterMain, 700);
-  } catch(e) {
-    console.error('[doRegister]', e);
-    if (e.code === 'auth/email-already-in-use') {
-      toast('이미 가입된 전화번호입니다. 로그인해주세요','err');
-      showScreen('Login');
-    } else {
-      toast('가입 중 오류가 발생했습니다: '+e.message,'err');
-    }
-    btn.disabled = false; btn.innerHTML = '<span>시작하기</span><span>→</span>';
+
+  // 중복 체크
+  const accts = loadAccounts();
+  if (accts[rp]) {
+    toast('이미 가입된 전화번호입니다. 로그인해주세요','err');
+    showScreen('Login');
+    btn.disabled=false; btn.innerHTML='<span>시작하기</span><span>→</span>';
+    return;
   }
+
+  const clientId = 'local_' + Date.now().toString(36);
+  const pwHash   = hashPwSync(pw, clientId);
+  const acct = { clientId, name, phone:rp, passwordHash:pwHash, fcId, createdAt:Date.now() };
+  const newAccts = loadAccounts();
+  newAccts[rp] = acct;
+  saveAccounts(newAccts);
+
+  saveSess({ clientId, name, phone:rp });
+  toast(name+'님, 환영합니다 🎉','ok');
+  setTimeout(enterMain, 700);
 };
 
-/* ── 로그인 (Firebase) ── */
+/* ── 로그인 (로컬 localStorage) ── */
 window.doLogin = async function() {
   const rp   = rawPhone('liPhone1','liPhone2');
   const pw   = document.getElementById('liPw').value;
@@ -1614,25 +1493,19 @@ window.doLogin = async function() {
   if (rp.length !== 11) { toast('전화번호를 입력해주세요','err'); return; }
   if (!pw)               { toast('비밀번호를 입력해주세요','err'); return; }
 
-  btn.disabled = true; btn.innerHTML = '<span>확인 중...</span>';
-  try {
-    const sess = await fb().login(rp, pw);
-    saveSess(sess);
-    toast(sess.name+'님, 반갑습니다 👋','ok');
-    setTimeout(enterMain, 600);
-  } catch(e) {
-    console.error('[doLogin]', e);
-    if (e.code==='auth/invalid-credential'||e.code==='auth/wrong-password') {
-      hint.textContent='전화번호 또는 비밀번호가 올바르지 않습니다';
-      hint.className='fi-hint err';
-    } else if (e.code==='auth/user-not-found') {
-      hint.textContent='가입되지 않은 전화번호입니다';
-      hint.className='fi-hint err';
-    } else {
-      toast('로그인 중 오류: '+e.message,'err');
-    }
-    btn.disabled=false; btn.innerHTML='<span>로그인</span><span>→</span>';
+  const acct = getAccount(rp);
+  if (!acct) {
+    hint.textContent='가입되지 않은 전화번호입니다';
+    hint.className='fi-hint err'; return;
   }
+  if (hashPwSync(pw, acct.clientId) !== acct.passwordHash) {
+    hint.textContent='비밀번호가 올바르지 않습니다';
+    hint.className='fi-hint err'; return;
+  }
+
+  saveSess({ clientId:acct.clientId, name:acct.name, phone:rp });
+  toast(acct.name+'님, 반갑습니다 👋','ok');
+  setTimeout(enterMain, 600);
 };
 
 /* ── 비밀번호 변경 ── */
@@ -1667,10 +1540,9 @@ window.doChangePw = function() {
   setTimeout(()=>showScreen('Login'), 800);
 };
 
-/* ── 로그아웃 (Firebase) ── */
+/* ── 로그아웃 ── */
 window.doLogout = async function() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
-  try { if(fb()) await fb().logout(); } catch(e){}
   clearSess(); closeDrawer();
   document.getElementById('mainContent').style.display = 'none';
   document.getElementById('authWrap').style.display = 'block';
@@ -3027,22 +2899,8 @@ window.saveProd = function() {
     return;
   }
 
-  // Firebase 초기화 대기
-  let retries = 0;
-  while (!window._fb && retries++ < 20) {
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  // FC 프로필 조회 (실패해도 기본값으로 진행)
-  try {
-    if (window._fb) {
-      const fc = await fb().getFcData(fcId);
-      fcData = fc || { name:'', title:'', company:'', fcId };
-    }
-  } catch(e) {
-    console.warn('[init] FC 프로필 조회 실패 — 기본값 사용:', e.message);
-  }
-  if (!fcData) fcData = { name:'', title:'', company:'', fcId };
+  // FC 기본값 설정 (로컬 모드)
+  fcData = { name:'', title:'', company:'', fcId };
 
   // loadingState 숨기고 바로 진입
   document.getElementById('loadingState').style.display = 'none';
