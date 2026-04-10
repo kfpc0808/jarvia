@@ -1024,13 +1024,6 @@ button,input{font-family:var(--font);outline:none;border:none}
         </div>
         <div id="cpPwGroup" style="display:none">
           <div class="fg">
-            <label class="fl">현재 비밀번호 <span class="req">*</span></label>
-            <div class="pw-wrap">
-              <input class="fi" id="cpOldPw" type="password" inputmode="numeric" placeholder="현재 비밀번호 입력" maxlength="6">
-              <button class="pw-toggle" onclick="togglePw('cpOldPw',this)" type="button">👁</button>
-            </div>
-          </div>
-          <div class="fg">
             <label class="fl">새 비밀번호 <span class="req">*</span></label>
             <div class="pw-wrap">
               <input class="fi" id="cpPw" type="password" inputmode="numeric" placeholder="숫자 4~6자리" maxlength="6">
@@ -1411,6 +1404,12 @@ window._fb = {
     return result.data;
   },
 
+  /* 비밀번호 재설정 (OTP 인증 완료 후 Cloud Function으로 강제 변경) */
+  async resetPassword(phone, newPw, fcId) {
+    const fn = httpsCallable(fbFns,'resetClientPassword');
+    await fn({phone, newPw, fcId});
+  },
+
   onAuthChange(cb) { return onAuthStateChanged(fbAuth, cb); }
 };
 
@@ -1671,43 +1670,29 @@ window.doChangePw = async function() {
   if (otpVerifiedPhone !== rp) {
     if (!(await verifyOtp('cp'))) return;
     document.getElementById('cpPwGroup').style.display = 'block';
-    toast('인증되었습니다. 현재 비밀번호와 새 비밀번호를 입력해주세요','ok');
+    toast('인증되었습니다. 새 비밀번호를 입력해주세요 ✅','ok');
     return;
   }
 
-  const oldPw = document.getElementById('cpOldPw').value;
-  const pw    = document.getElementById('cpPw').value;
-  const pw2   = document.getElementById('cpPw2').value;
-  const hint  = document.getElementById('cpHint');
+  const pw   = document.getElementById('cpPw').value;
+  const pw2  = document.getElementById('cpPw2').value;
+  const hint = document.getElementById('cpHint');
 
-  if (!oldPw)              { toast('현재 비밀번호를 입력해주세요','err'); return; }
-  if (!pw || pw.length<4)  { toast('새 비밀번호는 4자리 이상이어요','err'); return; }
-  if (pw !== pw2)          { hint.textContent='비밀번호가 일치하지 않습니다'; hint.className='fi-hint err'; return; }
-  if (pw === oldPw)        { toast('현재 비밀번호와 동일합니다','err'); return; }
+  if (!pw || pw.length<4) { toast('비밀번호는 4자리 이상이어요','err'); return; }
+  if (pw !== pw2)         { hint.textContent='비밀번호가 일치하지 않습니다'; hint.className='fi-hint err'; return; }
 
   btn.disabled = true; btn.textContent = '변경 중...';
   try {
-    // 현재 비밀번호로 재로그인 후 비밀번호 변경
-    const email = `${rp}@jf-client-${fcId}.internal`;
-    const { signInWithEmailAndPassword, updatePassword }
-      = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
-    // 재인증
-    const cred = await signInWithEmailAndPassword(fb().auth, email, oldPw);
-    // 비밀번호 변경
-    await updatePassword(cred.user, pw);
-    // 로그아웃 처리 (새 비밀번호로 다시 로그인)
-    await fb().logout();
+    // Cloud Function으로 비밀번호 강제 변경 (OTP 인증 완료 후)
+    await fb().resetPassword(rp, pw, fcId);
+    await fb().logout().catch(()=>{});
     clearSess();
     otpVerifiedPhone = '';
     toast('비밀번호가 변경되었습니다. 새 비밀번호로 로그인하세요 ✅','ok');
     setTimeout(()=>showScreen('Login'), 1200);
   } catch(e) {
     console.error('[doChangePw]', e);
-    if(e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'){
-      toast('현재 비밀번호가 올바르지 않습니다','err');
-    } else {
-      toast('변경 실패: '+e.message,'err');
-    }
+    toast('변경 실패: '+(e.message||'잠시 후 다시 시도해주세요'),'err');
   } finally {
     btn.disabled=false; btn.textContent='비밀번호 변경';
   }
