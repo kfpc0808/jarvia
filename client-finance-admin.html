@@ -483,78 +483,113 @@ button,input,select{font-family:var(--font);outline:none;border:none}
 
 <div class="toast" id="toast"></div>
 
-<script>
-/* ══════════════════════════════════════
-   테스트용 더미 데이터
-══════════════════════════════════════ */
-const FC_DATA = {name:'김재무', title:'수석컨설턴트', company:'KFPC 파트너스', fcId:'gildong'};
+<!-- Firebase SDK -->
+<script type="module">
+import{initializeApp,getApps,getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getFirestore,doc,getDoc,getDocs,collection,query,where,orderBy,limit}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-/* 테스트 고객 데이터 생성 */
-const DEMO_CLIENTS = [
-  {
-    id:'c001', name:'홍길동', birthYear:1983, gender:'남', married:true,
-    phone:'010-1234-5678', joinDate:'2024-09-15',
-    scores:{total:78,insurance:65,assets:80,debt:85,retirement:58,cashflow:75},
-    insurance:{hasReal:true,hasCancer:false,hasLife:true,hasPension:true,
-      cancerAmt:0,diagTotal:0},
-    assets:{savings:80000000,invest:50000000,retire:30000000,debt:150000000},
-    monthly:{insurance:255000,savings:300000,loan:900000},
-    lastUpdate:'2026-04-09'
-  },
-  {
-    id:'c002', name:'이민지', birthYear:1990, gender:'여', married:false,
-    phone:'010-2345-6789', joinDate:'2024-10-02',
-    scores:{total:52,insurance:30,assets:55,debt:60,retirement:40,cashflow:65},
-    insurance:{hasReal:false,hasCancer:false,hasLife:false,hasPension:true,
-      cancerAmt:0,diagTotal:0},
-    assets:{savings:20000000,invest:15000000,retire:8000000,debt:50000000},
-    monthly:{insurance:80000,savings:200000,loan:400000},
-    lastUpdate:'2026-04-08'
-  },
-  {
-    id:'c003', name:'김철수', birthYear:1978, gender:'남', married:true,
-    phone:'010-3456-7890', joinDate:'2024-08-20',
-    scores:{total:88,insurance:90,assets:85,debt:95,retirement:82,cashflow:88},
-    insurance:{hasReal:true,hasCancer:true,hasLife:true,hasPension:true,
-      cancerAmt:50000000,diagTotal:90000000},
-    assets:{savings:150000000,invest:120000000,retire:180000000,debt:0},
-    monthly:{insurance:450000,savings:800000,loan:0},
-    lastUpdate:'2026-04-10'
-  },
-  {
-    id:'c004', name:'박지영', birthYear:1986, gender:'여', married:true,
-    phone:'010-4567-8901', joinDate:'2024-11-15',
-    scores:{total:61,insurance:55,assets:65,debt:70,retirement:45,cashflow:72},
-    insurance:{hasReal:true,hasCancer:false,hasLife:false,hasPension:false,
-      cancerAmt:0,diagTotal:0},
-    assets:{savings:40000000,invest:20000000,retire:15000000,debt:80000000},
-    monthly:{insurance:120000,savings:250000,loan:600000},
-    lastUpdate:'2026-04-07'
-  },
-  {
-    id:'c005', name:'최동욱', birthYear:1975, gender:'남', married:true,
-    phone:'010-5678-9012', joinDate:'2024-07-10',
-    scores:{total:71,insurance:80,assets:70,debt:55,retirement:75,cashflow:60},
-    insurance:{hasReal:true,hasCancer:true,hasLife:true,hasPension:false,
-      cancerAmt:30000000,diagTotal:55000000},
-    assets:{savings:60000000,invest:80000000,retire:100000000,debt:200000000},
-    monthly:{insurance:380000,savings:400000,loan:1200000},
-    lastUpdate:'2026-04-06'
-  },
-  {
-    id:'c006', name:'정수연', birthYear:1992, gender:'여', married:false,
-    phone:'010-6789-0123', joinDate:'2025-01-05',
-    scores:{total:45,insurance:20,assets:50,debt:65,retirement:25,cashflow:55},
-    insurance:{hasReal:false,hasCancer:false,hasLife:false,hasPension:false,
-      cancerAmt:0,diagTotal:0},
-    assets:{savings:15000000,invest:5000000,retire:0,debt:30000000},
-    monthly:{insurance:0,savings:100000,loan:250000},
-    lastUpdate:'2026-04-05'
-  },
-];
+const fbApp = getApps().length ? getApp() : initializeApp({
+  apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",
+  authDomain:"kfpc-company-support-project.firebaseapp.com",
+  projectId:"kfpc-company-support-project",
+  storageBucket:"kfpc-company-support-project.firebasestorage.app",
+  messagingSenderId:"1012609333373",
+  appId:"1:1012609333373:web:7b6c207c81ff10d156d914"
+});
+const fbAuth = getAuth(fbApp);
+const fbDb   = getFirestore(fbApp,'javia-db');
+
+/* FC 로그인 확인 후 고객 데이터 로드 */
+onAuthStateChanged(fbAuth, async (user) => {
+  if (!user) {
+    window.location.href = 'index.html';
+    return;
+  }
+
+  /* FC loginId 조회 */
+  const {getDocs:gd,collection:col,query:q,where:w,limit:lim} = {
+    getDocs,collection,query,where,limit
+  };
+  const uSnap = await getDocs(query(
+    collection(fbDb,'users'),
+    where('email','==',user.email),
+    limit(1)
+  ));
+  if (uSnap.empty) { window.location.href='index.html'; return; }
+
+  const uData  = uSnap.docs[0].data();
+  const fcId   = uData.loginId || '';
+  const VALID  = ['jarvia_member','jarvia_inner','jarvia_report','inner_circle','branch_manager'];
+  if (!VALID.includes(uData.role||'')) {
+    alert('접근 권한이 없습니다.');
+    window.location.href='index.html';
+    return;
+  }
+
+  /* FC 프로필 조회 */
+  const fcSnap = await getDoc(doc(fbDb,'consultants',fcId));
+  const fcProfile = fcSnap.exists() ? fcSnap.data() : {};
+
+  /* window에 노출 */
+  window._fcId   = fcId;
+  window._fcData = {
+    name:    fcProfile.name    || uData.name    || '',
+    title:   fcProfile.title   || uData.title   || '',
+    company: fcProfile.company || uData.company || '',
+    fcId
+  };
+
+  /* 고객 데이터 Firestore 로드 */
+  try {
+    const clientsSnap = await getDocs(
+      collection(fbDb,'consultants',fcId,'clients')
+    );
+    const clients = [];
+    clientsSnap.forEach(d => {
+      const data = d.data();
+      clients.push({
+        id:          d.id,
+        clientId:    d.id,
+        name:        data.name        || '고객',
+        fcId:        data.fcId        || fcId,
+        scores:      data.scores      || {total:0,insurance:0,assets:0,debt:100,retirement:0,cashflow:50},
+        insurance:   data.insurance   || {hasReal:false,hasCancer:false,hasLife:false,hasPension:false,cancerAmt:0,diagTotal:0},
+        assets:      data.assets      || {savings:0,invest:0,retire:0,debt:0},
+        monthly:     data.monthly     || {insurance:0,savings:0,loan:0},
+        lastUpdate:  data.updatedAt
+          ? (data.updatedAt.toDate?data.updatedAt.toDate():new Date(data.updatedAt))
+            .toISOString().split('T')[0]
+          : '-',
+        // 더미 필드 (현재 공유 안 되는 항목 기본값)
+        birthYear:   data.birthYear   || 1985,
+        gender:      data.gender      || '-',
+        married:     data.married     || false,
+      });
+    });
+
+    window._clients = clients;
+    console.log(`[admin] 고객 ${clients.length}명 로드 완료`);
+
+    /* 앱 초기화 실행 */
+    if (typeof window._initAdmin === 'function') window._initAdmin();
+  } catch(e) {
+    console.error('[admin] 고객 데이터 로드 실패:', e.message);
+    window._clients = [];
+    if (typeof window._initAdmin === 'function') window._initAdmin();
+  }
+});
+</script>
+
+<script>
+/* FC 데이터 — Firebase 로드 전 기본값 */
+const FC_DATA = window._fcData || {name:'', title:'', company:'', fcId:''};
+
+/* 고객 데이터 — Firebase에서 로드 (window._clients) */
 
 let currentFilter = 'all';
-let filteredClients = [...DEMO_CLIENTS];
+let filteredClients = [];
 
 /* ── 유틸 ── */
 function fmtAmt(v){
@@ -589,7 +624,7 @@ function daysSince(dateStr){
 
 /* ── 통계 카드 ── */
 function renderStats(){
-  const clients=DEMO_CLIENTS;
+  const clients=(window._clients||[]);
   const urgent=clients.filter(c=>!c.insurance.hasReal||c.scores.insurance<40).length;
   const avgScore=Math.round(clients.reduce((s,c)=>s+c.scores.total,0)/clients.length);
   const noIns=clients.filter(c=>!c.insurance.hasReal).length;
@@ -649,7 +684,7 @@ function resetFilter(){
   applyFilter();
 }
 function applyFilter(){
-  filteredClients=DEMO_CLIENTS.filter(c=>{
+  filteredClients=(window._clients||[]).filter(c=>{
     if(currentFilter==='all') return true;
     if(currentFilter==='urgent') return !c.insurance.hasReal||c.scores.insurance<40;
     if(currentFilter==='insurance') return !c.insurance.hasReal||!c.insurance.hasCancer;
@@ -713,7 +748,7 @@ function renderClientList(){
 
 /* ── 고객 상세 모달 ── */
 function openModal(clientId){
-  const c=DEMO_CLIENTS.find(x=>x.id===clientId);
+  const c=(window._clients||[]).find(x=>x.id===clientId);
   if(!c) return;
   document.getElementById('modalTtl').textContent=c.name+' 고객 재무 리포트';
   document.getElementById('modalBg').classList.add('show');
@@ -852,7 +887,7 @@ window.closeModal=function(){
 
 /* ── 인사이트 페이지 ── */
 function renderInsight(){
-  const clients=DEMO_CLIENTS;
+  const clients=(window._clients||[]);
   const ages={30:0,40:0,50:0,other:0};
   clients.forEach(c=>{
     const a=getAge(c.birthYear);
@@ -925,14 +960,14 @@ window.copyInviteLink=function(){
 
 /* ── 전체 저장 ── */
 window.saveAllToDevice=function(){
-  if(!confirm(`전체 고객 ${DEMO_CLIENTS.length}명의 데이터를\n이 기기에 암호화 저장합니다.\n\n주로 사용하는 기기 1대를 권장합니다.\n계속하시겠습니까?`)) return;
+  if(!confirm(`전체 고객 ${(window._clients||[]).length}명의 데이터를\n이 기기에 암호화 저장합니다.\n\n주로 사용하는 기기 1대를 권장합니다.\n계속하시겠습니까?`)) return;
   toast('저장 중...','');
   setTimeout(()=>{
     // 실제: AES 암호화 후 IndexedDB 저장
     const key='jf_fc_clients_'+FC_DATA.fcId;
-    const data={clients:DEMO_CLIENTS,savedAt:new Date().toISOString()};
+    const data={clients:(window._clients||[]),savedAt:new Date().toISOString()};
     localStorage.setItem(key,JSON.stringify(data));
-    toast(`${DEMO_CLIENTS.length}명 저장 완료. 앱으로만 열람 가능합니다 🔒`,'ok');
+    toast(`${(window._clients||[]).length}명 저장 완료. 앱으로만 열람 가능합니다 🔒`,'ok');
   },600);
 };
 
@@ -957,18 +992,26 @@ function showFcPrivacyNotice(cb){
   };
 }
 
-/* ── 초기화 ── */
-(function init(){
-  document.getElementById('sbFcAv').textContent=(FC_DATA.name||'?')[0];
-  document.getElementById('sbFcName').textContent=FC_DATA.name+' '+FC_DATA.title;
-  document.getElementById('sbFcCo').textContent=FC_DATA.company;
+/* ── 초기화 (Firebase 로드 후 호출) ── */
+window._initAdmin = function(){
+  const fc = window._fcData || FC_DATA;
+  document.getElementById('sbFcAv').textContent  = (fc.name||'?')[0];
+  document.getElementById('sbFcName').textContent = fc.name+' '+fc.title;
+  document.getElementById('sbFcCo').textContent   = fc.company;
+  filteredClients = [...(window._clients||[])];
   renderStats();
   renderClientList();
-
-  // 최초 1회만 팝업 표시
   if(!localStorage.getItem(FC_PRV_KEY)){
     showFcPrivacyNotice(null);
   }
+};
+
+/* 로딩 중 표시 */
+(function(){
+  document.getElementById('clientList').innerHTML =
+    '<div style="text-align:center;padding:40px;color:#8B93AE;font-size:13px">'+
+    '<div style="font-size:28px;margin-bottom:10px">⏳</div>'+
+    'Firebase에서 고객 데이터를 불러오는 중...</div>';
 })();
 </script>
 </body>
