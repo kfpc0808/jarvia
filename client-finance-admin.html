@@ -466,6 +466,16 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       <!-- 통계 카드 -->
       <div class="stat-grid" id="statGrid"></div>
 
+      <!-- 당월 상령일 고객 리스트 -->
+      <div id="ageAlertSection" style="margin-bottom:20px;display:none">
+        <div class="section-title" style="margin-bottom:10px">
+          ⏰ 이번 달 상령일 고객
+          <span id="ageAlertCount" style="font-size:11px;font-weight:700;
+            background:var(--red);color:#fff;padding:2px 8px;border-radius:10px;margin-left:6px"></span>
+        </div>
+        <div id="ageAlertList"></div>
+      </div>
+
       <!-- 필터 -->
       <div class="filter-wrap">
         <div class="filter-top">
@@ -631,10 +641,13 @@ onAuthStateChanged(fbAuth, async (user) => {
           ? (data.updatedAt.toDate?data.updatedAt.toDate():new Date(data.updatedAt))
             .toISOString().split('T')[0]
           : '-',
-        // 더미 필드 (현재 공유 안 되는 항목 기본값)
         birthYear:   data.birthYear   || 1985,
         gender:      data.gender      || '-',
         married:     data.married     || false,
+        // 상령일 계산용 생년월일 (client_accounts에서 sync 필요)
+        birth:       data.birth       || '',
+        spouseBirth: data.spouseBirth || '',
+        phone:       data.phone       || '',
       });
     });
 
@@ -737,6 +750,100 @@ function renderStats(){
   const now=new Date();
   document.getElementById('lastUpdate').textContent=
     `${now.getMonth()+1}/${now.getDate()} 업데이트`;
+  renderAgeAlertSection();
+}
+
+/* ── 당월 상령일 고객 리스트 ── */
+function renderAgeAlertSection(){
+  const clients = window._clients || [];
+  const now = new Date();
+  const thisMonth = now.getMonth();
+  const thisYear  = now.getFullYear();
+
+  // 상령일 대상 수집 (고객 본인 + 배우자)
+  const alerts = [];
+  clients.forEach(c=>{
+    // 고객 본인
+    if(c.birth){
+      const info = calcInsAge(c.birth);
+      if(info){
+        const sm = info.sangRyung.getMonth();
+        const sy = info.sangRyung.getFullYear();
+        if(sy===thisYear && sm===thisMonth){
+          alerts.push({name:c.name, label:'본인', info, phone:c.phone, clientId:c.id,
+            urgent: info.dDay<=15});
+        }
+      }
+    }
+    // 배우자
+    if(c.spouseBirth){
+      const info = calcInsAge(c.spouseBirth);
+      if(info){
+        const sm = info.sangRyung.getMonth();
+        const sy = info.sangRyung.getFullYear();
+        if(sy===thisYear && sm===thisMonth){
+          alerts.push({name:c.name, label:'배우자', info, phone:c.phone, clientId:c.id,
+            urgent: info.dDay<=15});
+        }
+      }
+    }
+  });
+
+  const sec = document.getElementById('ageAlertSection');
+  const list = document.getElementById('ageAlertList');
+  const cnt  = document.getElementById('ageAlertCount');
+  if(!sec||!list) return;
+
+  if(alerts.length===0){ sec.style.display='none'; return; }
+
+  // D-day 오름차순 정렬
+  alerts.sort((a,b)=>a.info.dDay-b.info.dDay);
+
+  sec.style.display='block';
+  cnt.textContent = alerts.length+'명';
+
+  list.innerHTML = alerts.map(a=>{
+    const urgentColor = a.urgent ? 'var(--red)' : a.info.dDay<=30 ? 'var(--orange)' : 'var(--ink-lt)';
+    const urgentBg    = a.urgent ? 'var(--red-lt)' : a.info.dDay<=30 ? '#FEF3E2' : 'var(--bg-warm)';
+    const urgentBadge = a.urgent
+      ? '<span style="background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;margin-left:6px">🔴 긴급</span>'
+      : a.info.dDay<=30
+      ? '<span style="background:var(--orange);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;margin-left:6px">🟡 주의</span>'
+      : '';
+
+    const kakaoHref = a.phone
+      ? `kakaotalk://launch`
+      : '#';
+    const callHref = a.phone ? `tel:${a.phone}` : '#';
+
+    return `<div style="background:${urgentBg};border-radius:12px;padding:12px 14px;
+      margin-bottom:8px;border:1px solid rgba(0,0,0,.06)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <span style="font-size:14px;font-weight:800;color:var(--ink)">${a.name}</span>
+          <span style="font-size:11px;color:var(--ink-sub);margin-left:6px">${a.label}</span>
+          ${urgentBadge}
+        </div>
+        <div style="font-size:13px;font-weight:800;color:${urgentColor}">D-${a.info.dDay}</div>
+      </div>
+      <div style="font-size:12px;color:var(--ink-lt);margin-bottom:8px">
+        상령일 <b style="color:var(--ink)">${fmtDate(a.info.sangRyung)}</b> · 
+        보험 나이 <b style="color:var(--ink)">만 ${a.info.insAge}세 → ${a.info.insAge+1}세</b>
+      </div>
+      <div style="display:flex;gap:6px">
+        <a href="${callHref}" style="flex:1;display:flex;align-items:center;justify-content:center;
+          gap:4px;padding:8px;border-radius:8px;background:#EFF6FF;color:#1D4ED8;
+          border:1px solid #BFDBFE;font-size:12px;font-weight:700;text-decoration:none">
+          📞 전화
+        </a>
+        <a href="${kakaoHref}" style="flex:1;display:flex;align-items:center;justify-content:center;
+          gap:4px;padding:8px;border-radius:8px;background:#FEF08A;color:#854D0E;
+          border:1px solid #FDE047;font-size:12px;font-weight:700;text-decoration:none">
+          💬 카카오
+        </a>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 /* ── 필터 ── */

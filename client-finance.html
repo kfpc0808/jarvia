@@ -1134,6 +1134,12 @@ button,input{font-family:var(--font);outline:none;border:none}
     <div class="tab-pane active" id="pane-home">
       <div class="main-page">
 
+        <!-- 상령일 임박 알림 -->
+        <div id="ageAlertCard" style="display:none;background:linear-gradient(135deg,#FFF8ED,#FEF3DC);
+          border:1px solid rgba(201,169,110,.35);border-radius:var(--radius);
+          padding:14px 16px;margin-bottom:12px">
+        </div>
+
         <!-- 점수 히어로 -->
         <div class="score-hero">
           <div class="score-hero-top">
@@ -1210,10 +1216,32 @@ button,input{font-family:var(--font);outline:none;border:none}
       </div>
     </div><!-- /pane-home -->
 
-    <!-- ── 내 상품 탭 ── -->
+    <!-- ── 내 정보 탭 ── -->
     <div class="tab-pane" id="pane-products">
       <div class="main-page">
-        <div style="font-size:15px;font-weight:800;color:var(--ink);margin-bottom:14px">내 금융 상품</div>
+        <!-- 기본 정보 카드 -->
+        <div id="profileCard" style="background:#fff;border-radius:18px;padding:16px;
+          border:1px solid var(--border-lt);box-shadow:var(--shadow-card);margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-size:14px;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:6px">
+              <span style="width:24px;height:24px;border-radius:7px;background:var(--accent-lt);
+                display:flex;align-items:center;justify-content:center;font-size:12px">👤</span>
+              기본 정보
+            </div>
+            <button onclick="openProfileEdit()"
+              style="background:var(--accent-lt);color:var(--accent-bright);border:none;
+              border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer">
+              ✏️ 수정
+            </button>
+          </div>
+          <div id="profileDisplay"></div>
+          <!-- 상령일 알림 -->
+          <div id="profileAgeAlert" style="display:none;margin-top:10px;
+            background:var(--gold-lt);border:1px solid rgba(201,169,110,.3);
+            border-radius:10px;padding:10px 12px;font-size:12px;color:#7C5C1A;line-height:1.7">
+          </div>
+        </div>
+        <div style="font-size:14px;font-weight:800;color:var(--ink);margin-bottom:12px">내 금융 상품</div>
         <div class="product-grid" id="prodCatGrid"></div>
         <div style="font-size:11px;color:var(--ink-sub);text-align:center;padding:4px 0 8px;line-height:1.6">
           🔒 입력한 금액은 이 기기에만 저장됩니다
@@ -1284,8 +1312,8 @@ button,input{font-family:var(--font);outline:none;border:none}
       <span class="t-label">홈</span>
     </div>
     <div class="tab-item" id="tab-products" onclick="switchTab('products')">
-      <span class="t-icon">📋</span>
-      <span class="t-label">내 상품</span>
+      <span class="t-icon">👤</span>
+      <span class="t-label">내 정보</span>
     </div>
     <div class="tab-item" id="tab-assets" onclick="switchTab('assets')">
       <span class="t-icon">📊</span>
@@ -2072,7 +2100,7 @@ window.switchTab=function(id){
   document.getElementById('pane-'+id).classList.add('active');
   document.getElementById('tab-'+id).classList.add('active');
   if(id==='home')renderHome();
-  if(id==='products')renderProducts();
+  if(id==='products'){renderProfile();renderProducts();}
   if(id==='assets')renderAssets();
   if(id==='diag')renderDiag();
 };
@@ -2086,6 +2114,7 @@ function renderHome(){
 
   document.getElementById('briefDate').textContent=(now.getMonth()+1)+'/'+(now.getDate());
   loadDailyBriefing(); // 데일리 리포트 로드
+  renderAgeAlert(); // 상령일 알림
 
   renderFcMsg(); // FC 카드는 항상 표시
   if(allProds===0){
@@ -2240,6 +2269,465 @@ function renderFcMsg(){
 /* 카카오 링크/전화 없을 때 fallback */
 window.contactKakaoFallback = function(){
   toast('컨설턴트에게 직접 연락해주세요','');
+};
+
+/* ════ 상령일 계산 유틸 ════ */
+function calcInsAge(birthStr){
+  if(!birthStr) return null;
+  const birth = new Date(birthStr);
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  // 상령일: 생일 후 6개월 → 보험나이 올라감
+  // 즉 생일 전 6개월부터 새 나이 적용
+  const birthMM = birth.getMonth();
+  const birthDD = birth.getDate();
+  // 올해 상령일 = 생일 + 6개월
+  let sangRyung = new Date(today.getFullYear(), birthMM + 6, birthDD);
+  if(sangRyung < today){
+    // 이미 지났으면 내년 상령일
+    sangRyung = new Date(today.getFullYear()+1, birthMM + 6, birthDD);
+    age++; // 이미 보험나이 올라간 상태
+  }
+  const dDay = Math.ceil((sangRyung - today) / (1000*60*60*24));
+  return { insAge: age, sangRyung, dDay };
+}
+
+function fmtDate(d){
+  return `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일`;
+}
+
+/* 기본 정보 렌더링 */
+function renderProfile(){
+  const sess = session || loadSess();
+  const el = document.getElementById('profileDisplay');
+  const alertEl = document.getElementById('profileAgeAlert');
+  if(!el) return;
+
+  if(!sess?.birth){
+    el.innerHTML=`<div style="text-align:center;padding:16px;color:var(--ink-lt);font-size:13px">
+      <div style="font-size:28px;margin-bottom:8px">👤</div>
+      기본 정보를 입력해주세요<br>
+      <button onclick="openProfileEdit()" style="margin-top:10px;padding:8px 20px;
+        background:var(--accent);color:#fff;border:none;border-radius:10px;
+        font-size:13px;font-weight:700;cursor:pointer">정보 입력하기</button>
+    </div>`;
+    return;
+  }
+
+  // 나이 계산
+  const birth = new Date(sess.birth);
+  const age = new Date().getFullYear() - birth.getFullYear();
+  const myInfo = calcInsAge(sess.birth);
+  const spInfo = sess.spouseBirth ? calcInsAge(sess.spouseBirth) : null;
+
+  // 자녀 상령일
+  const childInfos = [];
+  if(sess.childrenBirths){
+    sess.childrenBirths.forEach((cb,i)=>{
+      if(cb) childInfos.push({label:`자녀${i+1}`, info: calcInsAge(cb)});
+    });
+  }
+
+  const genderLabel = sess.gender==='M'?'남성':'여성';
+  const spouseLabel = sess.spouse==='Y'?'있음':'없음';
+
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div style="background:var(--bg-warm);border-radius:10px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">성별·나이</div>
+        <div style="font-size:14px;font-weight:800;color:var(--ink)">${genderLabel} · 만 ${age}세</div>
+      </div>
+      <div style="background:var(--bg-warm);border-radius:10px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">생년월일</div>
+        <div style="font-size:13px;font-weight:700;color:var(--ink)">${birth.getFullYear()}.${String(birth.getMonth()+1).padStart(2,'0')}.${String(birth.getDate()).padStart(2,'0')}</div>
+      </div>
+      <div style="background:var(--bg-warm);border-radius:10px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">배우자</div>
+        <div style="font-size:13px;font-weight:700;color:var(--ink)">${spouseLabel}</div>
+      </div>
+      <div style="background:var(--bg-warm);border-radius:10px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">자녀</div>
+        <div style="font-size:13px;font-weight:700;color:var(--ink)">${sess.children||0}명</div>
+      </div>
+    </div>
+    ${myInfo?`
+    <div style="background:var(--accent-lt);border-radius:10px;padding:12px;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--accent-bright);margin-bottom:4px">🎂 보험 나이 · 상령일</div>
+      <div style="font-size:13px;font-weight:800;color:var(--ink)">보험 나이 만 ${myInfo.insAge}세</div>
+      <div style="font-size:12px;color:var(--ink-lt);margin-top:3px">
+        다음 상령일: ${fmtDate(myInfo.sangRyung)} <b style="color:${myInfo.dDay<=60?'var(--red)':'var(--ink)'}">D-${myInfo.dDay}</b>
+      </div>
+      <div style="font-size:11px;color:var(--ink-lt);margin-top:5px;line-height:1.65">
+        상령일이 지나면 보험 나이가 ${myInfo.insAge+1}세로 올라가 보험료가 인상됩니다.
+        ${myInfo.dDay<=60?'<b style="color:var(--red)">지금이 가입 적기입니다!</b>':'지금 가입하면 현재 보험료를 유지할 수 있습니다.'}
+      </div>
+    </div>`:''}
+    ${spInfo?`
+    <div style="background:var(--bg-warm);border-radius:10px;padding:10px;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-lt);margin-bottom:3px">👫 배우자 상령일</div>
+      <div style="font-size:12px;color:var(--ink)">
+        보험 나이 만 ${spInfo.insAge}세 · 상령일 ${fmtDate(spInfo.sangRyung)}
+        <b style="color:${spInfo.dDay<=60?'var(--red)':'var(--ink-lt)'}"> D-${spInfo.dDay}</b>
+      </div>
+    </div>`:''}
+    ${childInfos.map(c=>c.info?`
+    <div style="background:var(--bg-warm);border-radius:10px;padding:10px;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-lt);margin-bottom:3px">👶 ${c.label} 상령일</div>
+      <div style="font-size:12px;color:var(--ink)">
+        보험 나이 만 ${c.info.insAge}세 · 상령일 ${fmtDate(c.info.sangRyung)}
+        <b style="color:${c.info.dDay<=60?'var(--red)':'var(--ink-lt)'}"> D-${c.info.dDay}</b>
+      </div>
+    </div>`:'').join('')}`;
+
+  // 은퇴 설계 요약 카드
+  if(sess?.retireAge){
+    const curAge2 = sess.birth ? new Date().getFullYear()-new Date(sess.birth).getFullYear() : 0;
+    const ytr = Math.max(parseInt(sess.retireAge)-curAge2, 0);
+    const mon = parseInt(sess.retireMonthly)||300;
+    const futMon = Math.round(mon*Math.pow(1.025,ytr));
+    const lifeYrs = (sess.retireLifeType==='couple'?90:85)-parseInt(sess.retireAge);
+    const total = futMon*12*lifeYrs;
+    function fa(v){
+      if(v>=1e8)return(v/1e8).toFixed(1).replace(/\.0$/,'')+'억원';
+      if(v>=1e4)return Math.round(v/1e4)+'만원';
+      return v.toLocaleString()+'원';
+    }
+    el.innerHTML += `
+    <div style="background:linear-gradient(135deg,var(--accent-lt),#ECF0FB);
+      border-radius:10px;padding:12px;margin-top:8px;border:1px solid rgba(27,58,107,.08)">
+      <div style="font-size:11px;font-weight:700;color:var(--accent-bright);margin-bottom:6px">🏖️ 은퇴 설계 요약</div>
+      <div style="font-size:12px;color:var(--ink);line-height:1.8">
+        <div>희망 은퇴 나이 <b>${sess.retireAge}세</b> · 연금 개시 <b>${sess.pensionAge||sess.retireAge}세</b></div>
+        <div>은퇴 후 월 생활비 <b>${fa(futMon*10000)}</b>
+          <span style="font-size:10px;color:var(--ink-sub)">(물가상승 반영)</span></div>
+        <div>총 필요 자금 <b style="color:var(--red)">${fa(total*10000)}</b></div>
+      </div>
+    </div>`;
+  }
+
+  // 상령일 60일 이내 경고
+  const warnings = [];
+  if(myInfo && myInfo.dDay <= 60)
+    warnings.push(`고객님 상령일 D-${myInfo.dDay} (${fmtDate(myInfo.sangRyung)})`);
+  if(spInfo && spInfo.dDay <= 60)
+    warnings.push(`배우자 상령일 D-${spInfo.dDay} (${fmtDate(spInfo.sangRyung)})`);
+  childInfos.forEach(c=>{ if(c.info && c.info.dDay<=60)
+    warnings.push(`${c.label} 상령일 D-${c.info.dDay} (${fmtDate(c.info.sangRyung)})`); });
+
+  if(alertEl){
+    if(warnings.length>0){
+      alertEl.style.display='block';
+      alertEl.innerHTML=`<b>⚠️ 상령일 임박</b><br>${warnings.join('<br>')}`;
+    } else { alertEl.style.display='none'; }
+  }
+}
+
+/* 홈 탭 상령일 60일 알림 */
+function renderAgeAlert(){
+  const sess = session || loadSess();
+  const card = document.getElementById('ageAlertCard');
+  if(!card) return;
+
+  const targets = [];
+  if(sess?.birth){ const i=calcInsAge(sess.birth); if(i&&i.dDay<=60) targets.push({label:'고객님',info:i}); }
+  if(sess?.spouseBirth){ const i=calcInsAge(sess.spouseBirth); if(i&&i.dDay<=60) targets.push({label:'배우자',info:i}); }
+  if(sess?.childrenBirths) sess.childrenBirths.forEach((cb,idx)=>{
+    if(cb){ const i=calcInsAge(cb); if(i&&i.dDay<=60) targets.push({label:`자녀${idx+1}`,info:i}); }
+  });
+
+  if(targets.length===0){ card.style.display='none'; return; }
+
+  card.style.display='block';
+  card.innerHTML=`
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <span style="font-size:22px;flex-shrink:0">⏰</span>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#7C5C1A;margin-bottom:6px">상령일 임박 — 보험 가입 적기!</div>
+        ${targets.map(t=>`
+        <div style="font-size:12px;color:#7C5C1A;margin-bottom:4px;line-height:1.6">
+          <b>${t.label}</b>의 보험 나이가 <b>D-${t.info.dDay}</b> 후 
+          만 ${t.info.insAge+1}세로 올라갑니다.<br>
+          상령일(${fmtDate(t.info.sangRyung)}) 전 가입 시 현재 보험료 유지 가능합니다.
+        </div>`).join('')}
+        <button onclick="switchTab('products')" style="margin-top:6px;
+          background:var(--gold);color:#fff;border:none;border-radius:8px;
+          padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">
+          📞 지금 상담하기
+        </button>
+      </div>
+    </div>`;
+}
+
+/* 프로필 수정 모달 */
+window.openProfileEdit = function(){
+  const sess = session || loadSess();
+  const existChildren = sess?.childrenBirths || [];
+
+  document.getElementById('drawerBg').classList.add('show');
+  const drawer = document.getElementById('drawer');
+  drawer.style.display='block';
+  drawer.innerHTML=`
+    <div class="drawer-handle"><div class="drawer-handle-bar"></div></div>
+    <div class="drawer-title">👤 기본 정보 수정</div>
+    <div style="padding:0 20px 20px;overflow-y:auto;max-height:70vh">
+      <div class="fg">
+        <label class="fl">생년월일 <span class="req">*</span></label>
+        <input class="fi" id="epBirth" type="date" value="${sess?.birth||''}"
+          min="1940-01-01" max="2010-12-31">
+      </div>
+      <div class="fg">
+        <label class="fl">성별 <span class="req">*</span></label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="epGenderM" onclick="epSelectGender('M')"
+            style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--border);
+            font-size:13px;font-weight:700;cursor:pointer;
+            ${sess?.gender==='M'?'background:var(--accent);color:#fff;border-color:var(--accent)':'background:#fff;color:var(--ink-lt)'}">
+            👨 남성</button>
+          <button type="button" id="epGenderF" onclick="epSelectGender('F')"
+            style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--border);
+            font-size:13px;font-weight:700;cursor:pointer;
+            ${sess?.gender==='F'?'background:var(--accent);color:#fff;border-color:var(--accent)':'background:#fff;color:var(--ink-lt)'}">
+            👩 여성</button>
+        </div>
+        <input type="hidden" id="epGender" value="${sess?.gender||''}">
+      </div>
+      <div class="fg">
+        <label class="fl">직업</label>
+        <select class="fi" id="epJob" style="-webkit-appearance:none">
+          <option value="">선택</option>
+          ${['직장인','자영업','공무원','전문직','주부','학생','기타'].map(j=>
+            `<option value="${j}" ${sess?.job===j?'selected':''}>${j}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">연소득</label>
+        <select class="fi" id="epIncome" style="-webkit-appearance:none">
+          <option value="">선택</option>
+          ${['3천만원 이하','3천~5천만원','5천~8천만원','8천만~1억원','1억원 이상'].map(i=>
+            `<option value="${i}" ${sess?.income===i?'selected':''}>${i}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fg" style="border-top:1px solid var(--border-lt);padding-top:14px;margin-top:4px">
+        <label class="fl">배우자</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button type="button" id="epSpouseY" onclick="epSelectSpouse('Y')"
+            style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--border);
+            font-size:13px;font-weight:700;cursor:pointer;
+            ${sess?.spouse==='Y'?'background:var(--accent);color:#fff;border-color:var(--accent)':'background:#fff;color:var(--ink-lt)'}">
+            있음</button>
+          <button type="button" id="epSpouseN" onclick="epSelectSpouse('N')"
+            style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--border);
+            font-size:13px;font-weight:700;cursor:pointer;
+            ${sess?.spouse!=='Y'?'background:var(--accent);color:#fff;border-color:var(--accent)':'background:#fff;color:var(--ink-lt)'}">
+            없음</button>
+        </div>
+        <input type="hidden" id="epSpouse" value="${sess?.spouse||'N'}">
+        <div id="epSpouseBirthWrap" style="display:${sess?.spouse==='Y'?'block':'none'}">
+          <label class="fl">배우자 생년월일</label>
+          <input class="fi" id="epSpouseBirth" type="date" value="${sess?.spouseBirth||''}"
+            min="1940-01-01" max="2010-12-31">
+        </div>
+      </div>
+      <div class="fg" style="border-top:1px solid var(--border-lt);padding-top:14px;margin-top:4px">
+        <label class="fl">자녀</label>
+        <select class="fi" id="epChildren" style="-webkit-appearance:none"
+          onchange="epUpdateChildBirths(this.value)">
+          <option value="0" ${(sess?.children||0)==0?'selected':''}>없음</option>
+          <option value="1" ${(sess?.children||0)==1?'selected':''}>1명</option>
+          <option value="2" ${(sess?.children||0)==2?'selected':''}>2명</option>
+          <option value="3" ${(sess?.children||0)==3?'selected':''}>3명 이상</option>
+        </select>
+        <div id="epChildBirths" style="margin-top:8px"></div>
+      </div>
+      <div class="fg" style="border-top:1px solid var(--border-lt);padding-top:14px;margin-top:4px">
+        <div style="font-size:13px;font-weight:800;color:var(--accent);margin-bottom:12px;
+          display:flex;align-items:center;gap:6px">
+          🏖️ 은퇴 설계
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <div class="fg" style="flex:1;margin:0">
+            <label class="fl">희망 은퇴 나이</label>
+            <select class="fi" id="epRetireAge" style="-webkit-appearance:none">
+              <option value="">선택</option>
+              ${[50,55,60,62,65,67,70].map(a=>
+                `<option value="${a}" ${(sess?.retireAge||65)==a?'selected':''}>${a}세</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="fg" style="flex:1;margin:0">
+            <label class="fl">연금 개시 연령</label>
+            <select class="fi" id="epPensionAge" style="-webkit-appearance:none">
+              <option value="">선택</option>
+              ${[55,60,62,65,67,70].map(a=>
+                `<option value="${a}" ${(sess?.pensionAge||65)==a?'selected':''}>${a}세</option>`
+              ).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="fg" style="margin-bottom:10px">
+          <label class="fl">은퇴 후 희망 월 생활비 <span style="font-weight:400;color:var(--ink-sub)">(현재 가치 기준)</span></label>
+          <div style="display:flex;gap:8px">
+            <select class="fi" id="epRetireLifeType" style="-webkit-appearance:none;flex:1"
+              onchange="updateRetireCalc()">
+              <option value="single" ${(sess?.retireLifeType||'single')==='single'?'selected':''}>단독 생활</option>
+              <option value="couple" ${sess?.retireLifeType==='couple'?'selected':''}>부부 생활</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            ${[150,200,250,300,400,500].map(v=>
+              `<button type="button" onclick="epSelectRetireMon(${v})"
+                id="epRetireMon${v}"
+                style="flex:1;min-width:70px;padding:8px 6px;border-radius:8px;
+                border:1.5px solid var(--border);font-size:12px;font-weight:700;
+                cursor:pointer;background:#fff;color:var(--ink-lt);
+                ${(sess?.retireMonthly||300)===v?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">
+                ${v}만원
+              </button>`
+            ).join('')}
+          </div>
+          <input type="hidden" id="epRetireMonthly" value="${sess?.retireMonthly||300}">
+        </div>
+        <!-- 은퇴 자금 미리보기 -->
+        <div id="retireCalcPreview" style="background:var(--accent-lt);border-radius:10px;
+          padding:12px;border:1px solid rgba(45,93,174,.12);font-size:12px;
+          color:var(--accent-bright);line-height:1.8"></div>
+      </div>
+      <button onclick="saveProfile()"
+        style="width:100%;padding:14px;border-radius:12px;
+        background:linear-gradient(135deg,var(--accent),#2D5DAE);
+        color:#fff;font-size:15px;font-weight:800;cursor:pointer;border:none;margin-top:8px">
+        저장하기 ✓
+      </button>
+    </div>`;
+
+  // 자녀 생년월일 초기 렌더
+  epUpdateChildBirths(sess?.children||0, existChildren);
+  // 은퇴 계산 미리보기 초기 렌더
+  setTimeout(()=>updateRetireCalc(), 50);
+};
+
+window.epSelectGender=function(v){
+  document.getElementById('epGender').value=v;
+  const mBtn=document.getElementById('epGenderM'),fBtn=document.getElementById('epGenderF');
+  if(v==='M'){mBtn.style.cssText+='background:var(--accent);color:#fff;border-color:var(--accent)';
+    fBtn.style.cssText+='background:#fff;color:var(--ink-lt);border-color:var(--border)';}
+  else{fBtn.style.cssText+='background:var(--accent);color:#fff;border-color:var(--accent)';
+    mBtn.style.cssText+='background:#fff;color:var(--ink-lt);border-color:var(--border)';}
+};
+window.epSelectSpouse=function(v){
+  document.getElementById('epSpouse').value=v;
+  const yBtn=document.getElementById('epSpouseY'),nBtn=document.getElementById('epSpouseN');
+  if(v==='Y'){yBtn.style.cssText+='background:var(--accent);color:#fff;border-color:var(--accent)';
+    nBtn.style.cssText+='background:#fff;color:var(--ink-lt);border-color:var(--border)';
+    document.getElementById('epSpouseBirthWrap').style.display='block';}
+  else{nBtn.style.cssText+='background:var(--accent);color:#fff;border-color:var(--accent)';
+    yBtn.style.cssText+='background:#fff;color:var(--ink-lt);border-color:var(--border)';
+    document.getElementById('epSpouseBirthWrap').style.display='none';}
+};
+window.epSelectRetireMon=function(v){
+  document.getElementById('epRetireMonthly').value=v;
+  [150,200,250,300,400,500].forEach(x=>{
+    const btn=document.getElementById(`epRetireMon${x}`);
+    if(!btn) return;
+    if(x===v){btn.style.background='var(--accent)';btn.style.color='#fff';btn.style.borderColor='var(--accent)';}
+    else{btn.style.background='#fff';btn.style.color='var(--ink-lt)';btn.style.borderColor='var(--border)';}
+  });
+  updateRetireCalc();
+};
+
+window.updateRetireCalc=function(){
+  const sess=session||loadSess();
+  const preview=document.getElementById('retireCalcPreview');
+  if(!preview) return;
+
+  const retireAge=parseInt(document.getElementById('epRetireAge')?.value)||65;
+  const pensionAge=parseInt(document.getElementById('epPensionAge')?.value)||65;
+  const monthly=parseInt(document.getElementById('epRetireMonthly')?.value)||300;
+  const lifeType=document.getElementById('epRetireLifeType')?.value||'single';
+
+  // 현재 나이 계산
+  let curAge=40;
+  if(sess?.birth){
+    curAge=new Date().getFullYear()-new Date(sess.birth).getFullYear();
+  }
+  const yearsToRetire=Math.max(retireAge-curAge,1);
+  const inflationRate=0.025; // 물가상승률 2.5%
+
+  // 미래 월 생활비 (물가상승률 반영)
+  const futureMonthly=Math.round(monthly*Math.pow(1+inflationRate,yearsToRetire));
+
+  // 은퇴 후 생존 기간 (기대수명 85세 가정)
+  const lifeExpect=lifeType==='couple'?90:85;
+  const retireYears=Math.max(lifeExpect-retireAge,10);
+
+  // 총 필요 은퇴 자금
+  const totalNeeded=futureMonthly*12*retireYears;
+
+  // 현재 연금 적립액
+  const sc=calcScores();
+  const currentRetire=sc.totalRetBal||0;
+  const shortage=Math.max(totalNeeded-currentRetire,0);
+
+  // 월 추가 적립 필요액 (복리 연 5% 가정)
+  const r=0.05/12;
+  const n=yearsToRetire*12;
+  const monthlyNeeded=shortage>0&&n>0
+    ? Math.round(shortage*r/(Math.pow(1+r,n)-1))
+    : 0;
+
+  function fmtAmt2(v){
+    if(v>=1e8) return (v/1e8).toFixed(1).replace(/\.0$/,'')+'억원';
+    if(v>=1e4) return Math.round(v/1e4)+'만원';
+    return v.toLocaleString()+'원';
+  }
+
+  preview.innerHTML=`
+    <div style="font-weight:800;color:var(--accent);margin-bottom:6px">📊 은퇴 자금 시뮬레이션</div>
+    <div>현재 나이 <b>${curAge}세</b> → 은퇴 <b>${retireAge}세</b> (${yearsToRetire}년 후)</div>
+    <div>은퇴 후 월 생활비 <b>${fmtAmt2(futureMonthly*10000)}</b>
+      <span style="font-size:10px;opacity:.7">(물가상승률 2.5% 반영)</span></div>
+    <div>총 필요 자금 <b style="color:var(--red)">${fmtAmt2(totalNeeded*10000)}</b>
+      <span style="font-size:10px;opacity:.7">(${retireYears}년 기준)</span></div>
+    ${currentRetire>0?`<div>현재 적립액 <b>${fmtAmt2(currentRetire)}</b> · 부족액 <b style="color:var(--red)">${fmtAmt2(shortage*10000)}</b></div>`:''}
+    ${monthlyNeeded>0?`<div style="margin-top:4px;font-weight:800;color:var(--red)">
+      월 <b>${fmtAmt2(monthlyNeeded*10000)}</b> 추가 적립 필요
+    </div>`:'<div style="color:var(--green);font-weight:700">✅ 현재 적립액으로 목표 달성 가능</div>'}`;
+};
+
+window.epUpdateChildBirths=function(cnt, existing=[]){
+  const wrap=document.getElementById('epChildBirths'); if(!wrap) return;
+  const n=parseInt(cnt)||0;
+  wrap.innerHTML=Array.from({length:n},(_,i)=>`
+    <div class="fg" style="margin-bottom:8px">
+      <label class="fl">자녀${i+1} 생년월일</label>
+      <input class="fi" id="epChild${i}" type="date" value="${existing[i]||''}"
+        min="2000-01-01" max="${new Date().toISOString().split('T')[0]}">
+    </div>`).join('');
+};
+window.saveProfile=function(){
+  const sess=session||loadSess();
+  const birth=document.getElementById('epBirth')?.value||'';
+  const gender=document.getElementById('epGender')?.value||'';
+  const job=document.getElementById('epJob')?.value||'';
+  const income=document.getElementById('epIncome')?.value||'';
+  const spouse=document.getElementById('epSpouse')?.value||'N';
+  const spouseBirth=document.getElementById('epSpouseBirth')?.value||'';
+  const children=document.getElementById('epChildren')?.value||'0';
+  const childrenBirths=Array.from({length:parseInt(children)||0},(_,i)=>
+    document.getElementById(`epChild${i}`)?.value||'');
+  const retireAge     = document.getElementById('epRetireAge')?.value||'65';
+  const pensionAge    = document.getElementById('epPensionAge')?.value||'65';
+  const retireMonthly = document.getElementById('epRetireMonthly')?.value||'300';
+  const retireLifeType= document.getElementById('epRetireLifeType')?.value||'single';
+  if(!birth){toast('생년월일을 입력해주세요','err');return;}
+  if(!gender){toast('성별을 선택해주세요','err');return;}
+  const updated={...sess,birth,gender,job,income,spouse,spouseBirth,children,childrenBirths,
+    retireAge,pensionAge,retireMonthly,retireLifeType};
+  saveSess(updated);
+  closeDrawer();
+  renderProfile();
+  renderAgeAlert();
+  toast('기본 정보가 저장되었습니다 ✅','ok');
 };
 
 /* 친구 추천 */
