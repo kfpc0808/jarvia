@@ -3954,11 +3954,90 @@ document.getElementById('rgPw2').addEventListener('input', function(){
 async function syncSharedData() {
   const sess = session || loadSess();
   if (!sess || !fcId || fcId === 'demo') return;
-  const sc = calcScores();
-  const ins = getProds('insurance');
+  const sc  = calcScores();
+  const now = new Date();
+
+  // ── 고객이 공유 ON한 상품만 필터링 ──
+  function sharedProds(cat){
+    return getProds(cat).filter(p=>p.shareAmt!=='N').map(p=>{
+      // 금액 필드 숫자 변환
+      const out={};
+      Object.entries(p).forEach(([k,v])=>{
+        out[k] = ['premium','balance','monthly','yearly','cancerAmt','brainAmt',
+          'heartAmt','hospDaily','deposit','monthlyRent','jeonseAmt',
+          'mortgage','buyPrice','currentPrice'].includes(k)
+          ? (Number(v)||0) : v;
+      });
+      return out;
+    });
+  }
+
+  // ── 진단 항목 생성 (고객 화면과 동일) ──
+  const diagItems = [];
+  const curAge = sess.birth ? now.getFullYear()-new Date(sess.birth).getFullYear() : 0;
+
+  if(!sc.hasReal)  diagItems.push({sev:'urgent', title:'실손보험 미가입 — 의료비 무방어 상태'});
+  else             diagItems.push({sev:'good',   title:'실손보험 가입 확인'});
+  if(!sc.hasCancer) diagItems.push({sev:'urgent', title:'암보험 미가입 — 3대 진단비 0원'});
+  else if(sc.cancerAmt<30000000) diagItems.push({sev:'warn', title:`암 진단비 부족 — 현재 ${Math.round(sc.cancerAmt/10000)}만원`});
+  else             diagItems.push({sev:'good',   title:`3대 진단비 ${Math.round(sc.diagTotal/10000)}만원 확보`});
+  if(!sc.hasLife)  diagItems.push({sev:'warn',   title:'사망 보장 없음 — 가족 보호 설계 필요'});
+  if(!sc.hasDementia && curAge>=45) diagItems.push({sev:'warn', title:'치매보험 미가입'});
+
+  // 은퇴 설계
+  const retireAge = parseInt(sess.retireAge)||65;
+  const ytr       = Math.max(retireAge-curAge,1);
+  const retMon    = parseInt(sess.retireMonthly)||0;
+  const futMon    = retMon ? Math.round(retMon*Math.pow(1.025,ytr)) : 0;
+  const lifeYrs   = ((sess.retireLifeType==='couple'?90:85)-retireAge);
+  const totalNeed = futMon*12*lifeYrs;
+  const curRet    = Math.round(sc.totalRetBal/10000);
+  const shortage  = Math.max(totalNeed-curRet,0);
+  const r=0.05/12, nm=ytr*12;
+  const monthlyAdd= shortage>0&&nm>0 ? Math.round(shortage*r/(Math.pow(1+r,nm)-1)) : 0;
+
+  if(shortage>5000) diagItems.push({sev:sc.totalRetBal<10000000?'urgent':'warn',
+    title:`노후 자금 ${shortage>=10000?Math.round(shortage/10000)+'억':shortage+'만'}원 부족`});
+  else if(curRet>0) diagItems.push({sev:'good', title:`노후 자금 ${curRet}만원 적립 중`});
+
+  const ltv = sc.totalAsset>0 ? Math.round(sc.totalDebt/sc.totalAsset*100) : 0;
+  const dsr = sc.monthlyOut>0 ? Math.round(sc.totalRepay/sc.monthlyOut*100) : 0;
+  if(sc.debt<50)       diagItems.push({sev:'urgent', title:`부채 과다 — LTV ${ltv}%, DSR ${dsr}%`});
+  else if(sc.totalDebt>0) diagItems.push({sev:'warn', title:`부채 관리 주의 — 총 ${Math.round(sc.totalDebt/10000)}만원`});
+  else                 diagItems.push({sev:'good',   title:'무부채 — 자산 증식 최적 조건'});
+
   const sharedData = {
-    name: sess.name,
+    name:   sess.name,
+    phone:  sess.phone || '',
     fcId,
+
+    /* ① 기본 정보 */
+    profile: {
+      birth:       sess.birth       || '',
+      gender:      sess.gender      || '',
+      age:         curAge,
+      job:         sess.job         || '',
+      income:      sess.income      || '',
+      spouse:      sess.spouse      || 'N',
+      spouseBirth: sess.spouseBirth || '',
+      children:    parseInt(sess.children)||0,
+      childrenBirths: sess.childrenBirths || [],
+    },
+
+    /* ② 은퇴 설계 */
+    retirement_plan: {
+      retireAge:       retireAge,
+      pensionAge:      parseInt(sess.pensionAge)||65,
+      retireMonthly:   retMon,
+      retireLifeType:  sess.retireLifeType || 'single',
+      futureMonthly:   futMon,
+      totalNeeded:     totalNeed,
+      currentRetire:   curRet,
+      shortage:        shortage,
+      monthlyAdd:      monthlyAdd,
+    },
+
+    /* ③ 점수 */
     scores: {
       total:      sc.total,
       insurance:  sc.insurance,
@@ -3967,28 +4046,62 @@ async function syncSharedData() {
       retirement: sc.retirement,
       cashflow:   sc.cashflow,
     },
+
+    /* ④ 보험 현황 */
     insurance: {
-      hasReal:   sc.hasReal,
-      hasCancer: sc.hasCancer,
-      hasLife:   sc.hasLife,
-      hasPension:sc.hasPension,
-      cancerAmt: sc.cancerAmt  || 0,
-      brainAmt:  sc.brainAmt   || 0,
-      heartAmt:  sc.heartAmt   || 0,
-      hospDaily: sc.hospDaily  || 0,
+      hasReal:    sc.hasReal,
+      hasCancer:  sc.hasCancer,
+      hasLife:    sc.hasLife,
+      hasPension: sc.hasPension,
+      hasDementia:sc.hasDementia,
+      cancerAmt:  sc.cancerAmt  || 0,
+      brainAmt:   sc.brainAmt   || 0,
+      heartAmt:   sc.heartAmt   || 0,
+      hospDaily:  sc.hospDaily  || 0,
+      diagTotal:  sc.diagTotal  || 0,
+      products:   sharedProds('insurance'),
     },
+
+    /* ⑤ 자산 */
     assets: {
-      savings: sc.totalSavBal,
-      invest:  sc.totalInvBal,
-      retire:  sc.totalRetBal,
-      debt:    sc.totalDebt,
+      savings:  sc.totalSavBal,
+      invest:   sc.totalInvBal,
+      retire:   sc.totalRetBal,
+      debt:     sc.totalDebt,
+      netAsset: sc.netAsset,
+      savProducts: sharedProds('savings'),
+      invProducts: sharedProds('invest'),
+      retProducts: sharedProds('retire'),
+      reProducts:  sharedProds('realestate'),
+      carProducts: sharedProds('car'),
     },
+
+    /* ⑥ 부채 */
+    debt_detail: {
+      total:    sc.totalDebt,
+      monthly:  sc.totalRepay,
+      ltv,
+      dsr,
+      products: sharedProds('loan'),
+    },
+
+    /* ⑦ 월납입 */
     monthly: {
       insurance: sc.monthlySplit?.insurance || 0,
       savings:   sc.monthlySplit?.savings   || 0,
       loan:      sc.monthlySplit?.loan      || 0,
+      total:     sc.monthlyOut || 0,
+    },
+
+    /* ⑧ 진단 요약 (고객 화면과 동일) */
+    diagnosis: {
+      items: diagItems,
+      urgentCount: diagItems.filter(d=>d.sev==='urgent').length,
+      warnCount:   diagItems.filter(d=>d.sev==='warn').length,
+      generatedAt: `${now.getFullYear()}.${now.getMonth()+1}.${now.getDate()}`,
     },
   };
+
   try {
     await fb().syncToFC(sess.clientId, fcId, sharedData);
     console.log('[client-finance] FC 공유 동기화 완료');

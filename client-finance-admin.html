@@ -644,10 +644,14 @@ onAuthStateChanged(fbAuth, async (user) => {
         birthYear:   data.birthYear   || 1985,
         gender:      data.gender      || '-',
         married:     data.married     || false,
-        // 상령일 계산용 생년월일 (client_accounts에서 sync 필요)
-        birth:       data.birth       || '',
-        spouseBirth: data.spouseBirth || '',
+        birth:       data.birth       || (data.profile?.birth||''),
+        spouseBirth: data.spouseBirth || (data.profile?.spouseBirth||''),
         phone:       data.phone       || '',
+        // 확장 데이터 (syncSharedData 신규 필드)
+        profile:         data.profile         || {},
+        retirement_plan: data.retirement_plan || {},
+        debt_detail:     data.debt_detail     || {},
+        diagnosis:       data.diagnosis       || {},
       });
     });
 
@@ -926,136 +930,341 @@ function renderClientList(){
 function openModal(clientId){
   const c=(window._clients||[]).find(x=>x.id===clientId);
   if(!c) return;
-  document.getElementById('modalTtl').textContent=c.name+' 고객 재무 리포트';
+  document.getElementById('modalTtl').textContent=c.name+' 고객 상담 브리핑';
   document.getElementById('modalBg').classList.add('show');
 
-  const age=getAge(c.birthYear);
-  const sc=c.scores;
-  const totalAsset=c.assets.savings+c.assets.invest+c.assets.retire;
-  const netAsset=totalAsset-c.assets.debt;
-  const monthlyTotal=c.monthly.insurance+c.monthly.savings+c.monthly.loan;
+  const sc  = c.scores;
+  const pr  = c.profile       || {};
+  const rp  = c.retirement_plan || {};
+  const ins = c.insurance     || {};
+  const ast = c.assets        || {};
+  const dbt = c.debt_detail   || {};
+  const mon = c.monthly       || {};
+  const diag= c.diagnosis     || {};
 
-  /* 영업 기회 생성 */
-  const opps=[];
-  if(!c.insurance.hasReal) opps.push({
-    sev:'urgent',t:'실손보험 미가입 — 즉시 상담 필요',
-    d:'의료비 리스크 노출 중. 나이가 들수록 보험료 상승. 지금이 최적 타이밍입니다.',
-    a1:'실손 설계 발송',a2:'상담 일정 잡기'});
-  if(!c.insurance.hasCancer) opps.push({
-    sev:'urgent',t:'암보험 없음 — 3대 질병 보장 공백',
-    d:`${age}세 기준 암 발병률이 높아지는 시기. 진단비 최소 3천만원 이상 권장.`,
-    a1:'암보험 설계 발송',a2:'문의 메시지 전송'});
-  if(!c.insurance.hasLife&&c.married) opps.push({
-    sev:'warn',t:'사망 보장 없음 — 가족 보호 설계 필요',
-    d:'기혼 고객으로 주소득자 유고 시 가족 생계 위험. 종신/정기보험 설계 필요.',
-    a1:'종신 설계 발송',a2:'상담 예약'});
-  if(sc.retirement<50) opps.push({
-    sev:'warn',t:`노후 준비 ${sc.retirement}점 — IRP·연금 추가 납입 필요`,
-    d:`현재 연금 적립액 ${fmtAmt(c.assets.retire)}. IRP 연 900만원 세액공제 활용 가능.`,
-    a1:'연금 전략 제안',a2:'IRP 가입 안내'});
-  if(sc.debt<60&&c.assets.debt>0) opps.push({
-    sev:'warn',t:`부채 관리 필요 — 총 ${fmtAmt(c.assets.debt)}`,
-    d:'부채 비율이 높습니다. 고금리 신용대출 우선 상환, 대환 검토를 제안하세요.',
-    a1:'부채 상담 연락',a2:'대환 안내'});
-  if(opps.length===0) opps.push({
-    sev:'good',t:'전반적으로 우수한 재무 상태',
-    d:'보장·저축·투자가 잘 구성되어 있습니다. 자산 성장 전략을 제안해보세요.'});
+  const age    = pr.age || getAge(c.birthYear);
+  const gender = pr.gender==='M'?'남성':pr.gender==='F'?'여성':c.gender||'-';
+  const married= pr.spouse==='Y'||c.married;
+  const children= pr.children||0;
+  const job    = pr.job||'';
+  const income = pr.income||'';
+  const totalAsset = (ast.savings||0)+(ast.invest||0)+(ast.retire||0);
+  const netAsset   = totalAsset-(ast.debt||0);
 
-  const oppHtml=opps.map(o=>`
-    <div class="opp-card ${o.sev}">
-      <div class="opp-top">
-        <span class="opp-sev os-${o.sev}">${o.sev==='urgent'?'🚨 즉시':o.sev==='warn'?'⚠️ 확인':'✅ 양호'}</span>
-        <span class="opp-title">${o.t}</span>
+  /* ── 색상 헬퍼 ── */
+  const sc2 = v=>v>=80?'var(--green)':v>=60?'var(--gold)':v>=40?'#F59E0B':'var(--red)';
+
+  /* ── ① 상담 포인트 (즉시 액션) ── */
+  const diagItems = diag.items || [];
+  const urgents   = diagItems.filter(d=>d.sev==='urgent');
+  const warns     = diagItems.filter(d=>d.sev==='warn');
+
+  // 레거시 폴백 (diagnosis 없는 구 데이터)
+  if(diagItems.length===0){
+    if(!ins.hasReal)  urgents.push({title:'실손보험 미가입'});
+    if(!ins.hasCancer) urgents.push({title:'암보험 미가입'});
+    if(sc.retirement<50) warns.push({title:`노후 준비 ${sc.retirement}점`});
+    if(sc.debt<60&&(ast.debt||0)>0) warns.push({title:`부채 관리 필요`});
+  }
+
+  const pointsHtml = [
+    ...urgents.map(d=>`
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;
+        background:var(--red-lt);border-radius:10px;margin-bottom:6px;
+        border-left:3px solid var(--red)">
+        <span style="font-size:14px;flex-shrink:0">🚨</span>
+        <div>
+          <div style="font-size:12px;font-weight:800;color:var(--red)">${d.title}</div>
+        </div>
+      </div>`),
+    ...warns.map(d=>`
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;
+        background:#FEF3E2;border-radius:10px;margin-bottom:6px;
+        border-left:3px solid var(--orange)">
+        <span style="font-size:14px;flex-shrink:0">⚠️</span>
+        <div>
+          <div style="font-size:12px;font-weight:800;color:#D4760A">${d.title}</div>
+        </div>
+      </div>`)
+  ].join('') || `<div style="padding:10px 12px;background:var(--green-lt);border-radius:10px;
+    font-size:12px;font-weight:700;color:var(--green)">✅ 전반적으로 양호한 재무 상태</div>`;
+
+  /* ── ② 레이더 차트 SVG ── */
+  function radarSvg(scores){
+    const cx=70,cy=70,R=52,n=5;
+    const lbls=['보장','자산','부채','노후','현금'];
+    const vals=[scores.insurance,scores.assets,scores.debt,scores.retirement,scores.cashflow];
+    let g='';
+    [0.25,0.5,0.75,1].forEach(r=>{
+      const pts=Array.from({length:n},(_,i)=>{
+        const a=(i/n)*2*Math.PI-Math.PI/2;
+        return `${cx+R*r*Math.cos(a)},${cy+R*r*Math.sin(a)}`;
+      }).join(' ');
+      g+=`<polygon points="${pts}" fill="none" stroke="rgba(27,58,107,.08)" stroke-width="1"/>`;
+    });
+    Array.from({length:n},(_,i)=>{
+      const a=(i/n)*2*Math.PI-Math.PI/2;
+      g+=`<line x1="${cx}" y1="${cy}" x2="${cx+R*Math.cos(a)}" y2="${cy+R*Math.sin(a)}"
+        stroke="rgba(27,58,107,.1)" stroke-width="1"/>`;
+    });
+    const dpts=vals.map((v,i)=>{
+      const a=(i/n)*2*Math.PI-Math.PI/2,r=R*(v/100);
+      return `${cx+r*Math.cos(a)},${cy+r*Math.sin(a)}`;
+    }).join(' ');
+    g+=`<polygon points="${dpts}" fill="rgba(201,169,110,.2)" stroke="#C9A96E" stroke-width="2"/>`;
+    vals.forEach((v,i)=>{
+      const a=(i/n)*2*Math.PI-Math.PI/2,r=R*(v/100);
+      g+=`<circle cx="${cx+r*Math.cos(a)}" cy="${cy+r*Math.sin(a)}" r="3.5" fill="#C9A96E"/>`;
+    });
+    lbls.forEach((l,i)=>{
+      const a=(i/n)*2*Math.PI-Math.PI/2;
+      const lx=cx+(R+14)*Math.cos(a),ly=cy+(R+14)*Math.sin(a);
+      g+=`<text x="${lx}" y="${ly+3}" text-anchor="middle" fill="var(--ink-lt)"
+        font-size="9" font-weight="700">${l}</text>`;
+    });
+    return `<svg width="140" height="140" viewBox="0 0 140 140">${g}</svg>`;
+  }
+
+  /* ── ③ 보험 상품 목록 ── */
+  const insProd = (ins.products||[]);
+  const insProdHtml = insProd.length>0
+    ? insProd.map(p=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;
+        padding:7px 0;border-bottom:1px solid var(--border-lt);font-size:12px">
+        <div>
+          <span style="font-weight:700;color:var(--ink)">${p.company||''}</span>
+          <span style="color:var(--ink-lt);margin-left:4px">${p.type||''}</span>
+        </div>
+        <span style="font-weight:700;color:var(--accent-bright)">${p.premium?fmtAmt(p.premium)+'/월':''}</span>
+      </div>`).join('')
+    : '<div style="font-size:12px;color:var(--ink-sub);padding:8px 0">등록된 보험 없음</div>';
+
+  /* ── ④ 대출 상품 목록 ── */
+  const loanProd = (dbt.products||[]);
+  const loanHtml = loanProd.length>0
+    ? loanProd.map(p=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;
+        padding:7px 0;border-bottom:1px solid var(--border-lt);font-size:12px">
+        <div>
+          <span style="font-weight:700;color:var(--ink)">${p.company||''}</span>
+          <span style="color:var(--ink-lt);margin-left:4px">${p.type||''}</span>
+          ${p.rate?`<span style="color:var(--red);margin-left:4px">${p.rate}%</span>`:''}
+        </div>
+        <div style="text-align:right">
+          <div style="font-weight:700;color:var(--red)">${p.balance?fmtAmt(p.balance):''}</div>
+          <div style="color:var(--ink-sub)">${p.monthly?fmtAmt(p.monthly)+'/월':''}</div>
+        </div>
+      </div>`).join('')
+    : '<div style="font-size:12px;color:var(--ink-sub);padding:8px 0">대출 없음</div>';
+
+  /* ── ⑤ 저축·투자·연금 목록 ── */
+  function prodListHtml(prods){
+    if(!prods||prods.length===0) return '<div style="font-size:12px;color:var(--ink-sub)">없음</div>';
+    return prods.map(p=>`
+      <div style="display:flex;justify-content:space-between;font-size:12px;
+        padding:5px 0;border-bottom:1px solid var(--border-lt)">
+        <span style="color:var(--ink)">${p.company||''} ${p.type||''}</span>
+        <span style="font-weight:700;color:var(--accent-bright)">
+          ${p.balance?fmtAmt(p.balance):''}${p.monthly?'·'+fmtAmt(p.monthly)+'/월':''}
+        </span>
+      </div>`).join('');
+  }
+
+  /* ── ⑥ 은퇴 설계 ── */
+  const rpHtml = rp.retireAge ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <div style="background:var(--bg-warm);border-radius:9px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:2px">희망 은퇴</div>
+        <div style="font-size:14px;font-weight:800;color:var(--ink)">${rp.retireAge}세</div>
+        <div style="font-size:10px;color:var(--ink-lt)">${Math.max(rp.retireAge-age,0)}년 후</div>
       </div>
-      <div class="opp-desc">${o.d}</div>
-      ${o.a1?`<div class="opp-actions">
-        <button class="opp-btn opp-primary" onclick="toast('${o.a1} 전송됨 📤','ok')">${o.a1}</button>
-        <button class="opp-btn opp-secondary" onclick="toast('${o.a2||''}','ok')">${o.a2||''}</button>
-      </div>`:''}
-    </div>`).join('');
-
-  /* 점수 바 */
-  const scoreItems=[
-    {l:'현금흐름',v:sc.cashflow},{l:'자산구조',v:sc.assets},
-    {l:'부채관리',v:sc.debt},{l:'보장',v:sc.insurance},{l:'노후준비',v:sc.retirement}
-  ];
-  const scoreBars=scoreItems.map(s=>`
-    <div class="score-bar-row">
-      <span class="score-bar-lbl">${s.l}</span>
-      <div class="score-bar-trk">
-        <div class="score-bar-fill" style="width:${s.v}%;background:${scoreColor(s.v)}"></div>
+      <div style="background:var(--bg-warm);border-radius:9px;padding:10px">
+        <div style="font-size:10px;color:var(--ink-sub);margin-bottom:2px">월 생활비 (미래)</div>
+        <div style="font-size:14px;font-weight:800;color:var(--ink)">${rp.futureMonthly||rp.retireMonthly}만원</div>
+        <div style="font-size:10px;color:var(--ink-lt)">현재 ${rp.retireMonthly}만원 기준</div>
       </div>
-      <span class="score-bar-val" style="color:${scoreColor(s.v)}">${s.v}</span>
-    </div>`).join('');
+      <div style="background:var(--red-lt);border-radius:9px;padding:10px">
+        <div style="font-size:10px;color:var(--red);margin-bottom:2px">필요 자금</div>
+        <div style="font-size:14px;font-weight:800;color:var(--red)">
+          ${rp.totalNeeded>=10000?Math.round(rp.totalNeeded/10000)+'억':rp.totalNeeded+'만'}원</div>
+      </div>
+      <div style="background:${rp.shortage>0?'#FEF3E2':'var(--green-lt)'};border-radius:9px;padding:10px">
+        <div style="font-size:10px;color:${rp.shortage>0?'#D4760A':'var(--green)'};margin-bottom:2px">
+          ${rp.shortage>0?'부족액':'목표 달성'}</div>
+        <div style="font-size:14px;font-weight:800;color:${rp.shortage>0?'var(--orange)':'var(--green)'}">
+          ${rp.shortage>0?(rp.shortage>=10000?Math.round(rp.shortage/10000)+'억':rp.shortage+'만')+'원':'✅'}</div>
+        ${rp.monthlyAdd>0?`<div style="font-size:10px;color:#D4760A">월 ${rp.monthlyAdd}만원 추가 필요</div>`:''}
+      </div>
+    </div>` : '<div style="font-size:12px;color:var(--ink-sub)">은퇴 설계 정보 미입력</div>';
 
-  /* 보험 현황 */
-  const insItems=[
-    {ico:'🏥',name:'실손보험',has:c.insurance.hasReal},
-    {ico:'🔬',name:'암보험',has:c.insurance.hasCancer},
-    {ico:'💀',name:'종신·정기',has:c.insurance.hasLife},
-    {ico:'🧓',name:'연금보험',has:c.insurance.hasPension},
-  ];
-  const insGrid=insItems.map(i=>`
-    <div class="ins-item ${i.has?'has':'no'}">
-      <div class="ins-item-ico">${i.ico}</div>
-      <div class="ins-item-name">${i.name}</div>
-      <div class="ins-item-status">${i.has?'✓ 가입':'✗ 미가입'}</div>
-    </div>`).join('');
-
+  /* ── 최종 HTML ── */
   document.getElementById('modalBody').innerHTML=`
-    <!-- 점수 요약 -->
-    <div class="modal-score-bar">
-      <div class="msb-top">
-        <span class="msb-name">${c.name} · ${age}세 · ${c.gender} · ${c.married?'기혼':'미혼'}</span>
-        <span class="msb-date">${c.lastUpdate} 기준</span>
+
+    <!-- 고객 기본 정보 -->
+    <div style="background:linear-gradient(135deg,#0D1E3D,#1B3A6B);border-radius:14px;
+      padding:16px;color:#fff;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:900;margin-bottom:4px">${c.name}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.65);margin-bottom:10px">
+        만 ${age}세 · ${gender}
+        ${married?'· 배우자 있음':''}
+        ${children>0?`· 자녀 ${children}명`:''}
+        ${job?'· '+job:''}
+        ${income?'· '+income:''}
       </div>
-      <div class="msb-scores">
-        <div class="msb-sc">
-          <div class="msb-sc-n">${sc.total}</div><div class="msb-sc-l">종합점수</div>
+      <div style="display:flex;gap:10px">
+        <div style="flex:1;text-align:center">
+          <div style="font-size:28px;font-weight:900;color:#C9A96E">${sc.total}</div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5)">종합 점수</div>
         </div>
-        <div class="msb-sc">
-          <div class="msb-sc-n" style="color:var(--gold)">${getGrade(sc.total).lbl}</div>
-          <div class="msb-sc-l">등급</div>
+        <div style="flex:1;text-align:center">
+          <div style="font-size:20px;font-weight:800;color:#C9A96E">${getGrade(sc.total).lbl}</div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5)">등급</div>
         </div>
-        <div class="msb-sc">
-          <div class="msb-sc-n">${fmtAmt(netAsset)}</div><div class="msb-sc-l">순자산</div>
+        <div style="flex:1;text-align:center">
+          <div style="font-size:16px;font-weight:800;color:${netAsset>=0?'#86EFAC':'#FCA5A5'}">${fmtAmt(netAsset)}</div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5)">순자산</div>
         </div>
+      </div>
+      <div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:8px;text-align:right">
+        ${diag.generatedAt||c.lastUpdate} 기준 · ${diag.urgentCount||0}건 즉시점검
       </div>
     </div>
 
-    <!-- 영업 기회 -->
-    <div class="section-title">🎯 영업 기회 (우선순위순)</div>
-    ${oppHtml}
+    <!-- 상담 포인트 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      🎯 오늘 상담 포인트
+    </div>
+    ${pointsHtml}
 
-    <!-- 영역별 점수 -->
-    <div class="section-title">📊 영역별 점수</div>
-    ${scoreBars}
+    <!-- 재무 점수 레이더 + 바 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin:16px 0 10px">
+      📊 재무 건강 점수
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid var(--border-lt);
+      display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <div style="flex-shrink:0">${radarSvg(sc)}</div>
+      <div style="flex:1">
+        ${[['보장',sc.insurance],['자산구조',sc.assets],['부채관리',sc.debt],
+           ['노후준비',sc.retirement],['현금흐름',sc.cashflow]].map(([l,v])=>`
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+            <span style="font-size:11px;color:var(--ink-lt);width:46px;flex-shrink:0">${l}</span>
+            <div style="flex:1;height:6px;background:var(--bg-warm);border-radius:3px;overflow:hidden">
+              <div style="width:${v}%;height:100%;background:${sc2(v)};border-radius:3px"></div>
+            </div>
+            <span style="font-size:11px;font-weight:800;color:${sc2(v)};width:24px;text-align:right">${v}</span>
+          </div>`).join('')}
+      </div>
+    </div>
 
     <!-- 보험 현황 -->
-    <div class="section-title">🛡️ 보험 가입 현황</div>
-    <div class="ins-grid">${insGrid}</div>
-
-    <!-- 자산 현황 -->
-    <div class="section-title">💰 자산 & 납입 현황</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      <div style="background:var(--bg-warm);border-radius:9px;padding:12px">
-        <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">총 금융자산</div>
-        <div style="font-size:16px;font-weight:800;color:var(--ink);font-family:var(--font-d)">${fmtAmt(totalAsset)}</div>
-      </div>
-      <div style="background:var(--bg-warm);border-radius:9px;padding:12px">
-        <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">총 부채</div>
-        <div style="font-size:16px;font-weight:800;color:${c.assets.debt>0?'var(--red)':'var(--ink)'};font-family:var(--font-d)">${fmtAmt(c.assets.debt)}</div>
-      </div>
-      <div style="background:var(--bg-warm);border-radius:9px;padding:12px">
-        <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">월 납입 합계</div>
-        <div style="font-size:16px;font-weight:800;color:var(--accent);font-family:var(--font-d)">${fmtAmt(monthlyTotal)}</div>
-      </div>
-      <div style="background:var(--bg-warm);border-radius:9px;padding:12px">
-        <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">연금 적립액</div>
-        <div style="font-size:16px;font-weight:800;color:var(--ink);font-family:var(--font-d)">${fmtAmt(c.assets.retire)}</div>
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      🛡️ 보험 현황
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+      ${[['실손',ins.hasReal],['암보험',ins.hasCancer],['종신',ins.hasLife],['치매',ins.hasDementia]].map(([l,has])=>`
+        <div style="text-align:center;padding:10px 4px;border-radius:10px;
+          background:${has?'var(--green-lt)':'var(--red-lt)'};
+          border:1px solid ${has?'rgba(10,123,97,.2)':'rgba(192,57,43,.15)'}">
+          <div style="font-size:18px">${has?'✅':'❌'}</div>
+          <div style="font-size:10px;font-weight:700;color:${has?'var(--green)':'var(--red)'}">${l}</div>
+        </div>`).join('')}
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-sub);margin-bottom:6px">3대 진단비</div>
+      <div style="display:flex;gap:8px">
+        ${[['암',ins.cancerAmt],['뇌혈관',ins.brainAmt],['심장',ins.heartAmt]].map(([l,v])=>`
+          <div style="flex:1;text-align:center;background:var(--bg-warm);border-radius:8px;padding:7px">
+            <div style="font-size:10px;color:var(--ink-sub)">${l}</div>
+            <div style="font-size:12px;font-weight:800;color:${(v||0)>=30000000?'var(--green)':'var(--red)'}">
+              ${v?fmtAmt(v):'0원'}</div>
+          </div>`).join('')}
       </div>
     </div>
-    <div style="height:20px"></div>`;
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:16px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-sub);margin-bottom:4px">등록 보험 상품</div>
+      ${insProdHtml}
+    </div>
+
+    <!-- 자산 현황 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      💰 자산 현황
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      ${[['총 금융자산',totalAsset,'var(--ink)'],
+         ['순자산',netAsset,netAsset>=0?'var(--green)':'var(--red)'],
+         ['총 부채',ast.debt||0,ast.debt>0?'var(--red)':'var(--ink)'],
+         ['연금 적립',ast.retire||0,'var(--accent)']].map(([l,v,col])=>`
+        <div style="background:var(--bg-warm);border-radius:9px;padding:11px">
+          <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">${l}</div>
+          <div style="font-size:14px;font-weight:800;color:${col}">${fmtAmt(v)}</div>
+        </div>`).join('')}
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-sub);margin-bottom:4px">저축 상품</div>
+      ${prodListHtml(ast.savProducts)}
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-sub);margin-bottom:4px">투자·증권</div>
+      ${prodListHtml(ast.invProducts)}
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:16px">
+      <div style="font-size:11px;font-weight:700;color:var(--ink-sub);margin-bottom:4px">연금·퇴직연금</div>
+      ${prodListHtml(ast.retProducts)}
+    </div>
+
+    <!-- 부채 현황 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      📉 부채 현황
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid var(--border-lt);margin-bottom:16px">
+      ${(ast.debt||0)>0?`
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <div style="flex:1;text-align:center;background:var(--red-lt);border-radius:8px;padding:8px">
+          <div style="font-size:10px;color:var(--ink-sub)">LTV</div>
+          <div style="font-size:15px;font-weight:800;color:${(dbt.ltv||0)>70?'var(--red)':'var(--orange)'}">${dbt.ltv||0}%</div>
+        </div>
+        <div style="flex:1;text-align:center;background:var(--red-lt);border-radius:8px;padding:8px">
+          <div style="font-size:10px;color:var(--ink-sub)">DSR</div>
+          <div style="font-size:15px;font-weight:800;color:${(dbt.dsr||0)>40?'var(--red)':'var(--orange)'}">${dbt.dsr||0}%</div>
+        </div>
+        <div style="flex:1;text-align:center;background:var(--red-lt);border-radius:8px;padding:8px">
+          <div style="font-size:10px;color:var(--ink-sub)">월 상환</div>
+          <div style="font-size:13px;font-weight:800;color:var(--red)">${fmtAmt(dbt.monthly||0)}</div>
+        </div>
+      </div>
+      ${loanHtml}`:'<div style="font-size:12px;color:var(--green);font-weight:700">✅ 부채 없음</div>'}
+    </div>
+
+    <!-- 은퇴 설계 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      🏖️ 은퇴 설계
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:14px;
+      border:1px solid var(--border-lt);margin-bottom:16px">
+      ${rpHtml}
+    </div>
+
+    <!-- 월납입 구성 -->
+    <div style="font-size:13px;font-weight:800;color:var(--ink);
+      display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      💸 월납입 구성
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px">
+      ${[['보험료',mon.insurance||0,'var(--accent)'],
+         ['저축',mon.savings||0,'var(--green)'],
+         ['대출상환',mon.loan||0,'var(--red)']].map(([l,v,col])=>`
+        <div style="background:var(--bg-warm);border-radius:9px;padding:10px;text-align:center">
+          <div style="font-size:10px;color:var(--ink-sub);margin-bottom:3px">${l}</div>
+          <div style="font-size:13px;font-weight:800;color:${col}">${fmtAmt(v)}</div>
+        </div>`).join('')}
+    </div>
+  `;
 }
 window.closeModal=function(){
   document.getElementById('modalBg').classList.remove('show');
