@@ -1230,16 +1230,13 @@ button,input{font-family:var(--font);outline:none;border:none}
       <span class="t-icon">🤖</span>
       <span class="t-label">AI 진단</span>
     </div>
+    <div class="tab-item" id="tab-recommend" onclick="shareRecommend()">
+      <span class="t-icon">🎁</span>
+      <span class="t-label">친구추천</span>
+    </div>
   </nav>
 
-<!-- 하단 플로팅 공유 버튼 -->
-<div class="float-share" id="floatShare">
-  <div class="float-share-inner">
-    <button class="float-share-btn" style="background:rgba(201,169,110,.25);color:#F5EFE0" onclick="shareRecommend()">🎁 친구 추천</button>
-    <button class="float-share-btn fsb-link" onclick="copyShareLink(buildShareUrl())">🔗 링크 공유</button>
-    <button class="float-share-btn fsb-kakao" onclick="shareKakao(calcScores().total,getGrade(calcScores().total).lbl,getRank(calcScores().total))">💛 카카오</button>
-  </div>
-</div>
+
 </div><!-- /mainContent -->
 
 <!-- ══ 상품 입력 모달 ══ -->
@@ -1743,6 +1740,12 @@ function addProd(cat,item){
 function delProd(cat,id){
   const d=loadProds(); if(!d[cat])return;
   d[cat]=d[cat].filter(p=>p.id!==id); saveProds(d);
+}
+function updateProd(cat,id,newData){
+  const d=loadProds(); if(!d[cat])return;
+  const idx=d[cat].findIndex(p=>p.id===id);
+  if(idx>=0) d[cat][idx]={...d[cat][idx],...newData};
+  saveProds(d);
 }
 
 /* 카테고리 정의 */
@@ -2479,13 +2482,17 @@ function renderProdModal(){
   if(prods.length>0){
     html+=`<div class="prod-list-wrap">`;
     html+=prods.map(p=>`
-      <div class="prod-list-item">
+      <div class="prod-list-item" onclick="showEditForm('${p.id}')" style="cursor:pointer">
         <span class="prod-list-icon">${cat.icon}</span>
         <div class="prod-list-info">
           <div class="prod-list-name">${p.name||p.company||'상품'}</div>
           <div class="prod-list-sub">${p.type||''} ${p.monthly||p.premium?'· '+fmtAmt(n(p.monthly||p.premium))+'/월':''}</div>
         </div>
-        <button class="prod-list-del" onclick="deleteProd('${curCat}','${p.id}')">✕</button>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="prod-list-del" style="background:var(--accent-lt);color:var(--accent-bright)"
+            onclick="event.stopPropagation();showEditForm('${p.id}')">✏️</button>
+          <button class="prod-list-del" onclick="event.stopPropagation();deleteProd('${curCat}','${p.id}')">✕</button>
+        </div>
       </div>`).join('');
     html+='</div>';
   }
@@ -2501,11 +2508,45 @@ function renderProdModal(){
 }
 
 window.showAddForm=function(){
+  editId=null;
   document.getElementById('addFormWrap').style.display='block';
   document.querySelector('.prod-add-btn').style.display='none';
   document.getElementById('prodSaveBtn').style.display='block';
-  // 계산 바인딩
+  document.getElementById('prodSaveBtn').textContent='저장하기 ✓';
   bindCalc();
+};
+
+window.showEditForm=function(id){
+  editId=id;
+  const prods=getProds(curCat);
+  const p=prods.find(x=>x.id===id);
+  if(!p) return;
+  // 폼 표시
+  document.getElementById('addFormWrap').style.display='block';
+  document.querySelector('.prod-add-btn').style.display='none';
+  document.getElementById('prodSaveBtn').style.display='block';
+  document.getElementById('prodSaveBtn').textContent='수정 완료 ✓';
+  bindCalc();
+  // 기존 값 채우기
+  setTimeout(()=>{
+    document.querySelectorAll('#addFormWrap [data-key]').forEach(el=>{
+      const key=el.dataset.key;
+      if(p[key]===undefined) return;
+      if(el.tagName==='SELECT'){
+        el.value=p[key];
+        if(el.onchange) el.onchange();
+      } else {
+        // 숫자 콤마 포맷
+        if(el.oninput && String(p[key]).match(/^[0-9]+$/)){
+          el.value=Number(p[key]).toLocaleString('ko-KR');
+          el.dataset.raw=p[key];
+        } else {
+          el.value=p[key];
+        }
+      }
+    });
+    bindCalc();
+  },50);
 };
 
 window.deleteProd=function(cat,id){
@@ -2527,9 +2568,19 @@ window.saveProd=function(){
   form.querySelectorAll('[data-bool]').forEach(el=>{
     data[el.dataset.bool]=el.classList.contains('sw-on')?'Y':'N';
   });
-  if(!data.company&&!data.name){toast('회사명 또는 상품명을 입력해주세요','err');return;}
-  addProd(curCat,data);
-  toast('저장되었습니다 ✓','ok');
+  // 부동산·자동차는 name/address 필드 사용 → 검증 완화
+  const skipCheck=['realestate'];
+  if(!skipCheck.includes(curCat) && !data.company&&!data.name){
+    toast('회사명 또는 상품명을 입력해주세요','err');return;
+  }
+  if(editId){
+    updateProd(curCat,editId,data);
+    editId=null;
+    toast('수정되었습니다 ✓','ok');
+  } else {
+    addProd(curCat,data);
+    toast('저장되었습니다 ✓','ok');
+  }
   renderProdModal();
   // 점수 업데이트
   if(curTab==='home')setTimeout(renderHome,300);
@@ -2695,14 +2746,10 @@ function buildForm(catId){
         <option>자가(소유)</option><option>전세</option><option>월세</option>
         <option>수익형 건물</option><option>토지</option><option>오피스텔</option>
       </select></div>
-    <div class="mfg"><label class="mfl">소재지</label>
-      <input class="mfi" data-key="address" type="text" placeholder="예: 서울 강남구 아파트"></div>
-    <div class="mfrow">
-      <div class="mfg"><label class="mfl">면적(㎡)</label>
-        <input class="mfi" data-key="area" type="text" inputmode="decimal" placeholder="예: 84.9"></div>
-      <div class="mfg"><label class="mfl">취득연도</label>
-        <input class="mfi" data-key="buyYear" type="text" inputmode="numeric" placeholder="예: 2019"></div>
-    </div>
+    <div class="mfg"><label class="mfl">소재지 <span style="font-weight:400;color:var(--ink-sub)">(예: 경기도 고양시 아파트)</span></label>
+      <input class="mfi" data-key="name" type="text" placeholder="예: 서울 강남구 아파트"></div>
+    <div class="mfg"><label class="mfl">취득연도</label>
+      <input class="mfi" data-key="buyYear" type="text" inputmode="numeric" placeholder="예: 2019"></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">취득가격(원)</label>
         <input class="mfi" data-key="buyPrice" type="text" inputmode="numeric" placeholder="예: 500,000,000" oninput="numFmt(this)"></div>
