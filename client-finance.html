@@ -1250,37 +1250,121 @@ button,input{font-family:var(--font);outline:none;border:none}
 <div class="toast" id="toast"></div>
 
 <!-- Firebase SDK -->
-<script>
-/* window._fb 로컬 스텁 — Firebase 없이 localStorage만 사용 */
+<script type="module">
+/* ═══════════════════════════════════════════════════════
+   Firebase 실서비스 연동
+   - Auth: 이메일 방식 (phone@jf-client-{fcId}.internal)
+   - Firestore: javia-db
+   - Cloud Functions: sendVerifyCode / checkVerifyCode
+   - Cloud Functions: generateFinanceReport (AI 진단)
+═══════════════════════════════════════════════════════ */
+import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,signOut}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
+  where,limit,serverTimestamp}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFunctions,httpsCallable}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
+
+const fbApp  = initializeApp({
+  apiKey:"AIzaSyCf7CsUTgfIWY-RW_mvTJOhczDtk1xM9sA",
+  authDomain:"kfpc-company-support-project.firebaseapp.com",
+  projectId:"kfpc-company-support-project",
+  storageBucket:"kfpc-company-support-project.firebasestorage.app",
+  messagingSenderId:"1012609333373",
+  appId:"1:1012609333373:web:7b6c207c81ff10d156d914"
+});
+const fbAuth = getAuth(fbApp);
+const fbDb   = getFirestore(fbApp,'javia-db');
+const fbFns  = getFunctions(fbApp,'asia-northeast3');
+
+const _params = new URLSearchParams(location.search);
+const _fcId   = _params.get('fc') || '';
+const _refId  = _params.get('ref') || '';
+
 window._fb = {
+  auth: fbAuth, db: fbDb, fns: fbFns, fcId: _fcId, refId: _refId,
+
   async register(name, phone, pw) {
-    const clientId = 'local_' + Date.now().toString(36);
-    return { clientId, name, phone };
+    const email = `${phone}@jf-client-${_fcId}.internal`;
+    const cred  = await createUserWithEmailAndPassword(fbAuth, email, pw);
+    const uid   = cred.user.uid;
+    await setDoc(doc(fbDb,'client_accounts',uid),{
+      clientId:uid, name, phone, fcId:_fcId,
+      referredBy:_refId||null,
+      createdAt:serverTimestamp(), lastLoginAt:serverTimestamp()
+    });
+    return { clientId:uid, name, phone };
   },
+
   async login(phone, pw) {
-    return null; // 로컬 방식은 메인 doLogin에서 처리
+    const email = `${phone}@jf-client-${_fcId}.internal`;
+    const cred  = await signInWithEmailAndPassword(fbAuth, email, pw);
+    const uid   = cred.user.uid;
+    const snap  = await getDoc(doc(fbDb,'client_accounts',uid));
+    const name  = snap.exists() ? snap.data().name : '';
+    await setDoc(doc(fbDb,'client_accounts',uid),
+      {lastLoginAt:serverTimestamp()},{merge:true});
+    return { clientId:uid, name, phone };
   },
-  async logout() {},
+
+  async logout() { await signOut(fbAuth); },
+
   async getFcData(fcId) {
-    return { name:'', title:'', company:'', fcId };
+    const snap = await getDoc(doc(fbDb,'consultants',fcId));
+    if(snap.exists()) return snap.data();
+    const aq = await getDocs(query(
+      collection(fbDb,'admins'),where('loginId','==',fcId),limit(1)));
+    if(!aq.empty){
+      const ad=aq.docs[0].data();
+      return {name:ad.name||fcId,title:ad.title||'',company:ad.company||'',fcId};
+    }
+    const uq = await getDocs(query(
+      collection(fbDb,'users'),where('loginId','==',fcId),limit(1)));
+    if(!uq.empty){
+      const ud=uq.docs[0].data();
+      return {name:ud.name||fcId,title:ud.title||'',company:ud.company||'',fcId};
+    }
+    return {name:'',title:'',company:'',fcId};
   },
+
   async checkFcRole(fcId) { return true; },
+
   async sendOtp(phone) {
-    // 테스트용: 4자리 코드 생성 후 alert
-    const code = String(Math.floor(1000+Math.random()*9000));
-    window._testOtp = code;
-    alert('📱 테스트 인증번호: ' + code);
+    const fn = httpsCallable(fbFns,'sendVerifyCode');
+    await fn({phone});
   },
+
   async checkOtp(phone, code) {
-    if(window._testOtp && code === window._testOtp) return true;
-    throw new Error('인증번호가 올바르지 않습니다');
+    const fn = httpsCallable(fbFns,'checkVerifyCode');
+    await fn({phone, code});
   },
-  async syncToFC() {},
-  async getReport() { return null; },
-  async generateReport() { return null; },
-  onAuthChange(cb) {}
+
+  async syncToFC(clientId, fcId, sharedData) {
+    await setDoc(
+      doc(fbDb,'consultants',fcId,'clients',clientId),
+      {...sharedData, updatedAt:serverTimestamp()},
+      {merge:true}
+    );
+  },
+
+  async getReport(clientId) {
+    const snap = await getDoc(doc(fbDb,'finance_reports',clientId));
+    return snap.exists() ? snap.data() : null;
+  },
+
+  async generateReport(clientId, fcId) {
+    const fn = httpsCallable(fbFns,'generateFinanceReport');
+    const result = await fn({clientId, fcId});
+    return result.data;
+  },
+
+  onAuthChange(cb) { return onAuthStateChanged(fbAuth, cb); }
 };
-console.log('[client-finance] 로컬 모드 초기화 완료');
+
+console.log('[client-finance] Firebase 초기화 완료');
 </script>
 
 <script>
@@ -1441,7 +1525,7 @@ async function verifyOtp(ctx) {
   }
 }
 
-/* ── 가입 (로컬 localStorage) ── */
+/* ── 가입 (Firebase) ── */
 window.doRegister = async function() {
   const name = document.getElementById('rgName').value.trim();
   const rp   = rawPhone('rgPhone1','rgPhone2');
@@ -1455,34 +1539,28 @@ window.doRegister = async function() {
   if (!pw || pw.length<4) { toast('비밀번호는 4자리 이상이어요','err'); return; }
   if (pw !== pw2)         { hint.textContent='비밀번호가 일치하지 않습니다'; hint.className='fi-hint err'; return; }
 
-  // OTP 검증
   const otpOk = await verifyOtp('rg');
   if (!otpOk) return;
 
   btn.disabled = true; btn.innerHTML = '<span>처리 중...</span>';
-
-  // 중복 체크
-  const accts = loadAccounts();
-  if (accts[rp]) {
-    toast('이미 가입된 전화번호입니다. 로그인해주세요','err');
-    showScreen('Login');
+  try {
+    const sess = await fb().register(name, rp, pw);
+    saveSess(sess);
+    toast(name+'님, 환영합니다 🎉','ok');
+    setTimeout(enterMain, 700);
+  } catch(e) {
+    console.error('[doRegister]', e);
+    if(e.code==='auth/email-already-in-use'){
+      toast('이미 가입된 전화번호입니다. 로그인해주세요','err');
+      showScreen('Login');
+    } else {
+      toast('가입 오류: '+e.message,'err');
+    }
     btn.disabled=false; btn.innerHTML='<span>시작하기</span><span>→</span>';
-    return;
   }
-
-  const clientId = 'local_' + Date.now().toString(36);
-  const pwHash   = hashPwSync(pw, clientId);
-  const acct = { clientId, name, phone:rp, passwordHash:pwHash, fcId, createdAt:Date.now() };
-  const newAccts = loadAccounts();
-  newAccts[rp] = acct;
-  saveAccounts(newAccts);
-
-  saveSess({ clientId, name, phone:rp });
-  toast(name+'님, 환영합니다 🎉','ok');
-  setTimeout(enterMain, 700);
 };
 
-/* ── 로그인 (로컬 localStorage) ── */
+/* ── 로그인 (Firebase) ── */
 window.doLogin = async function() {
   const rp   = rawPhone('liPhone1','liPhone2');
   const pw   = document.getElementById('liPw').value;
@@ -1493,19 +1571,25 @@ window.doLogin = async function() {
   if (rp.length !== 11) { toast('전화번호를 입력해주세요','err'); return; }
   if (!pw)               { toast('비밀번호를 입력해주세요','err'); return; }
 
-  const acct = getAccount(rp);
-  if (!acct) {
-    hint.textContent='가입되지 않은 전화번호입니다';
-    hint.className='fi-hint err'; return;
+  btn.disabled=true; btn.innerHTML='<span>확인 중...</span>';
+  try {
+    const sess = await fb().login(rp, pw);
+    saveSess(sess);
+    toast(sess.name+'님, 반갑습니다 👋','ok');
+    setTimeout(enterMain, 600);
+  } catch(e) {
+    console.error('[doLogin]', e);
+    if(e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'){
+      hint.textContent='전화번호 또는 비밀번호가 올바르지 않습니다';
+      hint.className='fi-hint err';
+    } else if(e.code==='auth/user-not-found'){
+      hint.textContent='가입되지 않은 전화번호입니다';
+      hint.className='fi-hint err';
+    } else {
+      toast('로그인 오류: '+e.message,'err');
+    }
+    btn.disabled=false; btn.innerHTML='<span>로그인</span><span>→</span>';
   }
-  if (hashPwSync(pw, acct.clientId) !== acct.passwordHash) {
-    hint.textContent='비밀번호가 올바르지 않습니다';
-    hint.className='fi-hint err'; return;
-  }
-
-  saveSess({ clientId:acct.clientId, name:acct.name, phone:rp });
-  toast(acct.name+'님, 반갑습니다 👋','ok');
-  setTimeout(enterMain, 600);
 };
 
 /* ── 비밀번호 변경 ── */
@@ -1540,9 +1624,10 @@ window.doChangePw = async function() {
   setTimeout(()=>showScreen('Login'), 800);
 };
 
-/* ── 로그아웃 ── */
+/* ── 로그아웃 (Firebase) ── */
 window.doLogout = async function() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
+  try { if(fb()) await fb().logout(); } catch(e){}
   clearSess(); closeDrawer();
   document.getElementById('mainContent').style.display = 'none';
   document.getElementById('authWrap').style.display = 'block';
@@ -1591,6 +1676,7 @@ const CATS=[
   {id:'invest',    icon:'📈', name:'투자·증권', color:'#5B4FC4'},
   {id:'retire',    icon:'🧓', name:'퇴직·연금', color:'#D4760A'},
   {id:'loan',      icon:'📉', name:'대출·부채', color:'#C0392B'},
+  {id:'realestate',icon:'🏠', name:'부동산', color:'#0F766E'},
   {id:'car',       icon:'🚗', name:'자동차', color:'#374151'},
 ];
 
@@ -1601,6 +1687,28 @@ function fmtAmt(v){
   if(a>=100000000)return s+(a/1e8).toFixed(1).replace(/\.0$/,'')+'억원';
   if(a>=10000)return s+Math.round(a/1e4)+'만원';
   return s+a.toLocaleString()+'원';
+}
+
+/* ─── 숫자 콤마 포맷 입력 ─── */
+function numFmt(el){
+  let v=el.value.replace(/[^0-9]/g,'');
+  el.dataset.raw=v;
+  el.value=v?Number(v).toLocaleString('ko-KR'):'';
+}
+function numRaw(el){
+  return Number((el.dataset.raw||el.value).replace(/[^0-9]/g,''))||0;
+}
+/* 직접입력 셀렉트 → 텍스트 입력 전환 */
+function handleDirectInput(sel){
+  if(sel.value!=='직접입력') return;
+  const key=sel.dataset.key;
+  const inp=document.createElement('input');
+  inp.className='mfi'; inp.type='text';
+  inp.dataset.key=key; inp.placeholder='직접 입력';
+  inp.style.marginTop='6px';
+  sel.parentNode.appendChild(inp);
+  sel.style.display='none';
+  inp.focus();
 }
 
 /* ─── 점수 계산 ─── */
@@ -2269,7 +2377,9 @@ window.saveProd=function(){
   if(!form)return;
   const data={};
   form.querySelectorAll('[data-key]').forEach(el=>{
-    data[el.dataset.key]=el.value||el.textContent;
+    // 숫자 필드는 raw값(콤마 없는) 저장
+    const raw = el.dataset.raw;
+    data[el.dataset.key] = raw !== undefined ? raw : (el.value||el.textContent);
   });
   form.querySelectorAll('[data-bool]').forEach(el=>{
     data[el.dataset.bool]=el.classList.contains('sw-on')?'Y':'N';
@@ -2286,7 +2396,7 @@ function buildForm(catId){
   if(catId==='insurance') return `
     <div class="form-section">보험 상품 정보</div>
     <div class="mfg"><label class="mfl">보험사</label>
-      <select class="mfsel" data-key="company">
+      <select class="mfsel" data-key="company" onchange="handleDirectInput(this)">
         <option value="">선택</option>
         <option>삼성생명</option><option>교보생명</option><option>한화생명</option>
         <option>현대해상</option><option>삼성화재</option><option>DB손해보험</option>
@@ -2303,20 +2413,20 @@ function buildForm(catId){
       <div class="mfg"><label class="mfl">가입 연월</label>
         <input class="mfi" data-key="startDate" type="month"></div>
       <div class="mfg"><label class="mfl">월 보험료(원)</label>
-        <input class="mfi" data-key="premium" type="number" inputmode="numeric" placeholder="예: 60000" oninput="bindCalc()"></div>
+        <input class="mfi" data-key="premium" type="text" inputmode="numeric" placeholder="예: 60,000" oninput="numFmt(this);bindCalc()"></div>
     </div>
     <div class="form-section">보장 내용</div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">암 진단비(원)</label>
-        <input class="mfi" data-key="cancerAmt" type="number" inputmode="numeric" placeholder="예: 30000000"></div>
+        <input class="mfi" data-key="cancerAmt" type="text" inputmode="numeric" placeholder="예: 30,000,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">뇌혈관 진단비(원)</label>
-        <input class="mfi" data-key="brainAmt" type="number" inputmode="numeric" placeholder="예: 20000000"></div>
+        <input class="mfi" data-key="brainAmt" type="text" inputmode="numeric" placeholder="예: 20,000,000" oninput="numFmt(this)"></div>
     </div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">심장 진단비(원)</label>
-        <input class="mfi" data-key="heartAmt" type="number" inputmode="numeric" placeholder="예: 20000000"></div>
+        <input class="mfi" data-key="heartAmt" type="text" inputmode="numeric" placeholder="예: 20,000,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">입원일당(원)</label>
-        <input class="mfi" data-key="hospDaily" type="number" inputmode="numeric" placeholder="예: 30000"></div>
+        <input class="mfi" data-key="hospDaily" type="text" inputmode="numeric" placeholder="예: 30,000" oninput="numFmt(this)"></div>
     </div>
     <div class="calc-preview" id="insCalc" style="display:none"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
@@ -2327,7 +2437,7 @@ function buildForm(catId){
   if(catId==='savings') return `
     <div class="form-section">저축 상품 정보</div>
     <div class="mfg"><label class="mfl">금융기관</label>
-      <select class="mfsel" data-key="company">
+      <select class="mfsel" data-key="company" onchange="handleDirectInput(this)">
         <option value="">선택</option>
         <option>국민은행</option><option>신한은행</option><option>하나은행</option>
         <option>우리은행</option><option>카카오뱅크</option><option>토스뱅크</option><option>직접입력</option>
@@ -2340,7 +2450,7 @@ function buildForm(catId){
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">월 납입액(원)</label>
-        <input class="mfi" data-key="monthly" type="number" inputmode="numeric" placeholder="예: 300000" oninput="bindCalc()"></div>
+        <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 300,000" oninput="numFmt(this);bindCalc()"></div>
       <div class="mfg"><label class="mfl">총 납입 횟수</label>
         <input class="mfi" data-key="totalCount" type="number" inputmode="numeric" placeholder="예: 24" oninput="bindCalc()"></div>
     </div>
@@ -2354,7 +2464,7 @@ function buildForm(catId){
       <input class="mfi" data-key="maturity" type="month"></div>
     <div class="calc-preview" id="savCalc" style="display:none"></div>
     <div class="mfg"><label class="mfl">현재 잔액(원) <span style="font-weight:400;color:var(--ink-sub)">(선택)</span></label>
-      <input class="mfi" data-key="balance" type="number" inputmode="numeric" placeholder="앱에서 조회 후 입력"></div>
+      <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="앱에서 조회 후 입력" oninput="numFmt(this)"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 잔액 금액 FC 공유</span>
       <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
@@ -2363,7 +2473,7 @@ function buildForm(catId){
   if(catId==='invest') return `
     <div class="form-section">투자·증권 상품</div>
     <div class="mfg"><label class="mfl">증권사·기관</label>
-      <select class="mfsel" data-key="company">
+      <select class="mfsel" data-key="company" onchange="handleDirectInput(this)">
         <option value="">선택</option>
         <option>미래에셋</option><option>삼성증권</option><option>KB증권</option>
         <option>NH투자증권</option><option>키움증권</option><option>직접입력</option>
@@ -2377,9 +2487,9 @@ function buildForm(catId){
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">연 납입액(원)</label>
-        <input class="mfi" data-key="yearly" type="number" inputmode="numeric" placeholder="예: 2400000"></div>
+        <input class="mfi" data-key="yearly" type="text" inputmode="numeric" placeholder="예: 2,400,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">현재 평가금액(원)</label>
-        <input class="mfi" data-key="balance" type="number" inputmode="numeric" placeholder="앱 조회"></div>
+        <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="앱 조회" oninput="numFmt(this)"></div>
     </div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 평가금액 FC 공유</span>
@@ -2398,9 +2508,9 @@ function buildForm(catId){
       <input class="mfi" data-key="company" type="text" placeholder="예: 미래에셋, 국민은행"></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">연 납입액(원)</label>
-        <input class="mfi" data-key="monthly" type="number" inputmode="numeric" placeholder="예: 1800000"></div>
+        <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 1,800,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">현재 적립금(원)</label>
-        <input class="mfi" data-key="balance" type="number" inputmode="numeric" placeholder="앱 조회"></div>
+        <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="앱 조회" oninput="numFmt(this)"></div>
     </div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 적립금 FC 공유</span>
@@ -2410,7 +2520,7 @@ function buildForm(catId){
   if(catId==='loan') return `
     <div class="form-section">대출·부채 정보</div>
     <div class="mfg"><label class="mfl">금융기관</label>
-      <select class="mfsel" data-key="company">
+      <select class="mfsel" data-key="company" onchange="handleDirectInput(this)">
         <option value="">선택</option>
         <option>국민은행</option><option>신한은행</option><option>하나은행</option>
         <option>카카오뱅크</option><option>직접입력</option>
@@ -2423,14 +2533,55 @@ function buildForm(catId){
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">대출 잔액(원)</label>
-        <input class="mfi" data-key="balance" type="number" inputmode="numeric" placeholder="예: 200000000"></div>
+        <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="예: 200,000,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">연 이율(%)</label>
         <input class="mfi" data-key="rate" type="number" inputmode="decimal" placeholder="예: 4.2" step="0.1"></div>
     </div>
     <div class="mfg"><label class="mfl">월 상환액(원)</label>
-      <input class="mfi" data-key="monthly" type="number" inputmode="numeric" placeholder="예: 900000"></div>
+      <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 900,000" oninput="numFmt(this)"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 잔액 FC 공유</span>
+      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+    </div>`;
+
+  if(catId==='realestate') return `
+    <div class="form-section">부동산 정보</div>
+    <div class="mfg"><label class="mfl">부동산 유형</label>
+      <select class="mfsel" data-key="type" onchange="bindCalc()">
+        <option value="">선택</option>
+        <option>자가(소유)</option><option>전세</option><option>월세</option>
+        <option>수익형 건물</option><option>토지</option><option>오피스텔</option>
+      </select></div>
+    <div class="mfg"><label class="mfl">소재지</label>
+      <input class="mfi" data-key="address" type="text" placeholder="예: 서울 강남구 아파트"></div>
+    <div class="mfrow">
+      <div class="mfg"><label class="mfl">면적(㎡)</label>
+        <input class="mfi" data-key="area" type="text" inputmode="decimal" placeholder="예: 84.9"></div>
+      <div class="mfg"><label class="mfl">취득연도</label>
+        <input class="mfi" data-key="buyYear" type="text" inputmode="numeric" placeholder="예: 2019"></div>
+    </div>
+    <div class="mfrow">
+      <div class="mfg"><label class="mfl">취득가격(원)</label>
+        <input class="mfi" data-key="buyPrice" type="text" inputmode="numeric" placeholder="예: 500,000,000" oninput="numFmt(this)"></div>
+      <div class="mfg"><label class="mfl">현재 시세(원)</label>
+        <input class="mfi" data-key="currentPrice" type="text" inputmode="numeric" placeholder="예: 700,000,000" oninput="numFmt(this)"></div>
+    </div>
+    <div id="reRentRow" style="display:none">
+      <div class="mfrow">
+        <div class="mfg"><label class="mfl">보증금(원)</label>
+          <input class="mfi" data-key="deposit" type="text" inputmode="numeric" placeholder="예: 50,000,000" oninput="numFmt(this)"></div>
+        <div class="mfg"><label class="mfl">월세(원)</label>
+          <input class="mfi" data-key="monthlyRent" type="text" inputmode="numeric" placeholder="예: 800,000" oninput="numFmt(this)"></div>
+      </div>
+    </div>
+    <div id="reJeonseRow" style="display:none">
+      <div class="mfg"><label class="mfl">전세금(원)</label>
+        <input class="mfi" data-key="jeonseAmt" type="text" inputmode="numeric" placeholder="예: 300,000,000" oninput="numFmt(this)"></div>
+    </div>
+    <div class="mfg"><label class="mfl">담보대출 잔액(원)</label>
+      <input class="mfi" data-key="mortgage" type="text" inputmode="numeric" placeholder="없으면 0" oninput="numFmt(this)"></div>
+    <div class="prv-toggle-row" onclick="toggleSw(this)">
+      <span class="prv-toggle-lbl">🔒 부동산 정보 FC 공유</span>
       <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
     </div>`;
 
@@ -2444,7 +2595,7 @@ function buildForm(catId){
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">월 할부·리스료(원)</label>
-        <input class="mfi" data-key="monthly" type="number" inputmode="numeric" placeholder="예: 450000"></div>
+        <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 450,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">자동차보험 만기</label>
         <input class="mfi" data-key="insExpiry" type="month"></div>
     </div>`;
@@ -2475,6 +2626,13 @@ function bindCalc(){
     const maturity=m*tot*(1+rate*tot/2);
     el.style.display='block';
     el.innerHTML=`<b>현재 적립</b> ${fmtAmt(current)} &nbsp;|&nbsp; <b>만기 예상</b> ${fmtAmt(Math.round(maturity))}`;
+  }
+  if(cat==='realestate'){
+    const type=document.querySelector('[data-key="type"]')?.value||'';
+    const rentRow=document.getElementById('reRentRow');
+    const jeonseRow=document.getElementById('reJeonseRow');
+    if(rentRow) rentRow.style.display=type==='월세'?'block':'none';
+    if(jeonseRow) jeonseRow.style.display=type==='전세'?'block':'none';
   }
 }
 function monthsDiff(ym){
@@ -2899,8 +3057,22 @@ window.saveProd = function() {
     return;
   }
 
-  // FC 기본값 설정 (로컬 모드)
-  fcData = { name:'', title:'', company:'', fcId };
+  // Firebase 초기화 대기
+  let retries = 0;
+  while (!window._fb && retries++ < 20) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  // FC 프로필 조회 (실패해도 기본값으로 진행)
+  try {
+    if (window._fb) {
+      const fc = await fb().getFcData(fcId);
+      fcData = fc || { name:'', title:'', company:'', fcId };
+    }
+  } catch(e) {
+    console.warn('[init] FC 프로필 조회 실패:', e.message);
+  }
+  if (!fcData) fcData = { name:'', title:'', company:'', fcId };
 
   // loadingState 숨기고 바로 진입
   document.getElementById('loadingState').style.display = 'none';
