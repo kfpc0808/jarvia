@@ -2203,6 +2203,7 @@ function calcScores(){
   const ret  = getProds('retire');
   const loan = getProds('loan');
   const car  = getProds('car');
+  const re   = getProds('realestate'); // 부동산
 
   /* ── 자산 집계 ── */
   const totalPrem   = ins.reduce((s,p)=>s+n(p.premium),0);
@@ -2214,9 +2215,17 @@ function calcScores(){
   const totalCarPay = car.reduce((s,p)=>s+n(p.monthly),0);
   const monthlySav  = sav.reduce((s,p)=>s+n(p.monthly),0);
   const monthlyInv  = inv.reduce((s,p)=>s+n(p.yearly)/12,0);
-  const totalAsset  = totalSavBal + totalInvBal + totalRetBal;
+  // 연금 월납입 (yearly÷12)
+  const monthlyRet  = ret.reduce((s,p)=>s+n(p.monthly||p.yearly)/12,0);
+  // 부동산 순자산 (현재시세 - 담보대출)
+  const totalRePrice= re.reduce((s,p)=>s+n(p.currentPrice||p.buyPrice),0);
+  const totalReMtg  = re.reduce((s,p)=>s+n(p.mortgage),0);
+  const reNetAsset  = Math.max(totalRePrice - totalReMtg, 0);
+  // 전체 자산 (금융 + 부동산 순자산)
+  const totalAsset  = totalSavBal + totalInvBal + totalRetBal + reNetAsset;
   const netAsset    = totalAsset - totalDebt;
-  const monthlyOut  = totalPrem + monthlySav + totalRepay + totalCarPay;
+  // 월납입 합계 (연금 포함)
+  const monthlyOut  = totalPrem + monthlySav + totalRepay + totalCarPay + monthlyRet;
 
   /* ── 보험 상세 분석 ── */
   const hasReal   = ins.some(p=>p.type==='실손보험');
@@ -2225,9 +2234,10 @@ function calcScores(){
   const hasPension= ins.some(p=>p.type==='연금보험');
   const hasDementia=ins.some(p=>p.type==='치매보험');
   // 3대 진단비 합산
-  const cancerAmt = ins.filter(p=>p.type==='암보험').reduce((s,p)=>s+n(p.cancerAmt),0);
-  const brainAmt  = ins.filter(p=>p.type==='암보험'||p.type==='건강보험').reduce((s,p)=>s+n(p.brainAmt),0);
-  const heartAmt  = ins.filter(p=>p.type==='암보험'||p.type==='건강보험').reduce((s,p)=>s+n(p.heartAmt),0);
+  // 진단비: 타입 무관 모든 보험에서 합산 (특약 포함)
+  const cancerAmt = ins.reduce((s,p)=>s+n(p.cancerAmt),0);
+  const brainAmt  = ins.reduce((s,p)=>s+n(p.brainAmt),0);
+  const heartAmt  = ins.reduce((s,p)=>s+n(p.heartAmt),0);
   const diagTotal = cancerAmt + brainAmt + heartAmt;
   // 입원일당 합산
   const hospDaily = ins.reduce((s,p)=>s+n(p.hospDaily),0);
@@ -2250,8 +2260,8 @@ function calcScores(){
   if(totalSavBal > 0) asScore += 10;
   if(totalInvBal > 0) asScore += 15;
   if(totalRetBal > 0) asScore += 20;
-  // 자산 다양화 보너스 (3개 이상 카테고리)
-  const assetCats = [totalSavBal,totalInvBal,totalRetBal].filter(v=>v>0).length;
+  if(reNetAsset  > 0) asScore += 5;  // 부동산 순자산 보유 시 추가
+  const assetCats = [totalSavBal,totalInvBal,totalRetBal,reNetAsset].filter(v=>v>0).length;
   if(assetCats >= 3) asScore += 5;
   asScore = Math.min(100, asScore);
 
@@ -2282,14 +2292,14 @@ function calcScores(){
 
   /* ── 5. 현금흐름 점수 ── */
   let cfScore = 50;
-  if(monthlySav > 0 || monthlyInv > 0){
-    const totalMonthlyInvest = monthlySav + monthlyInv;
-    // 월 30만 이상 저축·투자 시 점수 상승
+  if(monthlySav > 0 || monthlyInv > 0 || monthlyRet > 0){
+    // 저축·투자·연금 모두 포함
+    const totalMonthlyInvest = monthlySav + monthlyInv + monthlyRet;
     cfScore = Math.min(100, 50 + Math.round(totalMonthlyInvest / 200000 * 5));
   }
   // 부채 상환 부담 높으면 감점
-  if(totalRepay > 0 && monthlySav > 0) {
-    if(totalRepay > monthlySav * 2) cfScore -= 15;
+  if(totalRepay > 0 && (monthlySav + monthlyRet) > 0) {
+    if(totalRepay > (monthlySav + monthlyRet) * 2) cfScore -= 15;
   }
   cfScore = Math.max(20, cfScore);
 
@@ -2300,7 +2310,9 @@ function calcScores(){
     retirement:retScore, cashflow:cfScore,
     totalAsset, netAsset, totalDebt,
     totalSavBal, totalInvBal, totalRetBal,
+    totalRePrice, reNetAsset,   // 부동산 시세·순자산
     totalPrem, monthlySav, totalRepay, monthlyOut,
+    monthlyRet,                 // 연금 월납입
     hasReal, hasCancer, hasLife, hasPension, hasDementia,
     cancerAmt, brainAmt, heartAmt, diagTotal, hospDaily,
     assetCats,
@@ -2310,10 +2322,14 @@ function calcScores(){
       savings: monthlySav,
       loan: totalRepay,
       car: totalCarPay,
+      retire: Math.round(monthlyRet),
     }
   };
 }
-function n(v){return Number(v)||0;}
+function n(v){
+  if(typeof v==='string') v=v.replace(/,/g,'');
+  return Number(v)||0;
+}
 
 function getGrade(s){
   if(s>=90)return{lbl:'최우수',col:'#22C55E'};
@@ -4396,6 +4412,8 @@ async function syncSharedData() {
       insurance: sc.monthlySplit?.insurance || 0,
       savings:   sc.monthlySplit?.savings   || 0,
       loan:      sc.monthlySplit?.loan      || 0,
+      retire:    sc.monthlySplit?.retire    || 0,
+      total:     sc.monthlyOut || 0,
       total:     sc.monthlyOut || 0,
     },
 
