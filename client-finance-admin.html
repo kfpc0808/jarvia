@@ -6,6 +6,8 @@
 <title>재무 대시보드 — 컨설턴트</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js"></script>
+<script>if(window.Kakao&&!Kakao.isInitialized())Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
 <style>
 :root{
   --ink:#141B2D;--ink-mid:#2D3652;--ink-lt:#5A6484;--ink-sub:#8B93AE;
@@ -314,6 +316,8 @@ button,input,select{font-family:var(--font);outline:none;border:none}
 .prv-footnote{font-size:11px;color:var(--border);text-align:center;
   padding:0 24px 16px;line-height:1.6}
 </style>
+  <script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js"></script>
+  <script>if(window.Kakao&&!Kakao.isInitialized())Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
 </head>
 <body>
 
@@ -400,7 +404,10 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       </div>
       <div class="sb-nav-section">도구</div>
       <div class="sb-nav-item" onclick="copyInviteLink()">
-        <span class="nav-ico">🔗</span>고객 초대 링크
+        <span class="nav-ico">🔗</span>링크 복사
+      </div>
+      <div class="sb-nav-item" onclick="shareInviteKakao()">
+        <span class="nav-ico">💬</span>카카오 공유
       </div>
       <div class="sb-nav-item" onclick="saveAllToDevice()">
         <span class="nav-ico">💾</span>전체 저장
@@ -521,10 +528,22 @@ onAuthStateChanged(fbAuth, async (user) => {
 
   const uData  = uSnap.docs[0].data();
   const fcId   = uData.loginId || '';
+  /* 고객 재무 대시보드 사용 가능 역할
+     (무료회원·일반회원 제외) */
   const VALID  = ['jarvia_member','jarvia_inner','jarvia_report','inner_circle','branch_manager'];
   if (!VALID.includes(uData.role||'')) {
-    alert('접근 권한이 없습니다.');
-    window.location.href='index.html';
+    document.body.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+        min-height:100vh;text-align:center;padding:40px 24px;font-family:system-ui,sans-serif;background:#F0F3F8">
+        <div style="font-size:48px;margin-bottom:16px">🔒</div>
+        <div style="font-size:20px;font-weight:800;color:#141B2D;margin-bottom:8px">이용 권한이 없습니다</div>
+        <div style="font-size:14px;color:#5A6484;line-height:1.7;margin-bottom:24px">
+          재무 대시보드는 <b>JARVIA 멤버십·이너서클·지사장</b> 회원만<br>이용할 수 있습니다.
+        </div>
+        <button onclick="window.location.href='index.html'"
+          style="padding:12px 28px;background:#1B3A6B;color:#fff;border:none;border-radius:10px;
+          font-size:14px;font-weight:700;cursor:pointer">JARVIA로 돌아가기</button>
+      </div>`;
     return;
   }
 
@@ -540,6 +559,14 @@ onAuthStateChanged(fbAuth, async (user) => {
     company: fcProfile.company || uData.company || '',
     fcId
   };
+
+  /* fc_share_profiles 로드 (카카오 공유용) */
+  try {
+    const spSnap = await getDoc(doc(fbDb,'fc_share_profiles', fcId));
+    window._shareProfile = spSnap.exists() ? spSnap.data() : null;
+  } catch(e) {
+    window._shareProfile = null;
+  }
 
   /* 고객 데이터 Firestore 로드 */
   try {
@@ -951,11 +978,53 @@ window.showPage=function(id){
   if(id==='insight') renderInsight();
 };
 
-/* ── 초대 링크 ── */
+/* ── 초대 링크 복사 (FC 실ID 사용) ── */
 window.copyInviteLink=function(){
-  const url=`https://jarvia.co.kr/client-finance.html?fc=${FC_DATA.fcId}`;
-  if(navigator.clipboard) navigator.clipboard.writeText(url).then(()=>toast('초대 링크가 복사되었습니다 🔗','ok'));
-  else toast('링크: '+url);
+  const fcId = window._fcId || FC_DATA.fcId;
+  const url  = `https://jarvia.co.kr/client-finance.html?fc=${fcId}`;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(url).then(()=>toast('초대 링크가 복사되었습니다 🔗','ok'));
+  } else {
+    const ta=document.createElement('textarea');
+    ta.value=url; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('링크가 복사되었습니다 🔗','ok');
+  }
+};
+
+/* ── 카카오 공유 (fc_share_profiles 설정값 사용) ── */
+window.shareInviteKakao=function(){
+  const fcId = window._fcId || FC_DATA.fcId;
+  const fc   = window._fcData || FC_DATA;
+  const sp   = window._shareProfile || {};
+  const url  = `https://jarvia.co.kr/client-finance.html?fc=${fcId}`;
+
+  /* fc_share_profiles 설정값 우선, 없으면 기본값 */
+  const nm         = (fc.name||'')+(fc.title?' '+fc.title:'');
+  const shareTitle = sp.shareTitle || (nm+'의 재무 대시보드');
+  const shareDesc  = sp.shareDesc  || '내 금융 상품을 입력하고 AI 재무 건강 점수를 확인해보세요.';
+  const shareImg   = sp.shareImageUrl || 'https://jarvia.co.kr/client_report_share_v2.png';
+
+  if(window.Kakao && Kakao.isInitialized()){
+    Kakao.Share.sendDefault({
+      objectType:'feed',
+      content:{
+        title: shareTitle,
+        description: shareDesc,
+        imageUrl: shareImg,
+        imageWidth:800, imageHeight:400,
+        link:{mobileWebUrl:url, webUrl:url}
+      },
+      buttons:[{title:'재무 대시보드 열기', link:{mobileWebUrl:url, webUrl:url}}],
+      installTalk:true
+    });
+  } else {
+    /* Kakao SDK 없을 때 링크 복사 폴백 */
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(url).then(()=>toast('카카오 SDK 오류 — 링크 복사됨 📋','ok'));
+    }
+  }
 };
 
 /* ── 전체 저장 ── */
