@@ -260,14 +260,13 @@ button,input,select{font-family:var(--font);outline:none;border:none}
   .main{margin-left:0;display:flex;flex-direction:column;min-height:100vh}
   .topbar{padding:0 16px;position:sticky;top:0;z-index:90}
   .content{
-    padding:14px 14px 80px;
+    padding:14px 14px 80px;   /* 하단 탭바 높이만큼 여백 */
     flex:1;
     overflow-y:auto;
     -webkit-overflow-scrolling:touch;
-    min-width:0;
   }
   .stat-grid{grid-template-columns:1fr 1fr;gap:10px}
-  .table-header{display:none}
+  .table-header{display:none}  /* 모바일에선 헤더 숨김 */
   .client-row{
     grid-template-columns:1fr auto;
     grid-template-rows:auto auto;
@@ -276,13 +275,10 @@ button,input,select{font-family:var(--font);outline:none;border:none}
   }
   .th-gaps,.td-gaps,.th-asset,.td-asset,.th-updated,.td-updated{display:none}
   .cl-gaps{display:none}
+  /* 모바일 카드형 고객 행 */
   .cl-info{grid-column:1}
   .cl-score{grid-column:2;grid-row:1}
   .cl-actions{grid-column:1/-1;grid-row:2;margin-top:6px}
-  /* 인사이트 카드 모바일 — 1열 */
-  .insight-3col{grid-template-columns:1fr !important}
-  /* 인사이트 2열 카드 → 1열 */
-  #insightContent > div:first-child{grid-template-columns:1fr !important}
 }
 /* 모바일 가로(landscape) — 사이드바 스크롤 가능 */
 @media(max-width:900px) and (orientation:landscape){
@@ -466,6 +462,9 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       <div class="sb-nav-item" onclick="showPage('insight')">
         <span class="nav-ico">📊</span>인사이트
       </div>
+      <div class="sb-nav-item" onclick="showPage('sangryung')">
+        <span class="nav-ico">⏰</span>상령일 관리
+      </div>
       <div class="sb-nav-section">도구</div>
       <div class="sb-nav-item" onclick="copyInviteLink()">
         <span class="nav-ico">🔗</span>링크 복사
@@ -558,6 +557,24 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       <div id="insightContent"></div>
     </div>
 
+    <!-- 상령일 관리 페이지 -->
+    <div class="content" id="pageSangryung" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h2 style="font-size:18px;font-weight:800;color:var(--ink);margin:0">⏰ 상령일 관리</h2>
+          <div style="font-size:12px;color:var(--ink-sub);margin-top:4px">
+            월을 선택해 상령일 고객을 확인하고 사전에 연락하세요
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px" id="srMonthTabs"></div>
+      <div id="srClientList">
+        <div style="text-align:center;padding:40px;color:var(--ink-sub);font-size:13px">
+          월을 선택하면 해당 월의 상령일 고객이 표시됩니다
+        </div>
+      </div>
+    </div><!-- /pageSangryung -->
+
   </div><!-- /main -->
 </div><!-- /layout -->
 
@@ -569,6 +586,9 @@ button,input,select{font-family:var(--font);outline:none;border:none}
     </div>
     <div class="mob-tab-item" id="mobTabInsight" onclick="showPage('insight');mobSetTab('insight')">
       <span class="mt-ico">📊</span>인사이트
+    </div>
+    <div class="mob-tab-item" id="mobTabSangryung" onclick="showPage('sangryung');mobSetTab('sangryung')">
+      <span class="mt-ico">⏰</span>상령일
     </div>
     <div class="mob-tab-item" id="mobTabShare" onclick="toggleMobShare()">
       <span class="mt-ico">📤</span>공유
@@ -745,14 +765,28 @@ function fmtAmt(v){
   return s+a.toLocaleString();
 }
 function getAge(birthYear){return new Date().getFullYear()-birthYear;}
+function getAgeFromBirth(c){
+  // birth 문자열 우선 (정확), 없으면 birthYear 폴백
+  if(c.birth){
+    const b=new Date(c.birth);
+    if(!isNaN(b)) return new Date().getFullYear()-b.getFullYear();
+  }
+  if(c.profile?.birth){
+    const b=new Date(c.profile.birth);
+    if(!isNaN(b)) return new Date().getFullYear()-b.getFullYear();
+  }
+  return getAge(c.birthYear||1985);
+}
 function calcInsAge(birthStr){
   if(!birthStr) return null;
-  const birth=new Date(birthStr), today=new Date();
+  const birth=new Date(birthStr);
+  if(isNaN(birth)) return null;
+  const today=new Date();
   let age=today.getFullYear()-birth.getFullYear();
   const mm=birth.getMonth(), dd=birth.getDate();
   let sr=new Date(today.getFullYear(),mm+6,dd);
-  if(sr<today){sr=new Date(today.getFullYear()+1,mm+6,dd);age++;}
-  return{insAge:age,sangRyung:sr,dDay:Math.ceil((sr-today)/(864e5))};
+  if(sr<today){ sr=new Date(today.getFullYear()+1,mm+6,dd); age++; }
+  return{insAge:age,sangRyung:sr,dDay:Math.ceil((sr-today)/864e5)};
 }
 function getGrade(s){
   if(s>=80)return{lbl:'우수',cls:'sp-good'};
@@ -938,9 +972,9 @@ function applyFilter(){
     if(currentFilter==='insurance') return !c.insurance.hasReal||!c.insurance.hasCancer;
     if(currentFilter==='retire') return c.scores.retirement<50;
     if(currentFilter==='debt') return c.scores.debt<60;
-    if(currentFilter==='age30'){const a=getAge(c.birthYear);return a>=30&&a<40;}
-    if(currentFilter==='age40'){const a=getAge(c.birthYear);return a>=40&&a<50;}
-    if(currentFilter==='age50'){const a=getAge(c.birthYear);return a>=50&&a<60;}
+    if(currentFilter==='age30'){const a=getAgeFromBirth(c);return a>=30&&a<40;}
+    if(currentFilter==='age40'){const a=getAgeFromBirth(c);return a>=40&&a<50;}
+    if(currentFilter==='age50'){const a=getAgeFromBirth(c);return a>=50&&a<60;}
     if(currentFilter==='good') return c.scores.total>=80;
     return true;
   });
@@ -958,7 +992,7 @@ function renderClientList(){
   }
 
   el.innerHTML=filteredClients.map(c=>{
-    const age=getAge(c.birthYear);
+    const age=getAgeFromBirth(c);
     const g=getGrade(c.scores.total);
     const totalAsset=c.assets.savings+c.assets.invest+c.assets.retire;
 
@@ -1010,7 +1044,7 @@ function openModal(clientId){
   const mon = c.monthly       || {};
   const diag= c.diagnosis     || {};
 
-  const age    = pr.age || getAge(c.birthYear);
+  const age    = pr.age || getAgeFromBirth(c);
   const gender = pr.gender==='M'?'남성':pr.gender==='F'?'여성':c.gender||'-';
   const married= pr.spouse==='Y'||c.married;
   const children= pr.children||0;
@@ -1353,7 +1387,7 @@ function renderInsight(){
   const totalAsset=clients.reduce((s,c)=>s+c.assets.savings+c.assets.invest+c.assets.retire,0);
 
   document.getElementById('insightContent').innerHTML=`
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;min-width:0">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
       <div style="background:#fff;border-radius:var(--radius);padding:20px;border:1px solid var(--border-lt);box-shadow:var(--shadow-sm)">
         <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:14px">👥 연령대 분포</div>
         ${Object.entries({30:ages[30],40:ages[40],50:ages[50]}).map(([age,cnt])=>`
@@ -1369,8 +1403,8 @@ function renderInsight(){
         <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:14px">🛡️ 보장 공백 현황</div>
         ${[['실손 미가입',noReal,'var(--red)'],['암보험 부족',noCancer,'var(--orange)'],['노후 준비 부족',lowRet,'var(--purple)'],['부채 주의',highDebt,'#374151']].map(([lbl,cnt,col])=>`
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="font-size:12px;color:var(--ink-lt);white-space:nowrap;min-width:72px">${lbl}</span>
-            <div style="flex:1;height:8px;background:var(--bg-warm);border-radius:4px;overflow:hidden;min-width:30px">
+            <span style="font-size:12px;color:var(--ink-lt);flex:1">${lbl}</span>
+            <div style="width:80px;height:8px;background:var(--bg-warm);border-radius:4px;overflow:hidden">
               <div style="width:${clients.length?cnt/clients.length*100:0}%;height:100%;background:${col};border-radius:4px"></div>
             </div>
             <span style="font-size:12px;font-weight:800;color:${col};width:28px;text-align:right">${cnt}명</span>
@@ -1379,7 +1413,7 @@ function renderInsight(){
     </div>
     <div style="background:#fff;border-radius:var(--radius);padding:20px;border:1px solid var(--border-lt);box-shadow:var(--shadow-sm)">
       <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:16px">💡 영업 인사이트</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px" class="insight-3col">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
         ${[
           {ico:'🎯',title:'즉시 상담 타겟',desc:`실손·암보험 없는 고객 ${noReal+noCancer}명`,col:'var(--red-lt)',border:'rgba(192,57,43,.2)'},
           {ico:'📅',title:'노후 상담 타겟',desc:`노후 준비 50점 미만 ${lowRet}명`,col:'var(--orange-lt)',border:'rgba(212,118,10,.2)'},
@@ -1397,17 +1431,17 @@ function renderInsight(){
 /* ── 페이지 전환 ── */
 window.showPage=function(id){
   document.querySelectorAll('.sb-nav-item').forEach(n=>n.classList.remove('active'));
-  // 사이드바 활성화 (PC)
-  document.querySelectorAll(`.sb-nav-item`).forEach(el=>{
+  document.querySelectorAll('.sb-nav-item').forEach(el=>{
     if(el.getAttribute('onclick')===`showPage('${id}')`) el.classList.add('active');
   });
-  document.getElementById('pageClients').style.display=id==='clients'?'block':'none';
-  document.getElementById('pageInsight').style.display=id==='insight'?'block':'none';
-  document.getElementById('pageTitle').textContent=id==='clients'?'고객 현황':'영업 인사이트';
-  if(id==='insight') renderInsight();
-  // 모바일 탭 동기화
+  document.getElementById('pageClients').style.display   = id==='clients'   ?'block':'none';
+  document.getElementById('pageInsight').style.display   = id==='insight'   ?'block':'none';
+  document.getElementById('pageSangryung').style.display = id==='sangryung' ?'block':'none';
+  const titles={clients:'고객 현황',insight:'영업 인사이트',sangryung:'상령일 관리'};
+  document.getElementById('pageTitle').textContent = titles[id]||'';
+  if(id==='insight')   renderInsight();
+  if(id==='sangryung') renderSangryungPage();
   mobSetTab(id);
-  // 스크롤 상단
   window.scrollTo(0,0);
 };
 window.mobSetTab=function(id){
@@ -1418,6 +1452,137 @@ window.mobSetTab=function(id){
 window.toggleMobShare=function(){
   const bar=document.getElementById('mobShareBarEl');
   if(bar){ bar.style.display=bar.style.display==='none'?'flex':'none'; }
+};
+
+/* ── 상령일 관리 페이지 ── */
+function renderSangryungPage(){
+  const clients = window._clients||[];
+  const now = new Date();
+  const thisMonth = now.getMonth();
+  const months = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+  // 12개월 상령일 수집
+  const byMonth = {};
+  for(let m=0;m<12;m++) byMonth[m]=[];
+  clients.forEach(c=>{
+    const birthStr = c.birth || c.profile?.birth || '';
+    if(birthStr){
+      const info=calcInsAge(birthStr);
+      if(info) byMonth[info.sangRyung.getMonth()].push(
+        {name:c.name,label:'본인',info,phone:c.phone,clientId:c.id});
+    }
+    const spStr = c.spouseBirth || c.profile?.spouseBirth || '';
+    if(spStr){
+      const info=calcInsAge(spStr);
+      if(info) byMonth[info.sangRyung.getMonth()].push(
+        {name:c.name,label:'배우자',info,phone:c.phone,clientId:c.id});
+    }
+  });
+  window._srByMonth = byMonth;
+
+  // 월 탭 렌더
+  const tabsEl = document.getElementById('srMonthTabs');
+  if(!tabsEl) return;
+  tabsEl.innerHTML = months.map((m,i)=>{
+    const cnt=byMonth[i].length, isNow=i===thisMonth;
+    return `<button onclick="renderSangryungList(${i})" id="srTab${i}"
+      style="padding:8px 14px;border-radius:20px;cursor:pointer;font-size:12px;
+      font-weight:${isNow?800:600};position:relative;transition:all .15s;
+      border:1.5px solid ${isNow?'var(--accent)':'var(--border)'};
+      background:${isNow?'var(--accent)':'#fff'};
+      color:${isNow?'#fff':'var(--ink-lt)'}">
+      ${m}${cnt>0?`<span style="position:absolute;top:-6px;right:-6px;
+        background:${isNow?'#fff':'var(--red)'};color:${isNow?'var(--red)':'#fff'};
+        font-size:10px;font-weight:800;width:17px;height:17px;border-radius:50%;
+        display:flex;align-items:center;justify-content:center">${cnt}</span>`:''}
+    </button>`;
+  }).join('');
+
+  renderSangryungList(thisMonth);
+}
+
+window.renderSangryungList=function(monthIdx){
+  const months=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  const byMonth=window._srByMonth||{};
+  const list=byMonth[monthIdx]||[];
+
+  // 탭 스타일 업데이트
+  for(let i=0;i<12;i++){
+    const el=document.getElementById('srTab'+i);
+    if(!el) continue;
+    const sel=i===monthIdx;
+    el.style.background  = sel?'var(--accent)':'#fff';
+    el.style.color       = sel?'#fff':'var(--ink-lt)';
+    el.style.fontWeight  = sel?'800':'600';
+    el.style.borderColor = sel?'var(--accent)':'var(--border)';
+  }
+
+  const listEl=document.getElementById('srClientList');
+  if(!listEl) return;
+
+  if(list.length===0){
+    listEl.innerHTML=`<div style="text-align:center;padding:40px;color:var(--ink-sub)">
+      <div style="font-size:32px;margin-bottom:8px">📅</div>
+      <div style="font-size:14px;font-weight:700">${months[monthIdx]}에 상령일 고객이 없습니다</div>
+      <div style="font-size:12px;margin-top:4px">다른 월을 선택해 보세요</div>
+    </div>`;
+    return;
+  }
+
+  const sorted=[...list].sort((a,b)=>a.info.dDay-b.info.dDay);
+  listEl.innerHTML=`
+    <div style="font-size:13px;font-weight:700;color:var(--ink-sub);margin-bottom:12px">
+      ${months[monthIdx]} 상령일 고객
+      <b style="color:var(--accent)">${sorted.length}명</b>
+    </div>
+    ${sorted.map(a=>{
+      const urgent=a.info.dDay<=15, warn=a.info.dDay<=30;
+      const col   =urgent?'var(--red)':warn?'var(--orange)':'var(--ink-lt)';
+      const bg    =urgent?'var(--red-lt)':warn?'#FEF3E2':'#F8F9FC';
+      const sr    =a.info.sangRyung;
+      const srStr =`${sr.getMonth()+1}/${sr.getDate()}`;
+      const badge = urgent
+        ?`<span style="background:var(--red);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">🔴 D-${a.info.dDay}</span>`
+        : warn
+        ?`<span style="background:var(--orange);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">🟡 D-${a.info.dDay}</span>`
+        :`<span style="background:var(--bg-warm);color:var(--ink-sub);font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px">D-${a.info.dDay}</span>`;
+      return `
+        <div style="background:${bg};border-radius:14px;padding:14px 16px;
+          margin-bottom:10px;border:1px solid rgba(0,0,0,.06);cursor:pointer"
+          onclick="openModal('${a.clientId}')">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:15px;font-weight:800;color:var(--ink)">${a.name}</span>
+              <span style="font-size:11px;color:var(--ink-sub);background:rgba(0,0,0,.06);
+                padding:2px 8px;border-radius:10px">${a.label}</span>
+            </div>
+            ${badge}
+          </div>
+          <div style="font-size:12px;color:var(--ink-lt);margin-bottom:10px">
+            📅 상령일 <b style="color:var(--ink)">${srStr}</b>
+            &nbsp;·&nbsp;
+            보험나이 <b style="color:var(--ink)">${a.info.insAge}세 → ${a.info.insAge+1}세</b>
+          </div>
+          <div style="display:flex;gap:8px">
+            ${a.phone?`<a href="tel:${a.phone}" onclick="event.stopPropagation()"
+              style="flex:1;display:flex;align-items:center;justify-content:center;gap:4px;
+              padding:9px;border-radius:9px;background:#EFF6FF;color:#1D4ED8;
+              border:1px solid #BFDBFE;font-size:12px;font-weight:700;text-decoration:none">
+              📞 전화</a>`:''}
+            <button onclick="event.stopPropagation();toast('카카오 메시지 기능 준비 중','ok')"
+              style="flex:1;padding:9px;border-radius:9px;background:#FEF08A;color:#854D0E;
+              border:1px solid #FDE047;font-size:12px;font-weight:700;cursor:pointer">
+              💬 카카오
+            </button>
+            <button onclick="event.stopPropagation();openModal('${a.clientId}')"
+              style="flex:1;padding:9px;border-radius:9px;background:var(--accent-lt);
+              color:var(--accent-bright);border:1.5px solid rgba(45,93,174,.2);
+              font-size:12px;font-weight:700;cursor:pointer">
+              📋 리포트
+            </button>
+          </div>
+        </div>`;
+    }).join('')}`;
 };
 
 /* ── 초대 링크 복사 ── */
