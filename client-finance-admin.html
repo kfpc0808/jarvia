@@ -545,22 +545,34 @@ onAuthStateChanged(fbAuth, async (user) => {
     return;
   }
 
-  /* FC loginId 조회 */
-  const {getDocs:gd,collection:col,query:q,where:w,limit:lim} = {
-    getDocs,collection,query,where,limit
-  };
+  /* FC loginId 조회 — users 또는 admins 컬렉션 */
+  let uData = null;
   const uSnap = await getDocs(query(
     collection(fbDb,'users'),
     where('email','==',user.email),
     limit(1)
   ));
-  if (uSnap.empty) { window.location.href='index.html'; return; }
+  if (!uSnap.empty) {
+    uData = uSnap.docs[0].data();
+  } else {
+    // admins 컬렉션 체크 (관리자 계정)
+    const aSnap = await getDocs(query(
+      collection(fbDb,'admins'),
+      where('loginId','==', user.email.replace('@javia-admin.internal','')),
+      limit(1)
+    ));
+    if (!aSnap.empty) {
+      const ad = aSnap.docs[0].data();
+      uData = { loginId: ad.loginId, role:'admin', name: ad.name||ad.loginId,
+                email: user.email, status: ad.status||'active' };
+    }
+  }
+  if (!uData) { window.location.href='index.html'; return; }
 
-  const uData  = uSnap.docs[0].data();
   const fcId   = uData.loginId || '';
   /* 고객 재무 대시보드 사용 가능 역할
      (무료회원·일반회원 제외) */
-  const VALID  = ['jarvia_member','jarvia_inner','jarvia_report','inner_circle','branch_manager'];
+  const VALID  = ['jarvia_member','jarvia_inner','jarvia_report','inner_circle','branch_manager','admin'];
   if (!VALID.includes(uData.role||'')) {
     document.body.innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
