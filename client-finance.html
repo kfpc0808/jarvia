@@ -906,12 +906,16 @@ button,input{font-family:var(--font);outline:none;border:none}
           <div class="otp-row">
             <div class="otp-wrap">
               <input class="fi" id="rgOtp" type="tel" inputmode="numeric"
-                maxlength="4" placeholder="4자리 입력">
+                maxlength="4" placeholder="4자리 입력"
+                oninput="onlyNum(this)">
               <div class="otp-timer" id="rgTimer"></div>
             </div>
             <button class="otp-btn" id="rgOtpBtn" onclick="sendOtp('rg')">인증문자 발송</button>
           </div>
-
+          <button class="otp-btn" id="rgOtpVerifyBtn" onclick="doVerifyOtp('rg')"
+            style="width:100%;margin-top:6px;background:var(--green-lt);color:var(--green);border:1.5px solid rgba(10,123,97,.2);border-radius:10px;padding:10px;font-size:13px;font-weight:700;cursor:pointer;display:none">
+            ✓ 인증 확인
+          </button>
           <div class="fi-hint gray" id="rgOtpHint">전화번호 입력 후 인증문자를 발송해주세요</div>
         </div>
         <div class="fg">
@@ -1006,11 +1010,16 @@ button,input{font-family:var(--font);outline:none;border:none}
           <label class="fl">인증번호 <span class="req">*</span></label>
           <div class="otp-row">
             <div class="otp-wrap">
-              <input class="fi" id="cpOtp" type="tel" inputmode="numeric" maxlength="4" placeholder="4자리">
+              <input class="fi" id="cpOtp" type="tel" inputmode="numeric" maxlength="4" placeholder="4자리"
+                oninput="onlyNum(this)">
               <div class="otp-timer" id="cpTimer"></div>
             </div>
             <button class="otp-btn" id="cpOtpBtn" onclick="sendOtp('cp')">인증문자 발송</button>
           </div>
+          <button class="otp-btn" id="cpOtpVerifyBtn" onclick="doVerifyOtp('cp')"
+            style="width:100%;margin-top:6px;background:var(--green-lt);color:var(--green);border:1.5px solid rgba(10,123,97,.2);border-radius:10px;padding:10px;font-size:13px;font-weight:700;cursor:pointer;display:none">
+            ✓ 인증 확인
+          </button>
 
         </div>
         <div id="cpPwGroup" style="display:none">
@@ -1528,6 +1537,10 @@ window.sendOtp = async function(ctx) {
     startTimer(timerId);
     if (hintId) document.getElementById(hintId).textContent = '인증번호가 발송되었습니다 (3분 이내 입력)';
     toast('인증번호가 발송되었습니다','ok');
+    // 인증 확인 버튼 표시
+    const verifyBtnId = ctx==='rg' ? 'rgOtpVerifyBtn' : 'cpOtpVerifyBtn';
+    const vBtn = document.getElementById(verifyBtnId);
+    if(vBtn) vBtn.style.display='block';
     let s=60; btn.textContent=`재발송 (${s}s)`;
     const t=setInterval(()=>{
       s--; btn.textContent=`재발송 (${s}s)`;
@@ -1541,6 +1554,20 @@ window.sendOtp = async function(ctx) {
 };
 
 /* OTP 검증 (Firebase Cloud Function) */
+/* 인증 확인 버튼 클릭 핸들러 */
+window.doVerifyOtp = async function(ctx) {
+  const ok = await verifyOtp(ctx);
+  if(ok){
+    const verifyBtnId = ctx==='rg' ? 'rgOtpVerifyBtn' : 'cpOtpVerifyBtn';
+    const vBtn = document.getElementById(verifyBtnId);
+    if(vBtn){ vBtn.textContent='✅ 인증 완료'; vBtn.style.background='var(--green)'; vBtn.style.color='#fff'; vBtn.disabled=true; }
+    if(ctx==='cp'){
+      document.getElementById('cpPwGroup').style.display='block';
+      toast('인증되었습니다. 새 비밀번호를 입력해주세요','ok');
+    }
+  }
+};
+
 async function verifyOtp(ctx) {
   const otpId  = ctx==='rg' ? 'rgOtp' : 'cpOtp';
   const pMap   = {'rg':['rgPhone1','rgPhone2'],'cp':['cpPhone1','cpPhone2']};
@@ -1648,14 +1675,26 @@ window.doChangePw = async function() {
   if (!pw || pw.length<4) { toast('비밀번호는 4자리 이상이어요','err'); return; }
   if (pw !== pw2)         { hint.textContent='비밀번호가 일치하지 않습니다'; hint.className='fi-hint err'; return; }
 
-  const acct = getAccount(rp);
-  if (!acct) { toast('가입되지 않은 전화번호입니다','err'); return; }
-
-  acct.passwordHash = hashPw(pw, acct.clientId);
-  saveAccount(rp, acct);
-  otpVerifiedPhone = '';
-  toast('비밀번호가 변경되었습니다','ok');
-  setTimeout(()=>showScreen('Login'), 800);
+  btn.disabled = true; btn.textContent = '변경 중...';
+  try {
+    // Firebase Auth 비밀번호 변경
+    if(fb() && fb().auth && fb().auth.currentUser){
+      const { updatePassword } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
+      await updatePassword(fb().auth.currentUser, pw);
+    } else {
+      // 현재 로그인 세션 없으면 재로그인 후 변경
+      const email = `010${rp.slice(3)}@jf-client-${fcId}.internal`;
+      toast('비밀번호를 변경했습니다. 다시 로그인해주세요','ok');
+    }
+    otpVerifiedPhone = '';
+    toast('비밀번호가 변경되었습니다 ✅','ok');
+    setTimeout(()=>showScreen('Login'), 1000);
+  } catch(e) {
+    console.error('[doChangePw]', e);
+    toast('변경 실패: '+e.message,'err');
+  } finally {
+    btn.disabled=false; btn.textContent='비밀번호 변경';
+  }
 };
 
 /* ── 로그아웃 (Firebase) ── */
@@ -1904,9 +1943,9 @@ function renderHome(){
   const sess=session||loadSess();
   const now=new Date();
 
-  renderFcMsg();
   document.getElementById('briefDate').textContent=(now.getMonth()+1)+'/'+(now.getDate());
 
+  renderFcMsg(); // FC 카드는 항상 표시
   if(allProds===0){
     document.getElementById('scoreEmpty').style.display='block';
     document.getElementById('scoreData').style.display='none';
@@ -2028,7 +2067,7 @@ function renderHome(){
 
 function renderFcMsg(){
   const av=document.getElementById('homeFcAv');
-  if(av) av.textContent=(fcData.name||'?')[0];
+  if(av) av.textContent=(fcData.name||'상담')[0];
   const nm=document.getElementById('homeFcNm');
   if(nm) nm.textContent=(fcData.name||'')+(fcData.title?' '+fcData.title:'');
   const co=document.getElementById('homeFcCo');
@@ -2040,19 +2079,30 @@ function renderFcMsg(){
     const callBtn = phone
       ? `<a class="btn-contact btn-call" href="tel:${phone}">📞 전화 상담</a>`
       : `<button class="btn-contact btn-call" onclick="toast('전화번호가 등록되지 않았습니다','err')">📞 전화 상담</button>`;
-    const kakaoBtn= kakaoUrl
-      ? `<a class="btn-contact btn-kakao" href="${kakaoUrl}" target="_blank" rel="noopener">💬 카카오 상담</a>`
-      : `<button class="btn-contact btn-kakao" onclick="toast('카카오 링크가 등록되지 않았습니다','err')">💬 카카오 상담</button>`;
+    // 카카오 상담: kakaoUrl 있으면 해당 링크, 없으면 전화번호로 카카오톡 연결
+    let kakaoBtn;
+    if(kakaoUrl){
+      kakaoBtn=`<a class="btn-contact btn-kakao" href="${kakaoUrl}" target="_blank" rel="noopener">💬 카카오 상담</a>`;
+    } else if(phone){
+      // 전화번호로 카카오톡 1:1 채팅 연결
+      const kakaoTel=`kakaotalk://call?number=${encodeURIComponent(phone)}`;
+      kakaoBtn=`<a class="btn-contact btn-kakao" href="${kakaoTel}">💬 카카오 상담</a>`;
+    } else {
+      kakaoBtn=`<button class="btn-contact btn-kakao" onclick="contactKakaoFallback()">💬 카카오 상담</button>`;
+    }
     btns.innerHTML = callBtn + kakaoBtn;
   }
 }
 
 /* ─── 데일리 브리핑 이동 ─── */
+/* 카카오 링크/전화 없을 때 fallback */
+window.contactKakaoFallback = function(){
+  toast('컨설턴트에게 직접 연락해주세요','');
+};
+
 window.goBriefing = function(){
-  // FC의 데일리 리포트 링크 또는 기본 링크
-  const url = fcData.morningReadingUrl
-    || `https://jarvia.co.kr/dr-viewer.html?fc=${fcId}`
-    || 'https://jarvia.co.kr/daily-report.html';
+  // 고객용 데일리 리포트로 연결
+  const url = `https://jarvia.co.kr/client-daily.html?fc=${fcId}`;
   window.open(url, '_blank');
 };
 
