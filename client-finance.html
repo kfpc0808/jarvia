@@ -1184,17 +1184,13 @@ button,input{font-family:var(--font);outline:none;border:none}
         </div>
 
         <!-- 데일리 브리핑 -->
-        <div class="briefing-card" onclick="goBriefing()" style="cursor:pointer">
+        <div class="briefing-card" onclick="goBriefing()" style="cursor:pointer" id="briefCard">
           <div class="brief-top">
-            <span class="brief-badge">📅 오늘의 재무 브리핑</span>
+            <span class="brief-badge" id="briefBadge">📅 오늘의 데일리 리포트</span>
             <span style="font-size:11px;color:var(--ink-sub)" id="briefDate"></span>
           </div>
-          <div class="brief-hl">금리 전환 국면 — 보험·연금 전략이 달라집니다</div>
-          <ul class="brief-pts">
-            <li>기준금리 동결 기조 전환 가능성</li>
-            <li>보험료 인상 전 가입 전략 점검 필요</li>
-            <li>연금저축 세액공제 한도 활용 시점</li>
-          </ul>
+          <div class="brief-hl" id="briefHl">데일리 리포트를 불러오는 중...</div>
+          <ul class="brief-pts" id="briefPts"></ul>
           <div class="brief-more">전체 보기 →</div>
         </div>
 
@@ -1463,6 +1459,41 @@ window._fb = {
   async getReport(clientId) {
     const snap = await getDoc(doc(fbDb,'finance_reports',clientId));
     return snap.exists() ? snap.data() : null;
+  },
+
+  /* 고객 데일리 리포트 조회 (직전 영업일 폴백 포함) */
+  async getDailyReport(fcId) {
+    // 직전 영업일 계산 함수
+    function prevBizDay(d) {
+      const dt = new Date(d);
+      dt.setDate(dt.getDate() - 1);
+      while(dt.getDay()===0||dt.getDay()===6) dt.setDate(dt.getDate()-1);
+      return dt;
+    }
+    function toYMD(d) {
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+    // 오늘부터 최대 7일 전까지 역방향 조회
+    let dt = new Date();
+    // 주말이면 바로 직전 영업일로 시작
+    while(dt.getDay()===0||dt.getDay()===6) dt = prevBizDay(dt);
+
+    for(let i=0; i<7; i++){
+      const dateStr = toYMD(dt);
+      const snap = await getDoc(doc(fbDb,'client_daily_reports',`${fcId}_${dateStr}`));
+      if(snap.exists()) return {...snap.data(), _date: dateStr};
+      dt = prevBizDay(dt);
+    }
+    // 최신 1개 폴백
+    try {
+      const q = await getDocs(query(
+        collection(fbDb,'client_daily_reports'),
+        where('fcId','==',fcId),
+        limit(1)
+      ));
+      if(!q.empty) return {...q.docs[0].data(), _date: q.docs[0].data().date||''};
+    } catch(e) {}
+    return null;
   },
 
   async generateReport(clientId, fcId) {
@@ -2054,6 +2085,7 @@ function renderHome(){
   const now=new Date();
 
   document.getElementById('briefDate').textContent=(now.getMonth()+1)+'/'+(now.getDate());
+  loadDailyBriefing(); // 데일리 리포트 로드
 
   renderFcMsg(); // FC 카드는 항상 표시
   if(allProds===0){
