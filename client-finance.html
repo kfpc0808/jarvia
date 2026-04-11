@@ -231,6 +231,17 @@ button,input{font-family:var(--font);outline:none;border:none}
   padding:10px 22px;border-radius:30px;font-size:14px;
   opacity:0;transition:all .3s var(--ease);pointer-events:none;
   z-index:9999;white-space:nowrap}
+/* ── FC 답장 팝업 ── */
+.reply-popup{position:fixed;top:20px;right:20px;z-index:10000;
+  background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.18);
+  padding:16px 18px;max-width:320px;width:calc(100vw - 40px);
+  transform:translateX(120%);transition:transform .4s var(--ease);
+  border-left:4px solid var(--accent)}
+.reply-popup.show{transform:translateX(0)}
+.reply-popup-header{display:flex;justify-content:space-between;align-items:center;
+  font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px}
+.reply-popup-action{font-size:11px;color:#64748B;margin-bottom:4px}
+.reply-popup-body{font-size:14px;color:var(--ink);line-height:1.6;font-weight:600}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:rgba(192,57,43,.92)}
 .toast.ok{background:rgba(10,123,97,.92)}
@@ -1633,6 +1644,14 @@ body.landing-mode .fc-header{top:48px}
     </div>
   </div>
   <div class="drawer-sep"></div>
+  <div class="drawer-item" onclick="toggleClientMute()">
+    <div class="drawer-item-icon" id="muteIcon" style="background:#F0F9FF">🔔</div>
+    <div>
+      <div class="drawer-item-title" id="muteLbl">알림음 켜짐</div>
+      <div class="drawer-item-desc">컨설턴트 답장 수신 알림음</div>
+    </div>
+  </div>
+  <div class="drawer-sep"></div>
   <div class="drawer-item" onclick="doLogout()">
     <div class="drawer-item-icon" style="background:var(--red-lt)">🚪</div>
     <div>
@@ -1678,7 +1697,7 @@ import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
   createUserWithEmailAndPassword,signOut,deleteUser}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
-  where,limit,serverTimestamp,deleteDoc,addDoc,orderBy}
+  where,limit,serverTimestamp,deleteDoc,addDoc,orderBy,onSnapshot}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
@@ -1884,6 +1903,70 @@ window._fb = {
       read: false
     });
   }
+};
+
+/* ── FC 답장 수신 알림 (onSnapshot) ── */
+window._playReplySound = function() {
+  if(localStorage.getItem('jf_client_sound_mute')==='Y') return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o1 = ctx.createOscillator(), g1 = ctx.createGain();
+    o1.type='sine'; o1.frequency.setValueAtTime(880,ctx.currentTime);
+    g1.gain.setValueAtTime(0.3,ctx.currentTime);
+    g1.gain.exponentialRampToValueAtTime(0.01,ctx.currentTime+0.4);
+    o1.connect(g1); g1.connect(ctx.destination);
+    o1.start(ctx.currentTime); o1.stop(ctx.currentTime+0.4);
+    const o2 = ctx.createOscillator(), g2 = ctx.createGain();
+    o2.type='sine'; o2.frequency.setValueAtTime(659,ctx.currentTime+0.15);
+    g2.gain.setValueAtTime(0.25,ctx.currentTime+0.15);
+    g2.gain.exponentialRampToValueAtTime(0.01,ctx.currentTime+0.7);
+    o2.connect(g2); g2.connect(ctx.destination);
+    o2.start(ctx.currentTime+0.15); o2.stop(ctx.currentTime+0.7);
+  } catch(e){}
+};
+
+let _replyWatchStarted = false;
+window._startReplyWatch = function(clientId) {
+  if(_replyWatchStarted) return;
+  _replyWatchStarted = true;
+  let firstLoad = true;
+  let knownReplies = {};
+  onSnapshot(
+    query(collection(fbDb,'consultation_requests'),
+      where('clientId','==',clientId), orderBy('createdAt','desc'), limit(20)),
+    (snap) => {
+      const newReplies = [];
+      snap.forEach(d => {
+        const data = d.data();
+        if(data.reply && !knownReplies[d.id]) {
+          newReplies.push({ id:d.id, reply:data.reply, action:data.action||'' });
+        }
+        if(data.reply) knownReplies[d.id] = true;
+      });
+      if(!firstLoad && newReplies.length > 0) {
+        window._playReplySound();
+        newReplies.forEach(r => window._showReplyPopup(r.action, r.reply));
+      }
+      firstLoad = false;
+    },
+    (e) => console.warn('[client] 답장 감지 실패:', e.message)
+  );
+};
+
+window._showReplyPopup = function(action, reply) {
+  const popup = document.createElement('div');
+  popup.className = 'reply-popup';
+  popup.innerHTML = `
+    <div class="reply-popup-header">
+      <span>💬 컨설턴트 답장</span>
+      <button onclick="this.closest('.reply-popup').remove()" style="background:none;border:none;font-size:16px;cursor:pointer;color:#64748B">✕</button>
+    </div>
+    <div class="reply-popup-action">${action}</div>
+    <div class="reply-popup-body">${reply}</div>
+  `;
+  document.body.appendChild(popup);
+  requestAnimationFrame(()=> popup.classList.add('show'));
+  setTimeout(()=>{ if(popup.parentNode) popup.classList.remove('show'); setTimeout(()=>{ if(popup.parentNode) popup.remove(); },400); }, 8000);
 };
 
 console.log('[client-finance] Firebase 초기화 완료');
@@ -2425,6 +2508,11 @@ function enterMain() {
   initFloatShare();
   // 기본 정보를 FC에 즉시 동기화
   setTimeout(syncSharedData, 1000);
+  // FC 답장 실시간 감지
+  const sess = session || loadSess();
+  if(sess && sess.clientId && _fcId && _fcId!=='demo') {
+    window._startReplyWatch(sess.clientId);
+  }
 }
 
 /* ── 비로그인 랜딩 모드 ── */
@@ -4319,6 +4407,16 @@ window.showEditForm=function(id){
         }
       }
     });
+    // shareAmt 복원
+    document.querySelectorAll('#addFormWrap [data-bool]').forEach(el=>{
+      const key=el.dataset.bool;
+      const val=p[key];
+      const isOn = val !== 'N';
+      el.classList.toggle('on', isOn);
+      el.classList.toggle('sw-on', isOn);
+      const lbl=el.closest('.prv-toggle-ctrl')?.querySelector('.sw-lbl');
+      if(lbl) lbl.textContent = isOn ? '공유 중' : '비공개';
+    });
     bindCalc();
   },80);
 };
@@ -4407,7 +4505,7 @@ function buildForm(catId){
     <div class="calc-preview" id="insCalc" style="display:none"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 월 보험료 금액 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='savings') return `
@@ -4443,7 +4541,7 @@ function buildForm(catId){
       <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="앱에서 조회 후 입력" oninput="numFmt(this)"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 잔액 금액 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='invest') return `
@@ -4470,7 +4568,7 @@ function buildForm(catId){
     </div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 평가금액 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='retire') return `
@@ -4502,7 +4600,7 @@ function buildForm(catId){
     </div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 적립금 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='loan') return `
@@ -4539,7 +4637,7 @@ function buildForm(catId){
       </select></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 잔액 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='realestate') return `
@@ -4576,7 +4674,7 @@ function buildForm(catId){
       <input class="mfi" data-key="mortgage" type="text" inputmode="numeric" placeholder="없으면 0" oninput="numFmt(this)"></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 부동산 정보 FC 공유</span>
-      <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
+      <div class="prv-toggle-ctrl"><div class="sw on sw-on" data-bool="shareAmt"></div><span class="sw-lbl">공유 중</span></div>
     </div>`;
 
   if(catId==='car') return `
@@ -4865,8 +4963,26 @@ function renderAuthFc() {
 }
 
 /* ── 드로어 ── */
-window.openDrawer  = function(){ document.getElementById('drawer').style.display='block'; document.getElementById('drawerBg').classList.add('show'); };
+window.openDrawer  = function(){
+  document.getElementById('drawer').style.display='block';
+  document.getElementById('drawerBg').classList.add('show');
+  // 알림음 상태 반영
+  const muted = localStorage.getItem('jf_client_sound_mute')==='Y';
+  const icon = document.getElementById('muteIcon');
+  const lbl = document.getElementById('muteLbl');
+  if(icon) icon.textContent = muted ? '🔇' : '🔔';
+  if(lbl) lbl.textContent = muted ? '알림음 꺼짐' : '알림음 켜짐';
+};
 window.closeDrawer = function(){ document.getElementById('drawer').style.display='none';  document.getElementById('drawerBg').classList.remove('show'); };
+window.toggleClientMute = function(){
+  const cur = localStorage.getItem('jf_client_sound_mute')==='Y';
+  localStorage.setItem('jf_client_sound_mute', cur ? 'N' : 'Y');
+  const icon = document.getElementById('muteIcon');
+  const lbl = document.getElementById('muteLbl');
+  if(icon) icon.textContent = cur ? '🔔' : '🔇';
+  if(lbl) lbl.textContent = cur ? '알림음 켜짐' : '알림음 꺼짐';
+  toast(cur ? '알림음이 켜졌습니다 🔔' : '알림음이 꺼졌습니다 🔇');
+};
 
 /* ── 팝업 ── */
 /* 진입 팝업 제거됨 */
