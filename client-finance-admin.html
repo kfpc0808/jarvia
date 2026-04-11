@@ -463,6 +463,12 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       <div class="sb-nav-item" onclick="showPage('expiry')">
         <span class="nav-ico">🔔</span>만기 관리
       </div>
+      <div class="sb-nav-item" onclick="showPage('consult')">
+        <span class="nav-ico">📞</span>상담 요청
+        <span id="sbConsultBadge" style="display:none;background:var(--red);color:#fff;
+          font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;
+          align-items:center;justify-content:center;padding:0 4px;margin-left:auto"></span>
+      </div>
       <div class="sb-nav-item" onclick="showPage('guide')">
         <span class="nav-ico">📖</span>시작 가이드
       </div>
@@ -596,6 +602,22 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px" id="expiryFilterChips"></div>
       <div id="expiryList"></div>
     </div><!-- /pageExpiry -->
+
+    <!-- 상담 요청 전용 페이지 -->
+    <div class="content" id="pageConsult" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h2 style="font-size:18px;font-weight:800;color:var(--ink);margin:0">📞 상담 요청</h2>
+          <div style="font-size:12px;color:var(--ink-sub);margin-top:4px">
+            고객이 보낸 상담 요청을 확인하고 답장하세요
+          </div>
+        </div>
+        <span id="consultTotalBadge" style="font-size:12px;font-weight:700;background:var(--red);
+          color:#fff;padding:4px 12px;border-radius:20px"></span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px" id="consultFilterChips"></div>
+      <div id="consultPageList"></div>
+    </div><!-- /pageConsult -->
 
     <!-- 상담 요청 패널 (토글) -->
     <div id="consultPanel" style="display:none;position:fixed;top:52px;right:16px;width:360px;max-width:90vw;
@@ -845,6 +867,9 @@ button,input,select{font-family:var(--font);outline:none;border:none}
     <div class="mob-tab-item" id="mobTabExpiry" onclick="showPage('expiry');mobSetTab('expiry')">
       <span class="mt-ico">🔔</span>만기
     </div>
+    <div class="mob-tab-item" id="mobTabConsult" onclick="showPage('consult');mobSetTab('consult')">
+      <span class="mt-ico">📞</span>상담
+    </div>
     <div class="mob-tab-item" id="mobTabGuide" onclick="showPage('guide');mobSetTab('guide')">
       <span class="mt-ico">📖</span>가이드
     </div>
@@ -888,7 +913,7 @@ button,input,select{font-family:var(--font);outline:none;border:none}
 <script type="module">
 import{initializeApp,getApps,getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,getDoc,getDocs,collection,query,where,orderBy,limit,updateDoc}
+import{getFirestore,doc,getDoc,getDocs,collection,query,where,orderBy,limit,updateDoc,onSnapshot,addDoc,serverTimestamp}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const fbApp = getApps().length ? getApp() : initializeApp({
@@ -1007,30 +1032,46 @@ onAuthStateChanged(fbAuth, async (user) => {
     if (typeof window._initAdmin === 'function') window._initAdmin();
   }
 
-  /* ── 상담 요청 데이터 로드 ── */
+  /* ── 상담 요청 실시간 감지 (onSnapshot) ── */
+  let _consultFirstLoad = true;
   try {
-    const crSnap = await getDocs(query(
-      collection(fbDb,'consultation_requests'),
-      where('fcId','==',fcId),
-      orderBy('createdAt','desc'),
-      limit(50)
-    ));
-    const requests = [];
-    crSnap.forEach(d => {
-      const data = d.data();
-      requests.push({
-        id: d.id,
-        clientId: data.clientId || '',
-        clientName: data.clientName || '고객',
-        action: data.action || '',
-        score: data.score || 0,
-        read: data.read || false,
-        createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date()
-      });
-    });
-    window._consultRequests = requests;
-    console.log(`[admin] 상담 요청 ${requests.length}건 로드 (미확인 ${requests.filter(r=>!r.read).length}건)`);
-    if (typeof window._renderConsultBadge === 'function') window._renderConsultBadge();
+    onSnapshot(
+      query(collection(fbDb,'consultation_requests'), where('fcId','==',fcId), orderBy('createdAt','desc'), limit(50)),
+      (snap) => {
+        const requests = [];
+        snap.forEach(d => {
+          const data = d.data();
+          requests.push({
+            id: d.id,
+            clientId: data.clientId || '',
+            clientName: data.clientName || '고객',
+            action: data.action || '',
+            score: data.score || 0,
+            read: data.read || false,
+            reply: data.reply || '',
+            repliedAt: data.repliedAt?.toDate ? data.repliedAt.toDate() : null,
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date()
+          });
+        });
+
+        // 신규 요청 감지 → 알림음 재생
+        const prevCount = (window._consultRequests||[]).length;
+        window._consultRequests = requests;
+        if (!_consultFirstLoad && requests.length > prevCount) {
+          window._playConsultSound();
+        }
+        _consultFirstLoad = false;
+
+        console.log(`[admin] 상담 요청 ${requests.length}건 (미확인 ${requests.filter(r=>!r.read).length}건)`);
+        if (typeof window._renderConsultBadge === 'function') window._renderConsultBadge();
+        if (typeof window._renderConsultList === 'function') window._renderConsultList();
+        if (typeof renderConsultPage === 'function' && document.getElementById('pageConsult')?.style.display==='block') renderConsultPage();
+      },
+      (e) => {
+        console.warn('[admin] 상담 요청 실시간 감지 실패:', e.message);
+        window._consultRequests = [];
+      }
+    );
   } catch(e) {
     console.warn('[admin] 상담 요청 로드 실패:', e.message);
     window._consultRequests = [];
@@ -1046,6 +1087,26 @@ onAuthStateChanged(fbAuth, async (user) => {
       if (typeof window._renderConsultList === 'function') window._renderConsultList();
     } catch(e) {
       console.warn('[admin] 읽음 처리 실패:', e.message);
+    }
+  };
+
+  /* FC → 고객 답장 */
+  window._sendConsultReply = async function(requestId, message) {
+    if (!message || !message.trim()) return;
+    try {
+      await updateDoc(doc(fbDb,'consultation_requests',requestId), {
+        reply: message.trim(),
+        repliedAt: serverTimestamp(),
+        read: true
+      });
+      const req = (window._consultRequests||[]).find(r=>r.id===requestId);
+      if (req) { req.reply = message.trim(); req.read = true; req.repliedAt = new Date(); }
+      if (typeof toast === 'function') toast('답장을 보냈습니다 ✓','ok');
+      if (typeof window._renderConsultBadge === 'function') window._renderConsultBadge();
+      if (typeof renderConsultPage === 'function') renderConsultPage();
+    } catch(e) {
+      console.warn('[admin] 답장 실패:', e.message);
+      if (typeof toast === 'function') toast('답장 전송에 실패했습니다','err');
     }
   };
 });
@@ -1791,11 +1852,13 @@ window.showPage=function(id){
   document.getElementById('pageSangryung').style.display = id==='sangryung' ?'block':'none';
   document.getElementById('pageGuide').style.display     = id==='guide'     ?'block':'none';
   document.getElementById('pageExpiry').style.display    = id==='expiry'    ?'block':'none';
-  const titles={clients:'고객 현황',insight:'영업 인사이트',sangryung:'상령일 관리',guide:'시작 가이드',expiry:'만기 관리'};
+  document.getElementById('pageConsult').style.display   = id==='consult'   ?'block':'none';
+  const titles={clients:'고객 현황',insight:'영업 인사이트',sangryung:'상령일 관리',guide:'시작 가이드',expiry:'만기 관리',consult:'상담 요청'};
   document.getElementById('pageTitle').textContent = titles[id]||'';
   if(id==='insight')   renderInsight();
   if(id==='sangryung') renderSangryungPage();
   if(id==='expiry')    renderExpiryPage();
+  if(id==='consult')   renderConsultPage();
   mobSetTab(id);
   window.scrollTo(0,0);
 };
@@ -2033,6 +2096,146 @@ function renderExpiryPage(){
   }).join('');
 }
 
+/* ── 알림음 (Web Audio API — 띵동) ── */
+window._playConsultSound = function() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // 띵 (높은 음)
+    const o1 = ctx.createOscillator();
+    const g1 = ctx.createGain();
+    o1.type = 'sine';
+    o1.frequency.setValueAtTime(880, ctx.currentTime);
+    g1.gain.setValueAtTime(0.3, ctx.currentTime);
+    g1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+    o1.connect(g1); g1.connect(ctx.destination);
+    o1.start(ctx.currentTime); o1.stop(ctx.currentTime + 0.4);
+    // 동 (낮은 음)
+    const o2 = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(659, ctx.currentTime + 0.15);
+    g2.gain.setValueAtTime(0.25, ctx.currentTime + 0.15);
+    g2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.7);
+    o2.connect(g2); g2.connect(ctx.destination);
+    o2.start(ctx.currentTime + 0.15); o2.stop(ctx.currentTime + 0.7);
+  } catch(e) { console.warn('알림음 재생 실패:', e.message); }
+};
+
+/* ── 상담 요청 전용 페이지 ── */
+let _consultFilter = 'all';
+function renderConsultPage(){
+  const reqs = window._consultRequests || [];
+
+  // 뱃지
+  const unread = reqs.filter(r=>!r.read).length;
+  const badge = document.getElementById('consultTotalBadge');
+  if(badge) badge.textContent = unread > 0 ? `미확인 ${unread}건` : `총 ${reqs.length}건`;
+
+  // 필터 칩
+  const chips = [
+    {id:'all', label:'전체', count:reqs.length},
+    {id:'unread', label:'⏳ 미확인', count:unread},
+    {id:'replied', label:'✅ 답장 완료', count:reqs.filter(r=>r.reply).length},
+    {id:'read', label:'👁️ 확인만', count:reqs.filter(r=>r.read&&!r.reply).length},
+  ];
+  const chipsEl = document.getElementById('consultFilterChips');
+  if(chipsEl){
+    chipsEl.innerHTML = chips.map(c=>`
+      <button onclick="_consultFilter='${c.id}';renderConsultPage()"
+        style="padding:7px 14px;border-radius:20px;font-size:12px;font-weight:700;
+        cursor:pointer;border:1.5px solid ${_consultFilter===c.id?'var(--accent)':'var(--border)'};
+        background:${_consultFilter===c.id?'var(--accent)':'#fff'};
+        color:${_consultFilter===c.id?'#fff':'var(--ink-lt)'};transition:all .15s">
+        ${c.label} <span style="opacity:.7">${c.count}</span>
+      </button>`).join('');
+  }
+
+  // 필터 적용
+  let filtered = reqs;
+  if(_consultFilter==='unread') filtered = reqs.filter(r=>!r.read);
+  else if(_consultFilter==='replied') filtered = reqs.filter(r=>r.reply);
+  else if(_consultFilter==='read') filtered = reqs.filter(r=>r.read&&!r.reply);
+
+  const listEl = document.getElementById('consultPageList');
+  if(!listEl) return;
+
+  if(filtered.length===0){
+    listEl.innerHTML=`<div style="text-align:center;padding:40px;color:var(--ink-sub)">
+      <div style="font-size:32px;margin-bottom:8px">📭</div>
+      <div style="font-size:14px;font-weight:700">${_consultFilter==='all'?'상담 요청이 없습니다':'해당 조건의 요청이 없습니다'}</div>
+    </div>`;
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(r=>{
+    const dt = r.createdAt;
+    const timeStr = `${dt.getFullYear()}.${dt.getMonth()+1}.${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+    const isUnread = !r.read;
+    const hasReply = !!r.reply;
+    const bg = isUnread ? '#FEF2F2' : hasReply ? '#F0FDF4' : '#F8F9FC';
+    const border = isUnread ? 'rgba(192,57,43,.15)' : hasReply ? 'rgba(10,123,97,.15)' : 'rgba(0,0,0,.06)';
+    const statusBadge = isUnread
+      ? '<span style="background:var(--red);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">🔴 미확인</span>'
+      : hasReply
+      ? '<span style="background:var(--green);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">✅ 답장 완료</span>'
+      : '<span style="background:var(--bg-warm);color:var(--ink-sub);font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px">👁️ 확인</span>';
+
+    const replyTimeStr = r.repliedAt ? `${r.repliedAt.getMonth()+1}/${r.repliedAt.getDate()} ${String(r.repliedAt.getHours()).padStart(2,'0')}:${String(r.repliedAt.getMinutes()).padStart(2,'0')}` : '';
+
+    return `<div style="background:${bg};border-radius:14px;padding:16px;
+      margin-bottom:10px;border:1px solid ${border}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:15px;font-weight:800;color:var(--ink)">${r.clientName}</span>
+          <span style="font-size:11px;color:var(--ink-sub)">점수 ${r.score}점</span>
+        </div>
+        ${statusBadge}
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid rgba(0,0,0,.06);margin-bottom:10px">
+        <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">💬 고객 요청 · ${timeStr}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--ink);line-height:1.6">${r.action}</div>
+      </div>
+      ${hasReply ? `
+      <div style="background:#E6F5F0;border-radius:10px;padding:12px;border:1px solid rgba(10,123,97,.15);margin-bottom:10px">
+        <div style="font-size:11px;color:var(--green);margin-bottom:4px">✅ 내 답장 · ${replyTimeStr}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);line-height:1.6">${r.reply}</div>
+      </div>` : ''}
+      <div style="display:flex;gap:8px;align-items:stretch">
+        ${!hasReply ? `
+        <input id="replyInput_${r.id}" type="text" placeholder="답장을 입력하세요..."
+          style="flex:1;padding:10px 12px;border-radius:9px;border:1.5px solid var(--border);
+          font-size:13px;font-family:var(--font);outline:none"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();_doReply('${r.id}')}">
+        <button onclick="_doReply('${r.id}')"
+          style="padding:10px 16px;border-radius:9px;background:var(--accent);color:#fff;
+          border:none;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
+          📩 답장
+        </button>` : `
+        <input id="replyInput_${r.id}" type="text" placeholder="추가 답장..."
+          style="flex:1;padding:10px 12px;border-radius:9px;border:1.5px solid var(--border);
+          font-size:13px;font-family:var(--font);outline:none"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();_doReply('${r.id}')}">
+        <button onclick="_doReply('${r.id}')"
+          style="padding:10px 16px;border-radius:9px;background:var(--accent-lt);color:var(--accent-bright);
+          border:1.5px solid rgba(45,93,174,.2);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
+          📩 재답장
+        </button>`}
+        ${isUnread ? `<button onclick="if(window._markConsultRead)window._markConsultRead('${r.id}');setTimeout(renderConsultPage,300)"
+          style="padding:10px 12px;border-radius:9px;background:var(--bg-warm);color:var(--ink-lt);
+          border:none;font-size:12px;font-weight:700;cursor:pointer">확인</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+window._doReply = function(requestId) {
+  const input = document.getElementById('replyInput_'+requestId);
+  if(!input || !input.value.trim()) { toast('답장 내용을 입력하세요','err'); return; }
+  if(typeof window._sendConsultReply === 'function'){
+    window._sendConsultReply(requestId, input.value);
+  }
+};
+
 /* ── 초대 링크 복사 ── */
 window.copyInviteLink=function(){
   const fcId = window._fcId
@@ -2123,13 +2326,24 @@ window._renderConsultBadge = function() {
   const unread = reqs.filter(r => !r.read).length;
   const bell = document.getElementById('consultBell');
   const badge = document.getElementById('consultBadge');
-  if (!bell || !badge) return;
-  bell.style.display = 'inline-block';
-  if (unread > 0) {
-    badge.style.display = 'flex';
-    badge.textContent = unread > 99 ? '99+' : unread;
-  } else {
-    badge.style.display = 'none';
+  if (bell) bell.style.display = 'inline-block';
+  if (badge) {
+    if (unread > 0) {
+      badge.style.display = 'flex';
+      badge.textContent = unread > 99 ? '99+' : unread;
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  // 사이드바 뱃지
+  const sbBadge = document.getElementById('sbConsultBadge');
+  if (sbBadge) {
+    if (unread > 0) {
+      sbBadge.style.display = 'flex';
+      sbBadge.textContent = unread > 99 ? '99+' : unread;
+    } else {
+      sbBadge.style.display = 'none';
+    }
   }
 };
 
@@ -2162,11 +2376,7 @@ window._renderConsultList = function() {
 };
 
 window.toggleConsultPanel = function() {
-  const panel = document.getElementById('consultPanel');
-  if (!panel) return;
-  const show = panel.style.display === 'none';
-  panel.style.display = show ? 'block' : 'none';
-  if (show && typeof window._renderConsultList === 'function') window._renderConsultList();
+  showPage('consult');
 };
 
 /* ── 가이드 이미지 스와이프 뷰어 ── */
@@ -2284,7 +2494,7 @@ window._initAdmin = function(){
   }
   // URL 파라미터로 초기 탭 선택
   const _urlTab = new URLSearchParams(window.location.search).get('tab');
-  if(_urlTab && ['clients','insight','sangryung','guide','expiry'].includes(_urlTab)){
+  if(_urlTab && ['clients','insight','sangryung','guide','expiry','consult'].includes(_urlTab)){
     showPage(_urlTab);
   }
 };
