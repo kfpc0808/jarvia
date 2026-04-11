@@ -326,7 +326,7 @@
       </div>
     </div>
       <!-- ★ PC: sub-tab-area를 tab-outer 안 오른쪽에 배치 -->
-      <div id="sub-tab-area" class="hidden" style="flex-shrink:0;display:flex;align-items:center;gap:8px"><div class="sub-tabs" id="sub-tabs-inner" style="margin-bottom:0;flex:1"><button class="sub-tab active" onclick="filterSub('all',this)">전체</button><button class="sub-tab" onclick="filterSub('개인',this)">개인</button><button class="sub-tab" onclick="filterSub('법인',this)">법인</button><button class="sub-tab" id="cat-tab-lecture" onclick="filterCat('weekly_lecture',this)" style="display:none;background:#FFF8E1;border-color:#D4A03C;color:#8B6914;font-weight:700">📚 토요특강</button></div><button onclick="goSnapshot()" style="padding:7px 14px;border-radius:16px;border:1px solid #BFCFE0;background:#EBF2FA;color:#1B3A5C;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font);white-space:nowrap;transition:all .2s;flex-shrink:0">📈 금융통계</button></div>
+      <div id="sub-tab-area" class="hidden" style="flex-shrink:0;display:flex;align-items:center;gap:8px"><div class="sub-tabs" id="sub-tabs-inner" style="margin-bottom:0;flex:1"><button class="sub-tab active" onclick="filterSub('all',this)">전체</button><button class="sub-tab" onclick="filterSub('개인',this)">개인</button><button class="sub-tab" onclick="filterSub('법인',this)">법인</button><button class="sub-tab" id="cat-tab-lecture" onclick="filterCat('weekly_lecture',this)" style="display:none;background:#FFF8E1;border-color:#D4A03C;color:#8B6914;font-weight:700">📚 토요특강</button></div><button class="fd-btn" onclick="showFinanceComingSoon()"><span>📊</span><span>재무대시보드</span><span class="fd-new">NEW</span></button></div>
     </div><!-- end tab-outer -->
     <div class="filter-bar"><input id="f-keyword" placeholder="키워드로 검색..." oninput="filterList()" style="flex:1 1 60%;min-width:0"><button class="cat-tab" id="btn-upcoming" onclick="filterCat('upcoming',this)" style="flex:0 0 auto;padding:10px 16px;font-size:14px;white-space:nowrap">📅 게시예정</button></div>
     <div id="upcoming-sec" class="sec hidden">
@@ -1635,6 +1635,12 @@ function edbToggle(row){
 /* ── 구매 확인 모달 ── */
 .exs-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;}
 .exs-modal-box{background:#fff;border-radius:16px;padding:24px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.2);}
+@keyframes fd-spin{to{transform:rotate(360deg)}}
+@keyframes fd-blink{0%,100%{opacity:1}50%{opacity:.4}}
+.fd-btn{position:relative;overflow:hidden;display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:20px;background:linear-gradient(135deg,#1a1a2e,#16213e);border:1px solid rgba(226,201,126,.35);color:#e2c97e;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0}
+.fd-btn::after{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:conic-gradient(from 0deg,transparent 0%,rgba(226,201,126,.12) 10%,transparent 20%);animation:fd-spin 4s linear infinite}
+.fd-btn>*{position:relative;z-index:1}
+.fd-btn .fd-new{font-size:9px;background:rgba(226,201,126,.25);padding:1px 5px;border-radius:3px;animation:fd-blink 2.5s ease-in-out infinite}
 </style>
 
 <div class="exs-wrap">
@@ -3054,6 +3060,7 @@ onAuthStateChanged(auth,async u=>{
       if(window._justLoggedIn){window._justLoggedIn=false;setTimeout(()=>openNoticeModal(),300);}
       checkPaymentResult();
       showLoginPopups();
+      checkConsultRequests();
     }else{
       // ★ 인증은 됐지만 users에 없는 경우 (익명인증 등) → 로그아웃 후 로그인 페이지
       console.warn('인증 유저가 users에 없음 (uid:'+u.uid+', isAnonymous:'+u.isAnonymous+') — 로그아웃 처리');
@@ -5999,6 +6006,54 @@ function closeLoginPopup(){
   if(_lpQueue.length)setTimeout(()=>showNextPopup(),300);
 }
 window.showLoginPopups=showLoginPopups;window.closeLoginPopup=closeLoginPopup;
+
+// ═══ 상담 요청 팝업 (로그인 시 자동) ═══
+async function checkConsultRequests(){
+  if(!me||!meData||meData.role==='admin')return;
+  const lid=meData.loginId||'';
+  if(!lid)return;
+  try{
+    const crSnap=await getDocs(query(
+      collection(db,'consultation_requests'),
+      where('fcId','==',lid),
+      where('read','==',false),
+      orderBy('createdAt','desc'),
+      limit(20)
+    ));
+    if(crSnap.empty)return;
+    const items=[];
+    crSnap.forEach(d=>{
+      const r=d.data();
+      const dt=r.createdAt?.toDate?r.createdAt.toDate():new Date();
+      items.push({
+        id:d.id,
+        name:r.clientName||'고객',
+        action:r.action||'',
+        score:r.score||0,
+        time:`${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`
+      });
+    });
+    window._pendingConsults=items;
+    const listEl=document.getElementById('consultPopupList');
+    if(listEl) listEl.innerHTML=items.map(r=>`<div style="padding:10px 0;border-bottom:1px solid #E8ECF1">
+      <div style="display:flex;justify-content:space-between"><span style="font-size:14px;font-weight:700;color:#141B2D">${r.name}</span><span style="font-size:11px;color:#8B93AE">${r.time}</span></div>
+      <div style="font-size:13px;color:#2D5DAE;margin-top:3px">📞 ${r.action}</div>
+      <div style="font-size:11px;color:#8B93AE;margin-top:2px">재무 점수 ${r.score}점</div>
+    </div>`).join('');
+    setTimeout(()=>{const m=document.getElementById('mdl-consult-popup');if(m)m.style.display='flex';},800);
+  }catch(e){console.warn('[consult popup]',e.message);}
+}
+window.closeConsultPopup=function(){
+  const m=document.getElementById('mdl-consult-popup');if(m)m.style.display='none';
+};
+window.markAllConsultRead=async function(){
+  const items=window._pendingConsults||[];
+  for(const r of items){
+    try{await updateDoc(doc(db,'consultation_requests',r.id),{read:true});}catch(e){}
+  }
+  window.closeConsultPopup();
+  if(typeof toast==='function')toast(items.length+'건 상담 요청을 확인했습니다','success');
+};
 </script>
 <!-- ═══ 하단 바로가기 버튼 ═══ -->
 <div id="calc-banner" class="hidden" style="max-width:1200px;margin:0 auto;padding:0 24px">
@@ -6047,6 +6102,16 @@ function requestUpgrade(){
 <div>E. &#107;&#102;&#112;&#95;&#99;&#101;&#110;&#116;&#101;&#114;&#64;&#110;&#97;&#118;&#101;&#114;&#46;&#99;&#111;&#109; <button onclick="nav('partnership')" style="margin-left:8px;padding:4px 12px;border:1px solid rgba(255,255,255,.2);border-radius:6px;background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);font-size:12px;cursor:pointer;font-family:inherit;transition:all .2s">제휴 제안</button></div>
 </footer>
 <!-- 재무 대시보드 오픈 예정 팝업 -->
+<div id="mdl-consult-popup" style="display:none;position:fixed;inset:0;background:rgba(10,15,30,.75);z-index:9100;align-items:center;justify-content:center" onclick="if(event.target===this)closeConsultPopup()">
+  <div style="background:#fff;border-radius:20px;width:380px;max-width:calc(100vw - 40px);padding:28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:17px;font-weight:900;color:#141B2D">📞 새 상담 요청</div>
+      <span onclick="closeConsultPopup()" style="cursor:pointer;font-size:20px;color:#8B93AE">✕</span>
+    </div>
+    <div id="consultPopupList" style="max-height:50vh;overflow-y:auto"></div>
+    <button onclick="markAllConsultRead()" style="width:100%;padding:13px;background:linear-gradient(135deg,#1a1a2e,#16213e);color:#e2c97e;border:none;border-radius:12px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;margin-top:16px">모두 확인</button>
+  </div>
+</div>
 <div id="financeComingSoonBg" style="display:none;position:fixed;inset:0;background:rgba(10,15,30,.75);z-index:9000;align-items:center;justify-content:center" onclick="if(event.target===this)closeFinanceComingSoon()">
   <div style="background:#fff;border-radius:20px;width:320px;max-width:calc(100vw - 40px);padding:32px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.2)">
     <div style="font-size:44px;margin-bottom:12px">🚀</div>
@@ -6058,10 +6123,12 @@ function requestUpgrade(){
 <script>
 function showFinanceComingSoon(){
   const _md = window.meData || (typeof meData!=='undefined'?meData:null);
-  if(_md && _md.loginId==='gildong'){
+  const _validRoles=['jarvia_member','jarvia_inner','jarvia_report','inner_circle','branch_manager','admin'];
+  if(_md && _validRoles.includes(_md.role)){
     window.location.href='client-finance-admin.html';
     return;
   }
+  if(!_md){openM('mdl-login-prompt');return;}
   const el=document.getElementById('financeComingSoonBg');
   el.style.display='flex';
   if(typeof closeMobMenu==='function') closeMobMenu();
