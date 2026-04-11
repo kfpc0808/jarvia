@@ -1661,6 +1661,20 @@ body.landing-mode .fc-header{top:48px}
       </div>
     </div><!-- /pane-diag -->
 
+    <!-- ── 상담 내역 탭 ── -->
+    <div class="tab-pane" id="pane-consult">
+      <div class="section-card" style="padding:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-size:18px;font-weight:800;color:var(--ink)">📞 상담 내역</div>
+          <div id="consultUnreadBadge" style="display:none;background:var(--red);color:#fff;
+            font-size:11px;font-weight:800;padding:3px 10px;border-radius:12px"></div>
+        </div>
+        <div id="consultHistoryList" style="font-size:13px;color:var(--ink-lt);line-height:1.65">
+          상담 내역이 없습니다
+        </div>
+      </div>
+    </div><!-- /pane-consult -->
+
   </div><!-- /탭 콘텐츠 -->
 
   <!-- 하단 탭바 -->
@@ -1680,6 +1694,11 @@ body.landing-mode .fc-header{top:48px}
     <div class="tab-item" id="tab-diag" onclick="switchTab('diag')">
       <span class="t-icon">🤖</span>
       <span class="t-label">AI 진단</span>
+    </div>
+    <div class="tab-item" id="tab-consult" onclick="switchTab('consult')" style="position:relative">
+      <span class="t-icon">📞</span>
+      <span class="t-label">상담</span>
+      <span id="consultTabBadge" class="tab-notif" style="display:none;position:absolute;top:2px;right:8px"></span>
     </div>
     <div class="tab-item" id="tab-recommend" onclick="shareRecommend()">
       <span class="t-icon">🎁</span>
@@ -2166,6 +2185,9 @@ window._playReplySound = function() {
 };
 
 let _replyWatchStarted = false;
+window._consultHistory = [];
+window._consultReadReplies = JSON.parse(localStorage.getItem('jf_read_replies')||'{}');
+
 window._startReplyWatch = function(clientId) {
   if(_replyWatchStarted) return;
   _replyWatchStarted = true;
@@ -2173,40 +2195,73 @@ window._startReplyWatch = function(clientId) {
   let knownReplies = {};
   onSnapshot(
     query(collection(fbDb,'consultation_requests'),
-      where('clientId','==',clientId), orderBy('createdAt','desc'), limit(20)),
+      where('clientId','==',clientId), orderBy('createdAt','desc'), limit(50)),
     (snap) => {
+      const all = [];
       const newReplies = [];
       snap.forEach(d => {
         const data = d.data();
+        const item = {
+          id: d.id,
+          action: data.action||'',
+          reply: data.reply||'',
+          repliedAt: data.repliedAt?.toDate ? data.repliedAt.toDate() : null,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+        };
+        all.push(item);
         if(data.reply && !knownReplies[d.id]) {
-          newReplies.push({ id:d.id, reply:data.reply, action:data.action||'' });
+          newReplies.push(item);
         }
         if(data.reply) knownReplies[d.id] = true;
       });
+      window._consultHistory = all;
       if(!firstLoad && newReplies.length > 0) {
         window._playReplySound();
-        newReplies.forEach(r => window._showReplyPopup(r.action, r.reply));
+        newReplies.forEach(r => window._showReplyPopup(r.action, r.reply, r.id));
       }
       firstLoad = false;
+      window._updateConsultBadge();
+      if(typeof renderConsultTab==='function' && curTab==='consult') renderConsultTab();
     },
     (e) => console.warn('[client] 답장 감지 실패:', e.message)
   );
 };
 
-window._showReplyPopup = function(action, reply) {
+window._updateConsultBadge = function() {
+  const readMap = window._consultReadReplies;
+  const unread = window._consultHistory.filter(r => r.reply && !readMap[r.id]).length;
+  const badge = document.getElementById('consultTabBadge');
+  const badge2 = document.getElementById('consultUnreadBadge');
+  if(badge) { badge.style.display = unread > 0 ? 'inline-flex' : 'none'; badge.textContent = unread; }
+  if(badge2) { badge2.style.display = unread > 0 ? 'inline-block' : 'none'; badge2.textContent = '미확인 '+unread+'건'; }
+};
+
+window._showReplyPopup = function(action, reply, docId) {
+  function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   const popup = document.createElement('div');
   popup.className = 'reply-popup';
   popup.innerHTML = `
     <div class="reply-popup-header">
       <span>💬 컨설턴트 답장</span>
-      <button onclick="this.closest('.reply-popup').remove()" style="background:none;border:none;font-size:16px;cursor:pointer;color:#64748B">✕</button>
     </div>
-    <div class="reply-popup-action">${action}</div>
-    <div class="reply-popup-body">${reply}</div>
+    <div class="reply-popup-action">${esc(action)}</div>
+    <div class="reply-popup-body">${esc(reply)}</div>
+    <button onclick="window._dismissReplyPopup(this.closest('.reply-popup'),'${docId||''}')"
+      style="width:100%;margin-top:12px;padding:10px;border:none;border-radius:10px;
+      background:var(--accent);color:#fff;font-size:13px;font-weight:700;cursor:pointer">확인</button>
   `;
   document.body.appendChild(popup);
   requestAnimationFrame(()=> popup.classList.add('show'));
-  setTimeout(()=>{ if(popup.parentNode) popup.classList.remove('show'); setTimeout(()=>{ if(popup.parentNode) popup.remove(); },400); }, 8000);
+};
+
+window._dismissReplyPopup = function(el, docId) {
+  if(docId) {
+    window._consultReadReplies[docId] = true;
+    localStorage.setItem('jf_read_replies', JSON.stringify(window._consultReadReplies));
+    window._updateConsultBadge();
+  }
+  el.classList.remove('show');
+  setTimeout(()=>{ if(el.parentNode) el.remove(); }, 400);
 };
 
 console.log('[client-finance] Firebase 초기화 완료');
@@ -3129,6 +3184,60 @@ window.switchTab=function(id){
   if(id==='products'){renderProfile();renderProducts();}
   if(id==='assets')renderAssets();
   if(id==='diag')renderDiag();
+  if(id==='consult')renderConsultTab();
+};
+
+/* ─── 상담 내역 탭 렌더 ─── */
+function renderConsultTab(){
+  const list = window._consultHistory || [];
+  const readMap = window._consultReadReplies || {};
+  const wrap = document.getElementById('consultHistoryList');
+  if(!wrap) return;
+  if(list.length === 0){
+    wrap.innerHTML = '<div style="text-align:center;padding:40px 0;color:var(--ink-lt)">'+
+      '<div style="font-size:40px;margin-bottom:12px">📭</div>'+
+      '<div style="font-size:14px">아직 상담 내역이 없습니다</div>'+
+      '<div style="font-size:12px;margin-top:6px">AI 진단 결과에서 상담을 요청해보세요</div></div>';
+    return;
+  }
+  function fDate(d){ if(!d) return ''; return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+  function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+  wrap.innerHTML = list.map(r => {
+    const hasReply = !!r.reply;
+    const isNew = hasReply && !readMap[r.id];
+    return `<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:10px;
+      border:1px solid ${isNew?'var(--accent)':'rgba(0,0,0,.06)'};
+      ${isNew?'box-shadow:0 2px 12px rgba(27,58,107,.1)':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:11px;color:var(--ink-lt)">📤 내 요청 · ${fDate(r.createdAt)}</div>
+        ${hasReply
+          ? `<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;
+              background:${isNew?'var(--accent)':'var(--green-lt)'};color:${isNew?'#fff':'var(--green)'}">
+              ${isNew?'🔔 새 답장':'✅ 답장 완료'}</span>`
+          : '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;background:var(--bg-warm);color:var(--ink-lt)">⏳ 대기 중</span>'}
+      </div>
+      <div style="font-size:14px;font-weight:700;color:var(--ink);margin-bottom:${hasReply?'10':'0'}px">${esc(r.action)}</div>
+      ${hasReply ? `
+        <div style="background:linear-gradient(135deg,#E6F5F0,#F0FFF8);border-radius:10px;padding:12px;
+          border-left:3px solid var(--green)">
+          <div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px">
+            💬 컨설턴트 답장 · ${fDate(r.repliedAt)}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--ink);line-height:1.65">${esc(r.reply)}</div>
+        </div>
+        ${isNew ? `<button onclick="markConsultRead('${r.id}',this)"
+          style="width:100%;margin-top:10px;padding:9px;border:none;border-radius:10px;
+          background:var(--accent);color:#fff;font-size:12px;font-weight:700;cursor:pointer">확인</button>` : ''}
+      ` : ''}
+    </div>`;
+  }).join('');
+  // 탭 진입 시 배지 업데이트
+  window._updateConsultBadge();
+}
+window.markConsultRead = function(docId, btn){
+  window._consultReadReplies[docId] = true;
+  localStorage.setItem('jf_read_replies', JSON.stringify(window._consultReadReplies));
+  window._updateConsultBadge();
+  renderConsultTab();
 };
 
 /* ─── 홈 렌더 ─── */
