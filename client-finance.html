@@ -1266,6 +1266,12 @@ body.landing-mode .fc-header{top:48px}
           padding:14px 16px;margin-bottom:12px">
         </div>
 
+        <!-- 만기 임박 알림 -->
+        <div id="expiryAlertCard" style="display:none;background:linear-gradient(135deg,#FEF2F2,#FDE8E8);
+          border:1px solid rgba(220,38,38,.2);border-radius:var(--radius);
+          padding:14px 16px;margin-bottom:12px">
+        </div>
+
         <!-- 랜딩 히어로 (비로그인 시) -->
         <div id="landingHero" class="landing-hero" style="display:none">
           <div class="lh-icon">📊</div>
@@ -2512,6 +2518,16 @@ function openGuideLb(i) {
   document.getElementById('guideLbCaption').textContent = _guideSlides[i].title;
   lb.classList.add('show');
   document.body.style.overflow = 'hidden';
+  // 라이트박스 터치 스와이프
+  if(!lb._swipeInit){
+    lb._swipeInit = true;
+    let sx=0, dx=0;
+    lb.addEventListener('touchstart', e=>{ sx=e.touches[0].clientX; dx=0; }, {passive:true});
+    lb.addEventListener('touchmove', e=>{ dx=e.touches[0].clientX-sx; }, {passive:true});
+    lb.addEventListener('touchend', ()=>{
+      if(Math.abs(dx)>50){ dx<0 ? lbNav(1) : lbNav(-1); }
+    });
+  }
 }
 window.closeGuideLb = function() {
   document.getElementById('guideLightbox').classList.remove('show');
@@ -2607,6 +2623,11 @@ function toggleNpsHint(sel){
     if(lbl) lbl.textContent='연 납입액(원)';
   }
 }
+function toggleCarPayRow(sel){
+  const row = document.getElementById('carPayRow');
+  if(!row) return;
+  row.style.display = sel.value==='현금 구매' ? 'none' : 'block';
+}
 
 /* ─── 점수 계산 ─── */
 /* ═══════════════════════════════════════
@@ -2629,10 +2650,16 @@ function calcScores(){
   const totalDebt   = loan.reduce((s,p)=>s+n(p.balance),0);
   const totalRepay  = loan.reduce((s,p)=>s+n(p.monthly),0);
   const totalCarPay = car.reduce((s,p)=>s+n(p.monthly),0);
+  const carInsYear  = car.reduce((s,p)=>s+n(p.insAmount),0);
   const monthlySav  = sav.reduce((s,p)=>s+n(p.monthly),0);
   const monthlyInv  = inv.reduce((s,p)=>s+n(p.yearly)/12,0);
-  // 연금 월납입 (yearly÷12)
-  const monthlyRet  = ret.reduce((s,p)=>s+n(p.monthly||p.yearly)/12,0);
+  // 부동산 월세 합계
+  const monthlyRent = re.reduce((s,p)=>s+n(p.monthlyRent),0);
+  // 연금 월납입 (국민연금은 이미 월납부액이므로 /12 하지 않음)
+  const monthlyRet  = ret.reduce((s,p)=>{
+    const v = n(p.monthly||p.yearly);
+    return s + (p.type==='국민연금' ? v : v/12);
+  },0);
   // 부동산 순자산 (현재시세 - 담보대출)
   const totalRePrice= re.reduce((s,p)=>s+n(p.currentPrice||p.buyPrice),0);
   const totalReMtg  = re.reduce((s,p)=>s+n(p.mortgage),0);
@@ -2640,8 +2667,8 @@ function calcScores(){
   // 전체 자산 (금융 + 부동산 순자산)
   const totalAsset  = totalSavBal + totalInvBal + totalRetBal + reNetAsset;
   const netAsset    = totalAsset - totalDebt;
-  // 월납입 합계 (연금 포함)
-  const monthlyOut  = totalPrem + monthlySav + totalRepay + totalCarPay + monthlyRet;
+  // 월납입 합계 (연금 + 월세 + 자동차보험 포함)
+  const monthlyOut  = totalPrem + monthlySav + totalRepay + totalCarPay + monthlyRet + monthlyRent + Math.round(carInsYear/12);
 
   /* ── 보험 상세 분석 ── */
   const hasReal   = ins.some(p=>p.type==='실손보험');
@@ -2737,8 +2764,9 @@ function calcScores(){
       insurance: totalPrem,
       savings: monthlySav,
       loan: totalRepay,
-      car: totalCarPay,
+      car: totalCarPay + Math.round(carInsYear/12),
       retire: Math.round(monthlyRet),
+      rent: monthlyRent,
     }
   };
 }
@@ -2785,6 +2813,7 @@ function renderHome(){
   document.getElementById('briefDate').textContent=(now.getMonth()+1)+'/'+(now.getDate());
   loadDailyBriefing(); // 데일리 리포트 로드
   renderAgeAlert(); // 상령일 알림
+  renderExpiryAlerts(); // 만기 임박 알림
 
   renderFcMsg(); // FC 카드는 항상 표시
   if(allProds===0){
@@ -2852,8 +2881,8 @@ function renderHome(){
     const ms=sc.monthlySplit;
     const mTotal=Object.values(ms).reduce((a,b)=>a+b,0);
     if(mTotal>0){
-      const mColors=['#2D5DAE','#0A7B61','#C0392B','#374151','#D4760A'];
-      const mLabels=['보험료','저축','대출상환','차량','연금'];
+      const mColors=['#2D5DAE','#0A7B61','#C0392B','#374151','#D4760A','#0F766E'];
+      const mLabels=['보험료','저축','대출상환','차량','연금','월세'];
       let offset=0;
       const segs=Object.values(ms).map((v,i)=>{
         if(!v) return '';
@@ -3213,6 +3242,73 @@ function renderAgeAlert(){
           padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">
           📞 지금 상담하기
         </button>
+      </div>
+    </div>`;
+}
+
+/* ── 만기 임박 알림 (1개월 이내) ── */
+function renderExpiryAlerts(){
+  const card = document.getElementById('expiryAlertCard');
+  if(!card) return;
+
+  const now = new Date();
+  const limit = new Date(now.getFullYear(), now.getMonth()+1, now.getDate()); // 1개월 후
+  const alerts = [];
+
+  function checkDate(dateStr, label, cat){
+    if(!dateStr) return;
+    // YYYY-MM 또는 YYYY-MM-DD
+    const parts = dateStr.split('-');
+    const y = parseInt(parts[0]), m = parseInt(parts[1])-1;
+    const d = parts[2] ? parseInt(parts[2]) : 28; // 월만 있으면 월말 기준
+    const expDate = new Date(y, m, d);
+    if(expDate <= limit && expDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate()-7)){
+      const diffMs = expDate - now;
+      const diffDays = Math.ceil(diffMs / 86400000);
+      const dateLabel = `${y}.${String(m+1).padStart(2,'0')}`;
+      alerts.push({label, cat, dateLabel, diffDays, expDate});
+    }
+  }
+
+  // 보험 만기
+  getProds('insurance').forEach(p=>{
+    const name = p.name || p.company || '보험';
+    checkDate(p.endDate, `🛡️ ${name} (${p.type||'보험'})`, 'insurance');
+  });
+  // 저축 만기
+  getProds('savings').forEach(p=>{
+    const name = p.company || '저축';
+    checkDate(p.maturity, `🏦 ${name} (${p.type||'저축'})`, 'savings');
+  });
+  // 대출 만기
+  getProds('loan').forEach(p=>{
+    const name = p.company || '대출';
+    checkDate(p.maturity, `📉 ${name} (${p.type||'대출'})`, 'loan');
+  });
+  // 자동차보험 만기
+  getProds('car').forEach(p=>{
+    const name = p.name || '자동차';
+    checkDate(p.insExpiry, `🚗 ${name} 자동차보험`, 'car');
+  });
+
+  if(alerts.length===0){ card.style.display='none'; return; }
+
+  // 임박순 정렬
+  alerts.sort((a,b)=>a.diffDays-b.diffDays);
+
+  card.style.display='block';
+  card.innerHTML=`
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <span style="font-size:22px;flex-shrink:0">🔔</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:800;color:#991B1B;margin-bottom:8px">만기 임박 상품</div>
+        ${alerts.map(a=>`
+        <div style="font-size:12px;color:#7F1D1D;margin-bottom:6px;line-height:1.6;
+          padding:6px 8px;background:rgba(255,255,255,.5);border-radius:8px">
+          <b>${a.label}</b><br>
+          만기일 ${a.dateLabel} · <b style="color:#DC2626">${a.diffDays<=0?'만기 도래':'D-'+a.diffDays}</b>
+          <span style="font-size:11px;color:#991B1B"> — 담당 컨설턴트에게 상담하세요</span>
+        </div>`).join('')}
       </div>
     </div>`;
 }
@@ -4266,19 +4362,24 @@ function buildForm(catId){
         <option value="">선택</option>
         <option>삼성생명</option><option>교보생명</option><option>한화생명</option><option>미래에셋생명</option><option>신한라이프</option><option>ABL생명</option><option>DB생명</option><option>흥국생명</option><option>동양생명</option><option>푸본현대생명</option><option>KDB생명</option><option>메트라이프</option><option>AIA생명</option><option>처브라이프</option><option>라이나생명</option><option>현대해상</option><option>삼성화재</option><option>DB손해보험</option><option>KB손해보험</option><option>메리츠화재</option><option>흥국화재</option><option>롯데손해보험</option><option>한화손해보험</option><option>MG손해보험</option><option>농협손해보험</option><option>NH농협생명</option><option>하나생명</option><option>신한금융</option><option>직접입력</option>
       </select></div>
+    <div class="mfg"><label class="mfl">상품명 <span style="font-weight:400;color:var(--ink-sub)">(선택)</span></label>
+      <input class="mfi" data-key="name" type="text" placeholder="예: 무배당 뉴 암보험"></div>
     <div class="mfg"><label class="mfl">보험 종류</label>
       <select class="mfsel" data-key="type" onchange="bindCalc()">
         <option value="">선택</option>
         <option>실손보험</option><option>암보험</option><option>종신·정기보험</option>
         <option>연금보험</option><option>건강보험</option><option>치매보험</option>
-        <option>상해보험</option>
+        <option>상해보험</option><option>어린이보험</option><option>치아보험</option>
+        <option>운전자보험</option><option>화재보험</option>
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">가입 연월</label>
         <input class="mfi" data-key="startDate" type="month"></div>
-      <div class="mfg"><label class="mfl">월 보험료(원)</label>
-        <input class="mfi" data-key="premium" type="text" inputmode="numeric" placeholder="예: 60,000" oninput="numFmt(this);bindCalc()"></div>
+      <div class="mfg"><label class="mfl">만기 연월</label>
+        <input class="mfi" data-key="endDate" type="month"></div>
     </div>
+    <div class="mfg"><label class="mfl">월 보험료(원)</label>
+      <input class="mfi" data-key="premium" type="text" inputmode="numeric" placeholder="예: 60,000" oninput="numFmt(this);bindCalc()"></div>
     <div class="form-section">보장 내용</div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">암 진단비(원)</label>
@@ -4309,7 +4410,8 @@ function buildForm(catId){
       <select class="mfsel" data-key="type">
         <option value="">선택</option>
         <option>정기적금</option><option>정기예금</option><option>주택청약</option>
-        <option>CMA</option><option>파킹통장</option>
+        <option>CMA</option><option>파킹통장</option><option>청년도약계좌</option>
+        <option>청년희망적립금</option>
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">월 납입액(원)</label>
@@ -4343,13 +4445,15 @@ function buildForm(catId){
     <div class="mfg"><label class="mfl">계좌 종류</label>
       <select class="mfsel" data-key="type">
         <option value="">선택</option>
-        <option>ISA</option><option>연금저축펀드</option><option>IRP</option>
-        <option>일반 주식</option><option>해외 주식</option><option>ETF</option>
-        <option>펀드</option>
+        <option>ISA</option><option>일반 주식</option><option>해외 주식</option>
+        <option>ETF</option><option>펀드</option><option>가상자산(코인)</option>
       </select></div>
+    <div style="font-size:11px;color:var(--ink-sub);line-height:1.5;margin-bottom:8px;padding:0 2px">
+      💡 IRP·연금저축은 <b>퇴직·연금</b> 탭에 입력하세요 (중복 입력 시 자산이 2배로 집계됩니다)
+    </div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">연 납입액(원)</label>
-        <input class="mfi" data-key="yearly" type="text" inputmode="numeric" placeholder="예: 2,400,000" oninput="numFmt(this)"></div>
+        <input class="mfi" data-key="yearly" type="text" inputmode="numeric" placeholder="월평균×12 환산" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">현재 평가금액(원)</label>
         <input class="mfi" data-key="balance" type="text" inputmode="numeric" placeholder="앱 조회" oninput="numFmt(this)"></div>
     </div>
@@ -4364,7 +4468,7 @@ function buildForm(catId){
       <select class="mfsel" data-key="type" onchange="toggleNpsHint(this)">
         <option value="">선택</option>
         <option>DB형 퇴직연금</option><option>DC형 퇴직연금</option>
-        <option>IRP</option><option>연금저축보험</option><option>국민연금</option>
+        <option>IRP</option><option>연금저축보험</option><option>연금저축펀드</option><option>국민연금</option>
       </select></div>
     <div id="npsHint" style="display:none;background:#EEF6FF;border:1px solid #BFDBFE;
       border-radius:10px;padding:12px 14px;margin-bottom:10px;font-size:12px;line-height:1.7;color:#1E40AF">
@@ -4402,6 +4506,7 @@ function buildForm(catId){
         <option value="">선택</option>
         <option>주택담보대출</option><option>전세자금대출</option>
         <option>신용대출</option><option>자동차할부</option><option>카드론</option>
+        <option>학자금대출</option><option>마이너스통장</option>
       </select></div>
     <div class="mfrow">
       <div class="mfg"><label class="mfl">대출 잔액(원)</label>
@@ -4409,8 +4514,18 @@ function buildForm(catId){
       <div class="mfg"><label class="mfl">연 이율(%)</label>
         <input class="mfi" data-key="rate" type="number" inputmode="decimal" placeholder="예: 4.2" step="0.1"></div>
     </div>
-    <div class="mfg"><label class="mfl">월 상환액(원)</label>
-      <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 900,000" oninput="numFmt(this)"></div>
+    <div class="mfrow">
+      <div class="mfg"><label class="mfl">월 상환액(원)</label>
+        <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 900,000" oninput="numFmt(this)"></div>
+      <div class="mfg"><label class="mfl">만기일</label>
+        <input class="mfi" data-key="maturity" type="month"></div>
+    </div>
+    <div class="mfg"><label class="mfl">상환 방식</label>
+      <select class="mfsel" data-key="repayType">
+        <option value="">선택</option>
+        <option>원리금균등</option><option>원금균등</option><option>만기일시상환</option>
+        <option>자유상환</option>
+      </select></div>
     <div class="prv-toggle-row" onclick="toggleSw(this)">
       <span class="prv-toggle-lbl">🔒 잔액 FC 공유</span>
       <div class="prv-toggle-ctrl"><div class="sw" data-bool="shareAmt"></div><span class="sw-lbl">비공개</span></div>
@@ -4458,12 +4573,16 @@ function buildForm(catId){
     <div class="mfg"><label class="mfl">차량명</label>
       <input class="mfi" data-key="name" type="text" placeholder="예: 아반떼 2022"></div>
     <div class="mfg"><label class="mfl">구매 방식</label>
-      <select class="mfsel" data-key="type">
+      <select class="mfsel" data-key="type" onchange="toggleCarPayRow(this)">
         <option>현금 구매</option><option>할부</option><option>리스</option><option>렌트</option>
       </select></div>
-    <div class="mfrow">
+    <div id="carPayRow" style="display:none">
       <div class="mfg"><label class="mfl">월 할부·리스료(원)</label>
         <input class="mfi" data-key="monthly" type="text" inputmode="numeric" placeholder="예: 450,000" oninput="numFmt(this)"></div>
+    </div>
+    <div class="mfrow">
+      <div class="mfg"><label class="mfl">자동차보험료(연/원)</label>
+        <input class="mfi" data-key="insAmount" type="text" inputmode="numeric" placeholder="예: 800,000" oninput="numFmt(this)"></div>
       <div class="mfg"><label class="mfl">자동차보험 만기</label>
         <input class="mfi" data-key="insExpiry" type="month"></div>
     </div>`;
@@ -4777,7 +4896,7 @@ async function syncSharedData() {
       Object.entries(p).forEach(([k,v])=>{
         out[k] = ['premium','balance','monthly','yearly','cancerAmt','brainAmt',
           'heartAmt','hospDaily','deposit','monthlyRent','jeonseAmt',
-          'mortgage','buyPrice','currentPrice'].includes(k)
+          'mortgage','buyPrice','currentPrice','insAmount'].includes(k)
           ? (Number(v)||0) : v;
       });
       return out;
@@ -4903,7 +5022,7 @@ async function syncSharedData() {
       savings:   sc.monthlySplit?.savings   || 0,
       loan:      sc.monthlySplit?.loan      || 0,
       retire:    sc.monthlySplit?.retire    || 0,
-      total:     sc.monthlyOut || 0,
+      rent:      sc.monthlySplit?.rent      || 0,
       total:     sc.monthlyOut || 0,
     },
 
@@ -4914,6 +5033,26 @@ async function syncSharedData() {
       warnCount:   diagItems.filter(d=>d.sev==='warn').length,
       generatedAt: `${now.getFullYear()}.${now.getMonth()+1}.${now.getDate()}`,
     },
+
+    /* ⑨ 만기 임박 알림 (1개월 이내) */
+    expiryAlerts: (function(){
+      const limit = new Date(now.getFullYear(), now.getMonth()+1, now.getDate());
+      const items = [];
+      function chk(dateStr, label, cat){
+        if(!dateStr) return;
+        const pp=dateStr.split('-');
+        const y=parseInt(pp[0]), m=parseInt(pp[1])-1, d=pp[2]?parseInt(pp[2]):28;
+        const exp=new Date(y,m,d);
+        if(exp<=limit && exp>=new Date(now.getFullYear(),now.getMonth(),now.getDate()-7)){
+          items.push({label, cat, date:dateStr, dDay:Math.ceil((exp-now)/86400000)});
+        }
+      }
+      getProds('insurance').forEach(p=>chk(p.endDate, (p.name||p.company||'보험')+'('+( p.type||'')+')', 'insurance'));
+      getProds('savings').forEach(p=>chk(p.maturity, (p.company||'저축')+'('+(p.type||'')+')', 'savings'));
+      getProds('loan').forEach(p=>chk(p.maturity, (p.company||'대출')+'('+(p.type||'')+')', 'loan'));
+      getProds('car').forEach(p=>chk(p.insExpiry, (p.name||'자동차')+' 보험', 'car'));
+      return items;
+    })(),
   };
 
   try {
