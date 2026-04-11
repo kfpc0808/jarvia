@@ -1735,23 +1735,29 @@ window.showTermsModal = async function(type){
 
   try {
     // Firestore terms 컬렉션에서 불러오기
-    const { getFirestore, collection, query, where, orderBy, limit, getDocs }
+    const { getFirestore, collection, query, where, orderBy, limit, getDocs, doc, getDoc }
       = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
     const { getApp } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
     const db = getFirestore(getApp(), 'javia-db');
-    const q  = query(
-      collection(db,'terms'),
-      where('type','==',type),
-      where('isActive','==',true),
-      orderBy('version','desc'),
-      limit(1)
-    );
-    const snap = await getDocs(q);
-    if(!snap.empty){
-      document.getElementById('termsModalBody').textContent = snap.docs[0].data().content;
-    } else {
-      document.getElementById('termsModalBody').textContent = '약관 내용을 불러올 수 없습니다.';
+    let content = '';
+    try {
+      const q = query(
+        collection(db,'terms'),
+        where('type','==',type),
+        where('isActive','==',true),
+        orderBy('version','desc'),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if(!snap.empty) content = snap.docs[0].data().content;
+    } catch(ie) {
+      // 복합 인덱스 없을 때 fallback (admin.html과 동일)
+      console.warn('[showTermsModal] index fallback:', ie.message);
+      const snap2 = await getDocs(collection(db,'terms'));
+      const list = snap2.docs.map(d=>d.data()).filter(t=>t.type===type&&t.isActive).sort((a,b)=>(b.version||0)-(a.version||0));
+      if(list.length) content = list[0].content;
     }
+    document.getElementById('termsModalBody').textContent = content || '약관 내용을 불러올 수 없습니다.';
   } catch(e) {
     console.warn('[showTermsModal]', e.message);
     document.getElementById('termsModalBody').textContent = '약관 내용을 불러올 수 없습니다.';
@@ -1990,7 +1996,7 @@ window.doChangePw = async function() {
   const pw2  = document.getElementById('cpPw2').value;
   const hint = document.getElementById('cpHint');
 
-  if (!pw || pw.length<4) { toast('비밀번호는 6자리로 입력해주세요','err'); return; }
+  if (!pw || pw.length<6) { toast('비밀번호는 6자리로 입력해주세요','err'); return; }
   if (pw !== pw2)         { hint.textContent='비밀번호가 일치하지 않습니다'; hint.className='fi-hint err'; return; }
 
   btn.disabled = true; btn.textContent = '변경 중...';
