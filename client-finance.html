@@ -440,6 +440,21 @@ button,input{font-family:var(--font);outline:none;border:none}
 .diag-ask-btn{padding:7px 14px;background:var(--accent);color:#fff;
   border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;
   border:none;-webkit-tap-highlight-color:transparent}
+.diag-summary-card{background:linear-gradient(135deg,#F0F4FF,#E8EEFF);border-radius:14px;
+  padding:16px;margin-bottom:12px;border:1px solid rgba(45,93,174,.12)}
+.diag-summary-text{font-size:13px;color:var(--ink);line-height:1.7;font-weight:500}
+.diag-grade-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;
+  border-radius:8px;font-size:11px;font-weight:800;margin-top:8px}
+.diag-lifestage{background:linear-gradient(135deg,#FFF8ED,#FEF3DC);border-radius:10px;
+  padding:10px 14px;font-size:12px;color:#8B6914;font-weight:600;
+  margin-bottom:12px;border:1px solid rgba(212,168,50,.15)}
+.diag-gap-bar{margin-top:6px;margin-bottom:4px}
+.diag-gap-track{height:6px;background:#E8ECF1;border-radius:3px;overflow:hidden}
+.diag-gap-fill{height:100%;border-radius:3px;transition:width .3s}
+.diag-gap-label{display:flex;justify-content:space-between;font-size:10px;
+  color:var(--ink-lt);margin-top:3px;font-family:var(--font-d)}
+.diag-vs{display:inline-flex;padding:2px 6px;border-radius:4px;
+  font-size:10px;font-weight:700;margin-left:6px}
 .diag-empty{text-align:center;padding:40px 20px;color:var(--ink-lt)}
 .diag-empty-icon{font-size:40px;margin-bottom:12px}
 
@@ -1394,7 +1409,7 @@ import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
   createUserWithEmailAndPassword,signOut,deleteUser}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
-  where,limit,serverTimestamp,deleteDoc}
+  where,limit,serverTimestamp,deleteDoc,addDoc}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
@@ -1589,7 +1604,16 @@ window._fb = {
     await fn({phone, newPw, fcId});
   },
 
-  onAuthChange(cb) { return onAuthStateChanged(fbAuth, cb); }
+  onAuthChange(cb) { return onAuthStateChanged(fbAuth, cb); },
+
+  async saveConsultation(clientId, clientName, fcId, action, score) {
+    await addDoc(collection(fbDb, 'consultation_requests'), {
+      clientId, clientName, fcId, action,
+      score: score || 0,
+      createdAt: serverTimestamp(),
+      read: false
+    });
+  }
 };
 
 console.log('[client-finance] Firebase 초기화 완료');
@@ -3282,6 +3306,25 @@ function drawRadarChart(scores){
   svg.innerHTML=gridHtml;
 }
 
+/* ═══════════════════════════════════════
+   상담 요청 → Firestore 저장
+═══════════════════════════════════════ */
+window.requestConsultation = async function(action) {
+  const sess = session || loadSess();
+  if (!sess || !sess.clientId || fcId === 'demo' || !fb()) {
+    toast(action + ' 문의가 전송되었습니다 📤','ok');
+    return;
+  }
+  try {
+    const sc = calcScores();
+    await fb().saveConsultation(sess.clientId, sess.name || '고객', fcId, action, sc?.total || 0);
+    toast(action + ' 상담 요청이 전송되었습니다 📤','ok');
+  } catch(e) {
+    console.warn('[consult] 상담 요청 저장 실패:', e.message);
+    toast(action + ' 문의가 전송되었습니다 📤','ok');
+  }
+};
+
 function renderDiag(){
   const sc   = calcScores();
   const sess = session || loadSess();
@@ -3595,7 +3638,7 @@ function renderDiag(){
         <div class="diag-t">${it.t}</div>
         <div class="diag-d">${it.d}</div>
         ${it.action?`<button class="diag-ask-btn"
-          onclick="toast('${it.action} 문의가 전송되었습니다 📤','ok')">
+          onclick="requestConsultation('${it.action}')">
           📞 ${it.action}</button>`:''}
       </div>
     </div>`;
@@ -4480,29 +4523,95 @@ window.renderDiagWithAI = async function() {
     const bgMap = {
       urgent:'var(--red-lt)', warn:'#FEF3E2', good:'var(--green-lt)'
     };
+
+    // 등급 색상
+    const gradeColorMap = {
+      '최우수':'#0A7B61','우수':'#0A7B61','양호':'var(--accent)',
+      '보통':'#D4760A','주의':'#C0392B','위험':'#C0392B'
+    };
+    const gradeBgMap = {
+      '최우수':'var(--green-lt)','우수':'var(--green-lt)','양호':'#EEF2FF',
+      '보통':'#FEF3E2','주의':'var(--red-lt)','위험':'var(--red-lt)'
+    };
+
+    // vsLast 배지 생성
+    function vsLastBadge(vs) {
+      if (!vs || vs === 'new') return '';
+      const m = {
+        improved: {txt:'✅ 개선',bg:'var(--green-lt)',col:'var(--green)'},
+        worsened: {txt:'⚠️ 악화',bg:'var(--red-lt)',col:'var(--red)'},
+        unchanged:{txt:'— 유지',bg:'#F0F0F0',col:'#888'}
+      };
+      const s = m[vs]; if(!s) return '';
+      return `<span class="diag-vs" style="background:${s.bg};color:${s.col}">${s.txt}</span>`;
+    }
+
+    // 부족금액 게이지 바
+    function gapBar(it) {
+      if (it.currentValue == null || it.recommendedValue == null || !it.recommendedValue) return '';
+      const cur = Math.max(0, it.currentValue);
+      const rec = it.recommendedValue;
+      const pct = Math.min(100, Math.round((cur / rec) * 100));
+      const barCol = pct >= 80 ? 'var(--green)' : pct >= 50 ? '#D4760A' : 'var(--red)';
+      const fmtV = (v) => {
+        if (v >= 1e8) return (v/1e8).toFixed(1).replace(/\.0$/,'')+'억';
+        if (v >= 1e4) return Math.round(v/1e4)+'만';
+        return v.toLocaleString();
+      };
+      const gapAmt = it.gap != null ? it.gap : cur - rec;
+      const gapText = gapAmt < 0 ? '부족 '+fmtV(Math.abs(gapAmt))+'원' : '충족';
+      return `<div class="diag-gap-bar">
+        <div class="diag-gap-track"><div class="diag-gap-fill" style="width:${pct}%;background:${barCol}"></div></div>
+        <div class="diag-gap-label"><span>현재 ${fmtV(cur)}원 (${pct}%)</span><span>${gapText}</span></div>
+      </div>`;
+    }
+
     document.getElementById('diagList').innerHTML = aiReport.items.map(it => {
       const sv = sevMap[it.sev] || sevMap.good;
       return `<div class="diag-item" style="border-left:3px solid ${sv.col}">
         <div class="diag-ico" style="background:${bgMap[it.sev]||bgMap.good}">${it.icon||'📋'}</div>
         <div class="diag-body">
-          <div class="diag-sev ${sv.cls}">${sv.lbl}</div>
+          <div class="diag-sev ${sv.cls}">${sv.lbl}${vsLastBadge(it.vsLast)}</div>
           <div class="diag-t">${it.title}</div>
           <div class="diag-d">${it.desc}</div>
+          ${gapBar(it)}
           ${it.action?`<button class="diag-ask-btn"
-            onclick="toast('${it.action} 문의 전송됨 📤','ok')">📞 ${it.action}</button>`:''}
+            onclick="requestConsultation('${it.action}')">📞 ${it.action}</button>`:''}
         </div>
       </div>`;
     }).join('');
 
-    // 요약 배지
+    // 상단에 요약 카드 + 등급 + 생애주기 리스크 + 건수 배지 삽입
+    let topHtml = '';
+
+    // ① 요약 + 등급 카드
+    if (aiReport.summary) {
+      const gr = aiReport.grade || '';
+      const grCol = gradeColorMap[gr] || 'var(--accent)';
+      const grBg  = gradeBgMap[gr] || '#EEF2FF';
+      topHtml += `<div class="diag-summary-card">
+        <div class="diag-summary-text">${aiReport.summary}</div>
+        ${gr ? `<span class="diag-grade-badge" style="background:${grBg};color:${grCol}">📊 종합 등급: ${gr}</span>` : ''}
+      </div>`;
+    }
+
+    // ② 생애주기 리스크
+    if (aiReport.lifestageRisk) {
+      topHtml += `<div class="diag-lifestage">🎯 ${aiReport.lifestageRisk}</div>`;
+    }
+
+    // ③ 건수 배지
     const uc = aiReport.urgentCount || 0;
     const wc = aiReport.warnCount   || 0;
-    const badge = uc > 0
-      ? `<div style="background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--red);font-weight:700;margin-bottom:12px">🚨 즉시 점검 ${uc}건, 확인 필요 ${wc}건</div>`
-      : wc > 0
-      ? `<div style="background:#FEF3E2;border:1px solid rgba(212,118,10,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:#D4760A;font-weight:700;margin-bottom:12px">⚠️ 확인 필요 ${wc}건</div>`
-      : `<div style="background:var(--green-lt);border:1px solid rgba(10,123,97,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--green);font-weight:700;margin-bottom:12px">✅ 전반적으로 양호합니다</div>`;
-    document.getElementById('diagList').insertAdjacentHTML('afterbegin', badge);
+    if (uc > 0) {
+      topHtml += `<div style="background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--red);font-weight:700;margin-bottom:12px">🚨 즉시 점검 ${uc}건, 확인 필요 ${wc}건</div>`;
+    } else if (wc > 0) {
+      topHtml += `<div style="background:#FEF3E2;border:1px solid rgba(212,118,10,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:#D4760A;font-weight:700;margin-bottom:12px">⚠️ 확인 필요 ${wc}건</div>`;
+    } else {
+      topHtml += `<div style="background:var(--green-lt);border:1px solid rgba(10,123,97,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--green);font-weight:700;margin-bottom:12px">✅ 전반적으로 양호합니다</div>`;
+    }
+
+    document.getElementById('diagList').insertAdjacentHTML('afterbegin', topHtml);
   } else {
     // AI 리포트 없으면 로컬 진단
     _origRenderDiag();
