@@ -1409,7 +1409,7 @@ import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
   createUserWithEmailAndPassword,signOut,deleteUser}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
-  where,limit,serverTimestamp,deleteDoc,addDoc}
+  where,limit,serverTimestamp,deleteDoc,addDoc,orderBy}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
@@ -1576,7 +1576,7 @@ window._fb = {
 
     for(let i=0; i<7; i++){
       const dateStr = toYMD(dt);
-      const snap = await getDoc(doc(fbDb,'client_daily_reports',`${fcId}_${dateStr}`));
+      const snap = await getDoc(doc(fbDb,'client_daily_reports',dateStr));
       if(snap.exists()) return {...snap.data(), _date: dateStr};
       dt = prevBizDay(dt);
     }
@@ -1584,10 +1584,11 @@ window._fb = {
     try {
       const q = await getDocs(query(
         collection(fbDb,'client_daily_reports'),
-        where('fcId','==',fcId),
+        where('status','==','published'),
+        orderBy('createdAt','desc'),
         limit(1)
       ));
-      if(!q.empty) return {...q.docs[0].data(), _date: q.docs[0].data().date||''};
+      if(!q.empty) return {...q.docs[0].data(), _date: q.docs[0].data().fileDate||''};
     } catch(e) {}
     return null;
   },
@@ -2466,8 +2467,8 @@ function renderHome(){
     const ms=sc.monthlySplit;
     const mTotal=Object.values(ms).reduce((a,b)=>a+b,0);
     if(mTotal>0){
-      const mColors=['#2D5DAE','#0A7B61','#C0392B','#374151'];
-      const mLabels=['보험료','저축','대출상환','차량'];
+      const mColors=['#2D5DAE','#0A7B61','#C0392B','#374151','#D4760A'];
+      const mLabels=['보험료','저축','대출상환','차량','연금'];
       let offset=0;
       const segs=Object.values(ms).map((v,i)=>{
         if(!v) return '';
@@ -2584,14 +2585,15 @@ async function loadDailyBriefing() {
       if(badgeEl) badgeEl.textContent = '📅 오늘의 데일리 리포트';
     }
 
-    // 제목 — 다양한 필드명 대응
-    const headline = data.headline || data.title || data.subject ||
-                     data.summary  || data.content?.split('\n')[0] || '';
+    // 제목 — indicatorInsight 우선
+    const headline = data.indicatorInsight || data.headline || data.title || '';
     hlEl.textContent = headline || '오늘의 재무 인사이트';
 
-    // 포인트 — 다양한 필드명 대응
-    const pts = data.points || data.keyPoints || data.highlights ||
-                data.bullets|| data.items     || [];
+    // 포인트 — news 배열에서 제목 추출
+    const newsArr = data.news || [];
+    const pts = newsArr.length > 0
+      ? newsArr.slice(0,3).map(n => n.title || n.headline || (typeof n==='string'?n:''))
+      : (data.points || data.keyPoints || []);
     if(Array.isArray(pts) && pts.length > 0){
       ptsEl.innerHTML = pts.slice(0,3).map(p=>`<li>${typeof p==='string'?p:(p.text||p.title||JSON.stringify(p))}</li>`).join('');
     } else {
