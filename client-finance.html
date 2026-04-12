@@ -245,6 +245,40 @@ button,input{font-family:var(--font);outline:none;border:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:rgba(192,57,43,.92)}
 .toast.ok{background:rgba(10,123,97,.92)}
+/* ── 채팅 스레드 ── */
+.chat-thread{background:#fff;border-radius:14px;padding:0;margin-bottom:10px;
+  border:1px solid rgba(0,0,0,.06);overflow:hidden}
+.chat-thread.has-new{border-color:var(--accent);box-shadow:0 2px 12px rgba(27,58,107,.1)}
+.chat-thread-hd{padding:14px 16px 10px;display:flex;align-items:center;justify-content:space-between;
+  cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chat-thread-hd:active{background:var(--bg-warm)}
+.chat-thread-title{font-size:13px;font-weight:800;color:var(--ink);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-thread-time{font-size:10px;color:var(--ink-sub);flex-shrink:0;margin-left:8px}
+.chat-thread-preview{padding:0 16px 12px;font-size:12px;color:var(--ink-lt);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-msgs{max-height:360px;overflow-y:auto;padding:4px 16px 8px;
+  display:flex;flex-direction:column;gap:6px;
+  -webkit-overflow-scrolling:touch;border-top:1px solid var(--border-lt)}
+.chat-bubble{max-width:82%;padding:10px 14px;border-radius:16px;
+  font-size:13px;line-height:1.6;word-break:break-word;position:relative}
+.chat-bubble.client{align-self:flex-end;background:var(--accent);color:#fff;
+  border-bottom-right-radius:4px}
+.chat-bubble.fc{align-self:flex-start;background:var(--bg-warm);color:var(--ink);
+  border-bottom-left-radius:4px}
+.chat-bubble-ts{font-size:9px;opacity:.5;margin-top:3px}
+.chat-bubble.client .chat-bubble-ts{text-align:right}
+.chat-input-row{display:flex;gap:6px;padding:10px 16px 14px;
+  border-top:1px solid var(--border-lt);background:#FAFBFD}
+.chat-input{flex:1;padding:10px 16px;border:1.5px solid var(--border);border-radius:22px;
+  font-size:13px;font-family:var(--font);outline:none;background:#fff;min-width:0}
+.chat-input:focus{border-color:var(--accent-bright)}
+.chat-input::placeholder{color:var(--ink-sub);font-size:12px}
+.chat-send{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;
+  border:none;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:filter .15s}
+.chat-send:active{filter:brightness(.85)}
+.chat-send:disabled{opacity:.4;cursor:not-allowed}
 /* ── 점수 피드백 팝업 (확인 클릭 시 닫힘) ── */
 .score-fb{position:fixed;inset:0;z-index:9998;
   background:rgba(10,15,30,.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
@@ -2089,7 +2123,7 @@ import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,
   createUserWithEmailAndPassword,signOut,deleteUser}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc,getDocs,collection,query,
-  where,limit,serverTimestamp,deleteDoc,addDoc,orderBy,onSnapshot}
+  where,limit,serverTimestamp,deleteDoc,addDoc,orderBy,onSnapshot,updateDoc}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
@@ -2293,6 +2327,22 @@ window._fb = {
       clientId, clientName, fcId, action,
       score: score || 0,
       createdAt: serverTimestamp(),
+      read: false,
+      messages: [{ sender:'client', text:action, ts:new Date().toISOString() }],
+      lastMessageAt: serverTimestamp()
+    });
+  },
+
+  /* 고객 → FC 추가 메시지 전송 */
+  async sendMessage(docId, text) {
+    const ref = doc(fbDb,'consultation_requests',docId);
+    const snap = await getDoc(ref);
+    const data = snap.exists() ? snap.data() : {};
+    const messages = data.messages || [];
+    messages.push({ sender:'client', text:text.trim(), ts:new Date().toISOString() });
+    await updateDoc(ref, {
+      messages,
+      lastMessageAt: serverTimestamp(),
       read: false
     });
   }
@@ -2326,44 +2376,57 @@ window._startReplyWatch = function(clientId) {
   if(_replyWatchStarted) return;
   _replyWatchStarted = true;
   let firstLoad = true;
-  let knownReplies = {};
+  let knownMsgCounts = {};
   onSnapshot(
     query(collection(fbDb,'consultation_requests'),
       where('clientId','==',clientId), orderBy('createdAt','desc'), limit(50)),
     (snap) => {
       const all = [];
-      const newReplies = [];
+      const newFcMsgs = [];
       snap.forEach(d => {
         const data = d.data();
+        const msgs = data.messages || [];
+        // 하위호환: messages 없으면 기존 action/reply로 구성
+        if(msgs.length===0){
+          if(data.action) msgs.push({sender:'client',text:data.action,ts:data.createdAt?.toDate?data.createdAt.toDate().toISOString():''});
+          if(data.reply)  msgs.push({sender:'fc',text:data.reply,ts:data.repliedAt?.toDate?data.repliedAt.toDate().toISOString():''});
+        }
         const item = {
           id: d.id,
           action: data.action||'',
-          reply: data.reply||'',
-          repliedAt: data.repliedAt?.toDate ? data.repliedAt.toDate() : null,
+          messages: msgs,
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
         };
         all.push(item);
-        if(data.reply && !knownReplies[d.id]) {
-          newReplies.push(item);
+        // 새 FC 메시지 감지
+        const prevCnt = knownMsgCounts[d.id] || 0;
+        const fcMsgs = msgs.filter(m=>m.sender==='fc');
+        if(fcMsgs.length > prevCnt){
+          const latest = fcMsgs[fcMsgs.length-1];
+          newFcMsgs.push({...item, latestFcMsg: latest.text});
         }
-        if(data.reply) knownReplies[d.id] = true;
+        knownMsgCounts[d.id] = fcMsgs.length;
       });
       window._consultHistory = all;
-      if(!firstLoad && newReplies.length > 0) {
+      if(!firstLoad && newFcMsgs.length > 0) {
         window._playReplySound();
-        newReplies.forEach(r => window._showReplyPopup(r.action, r.reply, r.id));
+        newFcMsgs.forEach(r => window._showReplyPopup(r.action, r.latestFcMsg, r.id));
       }
       firstLoad = false;
       window._updateConsultBadge();
       if(typeof renderConsultTab==='function' && curTab==='consult') renderConsultTab();
     },
-    (e) => console.warn('[client] 답장 감지 실패:', e.message)
+    (e) => console.warn('[client] 메시지 감지 실패:', e.message)
   );
 };
 
 window._updateConsultBadge = function() {
-  const readMap = window._consultReadReplies;
-  const unread = window._consultHistory.filter(r => r.reply && !readMap[r.id]).length;
+  const readMap = window._consultReadReplies;  // {docId: seenFcCount}
+  const unread = window._consultHistory.filter(r => {
+    const fcCount = (r.messages||[]).filter(m=>m.sender==='fc').length;
+    const seen = readMap[r.id] || 0;
+    return fcCount > seen;
+  }).length;
   const badge = document.getElementById('consultTabBadge');
   const badge2 = document.getElementById('consultUnreadBadge');
   if(badge) { badge.style.display = unread > 0 ? 'inline-flex' : 'none'; badge.textContent = unread; }
@@ -2390,7 +2453,9 @@ window._showReplyPopup = function(action, reply, docId) {
 
 window._dismissReplyPopup = function(el, docId) {
   if(docId) {
-    window._consultReadReplies[docId] = true;
+    const thread = (window._consultHistory||[]).find(r=>r.id===docId);
+    const fcCount = thread ? (thread.messages||[]).filter(m=>m.sender==='fc').length : 1;
+    window._consultReadReplies[docId] = fcCount;
     localStorage.setItem('jf_read_replies', JSON.stringify(window._consultReadReplies));
     window._updateConsultBadge();
   }
@@ -3349,47 +3414,175 @@ function renderConsultTab(){
   const wrap = document.getElementById('consultHistoryList');
   if(!wrap) return;
   if(list.length === 0){
-    wrap.innerHTML = '<div style="text-align:center;padding:40px 0;color:var(--ink-lt)">'+
-      '<div style="font-size:40px;margin-bottom:12px">📭</div>'+
-      '<div style="font-size:14px">아직 메시지가 없습니다</div>'+
-      '<div style="font-size:12px;margin-top:6px">AI 진단 결과에서 상담을 요청하면 여기에 표시됩니다</div></div>';
+    wrap.innerHTML = `<div style="text-align:center;padding:40px 0;color:var(--ink-lt)">
+      <div style="font-size:40px;margin-bottom:12px">📭</div>
+      <div style="font-size:14px">아직 메시지가 없습니다</div>
+      <div style="font-size:12px;margin-top:6px">AI 진단 결과에서 상담을 요청하면 여기에 표시됩니다</div>
+    </div>
+    <button onclick="openNewMsgModal()" style="display:block;margin:12px auto 0;padding:11px 24px;
+      border-radius:12px;background:var(--accent);color:#fff;font-size:13px;font-weight:700;
+      border:none;cursor:pointer">✏️ 새 메시지 보내기</button>`;
     return;
   }
-  function fDate(d){ if(!d) return ''; return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+  function fTs(ts){
+    if(!ts) return '';
+    const d = typeof ts==='string' ? new Date(ts) : ts;
+    if(isNaN(d)) return '';
+    return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  }
   function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
-  wrap.innerHTML = list.map(r => {
-    const hasReply = !!r.reply;
-    const isNew = hasReply && !readMap[r.id];
-    return `<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:10px;
-      border:1px solid ${isNew?'var(--accent)':'rgba(0,0,0,.06)'};
-      ${isNew?'box-shadow:0 2px 12px rgba(27,58,107,.1)':''}">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:11px;color:var(--ink-lt)">📤 내 요청 · ${fDate(r.createdAt)}</div>
-        ${hasReply
-          ? `<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;
-              background:${isNew?'var(--accent)':'var(--green-lt)'};color:${isNew?'#fff':'var(--green)'}">
-              ${isNew?'🔔 새 답장':'✅ 답장 완료'}</span>`
-          : '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;background:var(--bg-warm);color:var(--ink-lt)">⏳ 대기 중</span>'}
-      </div>
-      <div style="font-size:14px;font-weight:700;color:var(--ink);margin-bottom:${hasReply?'10':'0'}px">${esc(r.action)}</div>
-      ${hasReply ? `
-        <div style="background:linear-gradient(135deg,#E6F5F0,#F0FFF8);border-radius:10px;padding:12px;
-          border-left:3px solid var(--green)">
-          <div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px">
-            💬 컨설턴트 답장 · ${fDate(r.repliedAt)}</div>
-          <div style="font-size:13px;font-weight:600;color:var(--ink);line-height:1.65">${esc(r.reply)}</div>
+
+  wrap.innerHTML = `<button onclick="openNewMsgModal()" style="display:block;width:100%;padding:11px;
+    border-radius:12px;background:var(--accent);color:#fff;font-size:13px;font-weight:700;
+    border:none;cursor:pointer;margin-bottom:12px">✏️ 새 메시지 보내기</button>` +
+  list.map(r => {
+    const msgs = r.messages || [];
+    const fcCount = msgs.filter(m=>m.sender==='fc').length;
+    const seen = readMap[r.id] || 0;
+    const hasNew = fcCount > seen;
+    const lastMsg = msgs.length > 0 ? msgs[msgs.length-1] : null;
+    const preview = lastMsg ? (lastMsg.sender==='fc'?'💬 ':'') + lastMsg.text : r.action;
+    const previewTrunc = preview.length > 40 ? preview.slice(0,38)+'…' : preview;
+    const lastTime = lastMsg?.ts ? fTs(lastMsg.ts) : fTs(r.createdAt);
+    const threadId = r.id;
+
+    // 메시지 버블 렌더
+    const bubblesHtml = msgs.map(m=>`
+      <div class="chat-bubble ${m.sender==='client'?'client':'fc'}">
+        <div>${esc(m.text)}</div>
+        <div class="chat-bubble-ts">${m.sender==='fc'?'💬 '+((fcData||{}).name||'컨설턴트'):'나'} · ${fTs(m.ts)}</div>
+      </div>`).join('');
+
+    return `<div class="chat-thread${hasNew?' has-new':''}" id="thread_${threadId}">
+      <div class="chat-thread-hd" onclick="toggleThread('${threadId}')">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px">
+            ${hasNew?'<span style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0"></span>':''}
+            <span class="chat-thread-title">${esc(r.action)}</span>
+          </div>
+          <div class="chat-thread-preview">${esc(previewTrunc)}</div>
         </div>
-        ${isNew ? `<button onclick="markConsultRead('${r.id}',this)"
-          style="width:100%;margin-top:10px;padding:9px;border:none;border-radius:10px;
-          background:var(--accent);color:#fff;font-size:12px;font-weight:700;cursor:pointer">확인</button>` : ''}
-      ` : ''}
+        <div style="flex-shrink:0;text-align:right">
+          <div class="chat-thread-time">${lastTime}</div>
+          <div style="font-size:10px;color:var(--ink-sub)">${msgs.length}건</div>
+        </div>
+      </div>
+      <div id="threadBody_${threadId}" style="display:none">
+        <div class="chat-msgs" id="chatMsgs_${threadId}">${bubblesHtml}</div>
+        <div class="chat-input-row">
+          <input class="chat-input" id="chatIn_${threadId}" type="text"
+            placeholder="메시지를 입력하세요..."
+            onkeydown="if(event.key==='Enter'){event.preventDefault();sendChatMsg('${threadId}')}">
+          <button class="chat-send" onclick="sendChatMsg('${threadId}')">➤</button>
+        </div>
+      </div>
     </div>`;
   }).join('');
-  // 탭 진입 시 배지 업데이트
   window._updateConsultBadge();
 }
-window.markConsultRead = function(docId, btn){
-  window._consultReadReplies[docId] = true;
+
+/* 스레드 토글 (열기/닫기) */
+window.toggleThread = function(threadId){
+  const body = document.getElementById('threadBody_'+threadId);
+  if(!body) return;
+  const isOpen = body.style.display !== 'none';
+  // 다른 스레드 닫기
+  document.querySelectorAll('[id^="threadBody_"]').forEach(el=>el.style.display='none');
+  if(!isOpen){
+    body.style.display = 'block';
+    // 스크롤 최하단
+    const msgs = document.getElementById('chatMsgs_'+threadId);
+    if(msgs) setTimeout(()=>msgs.scrollTop=msgs.scrollHeight, 50);
+    // 읽음 처리
+    const thread = (window._consultHistory||[]).find(r=>r.id===threadId);
+    if(thread){
+      const fcCount = (thread.messages||[]).filter(m=>m.sender==='fc').length;
+      if(fcCount > (window._consultReadReplies[threadId]||0)){
+        window._consultReadReplies[threadId] = fcCount;
+        localStorage.setItem('jf_read_replies', JSON.stringify(window._consultReadReplies));
+        window._updateConsultBadge();
+        // UI 업데이트 (has-new 제거)
+        const el = document.getElementById('thread_'+threadId);
+        if(el) el.classList.remove('has-new');
+        const dot = el?.querySelector('[style*="border-radius:50%"][style*="background:var(--accent)"]');
+        if(dot && dot.style.width==='8px') dot.remove();
+      }
+    }
+    // input 포커스
+    const inp = document.getElementById('chatIn_'+threadId);
+    if(inp) setTimeout(()=>inp.focus(), 100);
+  }
+};
+
+/* 고객 → FC 메시지 전송 */
+window.sendChatMsg = async function(threadId){
+  const inp = document.getElementById('chatIn_'+threadId);
+  if(!inp || !inp.value.trim()) return;
+  const text = inp.value.trim();
+  inp.value = '';
+  inp.disabled = true;
+
+  try {
+    if(fb() && fb().sendMessage){
+      await fb().sendMessage(threadId, text);
+      toast('메시지를 보냈습니다','ok');
+    }
+  } catch(e) {
+    console.warn('[sendChatMsg]', e.message);
+    toast('전송 실패: '+e.message,'err');
+  } finally {
+    inp.disabled = false;
+    inp.focus();
+  }
+};
+
+/* 새 메시지 모달 */
+window.openNewMsgModal = function(){
+  const sess = session || loadSess();
+  if(!sess?.clientId){ toast('로그인이 필요합니다','err'); return; }
+  // 간단 입력 팝업
+  const bg = document.createElement('div');
+  bg.id = 'newMsgOverlay';
+  bg.style.cssText = 'position:fixed;inset:0;z-index:9600;background:rgba(10,15,30,.6);display:flex;align-items:center;justify-content:center;animation:fadeIn .2s';
+  bg.innerHTML = `<div style="background:#fff;border-radius:20px;padding:24px;width:calc(100% - 40px);max-width:360px;box-shadow:0 16px 48px rgba(20,27,45,.25)">
+    <div style="font-size:16px;font-weight:900;color:var(--ink);margin-bottom:6px">✏️ 새 메시지</div>
+    <div style="font-size:12px;color:var(--ink-lt);margin-bottom:16px">${(fcData||{}).name||'담당 컨설턴트'}에게 메시지를 보냅니다</div>
+    <textarea id="newMsgText" rows="4" placeholder="궁금한 점이나 상담 내용을 입력하세요..."
+      style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;
+      font-size:14px;font-family:var(--font);resize:none;outline:none;box-sizing:border-box"></textarea>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="document.getElementById('newMsgOverlay')?.remove()"
+        style="flex:1;padding:12px;border-radius:10px;background:var(--bg-warm);color:var(--ink-lt);
+        font-size:14px;font-weight:700;border:none;cursor:pointer">취소</button>
+      <button onclick="submitNewMsg()"
+        style="flex:1;padding:12px;border-radius:10px;background:var(--accent);color:#fff;
+        font-size:14px;font-weight:700;border:none;cursor:pointer">보내기 ➤</button>
+    </div>
+  </div>`;
+  bg.onclick = function(e){ if(e.target===bg) bg.remove(); };
+  document.body.appendChild(bg);
+  setTimeout(()=>document.getElementById('newMsgText')?.focus(), 200);
+};
+
+window.submitNewMsg = async function(){
+  const text = document.getElementById('newMsgText')?.value?.trim();
+  if(!text){ toast('내용을 입력하세요','err'); return; }
+  const sess = session || loadSess();
+  if(!sess?.clientId) return;
+  try {
+    const sc = calcScores();
+    await fb().saveConsultation(sess.clientId, sess.name||'고객', fcId, text, sc?.total||0);
+    document.getElementById('newMsgOverlay')?.remove();
+    toast('메시지가 전송되었습니다 📤','ok');
+  } catch(e){
+    toast('전송 실패: '+e.message,'err');
+  }
+};
+
+window.markConsultRead = function(docId){
+  const thread = (window._consultHistory||[]).find(r=>r.id===docId);
+  const fcCount = thread ? (thread.messages||[]).filter(m=>m.sender==='fc').length : 1;
+  window._consultReadReplies[docId] = fcCount;
   localStorage.setItem('jf_read_replies', JSON.stringify(window._consultReadReplies));
   window._updateConsultBadge();
   renderConsultTab();

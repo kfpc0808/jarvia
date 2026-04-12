@@ -1160,16 +1160,23 @@ onAuthStateChanged(fbAuth, async (user) => {
         const requests = [];
         snap.forEach(d => {
           const data = d.data();
+          const msgs = data.messages || [];
+          // 하위호환: messages 없으면 기존 action/reply로 구성
+          if(msgs.length===0){
+            if(data.action) msgs.push({sender:'client',text:data.action,ts:data.createdAt?.toDate?data.createdAt.toDate().toISOString():''});
+            if(data.reply)  msgs.push({sender:'fc',text:data.reply,ts:data.repliedAt?.toDate?data.repliedAt.toDate().toISOString():''});
+          }
           requests.push({
             id: d.id,
             clientId: data.clientId || '',
             clientName: data.clientName || '고객',
             action: data.action || '',
             score: data.score || 0,
-            read: data.read || false,
+            read: data.read !== false,
             reply: data.reply || '',
             repliedAt: data.repliedAt?.toDate ? data.repliedAt.toDate() : null,
-            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date()
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+            messages: msgs
           });
         });
 
@@ -1209,23 +1216,30 @@ onAuthStateChanged(fbAuth, async (user) => {
     }
   };
 
-  /* FC → 고객 답장 */
+  /* FC → 고객 메시지 전송 */
   window._sendConsultReply = async function(requestId, message) {
     if (!message || !message.trim()) return;
     try {
-      await updateDoc(doc(fbDb,'consultation_requests',requestId), {
+      const ref = doc(fbDb,'consultation_requests',requestId);
+      const snap = await getDoc(ref);
+      const data = snap.exists() ? snap.data() : {};
+      const messages = data.messages || [];
+      messages.push({ sender:'fc', text:message.trim(), ts:new Date().toISOString() });
+      await updateDoc(ref, {
+        messages,
         reply: message.trim(),
         repliedAt: serverTimestamp(),
-        read: true
+        read: true,
+        lastMessageAt: serverTimestamp()
       });
       const req = (window._consultRequests||[]).find(r=>r.id===requestId);
-      if (req) { req.reply = message.trim(); req.read = true; req.repliedAt = new Date(); }
-      if (typeof toast === 'function') toast('답장을 보냈습니다 ✓','ok');
+      if (req) { req.reply = message.trim(); req.read = true; req.repliedAt = new Date(); req.messages = messages; }
+      if (typeof toast === 'function') toast('메시지를 보냈습니다 ✓','ok');
       if (typeof window._renderConsultBadge === 'function') window._renderConsultBadge();
       if (typeof renderConsultPage === 'function') renderConsultPage();
     } catch(e) {
-      console.warn('[admin] 답장 실패:', e.message);
-      if (typeof toast === 'function') toast('답장 전송에 실패했습니다','err');
+      console.warn('[admin] 메시지 전송 실패:', e.message);
+      if (typeof toast === 'function') toast('메시지 전송에 실패했습니다','err');
     }
   };
 });
@@ -2308,59 +2322,73 @@ function renderConsultPage(){
     return;
   }
 
+  function fTs(ts){
+    if(!ts) return '';
+    const d = typeof ts==='string' ? new Date(ts) : ts;
+    if(isNaN(d)) return '';
+    return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  }
+  function esc(s){ const el=document.createElement('div'); el.textContent=s||''; return el.innerHTML; }
+
   listEl.innerHTML = filtered.map(r=>{
     const dt = r.createdAt;
     const timeStr = `${dt.getFullYear()}.${dt.getMonth()+1}.${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
     const isUnread = !r.read;
-    const hasReply = !!r.reply;
-    const bg = isUnread ? '#FEF2F2' : hasReply ? '#F0FDF4' : '#F8F9FC';
-    const border = isUnread ? 'rgba(192,57,43,.15)' : hasReply ? 'rgba(10,123,97,.15)' : 'rgba(0,0,0,.06)';
+    const msgs = r.messages || [];
+    const msgCount = msgs.length;
+    const lastMsg = msgs.length > 0 ? msgs[msgs.length-1] : null;
+    const bg = isUnread ? '#FEF2F2' : r.reply ? '#F0FDF4' : '#F8F9FC';
+    const border = isUnread ? 'rgba(192,57,43,.15)' : r.reply ? 'rgba(10,123,97,.15)' : 'rgba(0,0,0,.06)';
     const statusBadge = isUnread
       ? '<span style="background:var(--red);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">🔴 미확인</span>'
-      : hasReply
+      : r.reply
       ? '<span style="background:var(--green);color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px">✅ 답장 완료</span>'
       : '<span style="background:var(--bg-warm);color:var(--ink-sub);font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px">👁️ 확인</span>';
 
-    const replyTimeStr = r.repliedAt ? `${r.repliedAt.getMonth()+1}/${r.repliedAt.getDate()} ${String(r.repliedAt.getHours()).padStart(2,'0')}:${String(r.repliedAt.getMinutes()).padStart(2,'0')}` : '';
+    // 대화 내역 버블
+    const bubblesHtml = msgs.length > 0 ? `
+      <div id="adminMsgs_${r.id}" style="display:none;max-height:300px;overflow-y:auto;
+        padding:10px;background:#FAFBFD;border-radius:10px;margin-bottom:10px;
+        border:1px solid var(--border-lt);display:flex;flex-direction:column;gap:6px">
+        ${msgs.map(m=>`
+          <div style="max-width:82%;padding:9px 13px;border-radius:14px;font-size:12px;line-height:1.6;word-break:break-word;
+            ${m.sender==='client'
+              ?'align-self:flex-start;background:#EEF2FF;color:var(--ink);border-bottom-left-radius:4px'
+              :'align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px'}">
+            <div>${esc(m.text)}</div>
+            <div style="font-size:9px;opacity:.5;margin-top:3px;${m.sender==='fc'?'text-align:right':''}">${m.sender==='client'?'👤 '+r.clientName:'나(FC)'} · ${fTs(m.ts)}</div>
+          </div>`).join('')}
+      </div>` : '';
 
     return `<div style="background:${bg};border-radius:14px;padding:16px;
       margin-bottom:10px;border:1px solid ${border}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:15px;font-weight:800;color:var(--ink)">${r.clientName}</span>
+          <span style="font-size:15px;font-weight:800;color:var(--ink)">${esc(r.clientName)}</span>
           <span style="font-size:11px;color:var(--ink-sub)">점수 ${r.score}점</span>
+          ${msgCount>1?`<span style="font-size:10px;color:var(--accent-bright);font-weight:700;background:var(--accent-lt);padding:1px 6px;border-radius:4px">${msgCount}건</span>`:''}
         </div>
         ${statusBadge}
       </div>
       <div style="background:#fff;border-radius:10px;padding:12px;border:1px solid rgba(0,0,0,.06);margin-bottom:10px">
         <div style="font-size:11px;color:var(--ink-sub);margin-bottom:4px">💬 고객 요청 · ${timeStr}</div>
-        <div style="font-size:13px;font-weight:700;color:var(--ink);line-height:1.6">${r.action}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--ink);line-height:1.6">${esc(r.action)}</div>
       </div>
-      ${hasReply ? `
-      <div style="background:#E6F5F0;border-radius:10px;padding:12px;border:1px solid rgba(10,123,97,.15);margin-bottom:10px">
-        <div style="font-size:11px;color:var(--green);margin-bottom:4px">✅ 내 답장 · ${replyTimeStr}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--ink);line-height:1.6">${r.reply}</div>
-      </div>` : ''}
+      ${msgCount>1?`<button onclick="toggleAdminMsgs('${r.id}')" id="adminMsgsBtn_${r.id}"
+        style="width:100%;padding:8px;border-radius:8px;background:var(--accent-lt);color:var(--accent-bright);
+        border:none;font-size:12px;font-weight:700;cursor:pointer;margin-bottom:10px">
+        💬 대화 내역 ${msgCount}건 보기 ▼</button>`:''}
+      ${bubblesHtml}
       <div style="display:flex;gap:8px;align-items:stretch">
-        ${!hasReply ? `
-        <input id="replyInput_${r.id}" type="text" placeholder="답장을 입력하세요..."
+        <input id="replyInput_${r.id}" type="text" placeholder="메시지를 입력하세요..."
           style="flex:1;padding:10px 12px;border-radius:9px;border:1.5px solid var(--border);
           font-size:13px;font-family:var(--font);outline:none"
           onkeydown="if(event.key==='Enter'){event.preventDefault();_doReply('${r.id}')}">
         <button onclick="_doReply('${r.id}')"
           style="padding:10px 16px;border-radius:9px;background:var(--accent);color:#fff;
           border:none;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
-          📩 답장
-        </button>` : `
-        <input id="replyInput_${r.id}" type="text" placeholder="추가 답장..."
-          style="flex:1;padding:10px 12px;border-radius:9px;border:1.5px solid var(--border);
-          font-size:13px;font-family:var(--font);outline:none"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();_doReply('${r.id}')}">
-        <button onclick="_doReply('${r.id}')"
-          style="padding:10px 16px;border-radius:9px;background:var(--accent-lt);color:var(--accent-bright);
-          border:1.5px solid rgba(45,93,174,.2);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
-          📩 재답장
-        </button>`}
+          📩 보내기
+        </button>
         ${isUnread ? `<button onclick="if(window._markConsultRead)window._markConsultRead('${r.id}');setTimeout(renderConsultPage,300)"
           style="padding:10px 12px;border-radius:9px;background:var(--bg-warm);color:var(--ink-lt);
           border:none;font-size:12px;font-weight:700;cursor:pointer">확인</button>` : ''}
@@ -2369,11 +2397,25 @@ function renderConsultPage(){
   }).join('');
 }
 
+/* 대화 내역 토글 */
+window.toggleAdminMsgs = function(id){
+  const el = document.getElementById('adminMsgs_'+id);
+  const btn = document.getElementById('adminMsgsBtn_'+id);
+  if(!el) return;
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? 'flex' : 'none';
+  if(btn) btn.innerHTML = isHidden
+    ? '💬 대화 내역 접기 ▲'
+    : `💬 대화 내역 보기 ▼`;
+  if(isHidden) el.scrollTop = el.scrollHeight;
+};
+
 window._doReply = function(requestId) {
   const input = document.getElementById('replyInput_'+requestId);
-  if(!input || !input.value.trim()) { toast('답장 내용을 입력하세요','err'); return; }
+  if(!input || !input.value.trim()) { toast('내용을 입력하세요','err'); return; }
   if(typeof window._sendConsultReply === 'function'){
     window._sendConsultReply(requestId, input.value);
+    input.value = '';
   }
 };
 
