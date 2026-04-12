@@ -1432,6 +1432,12 @@ body.landing-mode .fc-header{top:48px}
     <div class="tab-pane active" id="pane-home">
       <div class="main-page">
 
+        <!-- FC 대리입력 확인 카드 -->
+        <div id="fcDraftCard" style="display:none;background:linear-gradient(135deg,#E1F5EE,#D4F5E9);
+          border:1px solid rgba(10,123,97,.25);border-radius:var(--radius);
+          padding:16px;margin-bottom:12px">
+        </div>
+
         <!-- 상령일 임박 알림 -->
         <div id="ageAlertCard" style="display:none;background:linear-gradient(135deg,#FFF8ED,#FEF3DC);
           border:1px solid rgba(201,169,110,.35);border-radius:var(--radius);
@@ -6204,6 +6210,7 @@ window.switchTab = function(id) {
   _origSwitchTab(id);
   if (id === 'diag') window.renderDiagWithAI();
   if (id === 'products') renderProdScore();
+  if (id === 'home') checkFcDrafts();
 };
 
 /* ── 로그인 유도 팝업 ── */
@@ -6571,6 +6578,86 @@ function renderProdScore(){
   bar.classList.add('score-bar-glow');
   setTimeout(()=>bar.classList.remove('score-bar-glow'),900);
 }
+
+/* ══ FC 대리입력 확인 ══ */
+let _fcDrafts = [];
+
+async function checkFcDrafts(){
+  const card = document.getElementById('fcDraftCard');
+  if(!card) return;
+  const sess = session || loadSess();
+  if(!sess?.clientId || !fcId || fcId==='demo' || isLanding){ card.style.display='none'; return; }
+
+  try{
+    const snap = await getDoc(doc(fbDb,'consultants',fcId,'clients',sess.clientId));
+    _fcDrafts = snap.exists() ? (snap.data().fcDraftProducts||[]) : [];
+  }catch(e){ _fcDrafts = []; }
+
+  if(_fcDrafts.length===0){ card.style.display='none'; return; }
+
+  const ICONS = {insurance:'🛡️',savings:'🏦',invest:'📈',retire:'🧓',loan:'📉',realestate:'🏠',car:'🚗'};
+  card.style.display = 'block';
+  card.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:24px">📋</span>
+      <div>
+        <div style="font-size:14px;font-weight:800;color:var(--green)">컨설턴트가 정리한 내역이 있어요</div>
+        <div style="font-size:12px;color:var(--ink-lt);margin-top:2px">${fcData.name||'담당 컨설턴트'}님이 ${_fcDrafts.length}건의 상품 정보를 입력했습니다</div>
+      </div>
+    </div>
+    ${_fcDrafts.map(d=>{
+      const ico = ICONS[d.category]||'📦';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;
+        background:rgba(255,255,255,.7);border-radius:8px;margin-bottom:4px;font-size:13px">
+        <span>${ico}</span>
+        <span style="flex:1;color:var(--ink)">${d.company||d.name||''} ${d.type||''}</span>
+        <span style="font-weight:700;color:var(--accent-bright)">${d.premium?fmtAmt(Number(d.premium))+'/월':''} ${d.balance?fmtAmt(Number(d.balance)):''}</span>
+      </div>`;
+    }).join('')}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button onclick="confirmFcDrafts()" style="flex:1;padding:11px;border:none;border-radius:10px;
+        background:var(--green);color:#fff;font-size:14px;font-weight:800;cursor:pointer">✓ 확인 완료</button>
+      <button onclick="reviewFcDrafts()" style="flex:1;padding:11px;border:none;border-radius:10px;
+        background:#fff;color:var(--accent-bright);font-size:14px;font-weight:700;cursor:pointer;
+        border:1.5px solid var(--accent-bright)">✏️ 수정할게 있어요</button>
+    </div>`;
+}
+
+window.confirmFcDrafts = async function(){
+  if(_fcDrafts.length===0) return;
+  const sess = session || loadSess();
+  if(!sess?.clientId) return;
+
+  // localStorage에 merge
+  _fcDrafts.forEach(d=>{
+    const cat = d.category;
+    if(!cat) return;
+    const item = {...d};
+    delete item.category; delete item.inputBy; delete item.status;
+    addProd(cat, item);
+  });
+
+  // Firestore에서 삭제
+  try{
+    await setDoc(doc(fbDb,'consultants',fcId,'clients',sess.clientId),
+      {fcDraftProducts:[]}, {merge:true});
+  }catch(e){ console.warn('[fcDraft] clear fail:', e.message); }
+
+  _fcDrafts = [];
+  document.getElementById('fcDraftCard').style.display = 'none';
+  toast('상품 정보가 등록되었습니다 ✓','ok');
+  renderHome();
+  renderProdScore();
+  setTimeout(syncSharedData, 500);
+};
+
+window.reviewFcDrafts = async function(){
+  await confirmFcDrafts();
+  setTimeout(()=>switchTab('products'), 300);
+};
+
+// 초기 로드 시 체크 (로그인 상태일 때)
+setTimeout(()=>{ if(!isLanding) checkFcDrafts(); }, 2500);
 
 /* ══ 은퇴설계 계산기 ══ */
 function cFmt(v){
