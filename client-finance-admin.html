@@ -3216,7 +3216,15 @@ function _observeUI(){
 function _pickFile(clientId){
   const inp=document.createElement('input');
   inp.type='file'; inp.style.display='none';
-  inp.onchange=()=>{ if(inp.files[0]) _sendFile(inp.files[0],clientId); inp.remove(); };
+  inp.onchange=()=>{
+    if(inp.files[0]){
+      const f=inp.files[0];
+      const sz=f.size>1048576?(f.size/1048576).toFixed(1)+'MB':Math.round(f.size/1024)+'KB';
+      _showProgress('attach',0,f.name+' ('+sz+')');
+      _sendFile(f,clientId);
+    }
+    inp.remove();
+  };
   document.body.appendChild(inp); inp.click();
 }
 
@@ -3356,10 +3364,24 @@ function _onRecvData(ev){
   if(typeof ev.data==='string'){
     if(ev.data==='__EOF__'){
       const blob=new Blob(_recvBuf,{type:_recvMeta?.type||'application/octet-stream'});
-      const a=document.createElement('a');
-      a.href=URL.createObjectURL(blob); a.download=_recvMeta?.name||'file';
-      a.click(); URL.revokeObjectURL(a.href);
-      _toast('파일 수신 완료 ✓','ok'); _hideProgress();
+      const url=URL.createObjectURL(blob);
+      const nm=_recvMeta?.name||'file';
+      const sz=_recvMeta?.size>1048576?(_recvMeta.size/1048576).toFixed(1)+'MB':Math.round((_recvMeta?.size||0)/1024)+'KB';
+      _hideProgress();
+      let card=document.getElementById('p2pDownload');
+      if(card) card.remove();
+      card=document.createElement('div'); card.id='p2pDownload';
+      card.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);padding:18px 20px;width:320px;max-width:90vw;border-left:4px solid var(--green)';
+      card.innerHTML=`<div style="font-size:14px;font-weight:800;color:var(--ink);margin-bottom:4px">📥 파일 수신 완료</div>
+        <div style="font-size:12px;color:var(--ink-lt);margin-bottom:12px">${nm} · ${sz}</div>
+        <div style="display:flex;gap:8px">
+          <button onclick="this.closest('#p2pDownload').remove()"
+            style="flex:1;padding:11px;border-radius:10px;background:var(--bg-warm);color:var(--ink-lt);font-size:13px;font-weight:700;border:none;cursor:pointer">닫기</button>
+          <a href="${url}" download="${nm}" onclick="setTimeout(()=>this.closest('#p2pDownload').remove(),500)"
+            style="flex:1;padding:11px;border-radius:10px;background:var(--green);color:#fff;font-size:13px;font-weight:800;border:none;cursor:pointer;text-align:center;text-decoration:none;display:block">저장하기 ↓</a>
+        </div>`;
+      document.body.appendChild(card);
+      _toast('파일 수신 완료 — 저장 버튼을 눌러주세요','ok');
       _recvBuf=[]; _recvMeta=null;
       return;
     }
@@ -3381,8 +3403,9 @@ function _showProgress(dir,pct,name){
     el.innerHTML='<div class="p2p-status"></div><div class="p2p-prog"><div class="p2p-prog-fill"></div></div>';
     document.body.appendChild(el);
   }
-  el.querySelector('.p2p-status').textContent=(dir==='send'?'📤 전송 중':'📥 수신 중')+` · ${name} · ${pct}%`;
-  el.querySelector('.p2p-prog-fill').style.width=pct+'%';
+  const label = dir==='attach'?'📎 첨부됨 · 연결 중...':dir==='send'?'📤 전송 중':'📥 수신 중';
+  el.querySelector('.p2p-status').textContent=`${label} · ${name}${pct>0?' · '+pct+'%':''}`;
+  el.querySelector('.p2p-prog-fill').style.width=(dir==='attach'?0:pct)+'%';
 }
 function _hideProgress(){ setTimeout(()=>document.getElementById('p2pProg')?.remove(),1500); }
 
