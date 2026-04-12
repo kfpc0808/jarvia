@@ -7139,5 +7139,290 @@ function cSV(){
   }
 })();
 </script>
+<!-- ══ P2P 파일 전송 ══ -->
+<style>
+.p2p-clip{width:36px;height:36px;border-radius:50%;background:var(--bg-warm);color:var(--ink-sub);
+  border:none;font-size:17px;cursor:not-allowed;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:all .15s;position:relative;opacity:.4}
+.p2p-clip.online{background:var(--green-lt);color:var(--green);cursor:pointer;opacity:1}
+.p2p-clip:active.online{filter:brightness(.88)}
+.p2p-dot{position:absolute;top:1px;right:1px;width:8px;height:8px;
+  border-radius:50%;background:#ccc;border:2px solid #fff}
+.p2p-clip.online .p2p-dot{background:var(--green)}
+.p2p-recv{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;
+  background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);
+  padding:18px 20px;width:calc(100vw - 40px);max-width:360px;
+  border-left:4px solid var(--green);animation:fadeIn .25s var(--ease)}
+.p2p-recv-name{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:2px}
+.p2p-recv-size{font-size:12px;color:var(--ink-lt);margin-bottom:12px}
+.p2p-recv-btns{display:flex;gap:8px}
+.p2p-recv-btns button{flex:1;padding:10px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:none}
+.p2p-prog{height:6px;background:var(--border-lt);border-radius:3px;overflow:hidden;margin-top:10px}
+.p2p-prog-fill{height:100%;background:var(--green);border-radius:3px;transition:width .15s}
+.p2p-status{font-size:11px;color:var(--ink-sub);margin-top:4px;text-align:center}
+</style>
+<script type="module">
+/* ══════════════════════════════════════════════════
+   P2P 파일 전송 (WebRTC DataChannel)
+   - 서버 저장 없음, 브라우저 ↔ 브라우저 직접 전송
+   - Firestore: 접속 상태 + WebRTC 신호만 중계
+══════════════════════════════════════════════════ */
+import{getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getFirestore,doc,setDoc,getDoc,deleteDoc,onSnapshot,collection,addDoc,getDocs,serverTimestamp}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+const _db = getFirestore(getApp(),'javia-db');
+const _params = new URLSearchParams(location.search);
+const _fcId = _params.get('fc')||'';
+let _clientId = '', _fcOnline = false, _p2pReady = false;
+let _pc = null, _dc = null, _recvBuf = [], _recvMeta = null;
+const CHUNK = 16384;
+const ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+
+/* ── 초기화 (세션 대기) ── */
+function _p2pInit(){
+  if(!_fcId||_fcId==='demo') return;
+  const sk = 'jf_sess_'+_fcId;
+  try{ const s=JSON.parse(localStorage.getItem(sk)||'null'); if(s?.clientId) _clientId=s.clientId; }catch(e){}
+  if(!_clientId){ setTimeout(_p2pInit,2000); return; }
+  _p2pReady = true;
+  _setPresence(true);
+  window.addEventListener('beforeunload',()=>_setPresence(false));
+  setInterval(()=>{ if(_p2pReady) _setPresence(true); },25000);
+  _watchFcPresence();
+  _watchSignal();
+  _observeUI();
+}
+setTimeout(_p2pInit,3000);
+
+/* ── 접속 상태 ── */
+async function _setPresence(on){
+  try{ await setDoc(doc(_db,'p2p_presence','cl_'+_fcId+'_'+_clientId),
+    {online:on,ts:serverTimestamp(),role:'client'}); }catch(e){}
+}
+function _watchFcPresence(){
+  onSnapshot(doc(_db,'p2p_presence','fc_'+_fcId),(snap)=>{
+    const d=snap.data();
+    _fcOnline = d?.online===true;
+    if(d?.ts?.toDate){ const age=Date.now()-d.ts.toDate().getTime(); if(age>60000) _fcOnline=false; }
+    document.querySelectorAll('.p2p-clip').forEach(b=>b.classList.toggle('online',_fcOnline));
+  });
+}
+
+/* ── UI 주입 (MutationObserver) ── */
+function _observeUI(){
+  const inject=()=>{
+    document.querySelectorAll('.chat-input-row').forEach(row=>{
+      if(row.querySelector('.p2p-clip')) return;
+      const send=row.querySelector('.chat-send');
+      if(!send) return;
+      const btn=document.createElement('button');
+      btn.className='p2p-clip'+(_fcOnline?' online':'');
+      btn.type='button';
+      btn.innerHTML='📎<span class="p2p-dot"></span>';
+      btn.title=_fcOnline?'파일 보내기':'상대방 오프라인';
+      btn.onclick=()=>{
+        if(!_fcOnline){_toast('상대방이 접속 중일 때 보낼 수 있습니다','err');return;}
+        _pickFile();
+      };
+      row.insertBefore(btn,send);
+    });
+  };
+  const el=document.getElementById('consultHistoryList');
+  if(el) new MutationObserver(inject).observe(el,{childList:true,subtree:true});
+  setInterval(inject,2000);
+}
+
+/* ── 파일 선택 → 전송 시작 ── */
+function _pickFile(){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.style.display='none';
+  inp.onchange=()=>{ if(inp.files[0]) _sendFile(inp.files[0]); inp.remove(); };
+  document.body.appendChild(inp); inp.click();
+}
+
+async function _sendFile(file){
+  const room = _fcId+'_'+_clientId;
+  const sigRef = doc(_db,'p2p_signals',room);
+  _toast('연결 중...','');
+
+  // 기존 신호 정리
+  try{ const cs=await getDocs(collection(_db,'p2p_signals',room,'offerCandidates'));
+    for(const d of cs.docs) await deleteDoc(d.ref);
+    const as=await getDocs(collection(_db,'p2p_signals',room,'answerCandidates'));
+    for(const d of as.docs) await deleteDoc(d.ref);
+  }catch(e){}
+
+  _pc = new RTCPeerConnection({iceServers:ICE});
+  _dc = _pc.createDataChannel('file');
+
+  // 전송 진행
+  _dc.onopen=()=>{
+    _dc.send(JSON.stringify({name:file.name,size:file.size,type:file.type}));
+    _sendChunks(file);
+  };
+  _dc.onclose=()=>{ _cleanup(room); };
+
+  // ICE candidates → Firestore
+  _pc.onicecandidate=e=>{
+    if(e.candidate) addDoc(collection(_db,'p2p_signals',room,'offerCandidates'),e.candidate.toJSON());
+  };
+
+  const offer=await _pc.createOffer();
+  await _pc.setLocalDescription(offer);
+  await setDoc(sigRef,{from:'client',offer:{type:offer.type,sdp:offer.sdp},
+    fileName:file.name,fileSize:file.size,ts:serverTimestamp(),status:'pending'});
+
+  // answer 대기
+  const unsub=onSnapshot(sigRef,(snap)=>{
+    const d=snap.data();
+    if(d?.answer && !_pc.currentRemoteDescription){
+      _pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+    }
+  });
+  // answer ICE candidates
+  onSnapshot(collection(_db,'p2p_signals',room,'answerCandidates'),(snap)=>{
+    snap.docChanges().forEach(c=>{
+      if(c.type==='added') _pc.addIceCandidate(new RTCIceCandidate(c.doc.data()));
+    });
+  });
+}
+
+async function _sendChunks(file){
+  const buf=await file.arrayBuffer();
+  const total=buf.byteLength;
+  let offset=0;
+  _showProgress('send',0,file.name);
+  function next(){
+    if(_dc.readyState!=='open') return;
+    while(offset<total){
+      if(_dc.bufferedAmount>CHUNK*8){ setTimeout(next,50); return; }
+      const end=Math.min(offset+CHUNK,total);
+      _dc.send(buf.slice(offset,end));
+      offset=end;
+      _showProgress('send',Math.round(offset/total*100),file.name);
+    }
+    _dc.send('__EOF__');
+    setTimeout(()=>{_toast('전송 완료 ✓','ok');_hideProgress();},500);
+  }
+  next();
+}
+
+/* ── 수신 감지 ── */
+function _watchSignal(){
+  const room=_fcId+'_'+_clientId;
+  onSnapshot(doc(_db,'p2p_signals',room),(snap)=>{
+    const d=snap.data();
+    if(!d||d.from==='client'||d.status!=='pending') return;
+    if(d.offer) _showRecvPopup(d,room);
+  });
+}
+
+function _showRecvPopup(sig,room){
+  if(document.getElementById('p2pRecv')) return;
+  const sz=sig.fileSize>1048576?(sig.fileSize/1048576).toFixed(1)+'MB':Math.round(sig.fileSize/1024)+'KB';
+  const div=document.createElement('div');
+  div.id='p2pRecv'; div.className='p2p-recv';
+  div.innerHTML=`<div class="p2p-recv-name">📥 ${sig.fileName}</div>
+    <div class="p2p-recv-size">크기: ${sz} · 컨설턴트가 보낸 파일</div>
+    <div class="p2p-recv-btns">
+      <button style="background:var(--bg-warm);color:var(--ink-lt)" onclick="window._p2pReject('${room}')">거절</button>
+      <button style="background:var(--green);color:#fff" onclick="window._p2pAccept('${room}')">수락</button>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+window._p2pReject=async function(room){
+  document.getElementById('p2pRecv')?.remove();
+  try{ await setDoc(doc(_db,'p2p_signals',room),{status:'rejected'},{merge:true}); }catch(e){}
+};
+
+window._p2pAccept=async function(room){
+  document.getElementById('p2pRecv')?.remove();
+  const sigRef=doc(_db,'p2p_signals',room);
+  const snap=await getDoc(sigRef);
+  const sig=snap.data();
+  if(!sig?.offer) return;
+
+  _pc=new RTCPeerConnection({iceServers:ICE});
+  _recvBuf=[]; _recvMeta=null;
+
+  _pc.ondatachannel=e=>{
+    _dc=e.channel;
+    _dc.onmessage=ev=>_onRecvData(ev);
+  };
+  _pc.onicecandidate=e=>{
+    if(e.candidate) addDoc(collection(_db,'p2p_signals',room,'answerCandidates'),e.candidate.toJSON());
+  };
+
+  await _pc.setRemoteDescription(new RTCSessionDescription(sig.offer));
+  const answer=await _pc.createAnswer();
+  await _pc.setLocalDescription(answer);
+  await setDoc(sigRef,{answer:{type:answer.type,sdp:answer.sdp},status:'accepted'},{merge:true});
+
+  // offer ICE candidates
+  onSnapshot(collection(_db,'p2p_signals',room,'offerCandidates'),(snap)=>{
+    snap.docChanges().forEach(c=>{
+      if(c.type==='added') _pc.addIceCandidate(new RTCIceCandidate(c.doc.data()));
+    });
+  });
+};
+
+function _onRecvData(ev){
+  if(typeof ev.data==='string'){
+    if(ev.data==='__EOF__'){
+      const blob=new Blob(_recvBuf,{type:_recvMeta?.type||'application/octet-stream'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=_recvMeta?.name||'file';
+      a.click(); URL.revokeObjectURL(a.href);
+      _toast('파일 수신 완료 ✓','ok'); _hideProgress();
+      _recvBuf=[]; _recvMeta=null;
+      return;
+    }
+    try{ _recvMeta=JSON.parse(ev.data); _showProgress('recv',0,_recvMeta.name); }catch(e){}
+    return;
+  }
+  _recvBuf.push(ev.data);
+  if(_recvMeta){
+    const got=_recvBuf.reduce((s,b)=>s+b.byteLength,0);
+    _showProgress('recv',Math.round(got/_recvMeta.size*100),_recvMeta.name);
+  }
+}
+
+/* ── 프로그레스 ── */
+function _showProgress(dir,pct,name){
+  let el=document.getElementById('p2pProg');
+  if(!el){
+    el=document.createElement('div');el.id='p2pProg';
+    el.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:9998;background:#fff;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,.15);padding:14px 18px;width:calc(100vw - 40px);max-width:340px';
+    el.innerHTML='<div class="p2p-status"></div><div class="p2p-prog"><div class="p2p-prog-fill"></div></div>';
+    document.body.appendChild(el);
+  }
+  el.querySelector('.p2p-status').textContent=(dir==='send'?'📤 전송 중':'📥 수신 중')+` · ${name} · ${pct}%`;
+  el.querySelector('.p2p-prog-fill').style.width=pct+'%';
+}
+function _hideProgress(){ setTimeout(()=>document.getElementById('p2pProg')?.remove(),1500); }
+
+/* ── 정리 ── */
+async function _cleanup(room){
+  try{ _pc?.close(); }catch(e){}
+  _pc=null; _dc=null;
+  try{
+    const cs=await getDocs(collection(_db,'p2p_signals',room,'offerCandidates'));
+    for(const d of cs.docs) await deleteDoc(d.ref);
+    const as=await getDocs(collection(_db,'p2p_signals',room,'answerCandidates'));
+    for(const d of as.docs) await deleteDoc(d.ref);
+    await deleteDoc(doc(_db,'p2p_signals',room));
+  }catch(e){}
+}
+
+function _toast(m,t){
+  const el=document.getElementById('toast');
+  if(!el) return;
+  el.textContent=m; el.className='toast show'+(t?' '+t:'');
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),2800);
+}
+</script>
 </body>
 </html>
