@@ -545,6 +545,12 @@ button,input,select{font-family:var(--font);outline:none;border:none}
     </div>
     <nav class="sb-nav">
       <div class="sb-nav-section">메뉴</div>
+      <div class="sb-nav-item" onclick="showPage('action')">
+        <span class="nav-ico">📋</span>오늘의 액션
+        <span id="sbActionBadge" style="display:none;background:var(--red);color:#fff;
+          font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;
+          display:inline-flex;align-items:center;justify-content:center;padding:0 4px;margin-left:auto"></span>
+      </div>
       <div class="sb-nav-item active" onclick="showPage('clients')">
         <span class="nav-ico">👥</span>고객목록
       </div>
@@ -954,12 +960,31 @@ button,input,select{font-family:var(--font);outline:none;border:none}
       </div>
     </div><!-- /pageGuide -->
 
+    <!-- ── 오늘의 액션 대시보드 ── -->
+    <div class="content" id="pageAction" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h2 style="font-size:18px;font-weight:800;color:var(--ink);margin:0">📋 오늘의 액션 리스트</h2>
+          <div style="font-size:12px;color:var(--ink-sub);margin-top:4px" id="actionDateLabel">
+            오늘 조치가 필요한 고객을 확인하세요
+          </div>
+        </div>
+        <span id="actionTotalBadge" style="font-size:12px;font-weight:700;background:var(--red);
+          color:#fff;padding:4px 12px;border-radius:20px"></span>
+      </div>
+      <div id="actionSummaryCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:20px"></div>
+      <div id="actionList"></div>
+    </div><!-- /pageAction -->
+
   </div><!-- /main -->
 </div><!-- /layout -->
 
 <!-- 모바일 하단 탭바 -->
 <div class="mob-tab-bar">
   <div class="mob-tab-inner">
+    <div class="mob-tab-item" id="mobTabAction" onclick="showPage('action');mobSetTab('action')">
+      <span class="mt-ico">📋</span>액션
+    </div>
     <div class="mob-tab-item active" id="mobTabClients" onclick="showPage('clients');mobSetTab('clients')">
       <span class="mt-ico">👥</span>고객목록
     </div>
@@ -1990,12 +2015,14 @@ window.showPage=function(id){
   document.getElementById('pageGuide').style.display     = id==='guide'     ?'block':'none';
   document.getElementById('pageExpiry').style.display    = id==='expiry'    ?'block':'none';
   document.getElementById('pageConsult').style.display   = id==='consult'   ?'block':'none';
-  const titles={clients:'고객 현황',insight:'영업 인사이트',sangryung:'상령일 관리',guide:'시작 가이드',expiry:'만기 관리',consult:'상담 요청'};
+  document.getElementById('pageAction').style.display    = id==='action'    ?'block':'none';
+  const titles={clients:'고객 현황',insight:'영업 인사이트',sangryung:'상령일 관리',guide:'시작 가이드',expiry:'만기 관리',consult:'상담 요청',action:'오늘의 액션'};
   document.getElementById('pageTitle').textContent = titles[id]||'';
   if(id==='insight')   renderInsight();
   if(id==='sangryung') renderSangryungPage();
   if(id==='expiry')    renderExpiryPage();
   if(id==='consult')   renderConsultPage();
+  if(id==='action')    renderActionDashboard();
   mobSetTab(id);
   window.scrollTo(0,0);
 };
@@ -3096,6 +3123,204 @@ window.deleteProxyDraft = async function(idx){
     await renderProxyBody();
   }catch(e){ toast('삭제 실패','err'); }
 };
+
+/* ══ 오늘의 액션 대시보드 ══ */
+function renderActionDashboard(){
+  const clients = window._clients || [];
+  const consults = window._consultRequests || [];
+  const now = new Date();
+  const days = ['일','월','화','수','목','금','토'];
+  const dateLabel = `${now.getFullYear()}.${now.getMonth()+1}.${now.getDate()}(${days[now.getDay()]})`;
+
+  const dateLbl = document.getElementById('actionDateLabel');
+  if(dateLbl) dateLbl.textContent = dateLabel + ' 기준 · 오늘 조치가 필요한 고객을 확인하세요';
+
+  const actions = []; // {priority, type, icon, title, desc, clientName, phone, clientId}
+
+  /* ── 1. 상령일 임박 (D-60) ── */
+  clients.forEach(c=>{
+    const checks = [
+      {label:'본인', birth: c.birth||c.profile?.birth},
+      {label:'배우자', birth: c.spouseBirth||c.profile?.spouseBirth},
+    ];
+    const childBirths = c.profile?.childrenBirths || [];
+    childBirths.forEach((cb,i)=>{ if(cb) checks.push({label:`자녀${i+1}`, birth:cb}); });
+
+    checks.forEach(ck=>{
+      if(!ck.birth) return;
+      const info = calcInsAge(ck.birth);
+      if(!info) return;
+      if(info.dDay <= 60){
+        const pri = info.dDay<=14?0:info.dDay<=30?1:2;
+        actions.push({
+          priority: pri,
+          type: 'sangryung',
+          icon: '⏰',
+          title: `${c.name} ${ck.label} — 상령일 D-${info.dDay}`,
+          desc: `보험나이 만 ${info.insAge}세 → ${info.insAge+1}세 (${info.sangRyung.getMonth()+1}/${info.sangRyung.getDate()})${info.dDay<=14?' · 보험 가입 시급!':''}`,
+          clientName: c.name, phone: c.phone||'', clientId: c.id
+        });
+      }
+    });
+  });
+
+  /* ── 2. 만기 임박 (D-90) ── */
+  clients.forEach(c=>{
+    (c.expiryAlerts||[]).forEach(exp=>{
+      const d = exp.dDay!=null ? exp.dDay : 999;
+      if(d > 90) return;
+      const pri = d<=7?0:d<=30?1:2;
+      actions.push({
+        priority: pri,
+        type: 'expiry',
+        icon: '🔔',
+        title: `${c.name} — ${exp.productName||'상품'} 만기 D-${d}`,
+        desc: `만기일 ${exp.expiryDate||''} · ${exp.category||''}${d<=7?' · 즉시 상담 필요':''}`,
+        clientName: c.name, phone: c.phone||'', clientId: c.id
+      });
+    });
+  });
+
+  /* ── 3. 보장 공백 (실손·암 미가입) ── */
+  clients.forEach(c=>{
+    if(!c.insurance?.hasReal){
+      actions.push({
+        priority: 1,
+        type: 'gap',
+        icon: '🚨',
+        title: `${c.name} — 실손보험 미가입`,
+        desc: '의료비 무방어 상태 · 가입 권유 필요',
+        clientName: c.name, phone: c.phone||'', clientId: c.id
+      });
+    }
+    if(!c.insurance?.hasCancer && (c.insurance?.cancerAmt||0) < 10000000){
+      actions.push({
+        priority: 2,
+        type: 'gap',
+        icon: '🎗️',
+        title: `${c.name} — 암 진단비 부족`,
+        desc: `현재 ${c.insurance?.cancerAmt ? Math.round(c.insurance.cancerAmt/10000)+'만원' : '0원'} · 권장 3천만원 이상`,
+        clientName: c.name, phone: c.phone||'', clientId: c.id
+      });
+    }
+  });
+
+  /* ── 4. 미확인 상담 요청 ── */
+  consults.filter(r=>!r.read).forEach(r=>{
+    actions.push({
+      priority: 0,
+      type: 'consult',
+      icon: '💬',
+      title: `${r.clientName} — 상담 요청 미확인`,
+      desc: r.action||'상담 요청',
+      clientName: r.clientName, phone: '', clientId: r.clientId
+    });
+  });
+
+  /* ── 5. 노후준비 부족 (점수 30 미만) ── */
+  clients.forEach(c=>{
+    if(c.scores?.retirement < 30){
+      actions.push({
+        priority: 2,
+        type: 'retire',
+        icon: '🧓',
+        title: `${c.name} — 노후준비 ${c.scores.retirement}점`,
+        desc: `연금 적립 부족 · 은퇴설계 상담 권장`,
+        clientName: c.name, phone: c.phone||'', clientId: c.id
+      });
+    }
+  });
+
+  /* ── 정렬: priority → dDay 순 ── */
+  actions.sort((a,b)=>a.priority-b.priority);
+
+  /* ── 요약 카드 ── */
+  const urgent = actions.filter(a=>a.priority===0).length;
+  const warning = actions.filter(a=>a.priority===1).length;
+  const info = actions.filter(a=>a.priority===2).length;
+  const total = actions.length;
+
+  const badge = document.getElementById('actionTotalBadge');
+  if(badge) badge.textContent = total > 0 ? `총 ${total}건` : '없음';
+  if(badge) badge.style.background = total > 0 ? 'var(--red)' : 'var(--green)';
+
+  // 사이드바 배지
+  const sbBadge = document.getElementById('sbActionBadge');
+  if(sbBadge){
+    sbBadge.style.display = total > 0 ? 'inline-flex' : 'none';
+    sbBadge.textContent = total;
+  }
+
+  const sumEl = document.getElementById('actionSummaryCards');
+  if(sumEl){
+    sumEl.innerHTML = `
+      <div style="background:${urgent>0?'var(--red-lt)':'var(--bg-warm)'};border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:24px;font-weight:900;color:${urgent>0?'var(--red)':'var(--ink-sub)'}">${urgent}</div>
+        <div style="font-size:11px;font-weight:700;color:${urgent>0?'var(--red)':'var(--ink-sub)'}">🚨 긴급</div>
+      </div>
+      <div style="background:${warning>0?'#FEF3E2':'var(--bg-warm)'};border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:24px;font-weight:900;color:${warning>0?'#D4760A':'var(--ink-sub)'}">${warning}</div>
+        <div style="font-size:11px;font-weight:700;color:${warning>0?'#D4760A':'var(--ink-sub)'}">⚠️ 주의</div>
+      </div>
+      <div style="background:${info>0?'var(--accent-lt)':'var(--bg-warm)'};border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:24px;font-weight:900;color:${info>0?'var(--accent)':'var(--ink-sub)'}">${info}</div>
+        <div style="font-size:11px;font-weight:700;color:${info>0?'var(--accent)':'var(--ink-sub)'}">💡 기회</div>
+      </div>`;
+  }
+
+  /* ── 액션 리스트 렌더 ── */
+  const listEl = document.getElementById('actionList');
+  if(!listEl) return;
+
+  if(total === 0){
+    listEl.innerHTML = `<div style="text-align:center;padding:60px 20px;color:var(--ink-sub)">
+      <div style="font-size:48px;margin-bottom:12px">✅</div>
+      <div style="font-size:16px;font-weight:800;color:var(--ink);margin-bottom:6px">오늘은 조치할 항목이 없습니다</div>
+      <div style="font-size:13px;color:var(--ink-lt);line-height:1.6">모든 고객이 잘 관리되고 있습니다</div>
+    </div>`;
+    return;
+  }
+
+  const priLabel = ['🚨 긴급','⚠️ 주의','💡 영업 기회'];
+  const priBg    = ['var(--red-lt)','#FEF3E2','var(--accent-lt)'];
+  const priColor = ['var(--red)','#D4760A','var(--accent)'];
+  const priBorder= ['rgba(192,57,43,.2)','rgba(212,118,10,.2)','rgba(45,93,174,.15)'];
+
+  // 우선순위별 그룹
+  let html = '';
+  [0,1,2].forEach(pri=>{
+    const group = actions.filter(a=>a.priority===pri);
+    if(group.length===0) return;
+    html += `<div style="font-size:12px;font-weight:800;color:${priColor[pri]};
+      margin:${pri>0?'20px':'0'} 0 10px;display:flex;align-items:center;gap:6px">
+      ${priLabel[pri]} <span style="font-weight:600;opacity:.7">${group.length}건</span></div>`;
+    html += group.map(a=>`
+      <div style="background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:8px;
+        border:1px solid ${priBorder[a.priority]};border-left:4px solid ${priColor[a.priority]};
+        box-shadow:0 2px 8px rgba(20,27,45,.04)">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <span style="font-size:20px;flex-shrink:0;margin-top:2px">${a.icon}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:3px">${a.title}</div>
+            <div style="font-size:12px;color:var(--ink-lt);line-height:1.6">${a.desc}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:10px">
+          ${a.phone?`<a href="tel:${a.phone}" style="flex:1;padding:8px;border-radius:8px;
+            background:#EFF6FF;color:#1D4ED8;font-size:12px;font-weight:700;
+            text-align:center;text-decoration:none;border:1px solid #BFDBFE">📞 전화</a>`:''}
+          ${a.type==='consult'?`<button onclick="showPage('consult')"
+            style="flex:1;padding:8px;border-radius:8px;background:var(--accent);color:#fff;
+            font-size:12px;font-weight:700;border:none;cursor:pointer">💬 상담 확인</button>`
+          :`<button onclick="showPage('clients')"
+            style="flex:1;padding:8px;border-radius:8px;background:var(--accent-lt);color:var(--accent);
+            font-size:12px;font-weight:700;border:none;cursor:pointer">👤 고객 상세</button>`}
+        </div>
+      </div>`).join('');
+  });
+
+  listEl.innerHTML = html;
+}
 </script>
 <!-- ══ P2P 파일 전송 ══ -->
 <style>
