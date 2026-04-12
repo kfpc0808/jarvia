@@ -245,13 +245,14 @@ button,input{font-family:var(--font);outline:none;border:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:rgba(192,57,43,.92)}
 .toast.ok{background:rgba(10,123,97,.92)}
-/* ── 점수 피드백 팝업 ── */
-.score-fb{position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px) scale(.9);
-  z-index:9998;opacity:0;pointer-events:none;transition:all .4s var(--ease);
-  background:#fff;border-radius:20px;padding:20px 24px;text-align:center;
-  box-shadow:0 12px 40px rgba(20,27,45,.2);border:1px solid var(--border-lt);
-  min-width:260px;max-width:340px}
-.score-fb.show{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
+/* ── 점수 피드백 팝업 (확인 클릭 시 닫힘) ── */
+.score-fb{position:fixed;inset:0;z-index:9998;
+  background:rgba(10,15,30,.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  display:none;align-items:center;justify-content:center}
+.score-fb.show{display:flex}
+.score-fb-card{background:#fff;border-radius:20px;padding:24px;text-align:center;
+  box-shadow:0 12px 40px rgba(20,27,45,.2);min-width:280px;max-width:340px;
+  animation:scorePop .4s var(--ease)}
 .score-fb-score{font-family:var(--font-d);font-size:36px;font-weight:800;line-height:1;margin:6px 0}
 .score-fb-delta{display:inline-block;padding:3px 12px;border-radius:20px;font-size:14px;font-weight:800;margin-bottom:8px}
 .score-fb-delta.up{background:var(--green-lt);color:var(--green)}
@@ -260,8 +261,14 @@ button,input{font-family:var(--font);outline:none;border:none}
 .score-fb-bar{height:6px;border-radius:3px;background:var(--border-lt);margin:12px 0 6px;overflow:hidden}
 .score-fb-fill{height:100%;border-radius:3px;transition:width .8s var(--ease)}
 .score-fb-comp{font-size:11px;color:var(--ink-sub)}
-@keyframes scorePop{0%{transform:scale(0)}50%{transform:scale(1.2)}100%{transform:scale(1)}}
-.score-fb .pop-anim{animation:scorePop .5s var(--ease)}
+.score-fb-btn{margin-top:14px;width:100%;padding:12px;border:none;border-radius:12px;
+  background:linear-gradient(135deg,var(--accent),#2D5DAE);color:#fff;
+  font-size:14px;font-weight:800;cursor:pointer}
+.score-fb-btn:active{filter:brightness(.93)}
+@keyframes scorePop{0%{transform:scale(.8);opacity:0}100%{transform:scale(1);opacity:1}}
+/* ── 점수 카드 (상품 탭 고정) ── */
+@keyframes scoreGlow{0%{box-shadow:0 0 0 0 rgba(45,93,174,.3)}70%{box-shadow:0 0 0 10px rgba(45,93,174,0)}100%{box-shadow:0 0 0 0 rgba(45,93,174,0)}}
+.score-bar-glow{animation:scoreGlow .8s var(--ease)}
 
 /* ══ Phase 2: 하단 탭 + 메인 레이아웃 ══ */
 .main-page{max-width:480px;margin:0 auto;
@@ -1715,6 +1722,10 @@ body.landing-mode .fc-header{top:48px}
           </div>
         </div>
         <div style="font-size:14px;font-weight:800;color:var(--ink);margin-bottom:12px">내 금융 상품</div>
+        <div id="prodScoreBar" style="display:none;background:linear-gradient(135deg,#F0F4FF,#E8EEFF);
+          border:1px solid rgba(45,93,174,.15);border-radius:14px;padding:14px 16px;margin-bottom:14px;
+          transition:all .3s var(--ease)">
+        </div>
         <div class="product-grid" id="prodCatGrid"></div>
         <div style="font-size:11px;color:var(--ink-sub);text-align:center;padding:4px 0 8px;line-height:1.6">
           🔒 입력하신 정보는 안전하게 서버에 저장됩니다
@@ -5016,7 +5027,12 @@ function renderProdModal(){
   html+=`<button class="prod-add-btn" onclick="showAddForm()">+ ${cat.name} 추가하기</button>`;
 
   // 입력 폼 (숨겨진 상태)
-  html+=`<div id="addFormWrap" style="display:none">${buildForm(curCat)}</div>`;
+  html+=`<div id="addFormWrap" style="display:none">
+    <div style="background:var(--green-lt);border:1px solid rgba(10,123,97,.15);border-radius:10px;
+      padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--green);text-align:center">
+      😊 모르는 항목은 비워두셔도 괜찮아요. 나중에 언제든 수정할 수 있습니다.
+    </div>
+    ${buildForm(curCat)}</div>`;
 
   document.getElementById('prodModalBody').innerHTML=html;
   document.getElementById('prodSaveBtn').style.display='none';
@@ -6187,6 +6203,7 @@ window.switchTab = function(id) {
   }
   _origSwitchTab(id);
   if (id === 'diag') window.renderDiagWithAI();
+  if (id === 'products') renderProdScore();
 };
 
 /* ── 로그인 유도 팝업 ── */
@@ -6470,61 +6487,89 @@ window.saveProd = function() {
   _origSaveProd();
   const afterScore = calcScores();
   const afterCount = CATS.reduce((a,c)=>a+getProds(c.id).length,0);
-  // 저장 성공 시에만 피드백 (검증 실패로 return된 경우 count 동일 & score 동일)
   const saved = afterCount > beforeCount || afterScore.total !== beforeScore.total;
   if(saved) showScoreFeedback(beforeScore, afterScore, afterCount);
+  renderProdScore();
   setTimeout(syncSharedData, 500);
 };
 
-/* ── 점수 피드백 팝업 ── */
+/* ── 점수 피드백 팝업 (확인 클릭 시 닫힘) ── */
 function showScoreFeedback(before, after, prodCount){
   const el = document.getElementById('scoreFb');
   if(!el) return;
   const diff = after.total - before.total;
   const g = getGrade(after.total);
-
-  // 입력 완성도 (7개 카테고리 중 1건 이상 있는 카테고리 수)
   const filled = CATS.filter(c=>getProds(c.id).length>0).length;
   const compPct = Math.round(filled / CATS.length * 100);
 
-  // 점수 변화 메시지
-  let deltaHtml, msgHtml;
+  let deltaHtml;
   if(diff > 0){
-    deltaHtml = `<div class="score-fb-delta up pop-anim">▲ ${diff}점 상승!</div>`;
+    deltaHtml = `<div class="score-fb-delta up">▲ ${diff}점 상승!</div>`;
   } else if(diff < 0){
     deltaHtml = `<div class="score-fb-delta" style="background:var(--red-lt);color:var(--red)">▼ ${Math.abs(diff)}점</div>`;
   } else {
     deltaHtml = `<div class="score-fb-delta same">✓ 등록 완료</div>`;
   }
 
-  // 동기부여 멘트
   const msgs = [];
   if(compPct < 100){
     const remain = CATS.length - filled;
+    const emptyNames = CATS.filter(c=>getProds(c.id).length===0).map(c=>c.name).slice(0,3).join(', ');
     msgs.push(`${remain}개 영역만 더 채우면 정밀 AI 진단이 가능해요`);
+    msgs.push(`💡 ${emptyNames} 등을 등록해보세요`);
   }
   if(after.total < 50) msgs.push('상품을 추가할수록 점수가 올라갑니다');
   else if(after.total < 70) msgs.push(`${g.lbl} 등급! 조금만 더 채워보세요`);
   else if(after.total < 90) msgs.push(`${g.lbl} 등급, ${getRank(after.total)} 수준입니다`);
   else msgs.push(`${g.lbl} 등급! 재무 관리를 잘 하고 계시네요`);
-  msgHtml = msgs[0] || '';
 
-  el.innerHTML = `
+  el.innerHTML = `<div class="score-fb-card">
     <div style="font-size:11px;font-weight:700;color:var(--ink-sub);letter-spacing:.5px;margin-bottom:2px">재무 건강 점수</div>
-    <div class="score-fb-score pop-anim" style="color:${g.col}">${after.total}<span style="font-size:16px;font-weight:600">점</span></div>
+    <div class="score-fb-score" style="color:${g.col}">${after.total}<span style="font-size:16px;font-weight:600">점</span></div>
     ${deltaHtml}
-    <div class="score-fb-bar"><div class="score-fb-fill" style="width:0;background:${g.col}"></div></div>
+    <div style="font-size:12px;color:var(--ink-lt);margin-bottom:4px">${getRank(after.total)} · ${g.lbl} 등급</div>
+    <div class="score-fb-bar"><div class="score-fb-fill" style="width:${compPct}%;background:${g.col}"></div></div>
     <div class="score-fb-comp">입력 완성도 ${compPct}% · 총 ${prodCount}건 등록</div>
-    <div class="score-fb-msg" style="margin-top:8px">${msgHtml}</div>`;
-
+    <div class="score-fb-msg" style="margin-top:8px">${msgs.join('<br>')}</div>
+    <div style="font-size:9px;color:var(--ink-sub);margin-top:10px;line-height:1.5">보장·자산구조·부채관리·노후준비·현금흐름 5개 영역을 각 100점으로 평가 후 산술 평균</div>
+    <button class="score-fb-btn" onclick="document.getElementById('scoreFb').classList.remove('show')">확인</button>
+  </div>`;
   el.classList.add('show');
-  // 프로그레스 바 애니메이션
-  setTimeout(()=>{
-    const fill = el.querySelector('.score-fb-fill');
-    if(fill) fill.style.width = compPct + '%';
-  }, 150);
-  clearTimeout(el._t);
-  el._t = setTimeout(()=> el.classList.remove('show'), 3500);
+}
+
+/* ── 상품 탭 고정 점수 카드 ── */
+function renderProdScore(){
+  const bar = document.getElementById('prodScoreBar');
+  if(!bar) return;
+  const allProds = CATS.reduce((a,c)=>a+getProds(c.id).length,0);
+  if(allProds === 0){ bar.style.display='none'; return; }
+
+  const sc = calcScores();
+  const g = getGrade(sc.total);
+  const filled = CATS.filter(c=>getProds(c.id).length>0).length;
+  const compPct = Math.round(filled / CATS.length * 100);
+
+  bar.style.display = 'block';
+  bar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="text-align:center;min-width:60px">
+        <div style="font-family:var(--font-d);font-size:28px;font-weight:800;color:${g.col};line-height:1">${sc.total}</div>
+        <div style="font-size:10px;font-weight:700;color:${g.col};margin-top:2px">${g.lbl}</div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-size:12px;font-weight:700;color:var(--ink)">재무 건강 점수</span>
+          <span style="font-size:11px;font-weight:600;color:var(--accent-bright)">${getRank(sc.total)}</span>
+        </div>
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.6);overflow:hidden;margin-bottom:4px">
+          <div style="height:100%;width:${sc.total}%;border-radius:3px;background:${g.col};transition:width .6s var(--ease)"></div>
+        </div>
+        <div style="font-size:10px;color:var(--ink-lt)">입력 완성도 ${compPct}% · ${allProds}건 등록 · ${filled}/${CATS.length}개 영역</div>
+        <div style="font-size:9px;color:var(--ink-sub);margin-top:4px;line-height:1.5">보장·자산구조·부채관리·노후준비·현금흐름 5개 영역을 각 100점으로 평가 후 산술 평균</div>
+      </div>
+    </div>`;
+  bar.classList.add('score-bar-glow');
+  setTimeout(()=>bar.classList.remove('score-bar-glow'),900);
 }
 
 /* ══ 은퇴설계 계산기 ══ */
