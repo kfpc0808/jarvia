@@ -245,6 +245,23 @@ button,input{font-family:var(--font);outline:none;border:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:rgba(192,57,43,.92)}
 .toast.ok{background:rgba(10,123,97,.92)}
+/* ── 점수 피드백 팝업 ── */
+.score-fb{position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px) scale(.9);
+  z-index:9998;opacity:0;pointer-events:none;transition:all .4s var(--ease);
+  background:#fff;border-radius:20px;padding:20px 24px;text-align:center;
+  box-shadow:0 12px 40px rgba(20,27,45,.2);border:1px solid var(--border-lt);
+  min-width:260px;max-width:340px}
+.score-fb.show{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
+.score-fb-score{font-family:var(--font-d);font-size:36px;font-weight:800;line-height:1;margin:6px 0}
+.score-fb-delta{display:inline-block;padding:3px 12px;border-radius:20px;font-size:14px;font-weight:800;margin-bottom:8px}
+.score-fb-delta.up{background:var(--green-lt);color:var(--green)}
+.score-fb-delta.same{background:var(--accent-lt);color:var(--accent-bright)}
+.score-fb-msg{font-size:13px;color:var(--ink-lt);line-height:1.6}
+.score-fb-bar{height:6px;border-radius:3px;background:var(--border-lt);margin:12px 0 6px;overflow:hidden}
+.score-fb-fill{height:100%;border-radius:3px;transition:width .8s var(--ease)}
+.score-fb-comp{font-size:11px;color:var(--ink-sub)}
+@keyframes scorePop{0%{transform:scale(0)}50%{transform:scale(1.2)}100%{transform:scale(1)}}
+.score-fb .pop-anim{animation:scorePop .5s var(--ease)}
 
 /* ══ Phase 2: 하단 탭 + 메인 레이아웃 ══ */
 .main-page{max-width:480px;margin:0 auto;
@@ -2041,6 +2058,7 @@ body.landing-mode .fc-header{top:48px}
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="score-fb" id="scoreFb"></div>
 
 <!-- 가이드 이미지 라이트박스 -->
 <div class="guide-lightbox" id="guideLightbox" onclick="if(event.target===this)closeGuideLb()">
@@ -6415,12 +6433,70 @@ function _renderPreviewDiag() {
 }
 window.showLoginPrompt = showLoginPrompt;
 
-/* saveProd 후 FC 공유 동기화 트리거 */
+/* saveProd 후 FC 공유 동기화 트리거 + 게이미피케이션 피드백 */
 const _origSaveProd = window.saveProd;
 window.saveProd = function() {
+  const beforeScore = calcScores();
+  const beforeCount = CATS.reduce((a,c)=>a+getProds(c.id).length,0);
   _origSaveProd();
+  const afterScore = calcScores();
+  const afterCount = CATS.reduce((a,c)=>a+getProds(c.id).length,0);
+  // 저장 성공 시에만 피드백 (검증 실패로 return된 경우 count 동일 & score 동일)
+  const saved = afterCount > beforeCount || afterScore.total !== beforeScore.total;
+  if(saved) showScoreFeedback(beforeScore, afterScore, afterCount);
   setTimeout(syncSharedData, 500);
 };
+
+/* ── 점수 피드백 팝업 ── */
+function showScoreFeedback(before, after, prodCount){
+  const el = document.getElementById('scoreFb');
+  if(!el) return;
+  const diff = after.total - before.total;
+  const g = getGrade(after.total);
+
+  // 입력 완성도 (7개 카테고리 중 1건 이상 있는 카테고리 수)
+  const filled = CATS.filter(c=>getProds(c.id).length>0).length;
+  const compPct = Math.round(filled / CATS.length * 100);
+
+  // 점수 변화 메시지
+  let deltaHtml, msgHtml;
+  if(diff > 0){
+    deltaHtml = `<div class="score-fb-delta up pop-anim">▲ ${diff}점 상승!</div>`;
+  } else if(diff < 0){
+    deltaHtml = `<div class="score-fb-delta" style="background:var(--red-lt);color:var(--red)">▼ ${Math.abs(diff)}점</div>`;
+  } else {
+    deltaHtml = `<div class="score-fb-delta same">✓ 등록 완료</div>`;
+  }
+
+  // 동기부여 멘트
+  const msgs = [];
+  if(compPct < 100){
+    const remain = CATS.length - filled;
+    msgs.push(`${remain}개 영역만 더 채우면 정밀 AI 진단이 가능해요`);
+  }
+  if(after.total < 50) msgs.push('상품을 추가할수록 점수가 올라갑니다');
+  else if(after.total < 70) msgs.push(`${g.lbl} 등급! 조금만 더 채워보세요`);
+  else if(after.total < 90) msgs.push(`${g.lbl} 등급, ${getRank(after.total)} 수준입니다`);
+  else msgs.push(`${g.lbl} 등급! 재무 관리를 잘 하고 계시네요`);
+  msgHtml = msgs[0] || '';
+
+  el.innerHTML = `
+    <div style="font-size:11px;font-weight:700;color:var(--ink-sub);letter-spacing:.5px;margin-bottom:2px">재무 건강 점수</div>
+    <div class="score-fb-score pop-anim" style="color:${g.col}">${after.total}<span style="font-size:16px;font-weight:600">점</span></div>
+    ${deltaHtml}
+    <div class="score-fb-bar"><div class="score-fb-fill" style="width:0;background:${g.col}"></div></div>
+    <div class="score-fb-comp">입력 완성도 ${compPct}% · 총 ${prodCount}건 등록</div>
+    <div class="score-fb-msg" style="margin-top:8px">${msgHtml}</div>`;
+
+  el.classList.add('show');
+  // 프로그레스 바 애니메이션
+  setTimeout(()=>{
+    const fill = el.querySelector('.score-fb-fill');
+    if(fill) fill.style.width = compPct + '%';
+  }, 150);
+  clearTimeout(el._t);
+  el._t = setTimeout(()=> el.classList.remove('show'), 3500);
+}
 
 /* ══ 은퇴설계 계산기 ══ */
 function cFmt(v){
