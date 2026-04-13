@@ -116,7 +116,9 @@
       <div style="display:flex;align-items:center;gap:8px;margin:8px 0"><select id="ppt-per-page" onchange="renderPptPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="20">20개씩</option><option value="30">30개씩</option><option value="40">40개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select><span id="ppt-page-info" style="font-size:13px;color:var(--text-lt)"></span></div><div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>날짜</th><th>회원</th><th>유형</th><th>PT 제목</th><th>상태</th><th>차감액</th></tr></thead><tbody id="tb-logs-pptgen"></tbody></table></div><div id="ppt-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
       <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">🔢 재무계산기 이용 로그</h3>
       <div id="lg-calc-summary" class="dash-row mt"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:8px 0"><select id="calc-per-page" onchange="renderCalcPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="20">20개씩</option><option value="30">30개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select><span id="calc-page-info" style="font-size:13px;color:var(--text-lt)"></span></div>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>날짜</th><th>회원</th><th>계산기명</th></tr></thead><tbody id="tb-logs-calc"></tbody></table></div>
+      <div id="calc-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
       <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">📊 재무 대시보드 이용 로그</h3>
       <div id="lg-fd-summary" class="dash-row mt"></div>
       <div style="display:flex;align-items:center;gap:8px;margin:8px 0"><select id="fd-log-per-page" onchange="renderFdLogPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="20">20개씩</option><option value="30">30개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select><span id="fd-log-page-info" style="font-size:13px;color:var(--text-lt)"></span></div>
@@ -2802,7 +2804,7 @@ async function bulkPriceApply(){
 }
 window.toggleBulkPrice=toggleBulkPrice;window.bulkPricePreview=bulkPricePreview;window.bulkPriceApply=bulkPriceApply;
 window.addCat=addCat;window.toggleCat=toggleCat;window.delCat=delCat;window.loadCats=loadCats;
-window.loadPays=loadPays;window.loadLogs=loadLogs;window.exportCSV=exportCSV;window.renderLogsPage=renderLogsPage;window.renderPptPage=renderPptPage;window.renderFdLogPage=renderFdLogPage;window.renderStatPage=renderStatPage;
+window.loadPays=loadPays;window.loadLogs=loadLogs;window.exportCSV=exportCSV;window.renderLogsPage=renderLogsPage;window.renderPptPage=renderPptPage;window.renderCalcPage=renderCalcPage;window.renderFdLogPage=renderFdLogPage;window.renderStatPage=renderStatPage;
 window.loadProps=loadProps;window.showProp=showProp;window.updateProp=updateProp;
 window.showNF=showNF;window.editNotice=editNotice;window.saveNotice=saveNotice;window.loadNoticesAdm=loadNoticesAdm;
 window.loadTermEdit=loadTermEdit;window.saveTerm=saveTerm;
@@ -3645,21 +3647,32 @@ async function resolveUserName(userId, storedName){
   return storedName||userId;
 }
 
+let _calcRows=[];
 async function loadCalcLogs(){
   const tb=$('tb-logs-calc');const sumEl=$('lg-calc-summary');
   try{
-    const snap=await getDocs(query(collection(db,'calc_logs'),orderBy('createdAt','desc'),limit(200)));
-    const uc={};const rows=[];
+    const snap=await getDocs(query(collection(db,'calc_logs'),orderBy('createdAt','desc'),limit(500)));
+    const uc={};_calcRows=[];
     for(const d of snap.docs){
       const l=d.data();
       if(!uc[l.userId]){
         uc[l.userId]=await resolveUserName(l.userId,l.userName||'');
       }
-      rows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${esc(l.calcTitle)}</td></tr>`);
+      _calcRows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${esc(l.calcTitle)}</td></tr>`);
     }
-    tb.innerHTML=rows.join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>';
-    sumEl.innerHTML=`<div class="dash-c"><span>총 이용수</span><strong>${snap.size}</strong></div>`;
+    sumEl.innerHTML=`<div class="dash-c"><span>총 이용수</span><strong>${_calcRows.length}</strong></div>`;
+    renderCalcPage(1);
   }catch(e){console.error('계산기로그 로드 실패:',e);tb.innerHTML=`<tr><td colspan="3" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;sumEl.innerHTML='';}
+}
+function renderCalcPage(page){
+  const per=parseInt($('calc-per-page')?.value||20);
+  const total=_calcRows.length;
+  const pages=Math.ceil(total/per)||1;
+  page=Math.max(1,Math.min(page,pages));
+  const start=(page-1)*per,end=start+per;
+  $('tb-logs-calc').innerHTML=_calcRows.slice(start,end).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>';
+  const info=$('calc-page-info');if(info)info.textContent=`${total}건 중 ${start+1}~${Math.min(end,total)}건`;
+  mkPager($('calc-pager'),total,page,per,'renderCalcPage');
 }
 let _fdLogRows=[];
 async function loadFinanceDashLogs(){
