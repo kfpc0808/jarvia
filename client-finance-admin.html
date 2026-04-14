@@ -1669,6 +1669,7 @@ function renderClientList(){
       <div style="text-align:center">
         <button class="action-btn" onclick="event.stopPropagation();openModal('${c.id}')">리포트</button>
         <button class="action-btn" style="background:#E1F5EE;color:#0A7B61;margin-left:4px" onclick="event.stopPropagation();openProxyInput('${c.id}')">대리입력</button>
+        <button class="action-btn" style="background:#FFF8E1;color:#8B6914;margin-left:4px" onclick="event.stopPropagation();window._offlineSendToClient&&window._offlineSendToClient('${c.id}','${(c.name||'고객').replace(/'/g,"\\'")}')">📎</button>
       </div>
     </div>`;
   }).join('');
@@ -3785,6 +3786,119 @@ function _toast(m,t){
   if(typeof toast==='function') toast(m,t);
   else console.log('[p2p]',m);
 }
+</script>
+
+<!-- ══ 오프라인 파일 전송 (Firebase Storage 폴백) ══ -->
+<script type="module">
+import{getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getFirestore,doc,setDoc,getDocs,deleteDoc,collection,query,where,orderBy,onSnapshot,serverTimestamp}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getStorage,ref,uploadBytes,getDownloadURL,deleteObject}
+  from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+
+const _odb = getFirestore(getApp(),'javia-db');
+const _ost = getStorage(getApp());
+const MAX_FILE_SIZE = 10*1024*1024; // 10MB
+const EXPIRE_DAYS = 7;
+let _oFcId = '';
+
+function _oInit(){
+  if(window._fcId) _oFcId = window._fcId;
+  if(!_oFcId){ setTimeout(_oInit,2000); return; }
+  _checkPendingFiles();
+}
+setTimeout(_oInit,3000);
+
+/* ── FC → 고객: 오프라인 파일 전송 (고객 목록 📎) ── */
+window._offlineSendToClient = function(clientId, clientName){
+  const inp = document.createElement('input');
+  inp.type='file'; inp.multiple=true; inp.style.display='none';
+  inp.onchange = async()=>{
+    const files = Array.from(inp.files);
+    if(!files.length){ inp.remove(); return; }
+    // 크기 검증
+    const oversize = files.filter(f=>f.size>MAX_FILE_SIZE);
+    if(oversize.length){
+      if(typeof toast==='function') toast(`파일 1건당 10MB 이하만 가능합니다 (${oversize[0].name})`,'err');
+      inp.remove(); return;
+    }
+    if(!confirm(`📎 ${clientName}님에게 파일 ${files.length}건을 보냅니다.\n\n※ 오프라인 전송: 파일은 7일간 보관되며,\n   기간 내 미수신 시 자동 삭제됩니다.`)){
+      inp.remove(); return;
+    }
+    if(typeof toast==='function') toast('파일 업로드 중...','');
+    try{
+      for(const f of files){
+        const ts = Date.now();
+        const path = `p2p_files/${_oFcId}/${ts}_${f.name}`;
+        const sRef = ref(_ost, path);
+        await uploadBytes(sRef, f);
+        const url = await getDownloadURL(sRef);
+        const docId = `${_oFcId}_${clientId}_${ts}`;
+        await setDoc(doc(_odb,'p2p_offline_files',docId),{
+          from:'fc', fromId:_oFcId, fromName:window._fcData?.name||'컨설턴트',
+          to:'client', toId:clientId, toName:clientName,
+          fcId:_oFcId, clientId:clientId,
+          fileName:f.name, fileSize:f.size, fileUrl:url, storagePath:path,
+          status:'pending',
+          createdAt:serverTimestamp(),
+          expiresAt:new Date(Date.now()+EXPIRE_DAYS*86400000)
+        });
+      }
+      if(typeof toast==='function') toast(`${clientName}님에게 파일 ${files.length}건 전송 완료 ✓`,'ok');
+    }catch(e){
+      console.error('[offline-send]',e);
+      if(typeof toast==='function') toast('파일 전송 실패: '+e.message,'err');
+    }
+    inp.remove();
+  };
+  document.body.appendChild(inp); inp.click();
+};
+
+/* ── 고객 → FC: 수신 대기 (pending 파일 감지) ── */
+function _checkPendingFiles(){
+  onSnapshot(
+    query(collection(_odb,'p2p_offline_files'),where('to','==','fc'),where('fcId','==',_oFcId),where('status','==','pending')),
+    (snap)=>{
+      snap.docChanges().forEach(ch=>{
+        if(ch.type==='added'){
+          const d=ch.doc.data();
+          _showOfflineRecv(ch.doc.id, d);
+        }
+      });
+    }
+  );
+}
+
+function _showOfflineRecv(docId, d){
+  if(typeof window._playConsultSound==='function') window._playConsultSound();
+  const sz=d.fileSize>1048576?(d.fileSize/1048576).toFixed(1)+'MB':Math.round(d.fileSize/1024)+'KB';
+  const div=document.createElement('div');
+  div.className='p2p-recv'; div.id='offRecv_'+docId;
+  div.innerHTML=`<div class="p2p-recv-name">📥 ${d.fileName}</div>
+    <div class="p2p-recv-size">크기: ${sz} · ${d.fromName||'고객'}님이 보낸 파일</div>
+    <div class="p2p-recv-btns">
+      <button style="background:var(--bg-warm);color:var(--ink-lt)" onclick="window._offlineReject('${docId}')">삭제</button>
+      <button style="background:var(--green);color:#fff" onclick="window._offlineAccept('${docId}','${d.fileUrl}','${d.fileName}','${d.storagePath}')">다운로드</button>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+window._offlineAccept=async function(docId,url,name,path){
+  document.getElementById('offRecv_'+docId)?.remove();
+  try{
+    const a=document.createElement('a');a.href=url;a.download=name;a.target='_blank';
+    document.body.appendChild(a);a.click();a.remove();
+    // 다운 후 삭제
+    await deleteDoc(doc(_odb,'p2p_offline_files',docId));
+    try{ await deleteObject(ref(_ost,path)); }catch(e){}
+    if(typeof toast==='function') toast('다운로드 완료 · 서버에서 삭제됨 ✓','ok');
+  }catch(e){ console.error('[offline-accept]',e); }
+};
+
+window._offlineReject=async function(docId){
+  document.getElementById('offRecv_'+docId)?.remove();
+  try{ await deleteDoc(doc(_odb,'p2p_offline_files',docId)); }catch(e){}
+};
 </script>
 </body>
 </html>
