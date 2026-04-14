@@ -3588,6 +3588,9 @@ function _pickFile(clientId){
   };
   document.body.appendChild(inp); inp.click();
 }
+// 오프라인 모듈에서 P2P 직접 전송 사용
+window._p2pPickFile = _pickFile;
+window._p2pClientOnline = _clientOnline;
 
 async function _sendFile(file,clientId){
   const room=_fcId+'_'+clientId;
@@ -3809,20 +3812,28 @@ function _oInit(){
 }
 setTimeout(_oInit,3000);
 
-/* ── FC → 고객: 오프라인 파일 전송 (고객 목록 📎) ── */
+/* ── FC → 고객: 파일 전송 (고객 목록 📎) ── */
 window._offlineSendToClient = function(clientId, clientName){
+  // ★ 고객이 온라인이면 P2P 직접 전송 (서버 저장 없음)
+  const isOnline = window._p2pClientOnline && window._p2pClientOnline[clientId];
+  if(isOnline && window._p2pPickFile){
+    if(confirm(`📎 ${clientName}님에게 파일을 보냅니다.\n\n✅ 고객이 접속 중입니다.\n   어디에도 저장되지 않고 직접 전달됩니다.`)){
+      window._p2pPickFile(clientId);
+    }
+    return;
+  }
+  // ★ 오프라인: Firebase Storage 경유
   const inp = document.createElement('input');
   inp.type='file'; inp.multiple=true; inp.style.display='none';
   inp.onchange = async()=>{
     const files = Array.from(inp.files);
     if(!files.length){ inp.remove(); return; }
-    // 크기 검증
     const oversize = files.filter(f=>f.size>MAX_FILE_SIZE);
     if(oversize.length){
       if(typeof toast==='function') toast(`파일 1건당 10MB 이하만 가능합니다 (${oversize[0].name})`,'err');
       inp.remove(); return;
     }
-    if(!confirm(`📎 ${clientName}님에게 파일 ${files.length}건을 보냅니다.\n\n※ 오프라인 전송: 파일은 7일간 보관되며,\n   기간 내 미수신 시 자동 삭제됩니다.`)){
+    if(!confirm(`📎 ${clientName}님에게 파일 ${files.length}건을 보냅니다.\n\n📦 고객이 오프라인 상태입니다.\n   파일은 7일간 보관되며, 기간 내 미수신 시 자동 삭제됩니다.`)){
       inp.remove(); return;
     }
     if(typeof toast==='function') toast('파일 업로드 중...','');
@@ -3855,6 +3866,7 @@ window._offlineSendToClient = function(clientId, clientName){
 };
 
 /* ── 고객 → FC: 수신 대기 (pending 파일 감지) ── */
+const _offlineFiles = {};
 function _checkPendingFiles(){
   onSnapshot(
     query(collection(_odb,'p2p_offline_files'),where('to','==','fc'),where('fcId','==',_oFcId),where('status','==','pending')),
@@ -3862,6 +3874,7 @@ function _checkPendingFiles(){
       snap.docChanges().forEach(ch=>{
         if(ch.type==='added'){
           const d=ch.doc.data();
+          _offlineFiles[ch.doc.id] = d;
           _showOfflineRecv(ch.doc.id, d);
         }
       });
@@ -3878,19 +3891,21 @@ function _showOfflineRecv(docId, d){
     <div class="p2p-recv-size">크기: ${sz} · ${d.fromName||'고객'}님이 보낸 파일</div>
     <div class="p2p-recv-btns">
       <button style="background:var(--bg-warm);color:var(--ink-lt)" onclick="window._offlineReject('${docId}')">삭제</button>
-      <button style="background:var(--green);color:#fff" onclick="window._offlineAccept('${docId}','${d.fileUrl}','${d.fileName}','${d.storagePath}')">다운로드</button>
+      <button style="background:var(--green);color:#fff" onclick="window._offlineAccept('${docId}')">다운로드</button>
     </div>`;
   document.body.appendChild(div);
 }
 
-window._offlineAccept=async function(docId,url,name,path){
+window._offlineAccept=async function(docId){
   document.getElementById('offRecv_'+docId)?.remove();
+  const fd = _offlineFiles[docId];
+  if(!fd){ console.error('[offline] 파일 정보 없음:', docId); return; }
   try{
-    const a=document.createElement('a');a.href=url;a.download=name;a.target='_blank';
+    const a=document.createElement('a');a.href=fd.fileUrl;a.download=fd.fileName;a.target='_blank';
     document.body.appendChild(a);a.click();a.remove();
-    // 다운 후 삭제
     await deleteDoc(doc(_odb,'p2p_offline_files',docId));
-    try{ await deleteObject(ref(_ost,path)); }catch(e){}
+    try{ await deleteObject(ref(_ost,fd.storagePath)); }catch(e){}
+    delete _offlineFiles[docId];
     if(typeof toast==='function') toast('다운로드 완료 · 서버에서 삭제됨 ✓','ok');
   }catch(e){ console.error('[offline-accept]',e); }
 };
@@ -3898,6 +3913,7 @@ window._offlineAccept=async function(docId,url,name,path){
 window._offlineReject=async function(docId){
   document.getElementById('offRecv_'+docId)?.remove();
   try{ await deleteDoc(doc(_odb,'p2p_offline_files',docId)); }catch(e){}
+  delete _offlineFiles[docId];
 };
 </script>
 </body>
