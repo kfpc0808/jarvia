@@ -3274,7 +3274,23 @@ async function triggerEduDailyGen(){
   // 오늘 날짜 예약 콘텐츠 사전 확인
   const todaySnap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',today)));
   if(todaySnap.empty){alert(`오늘(${today}) 날짜의 예약 콘텐츠가 없습니다.`);return;}
-  if(!confirm(`오늘(${today}) 예약된 제목의 배경 설명을 생성합니다.\n(약 2~4분 소요)\n\n생성 후 확인하시고 특급보고서를 시작하실 수 있습니다.\n\n진행하시겠습니까?`))return;
+  // ★ 이미 특급보고서가 생성된 경우 덮어쓰기 여부 확인 (기존 결과 삭제 후 재생성)
+  const existingDocs=todaySnap.docs.filter(d=>d.data().premiumReportId);
+  if(existingDocs.length>0){
+    const ed=existingDocs[0].data();
+    const msg=`오늘(${today}) 예약된 제목은 이미 특급보고서가 생성되어 있습니다.\n\n제목: "${ed.title||'(제목 없음)'}"\n기존 Report ID: ${ed.premiumReportId}\n\n⚠️ 기존 결과 연결을 해제하고 배경 설명부터 새로 생성합니다.\n(기존 특급보고서 문서는 삭제되지 않습니다)\n\n진행하시겠습니까?`;
+    if(!confirm(msg))return;
+    try{
+      for(const d of existingDocs){await updateDoc(d.ref,{premiumReportId:deleteField()});}
+      console.log('[EduTopic/Daily] 덮어쓰기 — premiumReportId 제거 완료:',existingDocs.map(d=>d.id));
+    }catch(e){
+      console.error('[EduTopic/Daily] premiumReportId 제거 실패:',e);
+      toast('기존 결과 연결 해제 실패: '+e.message,'error');
+      return;
+    }
+  }else{
+    if(!confirm(`오늘(${today}) 예약된 제목의 배경 설명을 생성합니다.\n(약 2~4분 소요)\n\n생성 후 확인하시고 특급보고서를 시작하실 수 있습니다.\n\n진행하시겠습니까?`))return;
+  }
   const btn=document.querySelector('button[onclick="triggerEduDailyGen()"]');
   if(btn){btn.disabled=true;btn.textContent='⏳ 생성 중...';}
   setEduStatus('','');
@@ -3286,12 +3302,12 @@ async function triggerEduDailyGen(){
     const res=await fetch(`${EDU_PREVIEW_URL}?key=${EDU_API_KEY}&progressId=${progressId}`,{method:'GET',signal:AbortSignal.timeout(600000)});
     const data=await res.json();
     stopEduProgress();
-    if(data.success){
-      showEduPreview(data);
-      setEduStatus('✅ 배경 설명 생성 완료 — 아래에서 확인 후 특급보고서를 시작하세요','#2E7D32');
-    }else if(data.skipped){
+    if(data.skipped){
       setEduStatus('⚠️ 오늘 예약된 제목 없음 — 아래 즉시 생성에서 제목을 직접 입력하세요','#E65100');
       toast('오늘 예약 제목 없음 — 직접 입력하세요','warning');
+    }else if(data.success){
+      showEduPreview(data);
+      setEduStatus('✅ 배경 설명 생성 완료 — 아래에서 확인 후 특급보고서를 시작하세요','#2E7D32');
     }else{
       setEduStatus(`❌ 생성 실패: ${data.error||'오류 발생'}`,'#C62828');
       toast(`생성 실패: ${data.error||'오류 발생'}`,'error');
