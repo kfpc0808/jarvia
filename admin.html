@@ -241,7 +241,10 @@
   <div id="edu-progress-area" style="display:none;margin-top:14px;padding:16px;background:#1B3A5C;border-radius:8px;color:#fff">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <span id="edu-progress-label" style="font-size:14px;font-weight:600">⏳ 준비 중...</span>
-      <span id="edu-progress-timer" style="font-size:13px;color:#48A6CB;font-family:monospace">0:00</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="edu-progress-timer" style="font-size:13px;color:#48A6CB;font-family:monospace">0:00</span>
+        <button id="edu-progress-cancel-btn" onclick="cancelEduProgress()" style="padding:4px 10px;background:#C62828;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600">✖ 중지</button>
+      </div>
     </div>
     <div style="background:rgba(255,255,255,0.15);border-radius:6px;height:8px;overflow:hidden;margin-bottom:8px">
       <div id="edu-progress-bar" style="height:100%;background:linear-gradient(90deg,#48A6CB,#2E86AB);border-radius:6px;transition:width 0.5s ease;width:0%"></div>
@@ -3026,6 +3029,7 @@ let _eduPreviewData=null; // 미리보기 데이터 임시 저장
 let _eduProgressUnsub=null; // onSnapshot 구독 해제용
 let _eduTimerInterval=null; // 타이머 인터벌
 let _eduStartTime=null; // 시작 시각
+let _currentEduProgressId=null; // ★ 현재 진행 중 progressId (중지/삭제용)
 
 function setEduStatus(msg,color){
   const el=$('edu-gen-status');
@@ -3038,11 +3042,14 @@ function setEduStatus(msg,color){
 function startEduProgress(progressId){
   const area=$('edu-progress-area');
   if(!area)return;
+  _currentEduProgressId=progressId; // ★ 중지/삭제 버튼용 ID 저장
   area.style.display='block';
   $('edu-progress-label').textContent='⏳ 준비 중...';
   $('edu-progress-bar').style.width='0%';
   $('edu-progress-steps').innerHTML='';
   $('edu-progress-timer').textContent='0:00';
+  const cancelBtn=$('edu-progress-cancel-btn');
+  if(cancelBtn){cancelBtn.style.display='inline-block';cancelBtn.textContent='✖ 중지';cancelBtn.style.background='#C62828';}
   _eduStartTime=Date.now();
 
   // 타이머 (1초마다 경과시간 갱신)
@@ -3095,10 +3102,14 @@ function startEduProgress(progressId){
       }else if(d.status==='error'){
         setEduStatus('❌ 배경 설명 생성 실패 — 다시 시도해 주세요','#C62828');
       }
+      // ★ 완료/에러 시 중지 버튼 숨김
+      const cancelBtn=$('edu-progress-cancel-btn');
+      if(cancelBtn)cancelBtn.style.display='none';
       // 5초 후 자동 닫기
       setTimeout(()=>{
         const a=$('edu-progress-area');
         if(a)a.style.display='none';
+        _currentEduProgressId=null;
       },5000);
       stopEduProgress();
     }
@@ -3109,6 +3120,54 @@ function startEduProgress(progressId){
 function stopEduProgress(){
   if(_eduProgressUnsub){_eduProgressUnsub();_eduProgressUnsub=null;}
   if(_eduTimerInterval){clearInterval(_eduTimerInterval);_eduTimerInterval=null;}
+}
+
+/** ★ 진행 중인 배경설명 생성을 중지 + Firestore 문서 삭제 */
+async function cancelEduProgress(){
+  if(!_currentEduProgressId){toast('진행 중인 작업이 없습니다.','info');return;}
+  if(!confirm('현재 진행 중인 배경설명 생성을 중지하시겠습니까?\n(Firestore 진행 기록도 삭제됩니다)'))return;
+  const btn=$('edu-progress-cancel-btn');
+  if(btn){btn.disabled=true;btn.textContent='⏳ 중지 중...';}
+  try{
+    const progressId=_currentEduProgressId;
+    await deleteDoc(doc(db,'edu_gen_progress',progressId));
+    console.log('[EduCancel] 중지 완료:',progressId);
+    stopEduProgress();
+    $('edu-progress-area').style.display='none';
+    _currentEduProgressId=null;
+    setEduStatus('❌ 배경설명 생성이 중지되었습니다','#666');
+    toast('진행이 중지되었습니다','success');
+    // 생성 버튼 원상복귀
+    const bDaily=document.querySelector('button[onclick="triggerEduDailyGen()"]');
+    if(bDaily){bDaily.disabled=false;bDaily.textContent='📝 오늘 배경설명 생성';}
+    const bCustom=document.querySelector('button[onclick="triggerEduCustomGen()"]');
+    if(bCustom){bCustom.disabled=false;bCustom.textContent='🤖 AI 배경설명 생성';}
+  }catch(e){
+    console.error('[EduCancel] 중지 실패:',e);
+    toast('중지 실패 — 콘솔 확인','error');
+    if(btn){btn.disabled=false;btn.textContent='✖ 중지';}
+  }
+}
+
+/** ★ 좀비 작업 UI — 5분+ 경과한 진행 중 문서에 대한 삭제 안내 */
+function showStaleEduProgress(progressId,elapsedMin){
+  const area=$('edu-progress-area');
+  if(!area)return;
+  area.style.display='block';
+  area.style.background='#7F1D1D';
+  $('edu-progress-label').textContent=`⚠️ 이전 작업이 중단된 것 같습니다 (${elapsedMin}분 전 시작)`;
+  $('edu-progress-timer').textContent=`${elapsedMin}분+`;
+  $('edu-progress-bar').style.width='100%';
+  $('edu-progress-bar').style.background='linear-gradient(90deg,#F87171,#DC2626)';
+  $('edu-progress-steps').innerHTML='Cloud Function이 중간에 실패했거나 타임아웃된 것으로 보입니다.<br>아래 버튼으로 삭제 후 다시 시도하세요.';
+  const cancelBtn=$('edu-progress-cancel-btn');
+  if(cancelBtn){
+    cancelBtn.style.display='inline-block';
+    cancelBtn.textContent='🗑 기록 삭제';
+    cancelBtn.style.background='#DC2626';
+    cancelBtn.disabled=false;
+  }
+  setEduStatus(`⚠️ 이전 작업이 중단됨 (${elapsedMin}분 전) — 위의 🗑 버튼으로 삭제 후 재시도하세요`,'#DC2626');
 }
 
 /** ★ 페이지 재진입 시 배경설명 생성 상태 복원 */
@@ -3128,7 +3187,16 @@ async function restoreEduGenState(){
     const progressId=d.id;
 
     if(status==='started'||status==='running'){
-      // ★ Case 1: 진행 중 → onSnapshot 재연결
+      // ★ Case 1: 진행 중 → 타임아웃 체크 후 재연결 or 좀비 표시
+      const elapsedMin=Math.round((Date.now()-ca.getTime())/60000);
+      if(elapsedMin>=5){
+        // ★ 5분 이상 지난 건 = 좀비 작업. 삭제 버튼 표시.
+        console.log('[EduRestore] 좀비 배경설명 감지 (5분+ 경과):',progressId,`${elapsedMin}분 전`);
+        _currentEduProgressId=progressId;
+        if(data.title){$('edu-custom-title').value=data.title;if(data.salesType==='personal')$('edu-custom-type').value='personal';else if(data.salesType==='corporate'||data.salesType==='corp')$('edu-custom-type').value='corp';}
+        showStaleEduProgress(progressId,elapsedMin);
+        return;
+      }
       console.log('[EduRestore] 진행 중인 배경설명 생성 발견:',progressId);
       if(data.title){$('edu-custom-title').value=data.title;if(data.salesType==='personal')$('edu-custom-type').value='personal';else if(data.salesType==='corporate'||data.salesType==='corp')$('edu-custom-type').value='corp';}
       setEduStatus('🔄 배경 설명 생성 진행 중 (자동 복원됨)','#E65100');
