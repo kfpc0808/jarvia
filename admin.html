@@ -4483,7 +4483,7 @@ async function loadTaxWeeklyTopics(){
         const sorted=pgSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
         const pg=sorted[0];
         if(pg.topicId){
-          _tcwActiveGen={progressId:pg.id,topicId:pg.topicId,title:pg.title||''};
+          _tcwActiveGen={progressId:pg.id,topicId:pg.topicId,title:pg.title||'',pct:pg.pct||0,step:pg.step||0,totalSteps:pg.totalSteps||11};
           startTcwProgress(pg.id);
         }
       }
@@ -4536,7 +4536,7 @@ async function loadTaxWeeklyTopics(){
         <td style="text-align:center;font-size:11px;white-space:nowrap;color:#1565C0">${esc(t.keyword||'')}</td>
         <td style="text-align:center;font-size:11px;white-space:nowrap;color:#1565C0">${esc(t.keyword2||'')}</td>
         <td style="text-align:center;white-space:nowrap"><span style="font-size:10px;font-weight:700;color:${typeColor[t.insuranceType]||'#888'}">${typeLabel[t.insuranceType]||'-'}</span></td>
-        <td style="text-align:center;white-space:nowrap">${_tcwActiveGen&&_tcwActiveGen.topicId===t.id?'<button onclick="tcwReopenProgress()" style="background:#0f2545;color:#c9a84c;border:1px solid #c9a84c;border-radius:10px;padding:2px 10px;font-size:10px;font-weight:700;cursor:pointer;animation:tcwPulse 1.5s infinite">🔄 생성 중</button>':`<span style="font-size:10px;font-weight:700;color:${statusColor[st]}">${statusLabel[st]||st}</span>`}</td>
+        <td style="text-align:center;white-space:nowrap">${_tcwActiveGen&&_tcwActiveGen.topicId===t.id?`<button id="tcw-gen-btn-${t.id}" onclick="tcwReopenProgress()" style="background:#0f2545;color:#c9a84c;border:1px solid #c9a84c;border-radius:10px;padding:2px 10px;font-size:10px;font-weight:700;cursor:pointer;animation:tcwPulse 1.5s infinite" title="클릭 시 진행 모달 열기">🔄 생성 중 (${_tcwActiveGen.step||0}/${_tcwActiveGen.totalSteps||11} · ${_tcwActiveGen.pct||0}%)</button>`:`<span style="font-size:10px;font-weight:700;color:${statusColor[st]}">${statusLabel[st]||st}</span>`}</td>
         <td style="text-align:center">
           <div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">
             ${t.htmlUrl?`<button class="btn btn-sm btn-sec" onclick="tcwOpenDetail('${t.contentId||t.id}','${t.htmlUrl||''}','${(t.cardUrls||[]).join(',')}','${t.audioUrl||''}','${t.scriptUrl||''}','${esc(t.title||'').replace(/'/g,"&#39;")}','html','${t.id}')" style="font-size:10px;padding:2px 6px">🔍</button>`:''}
@@ -4653,7 +4653,7 @@ async function runTcwManual(){
 
   // progressId를 미리 만들어서 onSnapshot 구독 시작
   const progressId=`tcw_manual_${Date.now()}`;
-  _tcwActiveGen={progressId,topicId,title:topic.title};
+  _tcwActiveGen={progressId,topicId,title:topic.title,pct:0,step:0,totalSteps:11};
   // ★ Firestore에 즉시 기록 → 새로고침 후에도 "생성 중" 복원 가능
   try{await setDoc(doc(db,'tcw_gen_progress',progressId),{topicId,title:topic.title,status:'starting',createdAt:serverTimestamp()});}catch(e){console.warn('[TCW] progress 초기 기록 실패:',e);}
   startTcwProgress(progressId);
@@ -4688,7 +4688,7 @@ async function runTcwManual(){
 let _tcwProgressUnsub=null;
 let _tcwTimerInterval=null;
 let _tcwStartTime=null;
-let _tcwActiveGen=null; // { progressId, topicId, title } — 생성 진행 중 추적
+let _tcwActiveGen=null; // { progressId, topicId, title, pct, step, totalSteps } — 생성 진행 중 추적 (목록 진행률 표시 동기화용)
 
 // step → UI 단계 매핑
 const TCW_STEP_MAP={
@@ -4766,6 +4766,13 @@ function startTcwProgress(progressId){
     $('tcw-pm-label').textContent=label;
     $('tcw-pm-bar').style.width=pct+'%';
     $('tcw-pm-pct').textContent=pct+'%';
+
+    // ★ 목록의 "🔄 생성 중" 버튼 진행률 실시간 동기화 (다른 메뉴 갔다가 돌아와도 최신 상태 유지)
+    if(_tcwActiveGen){
+      _tcwActiveGen.pct=pct; _tcwActiveGen.step=step; _tcwActiveGen.totalSteps=total;
+      const listBtn=document.getElementById(`tcw-gen-btn-${_tcwActiveGen.topicId}`);
+      if(listBtn) listBtn.textContent=`🔄 생성 중 (${step}/${total} · ${pct}%)`;
+    }
 
     // 완료된 스텝 시각화 + 경과 시간
     const doneSteps=TCW_STEP_MAP[step]||[];
