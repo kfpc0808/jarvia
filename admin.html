@@ -4559,30 +4559,36 @@ async function loadTaxWeeklyTopics(){
 }
 
 async function copyTcwAudioScript(contentId){
-  // tax_weekly_topics에서 scriptUrl 조회
+  // tax_weekly_topics에서 audioScript 필드 우선 조회 (CORS fetch 회피)
   const snap=await getDocs(query(collection(db,'tax_weekly_topics'),where('contentId','==',contentId),limit(1)));
   if(snap.empty){toast('해당 주제를 찾을 수 없습니다.','warning');return;}
-  const scriptUrl=snap.docs[0].data().scriptUrl||'';
-  if(!scriptUrl){toast('아직 생성된 스크립트가 없습니다.','warning');return;}
+  const data=snap.docs[0].data();
+  let script=data.audioScript||'';
+
+  // audioScript 필드가 없는 기존 콘텐츠(레거시) — scriptUrl에서 fetch 시도 (폴백)
+  if(!script){
+    const scriptUrl=data.scriptUrl||'';
+    if(!scriptUrl){toast('아직 생성된 스크립트가 없습니다.','warning');return;}
+    try{
+      toast('📋 스크립트 로딩 중...','info');
+      const res=await fetch(scriptUrl);
+      if(!res.ok)throw new Error('스크립트 파일 로드 실패 ('+res.status+')');
+      script=await res.text();
+    }catch(err){
+      toast('스크립트 로드 실패(CORS 또는 권한) — 새로 생성된 콘텐츠부터 정상 작동합니다: '+err.message,'error');
+      return;
+    }
+  }
+
+  if(!script.trim()){toast('스크립트 내용이 비어있습니다.','warning');return;}
   try{
-    toast('📋 스크립트 로딩 중...','info');
-    const res=await fetch(scriptUrl);
-    if(!res.ok)throw new Error('스크립트 파일 로드 실패');
-    const script=await res.text();
-    if(!script.trim()){toast('스크립트 내용이 비어있습니다.','warning');return;}
     await navigator.clipboard.writeText(script);
     toast('📋 스크립트가 클립보드에 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
   }catch(err){
     // clipboard API 실패 시 폴백
-    try{
-      const res=await fetch(scriptUrl);
-      const script=await res.text();
-      const ta=document.createElement('textarea');
-      ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
-      toast('📋 스크립트 복사 완료!','success');
-    }catch(e2){
-      toast('스크립트 복사 실패: '+e2.message,'error');
-    }
+    const ta=document.createElement('textarea');
+    ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('📋 스크립트 복사 완료!','success');
   }
 }
 
