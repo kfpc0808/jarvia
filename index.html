@@ -4205,6 +4205,19 @@ async function loadClientProfile(){
       // 미리보기+링크 자동 표시
       renderFcPreview(_fcData);
       showFcStatus('success','✅ 프로필이 등록되어 있습니다. 고객 브리핑 링크가 활성화되었습니다.');
+      // ★ 마이그레이션: morningBookzipUrl은 있으나 bookzipBaseDate가 비어있으면 이번 주 월요일(KST)로 자동 설정
+      if(_fcData.morningBookzipUrl&&!_fcData.bookzipBaseDate&&(meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager')){
+        try{
+          var _bzNow=new Date();var _bzDay=_bzNow.getDay();var _bzDiff=_bzDay===0?6:_bzDay-1;
+          var _bzMon=new Date(_bzNow);_bzMon.setDate(_bzMon.getDate()-_bzDiff);_bzMon.setHours(0,0,0,0);
+          var _bzY=_bzMon.getFullYear(),_bzM=String(_bzMon.getMonth()+1).padStart(2,'0'),_bzD=String(_bzMon.getDate()).padStart(2,'0');
+          var _bzBase=_bzY+'-'+_bzM+'-'+_bzD;
+          await setDoc(doc(db,'consultants',meData.loginId),{bookzipBaseDate:_bzBase},{merge:true});
+          if(me.uid!==meData.loginId){await setDoc(doc(db,'consultants',me.uid),{bookzipBaseDate:_bzBase},{merge:true});}
+          _fcData.bookzipBaseDate=_bzBase;
+          console.log('[bookzip] bookzipBaseDate 자동 마이그레이션 완료:',_bzBase);
+        }catch(_e){console.warn('[bookzip] 마이그레이션 실패:',_e);}
+      }
       // ▼ 카톡 공유 설정 로드 (fc_share_profiles 컬렉션)
       try{
         const spDoc=await getDoc(doc(db,'fc_share_profiles',meData.loginId));
@@ -4275,7 +4288,7 @@ async function doSaveClientProfile(e){
       // ★ 아침독서(bookzip) — jarvia_member, jarvia_inner, inner_circle, branch_manager만 저장
       morningBookzipUrl:(meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager')?morningBookzipUrl:'',
       // ★ bookzip 기준일 — URL 변경 시 이번 주 월요일로 갱신, 미변경 시 기존값 유지
-      bookzipBaseDate:(meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager')&&morningBookzipUrl?(function(){var prev=_fcData&&_fcData.morningBookzipUrl||'';if(prev===morningBookzipUrl&&_fcData&&_fcData.bookzipBaseDate)return _fcData.bookzipBaseDate;var now=new Date();var day=now.getDay();var diff=day===0?6:day-1;var mon=new Date(now);mon.setDate(mon.getDate()-diff);mon.setHours(0,0,0,0);return mon.toISOString().slice(0,10);})():'',
+      bookzipBaseDate:(meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager')&&morningBookzipUrl?(function(){var prev=_fcData&&_fcData.morningBookzipUrl||'';if(prev===morningBookzipUrl&&_fcData&&_fcData.bookzipBaseDate)return _fcData.bookzipBaseDate;var now=new Date();var day=now.getDay();var diff=day===0?6:day-1;var mon=new Date(now);mon.setDate(mon.getDate()-diff);mon.setHours(0,0,0,0);var _y=mon.getFullYear(),_m=String(mon.getMonth()+1).padStart(2,'0'),_d=String(mon.getDate()).padStart(2,'0');return _y+'-'+_m+'-'+_d;})():'',
       // ★ 브로슈어 — 멤버십 전체(jarvia_member, jarvia_inner, jarvia_report, inner_circle, branch_manager) 저장, 네이버 — 이너서클/지사장만
       brochureUrl:(['jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager'].includes(meData.role)?brochureUrl:''),
       brochureLinkLabel:(['jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager'].includes(meData.role)?(($('fc-label-brochure')&&$('fc-label-brochure').textContent)||'명칭입력'):''),
@@ -4357,16 +4370,10 @@ function renderFcPreview(data){
 }
 
 function previewFcProfile(){
-  const data={
-    name:$('fc-name').value.trim(),
-    company:$('fc-company').value.trim(),
-    title:$('fc-title').value.trim(),
-    greeting:$('fc-greeting').value.trim(),
-    photoUrl:(_fcData&&_fcData.photoUrl)||null,
-  };
-  if(!data.name){toast('이름을 먼저 입력해주세요.','error');return;}
-  renderFcPreview(data);
-  $('fc-preview').scrollIntoView({behavior:'smooth',block:'center'});
+  const loginId=meData&&meData.loginId;
+  if(!loginId){toast('로그인 정보를 확인할 수 없습니다.','error');return;}
+  const url='https://jarvia.co.kr/client-daily?fc='+encodeURIComponent(loginId);
+  window.open(url,'_blank');
 }
 
 function copyFcLink(){
