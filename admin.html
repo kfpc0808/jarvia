@@ -129,6 +129,11 @@
       <div style="display:flex;align-items:center;gap:8px;margin:8px 0"><select id="stat-per-page" onchange="renderStatPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="20">20개씩</option><option value="30">30개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select><span id="stat-page-info" style="font-size:13px;color:var(--text-lt)"></span></div>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>날짜</th><th>회원</th><th>유형</th></tr></thead><tbody id="tb-logs-stat"></tbody></table></div>
       <div id="stat-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
+      <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">🔗 외부 서비스 이용 로그</h3>
+      <div id="lg-svc-summary" class="dash-row mt"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:8px 0"><select id="svc-per-page" onchange="renderSvcPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="20">20개씩</option><option value="30">30개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select><span id="svc-page-info" style="font-size:13px;color:var(--text-lt)"></span></div>
+      <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>날짜</th><th>회원</th><th>서비스</th></tr></thead><tbody id="tb-logs-svc"></tbody></table></div>
+      <div id="svc-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
     </div>
     <div id="p-props" class="panel hidden"><h2>제휴 제안함</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>접수일</th><th>회원</th><th>제목</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-props"></tbody></table></div></div>
     <div id="p-notices" class="panel hidden"><h2>공지사항 관리</h2><button class="btn" onclick="showNF()">공지 등록</button><div id="nf-area" class="hidden form-box"><input type="hidden" id="nf-id"><div class="fg"><label>제목</label><input id="nf-title" required></div><div class="fg"><label>내용</label>
@@ -2880,7 +2885,7 @@ async function bulkPriceApply(){
 }
 window.toggleBulkPrice=toggleBulkPrice;window.bulkPricePreview=bulkPricePreview;window.bulkPriceApply=bulkPriceApply;
 window.addCat=addCat;window.toggleCat=toggleCat;window.delCat=delCat;window.loadCats=loadCats;
-window.loadPays=loadPays;window.loadLogs=loadLogs;window.exportCSV=exportCSV;window.renderLogsPage=renderLogsPage;window.renderPptPage=renderPptPage;window.renderCalcPage=renderCalcPage;window.renderFdLogPage=renderFdLogPage;window.renderStatPage=renderStatPage;
+window.loadPays=loadPays;window.loadLogs=loadLogs;window.exportCSV=exportCSV;window.renderLogsPage=renderLogsPage;window.renderPptPage=renderPptPage;window.renderCalcPage=renderCalcPage;window.renderFdLogPage=renderFdLogPage;window.renderStatPage=renderStatPage;window.renderSvcPage=renderSvcPage;
 window.loadProps=loadProps;window.showProp=showProp;window.updateProp=updateProp;
 window.showNF=showNF;window.editNotice=editNotice;window.saveNotice=saveNotice;window.loadNoticesAdm=loadNoticesAdm;
 window.loadTermEdit=loadTermEdit;window.saveTerm=saveTerm;
@@ -3821,7 +3826,7 @@ function setLogRange(type){
   $('lg-to').value=todayStr;
   loadLogs();
 }
-async function loadLogsAll(){await loadLogs().catch(e=>console.error('콘텐츠로그로드실패:',e));loadLogsPptGen().catch(e=>console.warn('PPT로그로드실패:',e));loadCalcLogs().catch(e=>console.warn('계산기로그로드실패:',e));loadFinanceDashLogs().catch(e=>console.warn('재무대시보드로그로드실패:',e));loadStatLogs().catch(e=>console.warn('금융통계로그로드실패:',e));}
+async function loadLogsAll(){await loadLogs().catch(e=>console.error('콘텐츠로그로드실패:',e));loadLogsPptGen().catch(e=>console.warn('PPT로그로드실패:',e));loadCalcLogs().catch(e=>console.warn('계산기로그로드실패:',e));loadFinanceDashLogs().catch(e=>console.warn('재무대시보드로그로드실패:',e));loadStatLogs().catch(e=>console.warn('금융통계로그로드실패:',e));loadServiceLogs().catch(e=>console.warn('외부서비스로그로드실패:',e));}
 
 // ═══ 결제관리 - PPT 결제 내역 ═══
 async function loadPaysPptGen(){
@@ -3961,6 +3966,32 @@ function renderStatPage(page){
   $('tb-logs-stat').innerHTML=_statRows.slice(start,end).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>';
   const info=$('stat-page-info');if(info)info.textContent=`${total}건 중 ${start+1}~${Math.min(end,total)}건`;
   mkPager($('stat-pager'),total,page,per,'renderStatPage');
+}
+let _svcRows=[];
+async function loadServiceLogs(){
+  const tb=$('tb-logs-svc');const sumEl=$('lg-svc-summary');
+  try{
+    const snap=await getDocs(query(collection(db,'service_logs'),orderBy('createdAt','desc'),limit(500)));
+    const uc={};_svcRows=[];
+    const svcMap={bizinfo:'🏢 기업마당',research_note:'📝 연구노트',tax_navi:'⚖️ 예규/판례'};
+    for(const d of snap.docs){
+      const l=d.data();
+      if(!uc[l.userId])uc[l.userId]=await resolveUserName(l.userId,l.userName||'');
+      _svcRows.push(`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(uc[l.userId])}</td><td>${svcMap[l.service]||esc(l.service||'')}</td></tr>`);
+    }
+    sumEl.innerHTML=`<div class="dash-c"><span>총 이용수</span><strong>${_svcRows.length}</strong></div>`;
+    renderSvcPage(1);
+  }catch(e){console.error('외부서비스로그 로드 실패:',e);tb.innerHTML=`<tr><td colspan="3" style="text-align:center;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;sumEl.innerHTML='';}
+}
+function renderSvcPage(page){
+  const per=parseInt($('svc-per-page')?.value||20);
+  const total=_svcRows.length;
+  const pages=Math.ceil(total/per)||1;
+  page=Math.max(1,Math.min(page,pages));
+  const start=(page-1)*per,end=start+per;
+  $('tb-logs-svc').innerHTML=_svcRows.slice(start,end).join('')||'<tr><td colspan="3" class="tc">내역 없음</td></tr>';
+  const info=$('svc-page-info');if(info)info.textContent=`${total}건 중 ${start+1}~${Math.min(end,total)}건`;
+  mkPager($('svc-pager'),total,page,per,'renderSvcPage');
 }
 
 // ═══ DAILY REPORT 관리 ═══
