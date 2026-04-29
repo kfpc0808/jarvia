@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<title>JARVIA PDF 뷰어</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;font-family:'Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif;background:#0F2440;-webkit-text-size-adjust:100%}
+body{user-select:none;-webkit-user-select:none;-moz-user-select:none}
+.pv-hdr{position:fixed;top:0;left:0;right:0;height:52px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;background:#0F2440;color:#fff;z-index:100;border-bottom:1px solid rgba(255,255,255,.08);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.pv-title{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:12px;color:#fff}
+.pv-actions{display:flex;gap:8px;flex-shrink:0}
+.pv-btn{background:none;border:1px solid rgba(255,255,255,.4);color:#fff;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .2s,border-color .2s;white-space:nowrap}
+.pv-btn:hover{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.7)}
+.pv-body{position:absolute;top:52px;left:0;right:0;bottom:0;overflow-y:auto;background:#f5f5f5;padding:16px 0;-webkit-overflow-scrolling:touch}
+.pv-body canvas{display:block;margin:0 auto 12px;max-width:calc(100% - 16px);height:auto;box-shadow:0 2px 8px rgba(0,0,0,.15);background:#fff}
+.pv-state{display:flex;align-items:center;justify-content:center;height:calc(100% - 32px);color:#64748B;font-size:14px;flex-direction:column;gap:12px;text-align:center;padding:0 20px}
+.pv-state.error{color:#C62828}
+.pv-state small{color:#94A3B8;font-size:12px}
+.pv-spin{width:32px;height:32px;border:3px solid #E2E8F0;border-top-color:#2E86AB;border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:768px){
+  .pv-hdr{height:48px;padding:0 12px}
+  .pv-title{font-size:13px}
+  .pv-btn{padding:6px 10px;font-size:12px}
+  .pv-body{top:48px;padding:8px 0}
+  .pv-body canvas{margin-bottom:8px;max-width:calc(100% - 8px)}
+}
+</style>
+</head>
+<body oncontextmenu="return false" onselectstart="return false" ondragstart="return false">
+<div class="pv-hdr">
+  <span class="pv-title" id="pv-title">📑 PDF 뷰어</span>
+  <div class="pv-actions">
+    <button class="pv-btn" onclick="goMain()">🏠 메인</button>
+    <button class="pv-btn" onclick="closeWin()">✕ 닫기</button>
+  </div>
+</div>
+<div class="pv-body" id="pv-body">
+  <div class="pv-state"><div class="pv-spin"></div><div>PDF 로딩 중...</div></div>
+</div>
+
+<script>
+// ── 콘텐츠 보호: Ctrl+S/P/U/C, F12 차단 ──
+document.addEventListener('keydown',function(e){
+  var k=(e.key||'').toLowerCase();
+  if((e.ctrlKey||e.metaKey)&&(k==='s'||k==='p'||k==='u'||k==='c')){
+    e.preventDefault();e.stopPropagation();return false;
+  }
+  if(e.key==='F12'){e.preventDefault();return false;}
+});
+
+function goMain(){
+  window.location.href='https://jarvia.co.kr/';
+}
+function closeWin(){
+  try{window.close();}catch(e){}
+  setTimeout(function(){if(!window.closed)goMain();},150);
+}
+
+// ── URL 파라미터 파싱 ──
+function getParam(name){
+  var s=window.location.search||'';
+  var m=new RegExp('[?&]'+name+'=([^&]*)').exec(s);
+  return m?decodeURIComponent(m[1].replace(/\+/g,' ')):'';
+}
+
+var pdfUrl=getParam('url');
+var pdfTitle=getParam('title');
+if(pdfTitle){
+  document.getElementById('pv-title').textContent='📑 '+pdfTitle;
+  document.title='JARVIA - '+pdfTitle;
+}
+
+if(!pdfUrl){
+  document.getElementById('pv-body').innerHTML='<div class="pv-state error">⚠️ PDF URL이 제공되지 않았습니다.<small>메인으로 돌아가 다시 시도해 주세요.</small></div>';
+}else{
+  loadPdfJs();
+}
+
+function loadPdfJs(){
+  if(window['pdfjs-dist/build/pdf']){renderPdf();return;}
+  var s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  s.onload=renderPdf;
+  s.onerror=function(){
+    document.getElementById('pv-body').innerHTML='<div class="pv-state error">⚠️ PDF 뷰어 라이브러리 로드 실패<small>네트워크 상태를 확인해 주세요.</small></div>';
+  };
+  document.head.appendChild(s);
+}
+
+async function renderPdf(){
+  try{
+    var pdfjsLib=window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    var pdf=await pdfjsLib.getDocument(pdfUrl).promise;
+    var body=document.getElementById('pv-body');
+    body.innerHTML='';
+    var container=document.createElement('div');
+    container.style.cssText='width:100%';
+    body.appendChild(container);
+    var isMobile=window.innerWidth<=768;
+    var scale=isMobile?1.2:1.5;
+    for(var i=1;i<=pdf.numPages;i++){
+      var page=await pdf.getPage(i);
+      var vp=page.getViewport({scale:scale});
+      var canvas=document.createElement('canvas');
+      canvas.width=vp.width;canvas.height=vp.height;
+      container.appendChild(canvas);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+    }
+  }catch(e){
+    console.warn('pdf.js 실패, gview fallback:',e);
+    var gviewUrl='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(pdfUrl);
+    document.getElementById('pv-body').innerHTML='<iframe src="'+gviewUrl+'" style="width:100%;height:100%;border:none;background:#fff"></iframe>';
+  }
+}
+</script>
+</body>
+</html>
