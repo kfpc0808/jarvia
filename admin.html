@@ -5160,13 +5160,33 @@ async function _tcwPublishSilent(contentId,topicId){
       publishedAt:serverTimestamp(),updatedAt:serverTimestamp(),
     },{merge:true});
     if(topicId){
-      await setDoc(doc(db,'tax_weekly_topics',topicId),{status:'published',updatedAt:serverTimestamp()},{merge:true});
+      const topicRef=doc(db,'tax_weekly_topics',topicId);
+      await setDoc(topicRef,{status:'published',updatedAt:serverTimestamp()},{merge:true});
+      // ★ upcoming_contents 게시완료 동기화
+      const tSnap=await getDoc(topicRef);const t=tSnap.data()||{};
+      const upDate=t.year&&t.week&&t.day?twWeekDate(t.year,t.week,t.day):'';
+      if(upDate)await _syncUpcomingCompleted(upDate,'택스컨설팅위클리',t.title||'');
     }
     return true;
   }catch(e){
     console.error('[TCW] 즉시 게시 실패:',e);
     return false;
   }
+}
+
+// ★ upcoming_contents 게시완료 동기화 유틸 (date+category+title 매칭, 인덱스 불필요)
+async function _syncUpcomingCompleted(date,category,title){
+  if(!date)return;
+  try{
+    const snap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',date)));
+    for(const d of snap.docs){
+      const c=d.data();
+      if(category&&c.category!==category)continue;
+      if(title&&c.title&&c.title!==title)continue;
+      if(c.completed===true)continue;
+      await updateDoc(d.ref,{completed:true,updatedAt:serverTimestamp()});
+    }
+  }catch(e){console.warn('[upcoming sync] 실패:',e);}
 }
 
 async function saveNewTopic(andGenerate){
@@ -5735,6 +5755,10 @@ async function tcwPublishContent(contentId, topicId){
     if(topicId){
       const topicRef=doc(db,'tax_weekly_topics',topicId);
       await setDoc(topicRef,{status:'published',updatedAt:serverTimestamp()},{merge:true});
+      // ★ upcoming_contents 게시완료 동기화
+      const tSnap=await getDoc(topicRef);const t=tSnap.data()||{};
+      const upDate=t.year&&t.week&&t.day?twWeekDate(t.year,t.week,t.day):'';
+      if(upDate)await _syncUpcomingCompleted(upDate,'택스컨설팅위클리',t.title||'');
     }
     toast('\u2705 사용자 화면에 게시됐습니다.','success');
     loadTaxWeeklyTopics();
