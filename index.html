@@ -3435,7 +3435,7 @@ async function showDetail(cid){
     let _prBtns=`<button class="btn-preview" onclick="doPreview('${cid}')">👁 미리보기</button>`;
     _prBtns+=`<button class="btn" id="btn-view" onclick="doView('${cid}')"${_prViewDis}>📄 HTML 열람 ${viewLabel}</button>`;
     if(_prPpt)_prBtns+=`<button class="btn-download" id="btn-dl" onclick="doDownloadPPTX('${cid}')"${_prDlDis}>📊 PPT 다운로드 (${dlPriceLabel})</button>`;
-    if(_prPdf)_prBtns+=`<button class="btn btn-sec" onclick="openPdfSmart('${_prPdf}','${(c.title||'').replace(/'/g,'').replace(/"/g,'')}')"${_prViewDis}>📑 PDF 보기</button>`;
+    if(_prPdf)_prBtns+=`<button class="btn btn-sec" onclick="doViewPdf('${cid}')"${_prViewDis}>📑 PDF 보기</button>`;
     if(_prAudio)_prBtns+=`<button class="btn btn-sec" onclick="openReportAudio('${cid}')">🎧 오디오 듣기</button>`;
     actionsHTML=`<div class="closing-actions">
       <div class="cd-notice">📑 특급보고서 — HTML 열람, PPT·PDF·오디오를 이용할 수 있습니다.<br>${dlNoticePrice}</div>
@@ -5417,8 +5417,44 @@ function openTaxWeeklyCardsSeamless(cid){
 window.twPayAndOpen=twPayAndOpen;
 function openReportAudio(cid){_lastDetailCid=cid;const c=allContents.find(x=>x.contentId===cid);if(c&&c.audioUrl)openViewer(c.audioUrl,c.title,'audio');}
 window.openReportAudio=openReportAudio;
-function openPdfSmart(url,title){var isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);if(isMobile){window.open('./pdf-viewer.html?url='+encodeURIComponent(url)+'&title='+encodeURIComponent(title||''),'_blank');}else{window.open(url,'_blank');}}
-window.openPdfSmart=openPdfSmart;
+async function doViewPdf(cid){
+  _lastDetailCid=cid;
+  if(_viewing)return;
+  if(isExpired){toast('이용 기간이 만료되었습니다. 관리자에게 연장을 요청하세요.','error');return;}
+  if(!await checkSession())return;
+  _viewing=true;
+  try{
+    if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+    const c=allContents.find(x=>x.contentId===cid);
+    if(!c||!c.pdfUrl){toast('PDF 콘텐츠 오류','error');return;}
+    // 단체회원 권한 체크
+    if(isGroupMember()){
+      if(!checkGroupPerm(c.type,'view')){toast('이 콘텐츠 유형의 열람 권한이 없습니다. 관리자에게 문의하세요.','warning');return;}
+      try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+          await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+        }catch(e){}
+      _openPdfWindow(c.pdfUrl,c.title);return;
+    }
+    // 무료 권한 그룹 (admin, free_user, jarvia_member 등)
+    if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager'||meData.role==='jarvia_report'){
+      try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+          await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+        }catch(e){}
+      _openPdfWindow(c.pdfUrl,c.title);return;
+    }
+    // 일반회원(user): 결제 또는 30일 이내 재열람
+    const result=await spendCredit(me.uid,cid);
+    meData.balance=result.balance;if(result.point!==undefined)meData.point=result.point;updateBal();
+    if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n포인트: ${fmt(result.point||0)}P | 잔액: ${fmt(result.balance)}원\n${fdate(result.expiresAt)}까지 재열람 가능`);
+    else alert('무료 재열람 (30일 이내 결제 이력)');
+    _openPdfWindow(c.pdfUrl,c.title);
+  }catch(err){
+    if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다. 충전 후 이용해주세요.','warning');closeM('mdl-detail');openCharge();}
+    else toast('PDF 열람 오류: '+err.message,'error');
+  }finally{_viewing=false;}
+}
+function _openPdfWindow(url,title){var isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);if(isMobile){window.open('./pdf-viewer.html?url='+encodeURIComponent(url)+'&title='+encodeURIComponent(title||''),'_blank');}else{window.open(url,'_blank');}}
+window.doViewPdf=doViewPdf;
 window.openTaxWeeklyAudio=openTaxWeeklyAudio;window.openTaxWeeklyCards=openTaxWeeklyCards;window.openTaxWeeklyCardsSeamless=openTaxWeeklyCardsSeamless;window.openTaxWeeklyHtml=openTaxWeeklyHtml;
 window.showDetail=showDetail;window.doView=doView;window.doFav=doFav;window.doViewVideo=doViewVideo;window.doDownloadPPTX=doDownloadPPTX;window.doPreview=doPreview;
 window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;window.pptgenStart=pptgenStart;
