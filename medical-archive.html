@@ -253,16 +253,39 @@ onAuthStateChanged(auth,async u=>{
 // ── 데이터 로드 ──
 async function loadContents(){
   try{
-    const snap=await getDocs(query(
-      collection(db,'contents'),
-      where('type','==','medical_weekly'),
-      where('isActive','==',true),
-      orderBy('createdAt','desc')
-    ));
-    allContents=snap.docs.map(d=>({id:d.id,...d.data()}))
-      .filter(c=>!c.adminOnly||(meData&&meData.role==='admin'));
+    // 1차 시도: type + isActive + orderBy (composite index 필요)
+    let snap;
+    try{
+      snap=await getDocs(query(
+        collection(db,'contents'),
+        where('type','==','medical_weekly'),
+        where('isActive','==',true),
+        orderBy('createdAt','desc')
+      ));
+    }catch(idxErr){
+      // 2차 시도: 인덱스 미생성 시 orderBy 제외 후 클라이언트 정렬
+      console.warn('[MED] composite index 미생성 — fallback 쿼리:',idxErr.message);
+      snap=await getDocs(query(
+        collection(db,'contents'),
+        where('type','==','medical_weekly')
+      ));
+    }
+    let docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // isActive 클라이언트 필터 (fallback 쿼리는 isActive 조건 없으므로)
+    docs=docs.filter(c=>c.isActive!==false);
+    // adminOnly 클라이언트 필터
+    docs=docs.filter(c=>!c.adminOnly||(meData&&meData.role==='admin'));
+    // createdAt desc 정렬 (fallback 시에도 동작 보장)
+    docs.sort((a,b)=>{
+      const at=a.createdAt?.toMillis?a.createdAt.toMillis():0;
+      const bt=b.createdAt?.toMillis?b.createdAt.toMillis():0;
+      return bt-at;
+    });
+    allContents=docs;
+    console.log('[MED] 로드 완료:',allContents.length,'건');
     applyFilter();
   }catch(e){
+    console.error('[MED] loadContents 실패:',e);
     $('main').innerHTML=`<div class="empty"><div class="empty-icon">⚠️</div><h3>로드 실패</h3><p>${esc(e.message)}</p></div>`;
   }
 }
