@@ -241,8 +241,15 @@ onAuthStateChanged(auth,async u=>{
   me=u;
   if(u){
     try{
-      const snap=await getDoc(doc(db,'users',u.uid));
-      if(snap.exists())meData=snap.data();
+      // 1) users 컬렉션 조회 (일반 회원)
+      let snap=await getDoc(doc(db,'users',u.uid));
+      if(snap.exists()){
+        meData=snap.data();
+      }else{
+        // 2) admins 컬렉션 조회 (admin 계정은 여기 저장됨 — admin@javia-admin.internal 등)
+        snap=await getDoc(doc(db,'admins',u.uid));
+        if(snap.exists())meData=snap.data();
+      }
       const favSnap=await getDocs(query(collection(db,'view_logs'),where('userId','==',u.uid)));
       favSnap.docs.forEach(d=>{if(d.data().contentId)myFavSet.add(d.data().contentId);});
     }catch(e){}
@@ -292,7 +299,8 @@ console.log('%c[MED] 진단 도구 활성화 — 콘솔에서 diagMW() 호출','
 
 // ── 데이터 로드 ──
 //   admin.html과 동일 패턴: type 단일 조건만 쿼리, 나머지는 클라이언트 필터링
-//   (isActive를 쿼리 조건에 두면 isActive 필드가 누락된 문서도 제외되어 0건 반환되는 이슈 해결)
+//   admin 판정도 admin.html과 동일: email이 @javia-admin.internal로 끝나면 admin
+//   (admin 계정은 users 컬렉션에 문서가 없으므로 meData=null이라 role 검사 불가)
 async function loadContents(){
   try{
     const snap=await getDocs(query(
@@ -301,10 +309,13 @@ async function loadContents(){
     ));
     let docs=snap.docs.map(d=>({id:d.id,...d.data()}));
     console.log('[MED] Firestore raw:',docs.length,'건');
+    // admin 판정: ① email로 admin 계정 확인 (admin.html 동일) ② users.role 확인 (보강)
+    const isAdminUser=!!(me&&me.email&&me.email.endsWith('@javia-admin.internal'))
+                    ||!!(meData&&(meData.role==='admin'||meData.role==='superadmin'));
     // 클라이언트 필터: isActive (false만 명시적으로 제외 — 누락이면 통과)
     docs=docs.filter(c=>c.isActive!==false);
-    // 클라이언트 필터: adminOnly (admin 아니면 adminOnly 콘텐츠 제외)
-    docs=docs.filter(c=>!c.adminOnly||(meData&&meData.role==='admin'));
+    // 클라이언트 필터: adminOnly (admin이 아니면 adminOnly 콘텐츠 제외)
+    docs=docs.filter(c=>!c.adminOnly||isAdminUser);
     // 클라이언트 정렬: createdAt 내림차순
     docs.sort((a,b)=>{
       const at=a.createdAt?.toMillis?a.createdAt.toMillis():0;
@@ -312,7 +323,7 @@ async function loadContents(){
       return bt-at;
     });
     allContents=docs;
-    console.log('[MED] 필터 후:',allContents.length,'건 (admin:',meData?.role==='admin',')');
+    console.log('[MED] 필터 후:',allContents.length,'건 (admin:',isAdminUser,', email:',me?.email||'(없음)',')');
     applyFilter();
   }catch(e){
     console.error('[MED] loadContents 실패:',e);
