@@ -5114,18 +5114,112 @@ async function mwQuickGenerate(topicId){
 function startMwProgressMonitor(progressId, progressDiv){
   stopMwProgressMonitor();
   const startTime=Date.now();
+
+  // 11단계 정의 (medicalWeekly.js와 동기화)
+  const _MW_STEPS=[
+    {n:1,  label:'📋 주제 결정'},
+    {n:2,  label:'🔍 자료 수집 (NTS+법제처+심평원+Perplexity)'},
+    {n:3,  label:'📚 Perplexity 사전 법령·통계 수집'},
+    {n:4,  label:'🧮 계산기 결과 사전 생성'},
+    {n:5,  label:'🤖 Claude Opus — HTML 생성 (2~3분)'},
+    {n:6,  label:'🔎 3자 병렬 검증 (Perplexity + GPT + Gemini)'},
+    {n:7,  label:'✨ Claude Opus — 검증 통합 + 최종본 (1~2분)'},
+    {n:8,  label:'💾 HTML Storage 업로드'},
+    {n:9,  label:'🎙️ Claude Sonnet — 오디오 스크립트'},
+    {n:10, label:'🖼 카드 이미지 생성'},
+    {n:11, label:'📰 Firestore 게시 + Podcast API'},
+  ];
+
+  // 로그 누적 저장 (단계별 변화 감지용)
+  const _mwLog=[];
+  let _lastStep=0;
+
+  // 초기 UI 렌더링
+  function renderProgress(currentStep, currentLabel, pct, elapsed){
+    const elapsedMin=Math.floor(elapsed/60);
+    const elapsedSec=elapsed%60;
+    const eta=currentStep>0?Math.round((elapsed/currentStep)*(11-currentStep)):0;
+    const etaMin=Math.floor(eta/60);
+    const etaSec=eta%60;
+
+    let stepsHtml='';
+    _MW_STEPS.forEach(s=>{
+      let icon='⬜', color='#94A3B8', weight='400';
+      if(s.n<currentStep){icon='✅';color='#16A34A';weight='400';}
+      else if(s.n===currentStep){icon='🔵';color='#0F2440';weight='700';}
+      stepsHtml+=`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;color:${color};font-weight:${weight};font-size:12px"><span style="width:18px">${icon}</span><span style="width:24px;text-align:right;color:#64748B">${s.n}.</span><span>${s.label}</span></div>`;
+    });
+
+    let logHtml='';
+    if(_mwLog.length>0){
+      logHtml='<div style="margin-top:12px;padding:8px 10px;background:#0F172A;color:#10B981;font-family:monospace;font-size:11px;border-radius:6px;max-height:120px;overflow-y:auto;line-height:1.5">';
+      _mwLog.slice(-15).forEach(l=>{logHtml+=`<div>${esc(l)}</div>`;});
+      logHtml+='</div>';
+    }
+
+    progressDiv.innerHTML=`
+      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:14px;color:#1E293B">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:700;color:#0F2440">⏳ ${esc(currentLabel||'진행 중...')}</div>
+          <div style="font-size:11px;color:#64748B">${currentStep}/11 단계 (${pct}%)</div>
+        </div>
+        <div style="background:#E2E8F0;border-radius:99px;height:8px;overflow:hidden;margin-bottom:12px">
+          <div style="background:linear-gradient(90deg,#0F2440,#DC2626);height:100%;width:${pct}%;transition:width .5s ease"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:10px">
+          <span>⏱️ 경과: ${elapsedMin}분 ${elapsedSec}초</span>
+          <span>${currentStep>0&&currentStep<11?`예상 남은 시간: 약 ${etaMin}분 ${etaSec}초`:''}</span>
+        </div>
+        <div style="border-top:1px dashed #CBD5E1;padding-top:10px">
+          ${stepsHtml}
+        </div>
+        ${logHtml}
+      </div>`;
+  }
+
+  // 첫 화면 렌더링
+  renderProgress(0,'생성 시작 중...',0,0);
+
   _mwActiveProgress=setInterval(async()=>{
     try{
       const snap=await getDoc(doc(db,'mw_gen_progress',progressId));
+      const elapsed=Math.round((Date.now()-startTime)/1000);
+
       if(snap.exists()){
         const p=snap.data();
-        const elapsed=Math.round((Date.now()-startTime)/1000);
-        const elapsedMin=Math.floor(elapsed/60);
-        const elapsedSec=elapsed%60;
-        progressDiv.innerHTML=`⏳ ${esc(p.stepLabel||'진행 중...')}<br>단계: ${p.step||0}/${p.totalSteps||11} (${p.pct||0}%) · 경과: ${elapsedMin}분 ${elapsedSec}초`;
+        const step=p.step||0;
+        const label=p.stepLabel||'진행 중...';
+        const pct=p.pct||0;
+
+        // 새 단계 진입 시 로그 추가
+        if(step!==_lastStep&&step>0){
+          const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
+          _mwLog.push(`[${ts}] Step ${step}/11 — ${label}`);
+          _lastStep=step;
+        }
+
+        renderProgress(step,label,pct,elapsed);
+
+        // 완료 또는 실패 처리
+        if(p.status==='complete'){
+          stopMwProgressMonitor();
+          const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
+          _mwLog.push(`[${ts}] ✅ 생성 완료`);
+          renderProgress(11,'✅ 생성 완료',100,elapsed);
+        }else if(p.status==='error'){
+          stopMwProgressMonitor();
+          const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
+          _mwLog.push(`[${ts}] ❌ 오류: ${p.error||'unknown'}`);
+          renderProgress(step,'❌ 생성 실패',pct,elapsed);
+        }
+      }else{
+        // 아직 첫 기록 없음
+        renderProgress(0,'⏳ 함수 시작 대기 중... (Cold Start 가능)',0,elapsed);
       }
-    }catch(e){/* ignore */}
-  },3000);
+    }catch(e){
+      console.warn('[MW] progress fetch error:',e.message);
+    }
+  },2000); // 2초마다 갱신
 }
 
 function stopMwProgressMonitor(){
