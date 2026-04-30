@@ -27,6 +27,7 @@
 .mob-adm-header{display:none;padding:16px 20px;background:rgba(46,134,171,.1);border-bottom:1px solid rgba(255,255,255,.08)}.mob-adm-header .mob-adm-name{color:rgba(255,255,255,.9);font-size:13px;font-weight:500;display:block;margin-bottom:10px}.mob-adm-header .mob-adm-btns{display:flex;gap:8px}.mob-adm-header .mob-adm-btns button{flex:1;padding:8px 0;border-radius:6px;font-size:13px;font-family:var(--font);cursor:pointer;transition:var(--tr)}.mob-adm-header .btn-user-page{background:none;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.8)}.mob-adm-header .btn-user-page:hover{background:rgba(255,255,255,.1);color:#fff}.mob-adm-header .btn-mob-logout{background:none;border:1px solid rgba(231,76,60,.4);color:rgba(231,76,60,.8)}.mob-adm-header .btn-mob-logout:hover{background:rgba(231,76,60,.15);color:#E74C3C}
 @media(max-width:768px){.header-nav{display:none}.mob-menu-btn{display:block}.mob-adm-header{display:block}.fr{flex-direction:column;gap:0}.tbl{font-size:12px}.tbl th,.tbl td{padding:8px 6px;white-space:nowrap}.mdl-box{padding:20px;width:95%}.dash-row{grid-template-columns:repeat(2,1fr)}.sidebar{display:none;position:fixed;z-index:999;width:100%}.sidebar.show{display:block}.adm-main{margin-left:0;padding:16px;max-width:100vw;overflow-x:hidden}.info-grid{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;flex:1 1 auto}.toolbar{flex-direction:column;align-items:stretch}.panel{overflow-x:hidden}.header-inner{overflow:hidden}.tabs{overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap}.tab{white-space:nowrap;flex-shrink:0}.form-box{overflow-x:hidden}.dash-c strong{font-size:22px}.rich-toolbar{gap:3px;padding:6px}.rich-toolbar .btn-sm{padding:4px 8px;font-size:11px}.rich-toolbar select{font-size:11px}.rich-editor{min-height:150px;padding:12px;font-size:13px}}
 @keyframes tcwPulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes mwPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.7;transform:scale(1.02)}}
   </style>
 </head>
 <body>
@@ -1410,7 +1411,7 @@ function goPanel(el){
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
   document.querySelector('.sidebar').classList.remove('show');
-  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-membership':loadMembership,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':loadMedicalWeekly,'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash};
+  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-membership':loadMembership,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':()=>{loadMedicalWeekly();startMwAutoRefresh?.();},'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash};
   if(ld[el.dataset.p])ld[el.dataset.p]();
 }
 
@@ -4942,13 +4943,32 @@ const _MW_TOPICS=[
 ];
 
 let _mwContents=[]; // Firestore에서 가져온 생성된 콘텐츠
-let _mwActiveProgress=null; // 진행 상황 모니터
+let _mwActiveJobs={}; // ★ 진행 중인 작업 캐시 (topicId → progressDoc)
+let _mwActiveProgress=null; // 진행 상황 모니터 interval
 
 async function loadMedicalWeekly(){
   try{
     // 1) 생성된 콘텐츠 조회 (type:medical_weekly)
     const snap=await getDocs(query(collection(db,'contents'),where('type','==','medical_weekly')));
     _mwContents=snap.docs.map(d=>({id:d.id,...d.data()}));
+
+    // 1-2) ★ 진행 중인 작업 조회 (mw_gen_progress — status가 complete/error 아닌 것)
+    //   페이지 이탈 → 재진입 시에도 진행 상황 복원 가능
+    _mwActiveJobs={};
+    try{
+      const progSnap=await getDocs(query(collection(db,'mw_gen_progress')));
+      progSnap.docs.forEach(d=>{
+        const p=d.data();
+        if(p.status!=='complete'&&p.status!=='error'&&p.topicId){
+          // 1시간 이내 시작된 작업만 (오래된 잔재 제외)
+          const startedAt=p.startedAt?.toMillis?.()||0;
+          if(Date.now()-startedAt<3600000){
+            _mwActiveJobs[p.topicId]={progressId:d.id,...p};
+          }
+        }
+      });
+      console.log('[MW] 진행 중인 작업:',Object.keys(_mwActiveJobs).length,'건');
+    }catch(e){console.warn('[MW] mw_gen_progress 조회 실패:',e.message);}
 
     // 2) 통계 갱신
     const totalCount=_MW_TOPICS.length;
@@ -5014,11 +5034,25 @@ function renderMedicalWeeklyTable(){
 
   tbody.innerHTML=topics.map((t,i)=>{
     const c=contentMap[t.id];
-    const status=c?(c.isPublished?'<span class="st-done" style="white-space:nowrap">게시</span>':'<span class="st-reviewing" style="white-space:nowrap">대기</span>'):'<span class="st-new" style="white-space:nowrap">미생성</span>';
+    const job=_mwActiveJobs[t.id]; // ★ 진행 중인 작업
+    // 상태 표시: 생성 중 > 게시 > 대기 > 미생성 (우선순위)
+    let status;
+    if(job){
+      const stepNum=job.step||0;
+      const pct=job.pct||0;
+      status=`<span class="st-reviewing" style="white-space:nowrap;background:#FFF3E0;color:#E65100;border:1px solid #FFB74D;animation:mwPulse 1.5s ease-in-out infinite">⚙ 생성중 ${stepNum}/11 (${pct}%)</span>`;
+    }else if(c){
+      status=c.isPublished?'<span class="st-done" style="white-space:nowrap">게시</span>':'<span class="st-reviewing" style="white-space:nowrap">대기</span>';
+    }else{
+      status='<span class="st-new" style="white-space:nowrap">미생성</span>';
+    }
     const pubDateLabel=t.pubDate||(t.type==='reserve'?'예비 주제':'-');
     const typeBadge=t.type==='reserve'?'<span style="background:#FEF2F2;color:#991B1B;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">예비'+(t.recommendOrder?' #'+t.recommendOrder:'')+'</span>':'<span style="background:#F1F5F9;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">본편</span>';
     let actions='';
-    if(c){
+    if(job){
+      // ★ 진행 중인 작업 — 모니터 보기 버튼만 노출
+      actions=`<button class="btn-sm" onclick="mwReopenMonitor('${t.id}','${job.progressId}')" style="background:linear-gradient(135deg,#F59E0B,#DC2626);color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;animation:mwPulse 1.5s ease-in-out infinite">📺 진행 보기</button>`;
+    }else if(c){
       const cidEsc=c.contentId||c.id;
       // ★ 다운로드·열람 버튼 그룹 (생성된 파일들)
       let downloads='<div style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;margin-bottom:4px">';
@@ -5250,6 +5284,36 @@ function stopMwProgressMonitor(){
   if(_mwActiveProgress){clearInterval(_mwActiveProgress);_mwActiveProgress=null;}
 }
 
+/**
+ * ★ 진행 중인 작업 모니터 다시 열기
+ *  - 페이지 이탈 → 재진입 시 진행 모니터 복원
+ *  - 표에서 "📺 진행 보기" 버튼 클릭 시 호출
+ */
+async function mwReopenMonitor(topicId, progressId){
+  // 모니터 영역 확보 (생성 폼 영역 재활용)
+  let progressDiv=$('mw-progress');
+  if(!progressDiv){
+    // 폼이 닫혀있으면 임시 영역 생성
+    showMwManualForm?.();
+    await new Promise(r=>setTimeout(r,300));
+    progressDiv=$('mw-progress');
+  }
+  if(!progressDiv){
+    // 그래도 없으면 동적 생성
+    const formArea=$('mw-manual-form')||document.querySelector('.content');
+    progressDiv=document.createElement('div');
+    progressDiv.id='mw-progress';
+    progressDiv.style.cssText='margin-top:16px;padding:14px;background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0;font-size:13px;';
+    formArea.appendChild(progressDiv);
+  }
+  progressDiv.style.display='block';
+  progressDiv.scrollIntoView({behavior:'smooth',block:'center'});
+  toast('📺 진행 모니터를 복원합니다 ('+topicId+')','info');
+  startMwProgressMonitor(progressId,progressDiv);
+}
+
+window.mwReopenMonitor=mwReopenMonitor;
+
 async function mwPublish(contentId){
   if(!confirm('이 콘텐츠를 게시하시겠습니까?\n(현재 admin 전용 운영 중 — adminOnly:true 유지)'))return;
   try{
@@ -5278,6 +5342,23 @@ async function mwUnpublish(contentId){
 }
 
 window.loadMedicalWeekly=loadMedicalWeekly;
+
+// ★ 진행 중인 작업이 있으면 30초마다 자동으로 표 갱신 (페이지 활성 시)
+let _mwAutoRefresh=null;
+function startMwAutoRefresh(){
+  if(_mwAutoRefresh)return; // 중복 방지
+  _mwAutoRefresh=setInterval(()=>{
+    const panel=$('p-medical-weekly');
+    if(!panel||panel.style.display==='none')return; // 페이지 비활성
+    if(Object.keys(_mwActiveJobs||{}).length===0)return; // 진행 중 작업 없음
+    loadMedicalWeekly(); // 표만 새로고침 (진행 모니터는 별도 polling)
+  },30000); // 30초
+}
+function stopMwAutoRefresh(){
+  if(_mwAutoRefresh){clearInterval(_mwAutoRefresh);_mwAutoRefresh=null;}
+}
+window.startMwAutoRefresh=startMwAutoRefresh;
+window.stopMwAutoRefresh=stopMwAutoRefresh;
 window.renderMedicalWeeklyTable=renderMedicalWeeklyTable;
 window.showMwManualForm=showMwManualForm;
 window.hideMwManualForm=hideMwManualForm;
