@@ -5019,13 +5019,33 @@ function renderMedicalWeeklyTable(){
     const typeBadge=t.type==='reserve'?'<span style="background:#FEF2F2;color:#991B1B;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">예비'+(t.recommendOrder?' #'+t.recommendOrder:'')+'</span>':'<span style="background:#F1F5F9;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">본편</span>';
     let actions='';
     if(c){
-      // 생성된 콘텐츠 — 열기 / 게시 토글
-      if(c.url)actions+=`<button class="btn-sm" onclick="window.open('${c.url}','_blank')" style="background:#1565C0;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;margin-right:4px">📄 HTML</button>`;
-      if(c.isPublished){
-        actions+=`<button class="btn-sm" onclick="mwUnpublish('${c.contentId||c.id}')" style="background:#FF9800;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">⛔ 비공개</button>`;
+      const cidEsc=c.contentId||c.id;
+      // ★ 다운로드·열람 버튼 그룹 (생성된 파일들)
+      let downloads='<div style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;margin-bottom:4px">';
+      if(c.url)downloads+=`<button class="btn-sm" onclick="window.open('${c.url}','_blank')" style="background:#1565C0;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer" title="HTML 콘텐츠 열람">📄 HTML</button>`;
+      if(c.scriptUrl)downloads+=`<button class="btn-sm" onclick="mwDownloadScript('${cidEsc}','${c.scriptUrl}')" style="background:#7C3AED;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer" title="오디오 생성용 스크립트 다운로드 (NotebookLM 등에 사용)">🎙 스크립트</button>`;
+      if(c.audioUrl){
+        downloads+=`<button class="btn-sm" onclick="window.open('${c.audioUrl}','_blank')" style="background:#0891B2;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer" title="오디오 듣기·다운로드">🎧 오디오</button>`;
+        downloads+=`<button class="btn-sm" onclick="mwUploadAudio('${cidEsc}')" style="background:#FBBF24;color:#7C2D12;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer" title="오디오 재업로드">🔄</button>`;
       }else{
-        actions+=`<button class="btn-sm" onclick="mwPublish('${c.contentId||c.id}')" style="background:#2E7D32;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">🚀 게시</button>`;
+        downloads+=`<button class="btn-sm" onclick="mwUploadAudio('${cidEsc}')" style="background:#FBBF24;color:#7C2D12;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600" title="오디오 파일 업로드 (.mp3/.m4a)">🎵 오디오 업로드</button>`;
       }
+      if(c.cardUrls&&c.cardUrls.length){
+        downloads+=`<button class="btn-sm" onclick="mwViewCards('${cidEsc}')" style="background:#059669;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer" title="카드 이미지 보기 (${c.cardUrls.length}장)">🖼 카드</button>`;
+      }
+      downloads+='</div>';
+
+      // ★ 게시·삭제 버튼 그룹
+      let publish='<div style="display:flex;gap:3px;justify-content:center">';
+      if(c.isPublished){
+        publish+=`<button class="btn-sm" onclick="mwUnpublish('${cidEsc}')" style="background:#FF9800;color:#fff;border:none;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer">⛔ 비공개</button>`;
+      }else{
+        publish+=`<button class="btn-sm" onclick="mwPublish('${cidEsc}')" style="background:#2E7D32;color:#fff;border:none;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer">🚀 게시</button>`;
+      }
+      publish+=`<button class="btn-sm" onclick="mwDelete('${cidEsc}','${esc(t.title)}')" style="background:#DC2626;color:#fff;border:none;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer" title="콘텐츠 삭제 (재생성 시 사용)">🗑</button>`;
+      publish+='</div>';
+
+      actions=downloads+publish;
     }else{
       actions=`<button class="btn-sm" onclick="mwQuickGenerate('${t.id}')" style="background:linear-gradient(135deg,#0F2440,#DC2626);color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">⚡ 생성</button>`;
     }
@@ -5261,6 +5281,141 @@ window.runMwManual=runMwManual;
 window.mwQuickGenerate=mwQuickGenerate;
 window.mwPublish=mwPublish;
 window.mwUnpublish=mwUnpublish;
+
+// ═════════════════════════════════════════════════════════════
+// 🏥 메디컬 위클리 — 파일 관리 (다운로드·업로드·삭제)
+// ═════════════════════════════════════════════════════════════
+
+/**
+ * 오디오 생성용 스크립트 다운로드
+ *  - scriptUrl이 .txt 파일이므로 강제 다운로드 처리
+ */
+async function mwDownloadScript(contentId, scriptUrl){
+  if(!scriptUrl){toast('스크립트 URL이 없습니다','error');return;}
+  try{
+    toast('스크립트 다운로드 중...','info');
+    const res=await fetch(scriptUrl);
+    if(!res.ok)throw new Error('다운로드 실패: HTTP '+res.status);
+    const text=await res.text();
+    const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=`${contentId}_script.txt`;
+    document.body.appendChild(a);a.click();a.remove();
+    URL.revokeObjectURL(url);
+    toast('✅ 스크립트 다운로드 완료 — NotebookLM 등에서 사용하세요','success');
+  }catch(e){
+    console.error('[MW] 스크립트 다운로드 실패:',e);
+    toast('스크립트 다운로드 실패: '+e.message,'error');
+  }
+}
+
+/**
+ * 오디오 파일 업로드
+ *  - .mp3, .m4a, .wav 등 오디오 파일을 Storage에 업로드
+ *  - Firestore contents 문서의 audioUrl 갱신
+ */
+function mwUploadAudio(contentId){
+  // 임시 input 생성
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='audio/mpeg,audio/mp4,audio/wav,audio/x-m4a,.mp3,.m4a,.wav,.aac';
+  input.onchange=async(e)=>{
+    const file=e.target.files[0];
+    if(!file)return;
+
+    // 파일 크기 검증 (50MB 제한)
+    const MAX_SIZE=50*1024*1024;
+    if(file.size>MAX_SIZE){
+      toast('파일이 너무 큽니다 (최대 50MB)','error');
+      return;
+    }
+
+    if(!confirm(`"${file.name}" (${(file.size/1024/1024).toFixed(1)}MB) 를 업로드하시겠습니까?\n\n※ 기존 오디오가 있다면 교체됩니다.`))return;
+
+    try{
+      toast('🎵 오디오 업로드 중... 잠시만 기다려주세요','info');
+      // Storage 경로: medical_weekly_audio/{contentId}/{timestamp}_{filename}
+      const ext=file.name.split('.').pop().toLowerCase();
+      const path=`medical_weekly_audio/${contentId}/${Date.now()}.${ext}`;
+      const sRef=stRef(storage,path);
+      const task=uploadBytesResumable(sRef,file,{contentType:file.type});
+
+      // 진행률 토스트 갱신
+      task.on('state_changed',(snap)=>{
+        const pct=Math.round((snap.bytesTransferred/snap.totalBytes)*100);
+        if(pct%20===0)toast(`🎵 업로드 중... ${pct}%`,'info');
+      });
+
+      await task;
+      const audioUrl=await getDownloadURL(sRef);
+
+      // Firestore 갱신
+      await updateDoc(doc(db,'contents',contentId),{
+        audioUrl,
+        formats:['html','audio','card'],
+        updatedAt:serverTimestamp(),
+      });
+
+      toast('✅ 오디오 업로드 완료','success');
+      await loadMedicalWeekly(); // 표 갱신
+    }catch(err){
+      console.error('[MW] 오디오 업로드 실패:',err);
+      toast('업로드 실패: '+err.message,'error');
+    }
+  };
+  input.click();
+}
+
+/**
+ * 카드 이미지 보기 (모달)
+ */
+function mwViewCards(contentId){
+  const c=_mwContents.find(x=>(x.contentId||x.id)===contentId);
+  if(!c||!c.cardUrls||!c.cardUrls.length){toast('카드 이미지가 없습니다','error');return;}
+
+  const existing=document.getElementById('mw-cards-modal');
+  if(existing)existing.remove();
+
+  const modal=document.createElement('div');
+  modal.id='mw-cards-modal';
+  modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,36,64,.7);backdrop-filter:blur(4px);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:12px;max-width:900px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.4)">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid #E2E8F0;background:linear-gradient(135deg,#0F2440,#DC2626);color:#fff;border-radius:12px 12px 0 0">
+        <div style="font-size:14px;font-weight:700">🖼 카드 이미지 (${c.cardUrls.length}장) — ${esc(c.title||'')}</div>
+        <button onclick="document.getElementById('mw-cards-modal').remove()" style="background:rgba(255,255,255,.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">✕</button>
+      </div>
+      <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">
+        ${c.cardUrls.map((u,i)=>`<div style="border:1px solid #E2E8F0;border-radius:6px;overflow:hidden"><a href="${u}" target="_blank" download="${contentId}_card_${i+1}.png"><img src="${u}" style="width:100%;display:block;cursor:pointer" alt="card ${i+1}"></a><div style="padding:6px 8px;font-size:11px;color:#64748B;text-align:center;background:#F8FAFC">카드 ${i+1} (클릭 다운로드)</div></div>`).join('')}
+      </div>
+    </div>`;
+  modal.addEventListener('click',(e)=>{if(e.target===modal)modal.remove();});
+  document.body.appendChild(modal);
+}
+
+/**
+ * 콘텐츠 삭제 (재생성 시 사용)
+ *  - Firestore contents 문서 삭제
+ *  - Storage 파일은 유지 (수동 정리)
+ */
+async function mwDelete(contentId,title){
+  if(!confirm(`정말 삭제하시겠습니까?\n\n제목: ${title}\nID: ${contentId}\n\n※ Firestore 문서만 삭제됩니다 (Storage 파일은 별도 정리).\n※ 재생성하려면 삭제 후 ⚡ 생성 버튼을 누르세요.`))return;
+  try{
+    await deleteDoc(doc(db,'contents',contentId));
+    toast('✅ 콘텐츠 삭제 완료','success');
+    await loadMedicalWeekly();
+  }catch(e){
+    console.error('[MW] 삭제 실패:',e);
+    toast('삭제 실패: '+e.message,'error');
+  }
+}
+
+window.mwDownloadScript=mwDownloadScript;
+window.mwUploadAudio=mwUploadAudio;
+window.mwViewCards=mwViewCards;
+window.mwDelete=mwDelete;
 
 // ── TCW 수동 생성 ────────────────────────────────────────
 const TCW_TRIGGER_URL='https://triggertaxweekly-cvmdsjgzxa-du.a.run.app';
