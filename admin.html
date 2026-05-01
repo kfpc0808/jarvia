@@ -5076,6 +5076,7 @@ const _MW_TOPICS=[
 ];
 
 let _mwContents=[]; // Firestore에서 가져온 생성된 콘텐츠
+let _mwTitleOverrides={}; // ★ 미생성 주제 제목 override (mw_topic_overrides)
 let _mwActiveJobs={}; // ★ 진행 중인 작업 캐시 (topicId → progressDoc)
 let _mwActiveProgress=null; // 진행 상황 모니터 interval
 
@@ -5084,6 +5085,13 @@ async function loadMedicalWeekly(){
     // 1) 생성된 콘텐츠 조회 (type:medical_weekly)
     const snap=await getDocs(query(collection(db,'contents'),where('type','==','medical_weekly')));
     _mwContents=snap.docs.map(d=>({id:d.id,...d.data()}));
+
+    // 1-1) ★ 미생성 주제 제목 override 조회
+    _mwTitleOverrides={};
+    try{
+      const ovSnap=await getDocs(collection(db,'mw_topic_overrides'));
+      ovSnap.docs.forEach(d=>{const v=d.data();if(v?.title)_mwTitleOverrides[d.id]=v.title;});
+    }catch(e){console.warn('[MW] mw_topic_overrides 조회 실패:',e.message);}
 
     // 1-2) ★ 진행 중인 작업 조회 (mw_gen_progress — status가 complete/error 아닌 것)
     //   페이지 이탈 → 재진입 시에도 진행 상황 복원 가능
@@ -5120,13 +5128,15 @@ async function loadMedicalWeekly(){
         '<optgroup label="🌟 예비 주제 (즉시 운영 추천)">'+
         _MW_TOPICS.filter(t=>t.type==='reserve').sort((a,b)=>(a.recommendOrder||99)-(b.recommendOrder||99)).map(t=>{
           const done=generatedIds.has(t.id)?' ✓ 생성완료':'';
-          return `<option value="${t.id}">${t.recommendOrder}. ${esc(t.title)}${done}</option>`;
+          const dispTitle=_mwTitleOverrides[t.id]||t.title;
+          return `<option value="${t.id}">${t.recommendOrder}. ${esc(dispTitle)}${done}</option>`;
         }).join('')+
         '</optgroup>'+
         '<optgroup label="📅 본편 주제 (토요일 자동 매칭)">'+
         _MW_TOPICS.filter(t=>t.type==='main').map(t=>{
           const done=generatedIds.has(t.id)?' ✓ 생성완료':'';
-          return `<option value="${t.id}">[${t.pubDate||''}] ${esc(t.title)}${done}</option>`;
+          const dispTitle=_mwTitleOverrides[t.id]||t.title;
+          return `<option value="${t.id}">[${t.pubDate||''}] ${esc(dispTitle)}${done}</option>`;
         }).join('')+
         '</optgroup>';
     }
@@ -5168,6 +5178,9 @@ function renderMedicalWeeklyTable(){
   tbody.innerHTML=topics.map((t,i)=>{
     const c=contentMap[t.id];
     const job=_mwActiveJobs[t.id]; // ★ 진행 중인 작업
+    // ★ 제목 override 적용 + ✏️ 편집 버튼 (미생성 주제만)
+    const dispTitle=_mwTitleOverrides[t.id]||t.title;
+    const editBtn=(!c&&!job)?` <button onclick="mwEditTitle('${t.id}')" style="background:transparent;border:none;color:#1976D2;cursor:pointer;font-size:13px;padding:0 3px;margin-left:2px" title="제목 수정">✏️</button>`:'';
     // 상태 표시: 생성 중 > 게시 > 대기 > 미생성 (우선순위)
     let status;
     if(job){
@@ -5225,13 +5238,44 @@ function renderMedicalWeeklyTable(){
       <td style="text-align:center;font-family:monospace;font-size:11px">${t.id}</td>
       <td style="text-align:center;font-size:11px">${pubDateLabel}<br>${typeBadge}</td>
       <td style="text-align:center;font-size:11px">${esc(t.domain)}</td>
-      <td>${esc(t.title)}</td>
+      <td>${esc(dispTitle)}${editBtn}</td>
       <td style="text-align:center;font-size:11px;color:var(--text-lt)">${esc(t.targetPersona)}</td>
       <td style="text-align:center">${status}</td>
       <td style="text-align:center">${actions}</td>
     </tr>`;
   }).join('');
 }
+
+// ★ 미생성 주제 제목 인라인 수정 (mw_topic_overrides Firestore 저장)
+async function mwEditTitle(topicId){
+  const t=_MW_TOPICS.find(x=>x.id===topicId);
+  if(!t){toast('주제를 찾을 수 없습니다','error');return;}
+  const curr=_mwTitleOverrides[topicId]||t.title;
+  const next=prompt(`주제 제목 수정 (ID: ${topicId})\n\n원본: ${t.title}\n\n새 제목 입력 (취소: ESC, 원본 복원: 원본 제목 그대로 입력):`,curr);
+  if(next===null)return;
+  const trimmed=next.trim();
+  if(!trimmed){toast('제목을 입력하세요','warning');return;}
+  if(trimmed===curr)return;
+  try{
+    if(trimmed===t.title){
+      await deleteDoc(doc(db,'mw_topic_overrides',topicId));
+      delete _mwTitleOverrides[topicId];
+      toast('원본 제목으로 복원','success');
+    }else{
+      await setDoc(doc(db,'mw_topic_overrides',topicId),{
+        title:trimmed,
+        originalTitle:t.title,
+        updatedAt:serverTimestamp()
+      });
+      _mwTitleOverrides[topicId]=trimmed;
+      toast('제목 수정 완료 (드롭다운은 새로고침 후 반영)','success');
+    }
+    renderMedicalWeeklyTable();
+  }catch(e){
+    toast('수정 실패: '+e.message,'error');
+  }
+}
+window.mwEditTitle=mwEditTitle;
 
 function showMwManualForm(){
   $('mw-manual-form').classList.remove('hidden');
@@ -5250,7 +5294,8 @@ async function runMwManual(){
   const topic=_MW_TOPICS.find(t=>t.id===topicId);
   if(!topic){toast('주제를 찾을 수 없습니다','error');return;}
 
-  if(!confirm(`"${topic.title}"\n\n생성에 5~8분 소요됩니다. 계속하시겠습니까?`))return;
+  const dispTitle=_mwTitleOverrides[topic.id]||topic.title;
+  if(!confirm(`"${dispTitle}"\n\n생성에 5~8분 소요됩니다. 계속하시겠습니까?`))return;
 
   const progressDiv=$('mw-manual-progress');
   progressDiv.style.display='block';
