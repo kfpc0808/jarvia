@@ -719,7 +719,7 @@
 
       <!-- ★ 신규 주제 추가 폼 -->
       <div id="tcw-add-topic-form" class="hidden form-box" style="margin-bottom:16px;border-left:3px solid #2E7D32">
-        <h3 style="margin-bottom:12px;font-size:14px">➕ TCW 신규 주제 추가 — 원하는 주제를 직접 등록하고 즉시 생성할 수 있습니다</h3>
+        <h3 id="tcw-form-header" style="margin-bottom:12px;font-size:14px">➕ TCW 신규 주제 추가 — 원하는 주제를 직접 등록하고 즉시 생성할 수 있습니다</h3>
         <div class="fr">
           <div class="fg" style="flex:2">
             <label>제목 <i>*</i></label>
@@ -783,8 +783,9 @@
           💡 "🤖 키워드 자동 추천"을 누르면 제목·분야를 분석해 검색에 최적화된 키워드 2개를 자동 입력합니다. 모두 수정 가능합니다.
         </div>
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn" onclick="saveNewTopic(true)" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">💾🚀 저장 후 바로 생성</button>
-          <button class="btn" onclick="saveNewTopic(false)" style="background:linear-gradient(135deg,#1B5E20,#2E7D32);color:#fff">💾 저장만</button>
+          <button id="tcw-btn-save-and-gen" class="btn" onclick="saveNewTopic(true)" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">💾🚀 저장 후 바로 생성</button>
+          <button id="tcw-btn-save-only" class="btn" onclick="saveNewTopic(false)" style="background:linear-gradient(135deg,#1B5E20,#2E7D32);color:#fff">💾 저장만</button>
+          <button id="tcw-btn-update" class="btn hidden" onclick="updateTopic()" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">💾 수정 저장</button>
           <button class="btn btn-sec" onclick="hideTcwAddTopicForm()">취소</button>
         </div>
       </div>
@@ -4935,7 +4936,7 @@ async function loadTaxWeeklyTopics(){
         <td style="text-align:center;white-space:nowrap">${date}</td>
         <td style="text-align:center;white-space:nowrap">${dayBadge(t.day)}</td>
         <td style="text-align:center;font-size:11px;white-space:nowrap">${t.category||''}</td>
-        <td style="text-align:left;font-size:12px">${esc(t.title||'')}<button onclick="event.stopPropagation();tcwEditTitle('${t.id}','${esc(t.title||'').replace(/'/g,"\\'")}','${t.contentId||''}')" style="background:none;border:none;cursor:pointer;font-size:11px;padding:0 4px;opacity:0.5" title="제목 수정">✏️</button></td>
+        <td style="text-align:left;font-size:12px"><span onclick="tcwOpenEditForm('${t.id}')" style="cursor:pointer;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px" onmouseover="this.style.textDecorationColor='#1565C0'" onmouseout="this.style.textDecorationColor='transparent'" title="클릭하여 수정">${esc(t.title||'')}</span><button onclick="event.stopPropagation();tcwOpenEditForm('${t.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;padding:0 4px;opacity:0.5" title="수정">✏️</button></td>
         <td style="text-align:center;font-size:11px;white-space:nowrap;color:#1565C0">${esc(t.keyword||'')}</td>
         <td style="text-align:center;font-size:11px;white-space:nowrap;color:#1565C0">${esc(t.keyword2||'')}</td>
         <td style="text-align:center;white-space:nowrap"><span style="font-size:10px;font-weight:700;color:${typeColor[t.insuranceType]||'#888'}">${typeLabel[t.insuranceType]||'-'}</span></td>
@@ -6086,7 +6087,122 @@ const TCW_KEYWORD_MAP={
   ],default:['절세 전략','세액공제']},
 };
 
+// ═════════════════════════════════════════════════════════════
+// 📝 TCW 폼 모드 (신규 추가 / 수정) — 추가됨
+// ═════════════════════════════════════════════════════════════
+let _tcwFormMode='new';        // 'new' | 'edit'
+let _tcwEditingId=null;        // 수정 중인 문서 ID
+
+async function tcwOpenEditForm(topicId){
+  const topic=_twAll.find(t=>t.id===topicId);
+  if(!topic){toast('주제 정보를 찾을 수 없습니다.','error');return;}
+
+  _tcwFormMode='edit';
+  _tcwEditingId=topicId;
+
+  // 폼 헤더 변경
+  const titleShort=(topic.title||'').length>40?(topic.title||'').slice(0,40)+'…':(topic.title||'');
+  $('tcw-form-header').textContent='✏️ TCW 주제 수정 — '+titleShort;
+
+  // 기존 값 채우기
+  $('tcw-new-title').value=topic.title||'';
+  $('tcw-new-date').value=twWeekDate(topic.year,topic.week,topic.day);
+  $('tcw-new-type').value=topic.type||'personal';
+  $('tcw-new-category').value=topic.category||'';
+  $('tcw-new-insurance').value=topic.insuranceType||'A';
+  $('tcw-new-keyword1').value=topic.keyword||'';
+  $('tcw-new-keyword2').value=topic.keyword2||'';
+  $('tcw-new-immediate-publish').checked=false;
+
+  // 게시완료 행은 제목·키워드만 수정 가능 (Q2=B 정책)
+  const isPublished=topic.status==='published';
+  const lockable=['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish'];
+  lockable.forEach(id=>{
+    const el=$(id);
+    if(el){el.disabled=isPublished; el.style.opacity=isPublished?'0.5':'1'; el.style.cursor=isPublished?'not-allowed':'';}
+  });
+
+  // 버튼 표시 전환 (신규 버튼 숨기고 수정 버튼 표시)
+  $('tcw-btn-save-and-gen').classList.add('hidden');
+  $('tcw-btn-save-only').classList.add('hidden');
+  $('tcw-btn-update').classList.remove('hidden');
+
+  // 폼 표시
+  $('tcw-add-topic-form').classList.remove('hidden');
+  const manualForm=$('tcw-manual-form');
+  if(manualForm)manualForm.classList.add('hidden');
+
+  // 게시완료 안내
+  if(isPublished){
+    toast('게시완료 콘텐츠는 제목·키워드만 수정 가능합니다 (본문은 변경되지 않음).','info');
+  }
+
+  // 폼 위치로 스크롤
+  $('tcw-add-topic-form').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function updateTopic(){
+  if(_tcwFormMode!=='edit'||!_tcwEditingId){toast('수정 모드가 아닙니다.','error');return;}
+
+  const topic=_twAll.find(t=>t.id===_tcwEditingId);
+  if(!topic){toast('주제 정보를 찾을 수 없습니다.','error');return;}
+
+  const title=$('tcw-new-title').value.trim();
+  const keyword=$('tcw-new-keyword1').value.trim();
+  const keyword2=$('tcw-new-keyword2').value.trim();
+
+  if(!title||title.length<5){toast('제목을 5자 이상 입력해주세요.','warning');return;}
+  if(!keyword){toast('키워드1을 입력해주세요.','warning');return;}
+
+  const isPublished=topic.status==='published';
+  const updates={title,keyword,keyword2,updatedAt:serverTimestamp()};
+
+  // 게시완료가 아닌 경우만 발행일·유형·분야·보험유형 수정 허용
+  if(!isPublished){
+    const dateStr=$('tcw-new-date').value;
+    const type=$('tcw-new-type').value;
+    const category=$('tcw-new-category').value.trim();
+    const insuranceType=$('tcw-new-insurance').value;
+    if(!dateStr){toast('발행 예정일을 선택해주세요.','warning');return;}
+    if(!category){toast('분야를 입력해주세요.','warning');return;}
+    const wd=computeWeekFromDate(dateStr);
+    Object.assign(updates,{year:wd.year,week:wd.week,day:wd.day,type,category,insuranceType});
+  }
+
+  if(!confirm(`주제를 수정합니다:\n\n제목: ${title}\n키워드: ${keyword} / ${keyword2||'(없음)'}\n\n진행할까요?`))return;
+
+  try{
+    await updateDoc(doc(db,'tax_weekly_topics',_tcwEditingId),updates);
+
+    // 게시완료 콘텐츠는 contents 컬렉션의 title·keyword도 동기화 (제목 일관성)
+    if(isPublished&&topic.contentId){
+      try{
+        await updateDoc(doc(db,'contents',topic.contentId),{title,keyword,keyword2,updatedAt:serverTimestamp()});
+      }catch(e){console.warn('[TCW] contents 동기화 실패:',e);}
+    }
+
+    toast('✅ 수정 완료','success');
+    hideTcwAddTopicForm();
+    await loadTaxWeeklyTopics();
+  }catch(e){
+    console.error('[TCW] 수정 실패:',e);
+    toast('수정 실패: '+e.message,'error');
+  }
+}
+
 function showTcwAddTopicForm(){
+  // ── 신규 모드 초기화 ──
+  _tcwFormMode='new';
+  _tcwEditingId=null;
+  $('tcw-form-header').textContent='➕ TCW 신규 주제 추가 — 원하는 주제를 직접 등록하고 즉시 생성할 수 있습니다';
+  ['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish'].forEach(id=>{
+    const el=$(id);
+    if(el){el.disabled=false; el.style.opacity=''; el.style.cursor='';}
+  });
+  $('tcw-btn-save-and-gen').classList.remove('hidden');
+  $('tcw-btn-save-only').classList.remove('hidden');
+  $('tcw-btn-update').classList.add('hidden');
+
   // 다음 수요일 또는 목요일 자동 계산
   const today=new Date();
   const dow=today.getDay();
@@ -6514,6 +6630,11 @@ function tcwReopenProgress(){
 
 // ── 주제 제목 수정 ──
 async function tcwEditTitle(topicId,currentTitle,contentId){
+  // 호환성 유지: 새 수정 모달로 리다이렉트
+  if(typeof tcwOpenEditForm==='function'&&_twAll.find(t=>t.id===topicId)){
+    return tcwOpenEditForm(topicId);
+  }
+  // 폴백: 기존 prompt 방식
   const newTitle=prompt('제목을 수정하세요:',currentTitle);
   if(!newTitle||newTitle.trim()===currentTitle)return;
   const trimmed=newTitle.trim();
@@ -6528,6 +6649,7 @@ async function tcwEditTitle(topicId,currentTitle,contentId){
 }
 
 window.tcwReopenProgress=tcwReopenProgress;window.tcwEditTitle=tcwEditTitle;
+window.tcwOpenEditForm=tcwOpenEditForm;window.updateTopic=updateTopic;
 window.showTcwManualForm=showTcwManualForm;window.hideTcwManualForm=hideTcwManualForm;window.runTcwManual=runTcwManual;
 
 // ── TCW 상세 모달 ──────────────────────────────────────────
