@@ -1554,6 +1554,14 @@ onAuthStateChanged(auth,async u=>{
 async function admLogout(){await signOut(auth);window.location.href='index.html';}
 
 function goPanel(el){
+  // ★ 이전 활성 패널이 병의원 컨설팅이고, 새 패널이 다른 곳이면 인터벌 정리 (메모리 누수 방지)
+  try{
+    const prevActive=document.querySelector('.sn.active')?.dataset?.p;
+    if(prevActive==='p-medical-weekly'&&el.dataset.p!=='p-medical-weekly'){
+      try{stopMwProgressMonitor?.();}catch(_){}
+      try{stopMwAutoRefresh?.();}catch(_){}
+    }
+  }catch(_){}
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
   document.querySelector('.sidebar').classList.remove('show');
@@ -4911,13 +4919,6 @@ async function loadTaxWeeklyTopics(){
       return (dayOrder[a.day]??99)-(dayOrder[b.day]??99);
     });
 
-    // ★ 콘텐츠 생성일시 매핑 (contents 컬렉션에서 type='tax_weekly' 일괄 조회)
-    const _tcwCreatedMap={};
-    try{
-      const cSnap=await getDocs(query(collection(db,'contents'),where('type','==','tax_weekly')));
-      cSnap.forEach(d=>{const c=d.data();if(c.createdAt)_tcwCreatedMap[d.id]=c.createdAt;});
-    }catch(e){console.warn('[TCW] 콘텐츠 생성일시 조회 실패:',e);}
-
     // 월 필터
     let filtered=_twAll;
     if(month>0){
@@ -4955,7 +4956,7 @@ async function loadTaxWeeklyTopics(){
         <td style="text-align:center;white-space:nowrap">${i+1}</td>
         <td style="text-align:center;white-space:nowrap">${t.week}주</td>
         <td style="text-align:center;white-space:nowrap">${date}</td>
-        <td style="text-align:center;font-size:11px;white-space:nowrap">${t.contentId&&_tcwCreatedMap[t.contentId]?fdatetime(_tcwCreatedMap[t.contentId]):'-'}</td>
+        <td style="text-align:center;font-size:11px;white-space:nowrap">${t.generatedAt?fdatetime(t.generatedAt):'-'}</td>
         <td style="text-align:center;white-space:nowrap">${dayBadge(t)}</td>
         <td style="text-align:center;font-size:11px;white-space:nowrap">${t.category||''}</td>
         <td style="text-align:left;font-size:12px"><span onclick="tcwOpenEditForm('${t.id}')" style="cursor:pointer;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px" onmouseover="this.style.textDecorationColor='#1565C0'" onmouseout="this.style.textDecorationColor='transparent'" title="클릭하여 수정">${esc(t.title||'')}</span><button onclick="event.stopPropagation();tcwOpenEditForm('${t.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;padding:0 4px;opacity:0.5" title="수정">✏️</button></td>
@@ -5101,9 +5102,24 @@ const _MW_TOPICS=[
 let _mwContents=[]; // Firestore에서 가져온 생성된 콘텐츠
 let _mwTitleOverrides={}; // ★ 미생성 주제 제목 override (mw_topic_overrides)
 let _mwActiveJobs={}; // ★ 진행 중인 작업 캐시 (topicId → progressDoc)
-let _mwActiveProgress=null; // 진행 상황 모니터 interval
+let _mwActiveProgress=null; // 진행 상황 모니터 interval (2초)
+let _mwElapsedTicker=null; // ★ 경과시간만 갱신하는 1초 인터벌 (UX — 시계 부드럽게 흐르게)
 
 async function loadMedicalWeekly(){
+  // ★ 다른 메뉴에 있는 동안 종료된 작업의 결과 토스트 알림 (10분 이내만)
+  try{
+    const keys=Object.keys(localStorage).filter(k=>k.startsWith('mw_last_result_'));
+    keys.forEach(k=>{
+      try{
+        const v=JSON.parse(localStorage.getItem(k)||'{}');
+        if(v.ts&&(Date.now()-v.ts<600000)){
+          if(v.type==='complete')toast?.('이전 생성 완료: '+(v.title||'병의원 컨설팅'),'success');
+          else if(v.type==='error')toast?.('이전 생성 실패: '+(v.error||'알 수 없음'),'error');
+        }
+      }catch(_){}
+      localStorage.removeItem(k);
+    });
+  }catch(_){}
   try{
     // 1) 생성된 콘텐츠 조회 (type:medical_weekly)
     const snap=await getDocs(query(collection(db,'contents'),where('type','==','medical_weekly')));
@@ -5437,55 +5453,148 @@ function startMwProgressMonitor(progressId, progressDiv){
     {n:11, label:'📰 Firestore 게시 + Podcast API'},
   ];
 
-  // 로그 누적 저장 (단계별 변화 감지용)
+  // 로그 누적 저장 + 변경 감지 캐시
   const _mwLog=[];
-  let _lastStep=0;
+  let _lastStep=-1;     // -1로 초기화 → 첫 갱신 시 무조건 step 박스 그림
+  let _lastPct=-1;
+  let _lastLabel='';
+  let _lastLogLen=-1;
 
-  // 초기 UI 렌더링
-  function renderProgress(currentStep, currentLabel, pct, elapsed){
-    const elapsedMin=Math.floor(elapsed/60);
-    const elapsedSec=elapsed%60;
-    const eta=currentStep>0?Math.round((elapsed/currentStep)*(11-currentStep)):0;
-    const etaMin=Math.floor(eta/60);
-    const etaSec=eta%60;
-
+  // ★ 1) 정적 구조 한 번만 그리기 (이후엔 부분 갱신 → 깜빡임 제거)
+  function buildSkeleton(){
     let stepsHtml='';
     _MW_STEPS.forEach(s=>{
-      let icon='⬜', color='#94A3B8', weight='400';
-      if(s.n<currentStep){icon='✅';color='#16A34A';weight='400';}
-      else if(s.n===currentStep){icon='🔵';color='#0F2440';weight='700';}
-      stepsHtml+=`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;color:${color};font-weight:${weight};font-size:12px"><span style="width:18px">${icon}</span><span style="width:24px;text-align:right;color:#64748B">${s.n}.</span><span>${s.label}</span></div>`;
+      stepsHtml+=`<div id="mw-step-${s.n}" style="display:flex;align-items:center;gap:8px;padding:4px 0;color:#94A3B8;font-weight:400;font-size:12px"><span class="mw-step-icon" style="width:18px">⬜</span><span style="width:24px;text-align:right;color:#64748B">${s.n}.</span><span>${s.label}</span></div>`;
     });
-
-    let logHtml='';
-    if(_mwLog.length>0){
-      logHtml='<div style="margin-top:12px;padding:8px 10px;background:#0F172A;color:#10B981;font-family:monospace;font-size:11px;border-radius:6px;max-height:120px;overflow-y:auto;line-height:1.5">';
-      _mwLog.slice(-15).forEach(l=>{logHtml+=`<div>${esc(l)}</div>`;});
-      logHtml+='</div>';
-    }
-
     progressDiv.innerHTML=`
       <div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:14px;color:#1E293B">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-size:13px;font-weight:700;color:#0F2440">⏳ ${esc(currentLabel||'진행 중...')}</div>
-          <div style="font-size:11px;color:#64748B">${currentStep}/11 단계 (${pct}%)</div>
+          <div id="mw-current-label" style="font-size:13px;font-weight:700;color:#0F2440">⏳ 생성 시작 중...</div>
+          <div id="mw-step-counter" style="font-size:11px;color:#64748B">0/11 단계 (0%)</div>
         </div>
         <div style="background:#E2E8F0;border-radius:99px;height:8px;overflow:hidden;margin-bottom:12px">
-          <div style="background:linear-gradient(90deg,#0F2440,#DC2626);height:100%;width:${pct}%;transition:width .5s ease"></div>
+          <div id="mw-progress-bar" style="background:linear-gradient(90deg,#0F2440,#DC2626);height:100%;width:0%;transition:width .5s ease"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:10px">
-          <span>⏱️ 경과: ${elapsedMin}분 ${elapsedSec}초</span>
-          <span>${currentStep>0&&currentStep<11?`예상 남은 시간: 약 ${etaMin}분 ${etaSec}초`:''}</span>
+          <span id="mw-elapsed">⏱️ 경과: 0분 0초 <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#DC2626;animation:mwPulse 1s ease-in-out infinite;margin-left:4px;vertical-align:middle"></span></span>
+          <span id="mw-eta"></span>
         </div>
-        <div style="border-top:1px dashed #CBD5E1;padding-top:10px">
+        <div style="border-top:1px dashed #CBD5E1;padding-top:10px" id="mw-steps-container">
           ${stepsHtml}
         </div>
-        ${logHtml}
+        <div id="mw-log-container"></div>
       </div>`;
   }
 
-  // 첫 화면 렌더링
-  renderProgress(0,'생성 시작 중...',0,0);
+  // ★ 2) 시계만 부드럽게 흘러가게 (1초마다, polling과 별도)
+  function updateElapsed(){
+    const elapsed=Math.round((Date.now()-startTime)/1000);
+    const min=Math.floor(elapsed/60);
+    const sec=elapsed%60;
+    const elEl=progressDiv.querySelector('#mw-elapsed');
+    if(elEl)elEl.innerHTML=`⏱️ 경과: ${min}분 ${sec}초 <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#DC2626;animation:mwPulse 1s ease-in-out infinite;margin-left:4px;vertical-align:middle"></span>`;
+    // ETA — step 진입 후에만 표시
+    const etaEl=progressDiv.querySelector('#mw-eta');
+    if(etaEl){
+      if(_lastStep>0&&_lastStep<11){
+        const eta=Math.round((elapsed/_lastStep)*(11-_lastStep));
+        const etaMin=Math.floor(eta/60);
+        const etaSec=eta%60;
+        etaEl.textContent=`예상 남은 시간: 약 ${etaMin}분 ${etaSec}초`;
+      }else{
+        etaEl.textContent='';
+      }
+    }
+  }
+
+  // ★ 3) step / pct / 라벨 변경 시에만 부분 갱신
+  function updateStep(step, label, pct){
+    // 라벨 변경 시
+    if(label!==_lastLabel){
+      const labelEl=progressDiv.querySelector('#mw-current-label');
+      if(labelEl)labelEl.textContent='⏳ '+(label||'진행 중...');
+      _lastLabel=label;
+    }
+    // step 카운터 + 진행바
+    const counterEl=progressDiv.querySelector('#mw-step-counter');
+    if(counterEl)counterEl.textContent=`${step}/11 단계 (${pct}%)`;
+    if(pct!==_lastPct){
+      const barEl=progressDiv.querySelector('#mw-progress-bar');
+      if(barEl)barEl.style.width=pct+'%';
+      _lastPct=pct;
+    }
+    // step 박스 색상 (변경 시에만)
+    if(step!==_lastStep){
+      _MW_STEPS.forEach(s=>{
+        const box=progressDiv.querySelector(`#mw-step-${s.n}`);
+        if(!box)return;
+        const icon=box.querySelector('.mw-step-icon');
+        if(s.n<step){
+          if(icon)icon.textContent='✅';
+          box.style.color='#16A34A';
+          box.style.fontWeight='400';
+        }else if(s.n===step){
+          if(icon)icon.textContent='🔵';
+          box.style.color='#0F2440';
+          box.style.fontWeight='700';
+        }else{
+          if(icon)icon.textContent='⬜';
+          box.style.color='#94A3B8';
+          box.style.fontWeight='400';
+        }
+      });
+      _lastStep=step;
+    }
+  }
+
+  // ★ 4) 로그 영역 — 길이 변경 시에만 다시 그림
+  function updateLog(){
+    if(_mwLog.length===_lastLogLen)return;
+    _lastLogLen=_mwLog.length;
+    const cont=progressDiv.querySelector('#mw-log-container');
+    if(!cont)return;
+    if(_mwLog.length===0){cont.innerHTML='';return;}
+    let html='<div style="margin-top:12px;padding:8px 10px;background:#0F172A;color:#10B981;font-family:monospace;font-size:11px;border-radius:6px;max-height:120px;overflow-y:auto;line-height:1.5">';
+    _mwLog.slice(-15).forEach(l=>{html+=`<div>${esc(l)}</div>`;});
+    html+='</div>';
+    cont.innerHTML=html;
+  }
+
+  // ★ 5) 종료 상태 (완료/실패) — pulse dot 제거, 모든 step 마무리
+  function showFinalState(type, label){
+    const labelEl=progressDiv.querySelector('#mw-current-label');
+    if(labelEl)labelEl.textContent=label;
+    const elEl=progressDiv.querySelector('#mw-elapsed');
+    if(elEl){
+      const elapsed=Math.round((Date.now()-startTime)/1000);
+      const min=Math.floor(elapsed/60);
+      const sec=elapsed%60;
+      elEl.textContent=`⏱️ 경과: ${min}분 ${sec}초`; // pulse dot 제거
+    }
+    const etaEl=progressDiv.querySelector('#mw-eta');
+    if(etaEl)etaEl.textContent='';
+    if(type==='complete'){
+      _MW_STEPS.forEach(s=>{
+        const box=progressDiv.querySelector(`#mw-step-${s.n}`);
+        if(!box)return;
+        const icon=box.querySelector('.mw-step-icon');
+        if(icon)icon.textContent='✅';
+        box.style.color='#16A34A';
+        box.style.fontWeight='400';
+      });
+      const barEl=progressDiv.querySelector('#mw-progress-bar');
+      if(barEl)barEl.style.width='100%';
+      const counterEl=progressDiv.querySelector('#mw-step-counter');
+      if(counterEl)counterEl.textContent='11/11 단계 (100%)';
+    }
+  }
+
+  // 초기 렌더 (정적 구조 1회)
+  buildSkeleton();
+  updateElapsed();
+
+  // ★ 1초마다 시계 갱신 (polling과 별도 — 시계가 부드럽게 흐름)
+  _mwElapsedTicker=setInterval(updateElapsed, 1000);
 
   // ★ 디버깅 로그 (KFPC 진단 요청)
   console.log('[MW][startMwProgressMonitor] polling 시작', { progressId });
@@ -5495,7 +5604,6 @@ function startMwProgressMonitor(progressId, progressDiv){
     _pollCount++;
     try{
       const snap=await getDoc(doc(db,'mw_gen_progress',progressId));
-      const elapsed=Math.round((Date.now()-startTime)/1000);
 
       if(snap.exists()){
         const p=snap.data();
@@ -5507,29 +5615,36 @@ function startMwProgressMonitor(progressId, progressDiv){
         if(step!==_lastStep&&step>0){
           const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
           _mwLog.push(`[${ts}] Step ${step}/11 — ${label}`);
-          _lastStep=step;
           console.log('[MW][monitor] 단계 변경', { step, pct, label, status: p.status });
         }
 
-        renderProgress(step,label,pct,elapsed);
+        updateStep(step,label,pct);
+        updateLog();
 
         // 완료 또는 실패 처리
         if(p.status==='complete'){
           stopMwProgressMonitor();
           const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
           _mwLog.push(`[${ts}] ✅ 생성 완료`);
-          renderProgress(11,'✅ 생성 완료',100,elapsed);
-          console.log('[MW][monitor] 완료', { progressId, totalElapsed: elapsed+'초' });
+          updateLog();
+          showFinalState('complete','✅ 생성 완료');
+          // ★ 토스트 + localStorage (다른 메뉴에서 작업 종료 시 복귀 후 알림)
+          try{toast?.('병의원 컨설팅 생성 완료','success');}catch(_){}
+          try{localStorage.setItem('mw_last_result_'+progressId, JSON.stringify({type:'complete',ts:Date.now(),title:p.title||''}));}catch(_){}
+          console.log('[MW][monitor] 완료', { progressId });
         }else if(p.status==='error'){
           stopMwProgressMonitor();
           const ts=new Date().toLocaleTimeString('ko-KR',{hour12:false});
           _mwLog.push(`[${ts}] ❌ 오류: ${p.error||'unknown'}`);
-          renderProgress(step,'❌ 생성 실패',pct,elapsed);
+          updateLog();
+          showFinalState('error','❌ 생성 실패');
+          try{toast?.('병의원 컨설팅 생성 실패: '+(p.error||'unknown'),'error');}catch(_){}
+          try{localStorage.setItem('mw_last_result_'+progressId, JSON.stringify({type:'error',ts:Date.now(),error:p.error||'unknown'}));}catch(_){}
           console.error('[MW][monitor] 에러', { progressId, error: p.error, step });
         }
       }else{
-        // 아직 첫 기록 없음
-        renderProgress(0,'⏳ 함수 시작 대기 중... (Cold Start 가능)',0,elapsed);
+        // 아직 첫 기록 없음 — 라벨만 갱신 (시계는 1초 ticker가 흐르는 중)
+        updateStep(0,'⏳ 함수 시작 대기 중... (Cold Start 가능)',0);
         // ★ 30초 이상 첫 기록 없으면 진단 메시지
         if(_pollCount===15){
           console.warn('[MW][monitor] 30초 동안 mw_gen_progress 문서 없음 — 함수 호출 자체가 실패했을 수 있음', { progressId });
@@ -5538,11 +5653,12 @@ function startMwProgressMonitor(progressId, progressDiv){
     }catch(e){
       console.warn('[MW] progress fetch error:',e.message);
     }
-  },2000); // 2초마다 갱신
+  },2000); // 2초마다 데이터 polling (UI 시계는 1초마다)
 }
 
 function stopMwProgressMonitor(){
   if(_mwActiveProgress){clearInterval(_mwActiveProgress);_mwActiveProgress=null;}
+  if(_mwElapsedTicker){clearInterval(_mwElapsedTicker);_mwElapsedTicker=null;} // ★ 시계 ticker도 정리
 }
 
 /**
@@ -5609,7 +5725,7 @@ function startMwAutoRefresh(){
   if(_mwAutoRefresh)return; // 중복 방지
   _mwAutoRefresh=setInterval(()=>{
     const panel=$('p-medical-weekly');
-    if(!panel||panel.style.display==='none')return; // 페이지 비활성
+    if(!panel||panel.classList.contains('hidden'))return; // ★ 수정: 패널은 .hidden 클래스로 제어됨 (style.display 아님)
     if(Object.keys(_mwActiveJobs||{}).length===0)return; // 진행 중 작업 없음
     loadMedicalWeekly(); // 표만 새로고침 (진행 모니터는 별도 polling)
   },30000); // 30초
