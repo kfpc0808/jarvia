@@ -728,7 +728,7 @@
         </div>
         <div class="fr">
           <div class="fg">
-            <label>발행 예정일 <i>*</i></label>
+            <label>게시일 <i>*</i></label>
             <input type="date" id="tcw-new-date" onchange="onNewTopicDateChange()" style="width:100%">
           </div>
           <div class="fg">
@@ -776,7 +776,15 @@
           </label>
           <div style="margin-top:4px;margin-left:24px;font-size:11px;color:#795548;line-height:1.5">
             체크 시: 5~8분 후 생성이 완료되면 <strong>자동으로 사용자 화면에 게시</strong>됩니다.<br>
-            미체크 시: 생성 후 비공개 상태로 대기, 발행 예정일 오전 9시에 자동 게시 (또는 수동 "🚀 게시" 버튼 클릭).
+            미체크 시: 생성 후 비공개 상태로 대기, 게시일 오전 9시에 자동 게시 (또는 수동 "🚀 게시" 버튼 클릭).
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0 0 0;padding-top:8px;border-top:1px dashed #F57C00">
+            <input type="checkbox" id="tcw-new-temp-publish" style="width:16px;height:16px;cursor:pointer">
+            <strong>📌 임시 발행 (선택일 그대로 발행, 수/목·중복 무시)</strong>
+          </label>
+          <div style="margin-top:4px;margin-left:24px;font-size:11px;color:#795548;line-height:1.5">
+            체크 시: 정기 캘린더 슬롯과 무관하게 <strong>입력한 게시일에 그대로 발행</strong>됩니다 (금/토/일 등 모든 요일 가능, 같은 날짜 중복 OK).<br>
+            미체크 시: 정기 발행으로 처리 (수·목 자동 배정, 중복 검증 작동).
           </div>
         </div>
         <div style="margin-top:8px;padding:10px 14px;background:#E8F5E9;border-radius:6px;border-left:3px solid #2E7D32;font-size:12px;color:#1B5E20">
@@ -850,12 +858,12 @@
         </div>
         <div class="fr">
           <div class="fg">
-            <label>발행 예정일 (선택)</label>
+            <label>게시일 (선택)</label>
             <input type="date" id="mw-manual-publish-date" style="width:100%">
           </div>
         </div>
         <div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:6px;border-left:3px solid #DC2626;font-size:12px;color:#991B1B">
-          ⚠️ 5~8분 후 생성이 완료됩니다. 발행 예정일 미지정 시 오늘 날짜로 등록됩니다.
+          ⚠️ 5~8분 후 생성이 완료됩니다. 게시일 미지정 시 오늘 날짜로 등록됩니다.
         </div>
         <div id="mw-manual-progress" style="display:none;margin-top:10px;padding:10px 14px;background:#FEF2F2;border-radius:6px;font-size:13px;color:#991B1B"></div>
         <div style="margin-top:12px;display:flex;gap:8px">
@@ -4858,7 +4866,7 @@ function twWeekDate(year,week,day){
   startOfW1.setDate(jan4.getDate()-(jan4.getDay()||7)+1);
   const weekStart=new Date(startOfW1);
   weekStart.setDate(startOfW1.getDate()+(week-1)*7);
-  const offset=day==='wed'?2:3; // 월=0 기준 수=2 목=3
+  const offset=({mon:0,tue:1,wed:2,thu:3,fri:4,sat:5,sun:6})[day]??2; // 월=0 기준
   weekStart.setDate(weekStart.getDate()+offset);
   const y=weekStart.getFullYear();
   const m=String(weekStart.getMonth()+1).padStart(2,'0');
@@ -6113,10 +6121,11 @@ async function tcwOpenEditForm(topicId){
   $('tcw-new-keyword1').value=topic.keyword||'';
   $('tcw-new-keyword2').value=topic.keyword2||'';
   $('tcw-new-immediate-publish').checked=false;
+  if($('tcw-new-temp-publish'))$('tcw-new-temp-publish').checked=false;
 
   // 게시완료 행은 제목·키워드만 수정 가능 (Q2=B 정책)
   const isPublished=topic.status==='published';
-  const lockable=['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish'];
+  const lockable=['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish','tcw-new-temp-publish'];
   lockable.forEach(id=>{
     const el=$(id);
     if(el){el.disabled=isPublished; el.style.opacity=isPublished?'0.5':'1'; el.style.cursor=isPublished?'not-allowed':'';}
@@ -6163,13 +6172,20 @@ async function updateTopic(){
     const type=$('tcw-new-type').value;
     const category=$('tcw-new-category').value.trim();
     const insuranceType=$('tcw-new-insurance').value;
-    if(!dateStr){toast('발행 예정일을 선택해주세요.','warning');return;}
+    if(!dateStr){toast('게시일을 선택해주세요.','warning');return;}
     if(!category){toast('분야를 입력해주세요.','warning');return;}
     const wd=computeWeekFromDate(dateStr);
     Object.assign(updates,{year:wd.year,week:wd.week,day:wd.day,type,category,insuranceType});
   }
 
-  if(!confirm(`주제를 수정합니다:\n\n제목: ${title}\n키워드: ${keyword} / ${keyword2||'(없음)'}\n\n진행할까요?`))return;
+  let _dateLine='';
+  if(!isPublished){
+    const _ds=$('tcw-new-date').value;
+    const _dl={mon:'월',tue:'화',wed:'수',thu:'목',fri:'금',sat:'토',sun:'일'};
+    const _wd=computeWeekFromDate(_ds);
+    _dateLine=`\n게시일: ${_ds} (${_dl[_wd.day]||'?'})`;
+  }
+  if(!confirm(`주제를 수정합니다:\n\n제목: ${title}${_dateLine}\n키워드: ${keyword} / ${keyword2||'(없음)'}\n\n진행할까요?`))return;
 
   try{
     await updateDoc(doc(db,'tax_weekly_topics',_tcwEditingId),updates);
@@ -6195,7 +6211,7 @@ function showTcwAddTopicForm(){
   _tcwFormMode='new';
   _tcwEditingId=null;
   $('tcw-form-header').textContent='➕ TCW 신규 주제 추가 — 원하는 주제를 직접 등록하고 즉시 생성할 수 있습니다';
-  ['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish'].forEach(id=>{
+  ['tcw-new-date','tcw-new-type','tcw-new-category','tcw-new-insurance','tcw-new-immediate-publish','tcw-new-temp-publish'].forEach(id=>{
     const el=$(id);
     if(el){el.disabled=false; el.style.opacity=''; el.style.cursor='';}
   });
@@ -6218,12 +6234,16 @@ function showTcwAddTopicForm(){
   $('tcw-new-keyword1').value='';
   $('tcw-new-keyword2').value='';
   $('tcw-new-immediate-publish').checked=false;
+  if($('tcw-new-temp-publish'))$('tcw-new-temp-publish').checked=false;
   $('tcw-add-topic-form').classList.remove('hidden');
   $('tcw-manual-form').classList.add('hidden'); // 기존 수동 생성 폼은 숨기기
 }
 
 function hideTcwAddTopicForm(){
   $('tcw-add-topic-form').classList.add('hidden');
+  // ── 안전 조치: 폼 닫을 때 수정 모드도 리셋 ──
+  _tcwFormMode='new';
+  _tcwEditingId=null;
 }
 
 // 발행일 변경 시 유형 자동 감지 (수=개인, 목=법인)
@@ -6268,7 +6288,7 @@ function autoSuggestKeywords(){
 function computeWeekFromDate(dateStr){
   const d=new Date(dateStr+'T00:00:00');
   const dow=d.getDay();
-  const day=dow===3?'wed':dow===4?'thu':'wed';
+  const day=({0:'sun',1:'mon',2:'tue',3:'wed',4:'thu',5:'fri',6:'sat'})[dow]||'wed';
   const temp=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
   const dn=temp.getUTCDay()||7;
   temp.setUTCDate(temp.getUTCDate()+4-dn);
@@ -6323,21 +6343,50 @@ async function saveNewTopic(andGenerate){
   const keyword=$('tcw-new-keyword1').value.trim();
   const keyword2=$('tcw-new-keyword2').value.trim();
   const immediatePublish=$('tcw-new-immediate-publish').checked;
+  // ★ 임시 발행 모드 (수/목·중복 무시, 입력 날짜 그대로)
+  const tempPublish=$('tcw-new-temp-publish')?.checked||false;
 
   if(!title||title.length<5){toast('제목을 5자 이상 입력해주세요.','warning');return;}
-  if(!dateStr){toast('발행 예정일을 선택해주세요.','warning');return;}
+  if(!dateStr){toast('게시일을 선택해주세요.','warning');return;}
   if(!category){toast('분야를 입력해주세요.','warning');return;}
   if(!keyword){toast('키워드1을 입력해주세요. (🤖 자동 추천 활용 가능)','warning');return;}
 
-  const {year,week,day}=computeWeekFromDate(dateStr);
-  const contentId=`tcw_${year}_${week}_${day}_m${Date.now().toString(36).slice(-4)}`;
+  // 임시 발행이면 실제 요일 기준 dayKey 계산, 아니면 기존 로직 (wed/thu 강제)
+  let year,week,day;
+  if(tempPublish){
+    const _td=new Date(dateStr+'T00:00:00');
+    const _dow=_td.getDay();
+    const _dayMap={0:'sun',1:'mon',2:'tue',3:'wed',4:'thu',5:'fri',6:'sat'};
+    day=_dayMap[_dow]||'wed';
+    year=_td.getFullYear();
+    // ISO week 계산
+    const _temp=new Date(Date.UTC(_td.getFullYear(),_td.getMonth(),_td.getDate()));
+    const _dn=_temp.getUTCDay()||7;
+    _temp.setUTCDate(_temp.getUTCDate()+4-_dn);
+    const _yStart=new Date(Date.UTC(_temp.getUTCFullYear(),0,1));
+    week=Math.ceil(((_temp-_yStart)/86400000+1)/7);
+  }else{
+    const _w=computeWeekFromDate(dateStr);
+    year=_w.year; week=_w.week; day=_w.day;
+  }
+  // contentId — 임시 발행이면 _t 접미사, 정기면 _m 접미사 (기존 로직)
+  const contentId=tempPublish
+    ?`tcw_${year}_${week}_${day}_t${Date.now().toString(36)}`
+    :`tcw_${year}_${week}_${day}_m${Date.now().toString(36).slice(-4)}`;
 
-  const dupe=_twAll.find(t=>t.year===year&&t.week===week&&t.day===day&&t.title===title);
-  if(dupe){toast('동일 날짜에 같은 제목의 주제가 이미 존재합니다.','warning');return;}
+  // 임시 발행 모드면 중복 체크도 우회 (담당자가 의도적으로 중복 입력 가능)
+  if(!tempPublish){
+    const dupe=_twAll.find(t=>t.year===year&&t.week===week&&t.day===day&&t.title===title);
+    if(dupe){toast('동일 날짜에 같은 제목의 주제가 이미 존재합니다.','warning');return;}
+  }
 
-  const dayLabel=day==='wed'?'수(개인)':'목(법인)';
+  const dayLabelMap={wed:'수',thu:'목',fri:'금',sat:'토',sun:'일',mon:'월',tue:'화'};
+  const dayLabel=tempPublish
+    ?`${dayLabelMap[day]||day}(${type==='personal'?'개인':'법인'}, 임시발행)`
+    :(day==='wed'?'수(개인)':'목(법인)');
   const publishNote=andGenerate?(immediatePublish?'\n⚡ 생성 완료 즉시 게시':'\n※ 저장 후 즉시 생성 파이프라인 실행 (5~8분)'):'';
-  if(!confirm(`신규 주제를 추가합니다:\n\n제목: ${title}\n발행일: ${dateStr} (${week}주 ${dayLabel})\n분야: ${category} / 보험유형: ${insuranceType}\n키워드: ${keyword} / ${keyword2||'(없음)'}${publishNote}\n\n진행할까요?`))return;
+  const tempNote=tempPublish?'\n📌 임시 발행 모드 (선택일 그대로, 중복 무시)':'';
+  if(!confirm(`신규 주제를 추가합니다:\n\n제목: ${title}\n발행일: ${dateStr} (${week}주 ${dayLabel})\n분야: ${category} / 보험유형: ${insuranceType}\n키워드: ${keyword} / ${keyword2||'(없음)'}${tempNote}${publishNote}\n\n진행할까요?`))return;
 
   try{
     const newTopic={
@@ -6346,6 +6395,7 @@ async function saveNewTopic(andGenerate){
       createdAt:serverTimestamp(),
       createdBy:'manual_admin',
     };
+    if(tempPublish)newTopic.tempPublish=true; // 식별용 마커
     const newDocRef=doc(collection(db,'tax_weekly_topics'));
     await setDoc(newDocRef,newTopic);
     toast('✅ 신규 주제 저장 완료','success');
@@ -6365,10 +6415,16 @@ async function saveNewTopic(andGenerate){
       try{await setDoc(doc(db,'tcw_gen_progress',progressId),{topicId,title,status:'starting',createdAt:serverTimestamp()});}catch(e){console.warn('[TCW] progress 초기 기록 실패:',e);}
       startTcwProgress(progressId);
       try{
+        // ★ 백엔드로 보낼 payload — 임시 발행 모드 플래그 포함
+        const _payload={key:TCW_API_KEY,topicId,keyword,keyword2,day,progressId};
+        if(tempPublish){
+          _payload.tempPublish=true;
+          _payload.publishDate=dateStr;
+        }
         const res=await fetch(TCW_TRIGGER_URL,{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({key:TCW_API_KEY,topicId,keyword,keyword2,day,progressId}),
+          body:JSON.stringify(_payload),
           signal:AbortSignal.timeout(600000),
         });
         const data=await res.json();
