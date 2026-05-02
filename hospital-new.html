@@ -106,6 +106,29 @@ main{max-width:1400px;margin:0 auto;padding:80px 16px 40px}
 .tbl .col-tel{color:var(--accent);font-weight:600;white-space:nowrap}
 .tbl .col-date{color:var(--text-lt);white-space:nowrap;font-family:monospace}
 .tbl .col-name{font-weight:600;color:var(--primary)}
+/* ★ 사용자뷰 첫 행 강조 (클릭 가능 행) */
+.tbl tbody tr.row-highlight{background:linear-gradient(90deg,#FEF3C7,#FDE68A);cursor:pointer;font-weight:700}
+.tbl tbody tr.row-highlight:hover{background:linear-gradient(90deg,#FDE68A,#FCD34D)}
+.tbl tbody tr.row-highlight td{color:var(--primary)}
+.tbl tbody tr.row-highlight td.col-name::after{content:" 👆";font-size:12px}
+/* ★ 사용자뷰 마스킹 행 (클릭 시 안내) */
+.tbl tbody tr.row-masked{cursor:not-allowed;color:#9CA3AF}
+.tbl tbody tr.row-masked td{color:#9CA3AF;letter-spacing:1px}
+.tbl tbody tr.row-masked:hover{background:#F9FAFB}
+/* ★ 상세 모달 */
+.hosp-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.hosp-modal.hidden{display:none}
+.hosp-modal-bg{position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px)}
+.hosp-modal-box{position:relative;background:#fff;border-radius:12px;padding:24px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.hosp-modal-x{position:absolute;top:12px;right:12px;background:transparent;border:none;font-size:28px;color:#9CA3AF;cursor:pointer;line-height:1;padding:4px 8px}
+.hosp-modal-x:hover{color:#374151}
+.hosp-modal-name{font-size:20px;font-weight:700;color:var(--primary);margin-bottom:12px;padding-right:30px}
+.hosp-modal-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.hosp-modal-info{display:grid;grid-template-columns:80px 1fr;gap:10px 14px;font-size:14px;line-height:1.6}
+.hosp-modal-info .lbl{color:var(--text-lt);font-weight:600}
+.hosp-modal-info .val{color:var(--text)}
+.hosp-modal-info .val a{color:var(--accent);font-weight:600;text-decoration:none}
+.hosp-modal-info .val a:hover{text-decoration:underline}
 
 .pager{display:flex;justify-content:center;gap:6px;margin-top:14px}
 .pager button{padding:6px 12px;border:1px solid var(--border);border-radius:5px;background:#fff;cursor:pointer;font-size:13px;color:var(--text);font-family:var(--font)}
@@ -224,8 +247,13 @@ main{max-width:1400px;margin:0 auto;padding:80px 16px 40px}
       </div>
 
       <div id="userView" class="hidden">
-        <h3 style="font-size:14px;color:var(--primary);margin-bottom:8px">🎁 샘플 (가장 최근 개원 1곳)</h3>
-        <div id="sampleCard"></div>
+        <h3 style="font-size:14px;color:var(--primary);margin-bottom:8px">🎁 신규 개원 병의원 — 미리보기 (첫 번째 항목만 상세 확인 가능)</h3>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>개원일</th><th>병원명</th><th>종별</th><th>시도</th><th>시군구</th><th>주소</th><th>전화</th><th>의사</th><th>홈피</th></tr></thead>
+            <tbody id="userTbody"></tbody>
+          </table>
+        </div>
         <div class="contact-box">
           <h3>💼 더 많은 정보가 필요하신가요?</h3>
           <p>전체 신규 개원 병의원 정보는 <strong>개별 컨설팅</strong>으로 제공됩니다.<br>영업 활동에 활용하실 분은 아래로 문의해 주세요.</p>
@@ -253,6 +281,15 @@ main{max-width:1400px;margin:0 auto;padding:80px 16px 40px}
     <div id="loadingArea" class="loading hidden"><span class="spinner"></span> 검색 중...</div>
   </div>
 </main>
+
+<!-- 상세 정보 모달 (사용자뷰 첫 행 클릭 시) -->
+<div class="hosp-modal hidden" id="hospModal">
+  <div class="hosp-modal-bg" onclick="window._closeHospModal()"></div>
+  <div class="hosp-modal-box">
+    <button class="hosp-modal-x" onclick="window._closeHospModal()">×</button>
+    <div id="hospModalBody"></div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -393,6 +430,10 @@ async function search(){
   if(!fromD||!toD){toast('기간을 선택하세요.','err');return;}
   if(fromD>toD){toast('시작일이 종료일보다 늦습니다.','err');return;}
 
+  // ★ 시도/시군구 필수 검증 — '전체'로 검색 차단 (영업 도구 정책)
+  if(!$('sido').value){toast('시도를 선택해주세요.','err');return;}
+  if(!$('sggu').value){toast('시군구를 선택해주세요.','err');return;}
+
   const sido=$('sido').value||null;
   const sggu=$('sggu').value||null;
   const clCdNms=Array.from(document.querySelectorAll('.cl-chk:checked')).map(c=>c.value);
@@ -459,7 +500,7 @@ function render(d,fromD,toD){
     $('userView').classList.remove('hidden');
     $('adminView').classList.add('hidden');
     $('btnCsv').classList.add('hidden');
-    renderSampleCard(d.sample);
+    renderUserTable(d.sample,stats.total);
   }
 }
 
@@ -477,10 +518,72 @@ function renderBarChart(targetId,obj,limit,sortByKey){
   }).join('');
 }
 
-function renderSampleCard(sample){
-  if(!sample){$('sampleCard').innerHTML='<p style="text-align:center;color:var(--text-lt);padding:20px">샘플 없음</p>';return;}
-  $('sampleCard').innerHTML=`<div class="sample-card"><div class="sample-tag">🎁 SAMPLE</div><div class="sample-name">${esc(sample.yadmNm)}</div><div class="sample-meta"><span class="pill">${esc(sample.clCdNm)}</span><span class="pill">${esc(sample.sidoCdNm)} ${esc(sample.sgguCdNm)}</span><span class="pill">개원일 ${fmtDate8(sample.estbDd)}</span><span class="pill">의사 ${sample.drTotCnt}명</span></div><div class="sample-info"><span class="lbl">📍 주소</span><span class="val sample-blur">●●●●●●●●●●●●●●●●●●●● (관리자 문의)</span><span class="lbl">📞 전화</span><span class="val sample-blur">●●●-●●●●-●●●● (관리자 문의)</span><span class="lbl">🌐 홈피</span><span class="val sample-blur">●●●●●●●●●●●● (관리자 문의)</span></div></div>`;
+function renderUserTable(sample,total){
+  const body=$('userTbody');
+  if(!sample){
+    body.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--text-lt);padding:30px">샘플 정보가 없습니다.</td></tr>';
+    return;
+  }
+  // 첫 행: 실제 sample 데이터 (클릭 가능, 강조)
+  let html=`<tr class="row-highlight" onclick="window._openHospModal()">
+    <td class="col-date">${fmtDate8(sample.estbDd)}</td>
+    <td class="col-name">${esc(sample.yadmNm)}</td>
+    <td><span class="cl-pill">${esc(sample.clCdNm)}</span></td>
+    <td>${esc(sample.sidoCdNm)}</td>
+    <td>${esc(sample.sgguCdNm)}</td>
+    <td style="font-size:12px">${esc(sample.addr||'').slice(0,20)}${(sample.addr||'').length>20?'...':''}</td>
+    <td class="col-tel">${esc(sample.telno)||'-'}</td>
+    <td>${sample.drTotCnt}명</td>
+    <td>${sample.hospUrl?'<span style="color:var(--accent)">링크</span>':'-'}</td>
+  </tr>`;
+  // 나머지 행: 마스킹 (총 건수 - 1, 최대 14개 표시)
+  const remaining=Math.max(0,(total||1)-1);
+  const maskCount=Math.min(remaining,14); // 페이지 1개 분량만 미리보기
+  for(let i=0;i<maskCount;i++){
+    html+=`<tr class="row-masked" onclick="window._maskedRowClick()">
+      <td class="col-date">●●●●-●●-●●</td>
+      <td>●●●●●●●● 의원</td>
+      <td>●●</td>
+      <td>●●</td>
+      <td>●●●</td>
+      <td>●●●●●●●●●●●●</td>
+      <td>●●●-●●●●-●●●●</td>
+      <td>●명</td>
+      <td>-</td>
+    </tr>`;
+  }
+  if(remaining>maskCount){
+    html+=`<tr><td colspan="9" style="text-align:center;color:var(--text-lt);padding:14px;font-size:13px">+ ${fmt(remaining-maskCount)}곳 더 있음 — 전체 정보는 <strong style="color:var(--accent)">컨설팅 문의</strong></td></tr>`;
+  }
+  body.innerHTML=html;
 }
+
+// 첫 행 클릭 → 상세 모달 열기 (현재 sample을 lastResult에서 참조)
+window._openHospModal=function(){
+  const sample=lastResult?.sample;
+  if(!sample){toast('샘플 정보를 찾을 수 없습니다.','err');return;}
+  const body=$('hospModalBody');
+  body.innerHTML=`
+    <div class="hosp-modal-name">${esc(sample.yadmNm)}</div>
+    <div class="hosp-modal-meta">
+      <span class="pill">${esc(sample.clCdNm)}</span>
+      <span class="pill">${esc(sample.sidoCdNm)} ${esc(sample.sgguCdNm)}</span>
+      <span class="pill">개원일 ${fmtDate8(sample.estbDd)}</span>
+      <span class="pill">의사 ${sample.drTotCnt}명</span>
+    </div>
+    <div class="hosp-modal-info">
+      <span class="lbl">📍 주소</span><span class="val">${esc(sample.addr||'-')}</span>
+      <span class="lbl">📞 전화</span><span class="val">${sample.telno?`<a href="tel:${esc(sample.telno)}">${esc(sample.telno)}</a>`:'-'}</span>
+      <span class="lbl">🌐 홈피</span><span class="val">${sample.hospUrl?`<a href="${esc(sample.hospUrl)}" target="_blank" rel="noopener">${esc(sample.hospUrl)}</a>`:'-'}</span>
+    </div>
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-lt);font-size:12px;color:var(--text-lt);text-align:center">
+      💼 더 많은 신규 개원 정보는 컨설팅 문의 → <a href="mailto:polarislkh@naver.com" style="color:var(--accent);font-weight:600">polarislkh@naver.com</a>
+    </div>
+  `;
+  $('hospModal').classList.remove('hidden');
+};
+window._closeHospModal=function(){$('hospModal').classList.add('hidden');};
+window._maskedRowClick=function(){toast('🔒 전체 정보는 컨설팅 문의로만 제공됩니다 (polarislkh@naver.com)','err');};
 
 function renderAdminTable(hospitals){
   const total=hospitals.length;
