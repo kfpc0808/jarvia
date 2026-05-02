@@ -5720,13 +5720,22 @@ window.mwReopenMonitor=mwReopenMonitor;
 async function mwPublish(contentId){
   if(!confirm('이 콘텐츠를 게시하시겠습니까?\n사용자 화면에 즉시 공개됩니다.'))return;
   try{
-    await updateDoc(doc(db,'contents',contentId),{
+    const ref=doc(db,'contents',contentId);
+    // ★ upcoming_contents 동기화에 필요한 scheduledDate·title 사전 조회
+    //   (자동 게시 스케줄러 medicalWeekly.js L1340~ 와 동일한 동기화 정책)
+    const cSnap=await getDoc(ref);
+    const cData=cSnap.exists()?cSnap.data():{};
+    await updateDoc(ref,{
       isPublished:true,
       isActive:true,
       adminOnly:false, // ★ 일반 사용자 공개 (TCW 동일 정책)
       publishedAt:serverTimestamp(),
       updatedAt:serverTimestamp()
     });
+    // ★ upcoming_contents.completed=true 동기화 (게시예정콘텐츠 메뉴 표시 일관성)
+    if(cData.scheduledDate){
+      await _syncUpcomingCompleted(cData.scheduledDate,'병의원 컨설팅',cData.title||'');
+    }
     toast('게시 완료 (일반 공개)','success');
     loadMedicalWeekly();
   }catch(e){toast('게시 실패: '+e.message,'error');}
@@ -5737,6 +5746,8 @@ async function mwUnpublish(contentId){
   try{
     await updateDoc(doc(db,'contents',contentId),{
       isPublished:false,
+      isActive:false,        // ★ TCW tcwUnpublishContent와 동일 정책
+      adminOnly:true,        // ★ 회원 노출 차단 (게시 깃발 일관성)
       updatedAt:serverTimestamp()
     });
     toast('비공개 전환 완료','success');
