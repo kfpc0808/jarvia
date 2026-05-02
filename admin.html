@@ -2092,7 +2092,7 @@ function onCfTypeChange(){const t=$('cf-type').value;const labels={video:'영상
 async function uploadAudio(input){
   const file=input.files[0];if(!file)return;
   if(!file.type.startsWith('audio/')){toast('오디오 파일만 업로드 가능합니다.','error');input.value='';return;}
-  if(file.size>50*1024*1024){toast('파일 크기는 50MB 이하만 가능합니다.','error');input.value='';return;}
+  if(file.size>200*1024*1024){toast('파일 크기는 200MB 이하만 가능합니다.','error');input.value='';return;}
   const prog=$('cf-audio-progress');prog.textContent='업로드 중... 0%';
   const ext=file.name.split('.').pop()||'mp3';
   const path='jarvia/audio/'+Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9가-힣._-]/g,'');
@@ -4708,6 +4708,12 @@ function hideWlForm(){$('wl-form').classList.add('hidden');_wlFiles={html:null,a
 
 function wlFileSelected(type,input){
   const file=input.files[0];if(!file)return;
+  // ★ 오디오 파일 크기 검증 (200MB 제한)
+  if((type==='audio1'||type==='audio2')&&file.size>200*1024*1024){
+    toast('파일이 너무 큽니다 (최대 200MB)','error');
+    input.value='';
+    return;
+  }
   _wlFiles[type]=file;
   const nameEl=type==='html'?'wl-html-name':type==='audio1'?'wl-audio1-name':'wl-audio2-name';
   $(nameEl).textContent=file.name+' ('+(file.size/1024/1024).toFixed(1)+'MB)';
@@ -5848,10 +5854,10 @@ function mwUploadAudio(contentId){
     const file=e.target.files[0];
     if(!file)return;
 
-    // 파일 크기 검증 (50MB 제한)
-    const MAX_SIZE=50*1024*1024;
+    // 파일 크기 검증 (200MB 제한)
+    const MAX_SIZE=200*1024*1024;
     if(file.size>MAX_SIZE){
-      toast('파일이 너무 큽니다 (최대 50MB)','error');
+      toast('파일이 너무 큽니다 (최대 200MB)','error');
       return;
     }
 
@@ -6558,7 +6564,7 @@ async function saveNewTopic(andGenerate){
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(_payload),
-          signal:AbortSignal.timeout(600000),
+          signal:AbortSignal.timeout(90000), // ★ trigger-only (90초). 백엔드는 onSnapshot polling으로 추적
         });
         const data=await res.json();
         if(!data.success&&!data.skipped){
@@ -6571,6 +6577,15 @@ async function saveNewTopic(andGenerate){
           $('tcw-pm-result').style.color='#f85149';
         }
       }catch(e){
+        // ★ TimeoutError/AbortError는 백엔드가 죽었다는 뜻이 아님 (Cold Start 또는 작업 진행 중)
+        //   onSnapshot polling을 계속 살려두고 백엔드의 진짜 status (complete/error)를 추적
+        if(e.name==='TimeoutError'||e.name==='AbortError'){
+          console.log('[TCW] fetch timeout — 백엔드는 계속 실행 중, polling 유지');
+          $('tcw-pm-label').textContent='⏳ 백엔드 작업 진행 중 — 진행 상황은 계속 추적됩니다';
+          // ★ stopTcwProgress() 호출 안 함 — onSnapshot이 백엔드의 진짜 status를 받을 때까지 유지
+          return;
+        }
+        // 진짜 네트워크 에러 (CORS, DNS, 인증 실패 등)
         stopTcwProgress();
         window._tcwImmediatePublish=null;
         $('tcw-pm-label').textContent='❌ 요청 실패: '+e.message;
@@ -6616,7 +6631,7 @@ async function runTcwManual(){
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({key:TCW_API_KEY,topicId,keyword,keyword2,day:dayKey,progressId}),
-      signal:AbortSignal.timeout(600000),
+      signal:AbortSignal.timeout(90000), // ★ trigger-only (90초). 백엔드는 onSnapshot polling으로 추적
     });
     const data=await res.json();
     if(!data.success&&!data.skipped){
@@ -6628,6 +6643,15 @@ async function runTcwManual(){
       $('tcw-pm-result').style.color='#f85149';
     }
   }catch(e){
+    // ★ TimeoutError/AbortError는 백엔드가 죽었다는 뜻이 아님 (Cold Start 또는 작업 진행 중)
+    //   onSnapshot polling을 계속 살려두고 백엔드의 진짜 status (complete/error)를 추적
+    if(e.name==='TimeoutError'||e.name==='AbortError'){
+      console.log('[TCW] fetch timeout — 백엔드는 계속 실행 중, polling 유지');
+      $('tcw-pm-label').textContent='⏳ 백엔드 작업 진행 중 — 진행 상황은 계속 추적됩니다';
+      // ★ stopTcwProgress() 호출 안 함 — onSnapshot이 백엔드의 진짜 status를 받을 때까지 유지
+      return;
+    }
+    // 진짜 네트워크 에러 (CORS, DNS, 인증 실패 등)
     stopTcwProgress();
     $('tcw-pm-label').textContent='❌ 요청 실패: '+e.message;
     $('tcw-pm-bar').style.background='#da3633';
@@ -6975,6 +6999,8 @@ async function handleTcwHtmlUpload(input){
 async function handleTcwAudioUpload(input){
   const file=input.files[0];
   if(!file) return;
+  // ★ 파일 크기 검증 (200MB 제한)
+  if(file.size>200*1024*1024){toast('파일이 너무 큽니다 (최대 200MB)','error');input.value='';return;}
   const topicId=input.dataset.targetId;
   if(!topicId){toast('대상 주제를 찾을 수 없습니다.','error');return;}
   toast('🎵 오디오 업로드 중...','info');
@@ -7672,6 +7698,8 @@ function prTriggerUpload(reportId,type){
 async function handlePrFileUpload(input,type){
   if(!input.files[0]||!_prUploadTarget)return;
   const file=input.files[0];
+  // ★ 오디오 파일 크기 검증 (200MB 제한)
+  if(type==='audio'&&file.size>200*1024*1024){toast('파일이 너무 큽니다 (최대 200MB)','error');input.value='';return;}
   const{reportId}=_prUploadTarget;
   const fileExt=type==='ppt'?'pptx':type==='audio'?'m4a':type==='html'?'html':'pdf';
   const fmtKey=type==='ppt'?'ppt':type==='audio'?'audio':type==='html'?'html':'pdf';
