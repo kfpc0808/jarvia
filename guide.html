@@ -772,20 +772,25 @@ async function loadSections(){
     ];
     if(sections.length===0)throw new Error('가이드 섹션이 없습니다.');
 
-    // ===== 음성 연결 (Firestore 단일 문서 read — 1 read/page) =====
+    // ===== 음성 연결 (기존 Firestore guide_sections에서 audioUrl 매칭) =====
     // 실패해도 콘텐츠는 정상 표시 (graceful degradation)
     try{
-      const audioSnap=await getDoc(doc(db,'guide_audio_index','v1'));
-      if(audioSnap.exists()){
-        const audioMap=audioSnap.data()||{};
-        sections.forEach(s=>{
-          const a=audioMap[s.id];
-          if(a && a.audioUrl){
-            s.audioUrl=a.audioUrl;
-            s.duration=a.duration||0;
-          }
-        });
-      }
+      const q=query(collection(db,'guide_sections'),orderBy('order','asc'));
+      const snap=await getDocs(q);
+      const audioMap={};
+      snap.forEach(d=>{
+        const data=d.data();
+        if(data.order!=null && data.audioUrl){
+          audioMap[data.order]={audioUrl:data.audioUrl, duration:data.duration||0};
+        }
+      });
+      sections.forEach(s=>{
+        const a=audioMap[s.order];
+        if(a){
+          s.audioUrl=a.audioUrl;
+          s.duration=a.duration;
+        }
+      });
     }catch(audioErr){
       console.warn('[Guide] 음성 매칭 실패 (콘텐츠는 정상 표시):',audioErr);
     }
