@@ -506,6 +506,35 @@ body{
 .en-learn-block{margin:0 auto 20px}
 .en-speak-btn{display:inline-flex;align-items:center;gap:3px;padding:3px 10px;border-radius:14px;background:#E6F1FB;color:#185FA5;font-size:11px;cursor:pointer;border:none}
 .en-speak-btn:hover{background:#D0E4F7}
+
+/* ===== 📌 Curated Section (컨설턴트 추천 콘텐츠) ===== */
+.curated-section{margin:0 0 32px;padding:14px;background:#fff;border-radius:14px;border:2px solid var(--gold);box-shadow:0 0 0 4px rgba(201,169,110,0.12)}
+.curated-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.curated-title{font-size:13px;font-weight:700;color:var(--ink);letter-spacing:-0.2px}
+.curated-pageinfo{font-size:11px;color:var(--ink-lt)}
+.curated-pageinfo .cur-now{color:var(--accent);font-weight:700}
+.curated-pageinfo .cur-sep{color:#B4B2A9}
+.curated-viewport{overflow:hidden;position:relative}
+.curated-track{display:flex;transition:transform .35s cubic-bezier(.4,0,.2,1);will-change:transform}
+.curated-page{flex:0 0 100%;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.curated-page.single{grid-template-columns:1fr}
+.curated-card{background:var(--bg);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:10px 12px;display:flex;flex-direction:column}
+.curated-card-tags{display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap}
+.curated-card-tag{font-size:9px;padding:2px 6px;background:var(--accent-lt);color:var(--accent);border-radius:3px;font-weight:600}
+.curated-card-tag.gold{background:var(--gold-lt);color:var(--gold-dk)}
+.curated-card-title{font-size:12px;font-weight:600;color:var(--ink);line-height:1.4;min-height:34px;letter-spacing:-0.1px}
+.curated-card-msg{margin-top:6px;padding:7px 9px;background:var(--gold-lt);border-radius:5px;font-size:11px;color:var(--gold-dk);font-style:italic;line-height:1.45}
+.curated-card-actions{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.curated-card-btn{font-size:11px;padding:6px;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;text-align:center;display:block}
+.curated-card-btn.view{background:var(--accent);color:#fff}
+.curated-card-btn.view:hover{background:var(--accent-bright)}
+.curated-card-btn.kakao{background:#FEE500;color:#3C1E1E}
+.curated-card-btn.kakao:hover{background:#FDDA00}
+.curated-dots{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;margin-bottom:4px}
+.curated-dot{width:5px;height:5px;background:#D3D1C7;border-radius:50%;cursor:pointer;transition:all .2s var(--ease);border:none;padding:0}
+.curated-dot.active{width:18px;height:5px;background:var(--accent);border-radius:3px}
+.curated-hint{text-align:center;font-size:10px;color:var(--ink-sub);margin-top:2px}
+@media(min-width:520px){.curated-card-actions{flex-direction:row}.curated-card-btn{flex:1}}
 </style>
   <script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.2/kakao.min.js" crossorigin="anonymous"></script>
   <script>Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
@@ -605,6 +634,21 @@ body{
 
   <!-- Dynamic Sections Container -->
   <div id="sectionsContainer"></div>
+
+  <!-- ▼ 📌 Curated Section (컨설턴트가 고른 콘텐츠) -->
+  <div class="wrap">
+    <div class="curated-section" id="curatedSection" style="display:none">
+      <div class="curated-head">
+        <div class="curated-title">📌 컨설턴트가 고른 콘텐츠</div>
+        <div class="curated-pageinfo"><span class="cur-now" id="curatedPageNow">1</span><span class="cur-sep"> / </span><span id="curatedPageTotal">1</span></div>
+      </div>
+      <div class="curated-viewport" id="curatedViewport">
+        <div class="curated-track" id="curatedTrack"></div>
+      </div>
+      <div class="curated-dots" id="curatedDots"></div>
+      <div class="curated-hint" id="curatedHint">← 좌우로 밀어서 다음 →</div>
+    </div>
+  </div>
 
   <!-- Bottom CTA -->
   <div class="wrap">
@@ -840,7 +884,13 @@ async function init(){
     // 5. 하단 공유바 표시
     document.getElementById('shareBar').style.display='flex';
 
-    // 6. 샘플 프로필 안내 팝업 (consultants 미등록 시)
+    // 6. 📌 컨설턴트 큐레이션 로드 (loginId → uid 매핑 후 onSnapshot)
+    if(!userQ.empty){
+      const _fcAuthUid=userQ.docs[0].id;
+      loadCuratedPicks(_fcAuthUid);
+    }
+
+    // 7. 샘플 프로필 안내 팝업 (consultants 미등록 시)
     if(window._isSampleProfile){
       document.getElementById('sampleNoticeModal').classList.add('active');
     }
@@ -857,6 +907,155 @@ function showError(title,msg){
   const el=document.getElementById('errorState');
   el.innerHTML=`<h2>${esc(title)}</h2><p>${esc(msg)}</p><br><a href="https://jarvia.co.kr" style="color:var(--accent)">JARVIA 메인으로</a>`;
   el.style.display='block';
+}
+
+// ═══ 📌 Curated Picks (컨설턴트 추천 콘텐츠) ═══
+let _curPicks=[];        // [{pickId, contentId, message, order, _content}]
+let _curPageIdx=0;       // 현재 페이지 인덱스 (0-based)
+
+async function loadCuratedPicks(fcAuthUid){
+  try{
+    const pickSnap=await getDocs(query(
+      collection(db,'curated_picks'),
+      where('userId','==',fcAuthUid),
+      orderBy('order')
+    ));
+    const picks=pickSnap.docs.map(d=>d.data());
+    if(!picks.length){return;}
+    // 콘텐츠 메타 일괄 조회
+    const cMap={};
+    for(const p of picks){
+      const d=await getDoc(doc(db,'contents',p.contentId));
+      if(d.exists())cMap[p.contentId]=d.data();
+    }
+    _curPicks=picks.filter(p=>cMap[p.contentId]).map(p=>({...p,_content:cMap[p.contentId]}));
+    if(!_curPicks.length){return;}
+    renderCuratedSection();
+  }catch(e){
+    console.warn('loadCuratedPicks fail:',e);
+  }
+}
+
+function renderCuratedSection(){
+  const sec=document.getElementById('curatedSection');
+  if(!sec||!_curPicks.length)return;
+  sec.style.display='block';
+  // 2장씩 페어로 묶기
+  const pages=[];
+  for(let i=0;i<_curPicks.length;i+=2){
+    pages.push(_curPicks.slice(i,i+2));
+  }
+  document.getElementById('curatedPageTotal').textContent=pages.length;
+  // 트랙에 페이지 렌더
+  const track=document.getElementById('curatedTrack');
+  track.innerHTML=pages.map(page=>{
+    const isSingle=page.length===1;
+    const cards=page.map(p=>renderCuratedCard(p)).join('');
+    return `<div class="curated-page${isSingle?' single':''}">${cards}</div>`;
+  }).join('');
+  // 페이지 닷
+  const dots=document.getElementById('curatedDots');
+  if(pages.length<=1){
+    dots.innerHTML='';
+    document.getElementById('curatedHint').style.display='none';
+  }else{
+    dots.innerHTML=pages.map((_,i)=>`<button class="curated-dot${i===0?' active':''}" onclick="curatedGoTo(${i})"></button>`).join('');
+    document.getElementById('curatedHint').style.display='';
+  }
+  _curPageIdx=0;
+  curatedUpdatePos();
+  setupCuratedSwipe();
+}
+
+function renderCuratedCard(p){
+  const c=p._content;
+  const title=esc(c.title||'(제목 없음)');
+  // URL 결정
+  const url=buildContentUrl(c);
+  // 카테고리 태그 (간단 추론)
+  const tags=getCuratedTags(c);
+  const tagsHtml=tags.map((t,i)=>`<span class="curated-card-tag${i%2?' gold':''}">${esc(t)}</span>`).join('');
+  const msgHtml=p.message
+    ?`<div class="curated-card-msg">💬 "${esc(p.message)}"</div>`
+    :'';
+  // 카카오톡 1:1 채팅 + 메시지 프리필
+  const fc=fcData||{};
+  const kakaoUrl=fc.kakaoUrl||'#';
+  const prefillMsg=`안녕하세요, '${(c.title||'').slice(0,40)}' 콘텐츠 보고 연락드렸습니다.`;
+  return `<div class="curated-card">
+    <div class="curated-card-tags">${tagsHtml}</div>
+    <div class="curated-card-title">${title}</div>
+    ${msgHtml}
+    <div class="curated-card-actions">
+      <a class="curated-card-btn view" href="${esc(url)}" target="_blank" rel="noopener">📖 콘텐츠 보기</a>
+      <a class="curated-card-btn kakao" href="${esc(kakaoUrl)}" target="_blank" rel="noopener" data-prefill="${esc(prefillMsg)}" onclick="copyMsgAndOpen(event,this)">💬 이거 상담받기</a>
+    </div>
+  </div>`;
+}
+
+function getCuratedTags(c){
+  // c.type, c.categoryId, c.subType 등에서 카테고리 추론
+  const tags=[];
+  const _typeMap={daily_report:'데일리리포트',weekly_lecture:'토요특강',tax_weekly:'택스컨설팅',medical_weekly:'메디컬',brief:'이슈브리핑',report:'특급보고서',video:'영상',audio:'오디오',closing:'클로징',html:'HTML'};
+  if(c.type&&_typeMap[c.type])tags.push(_typeMap[c.type]);
+  else if(c.categoryId==='daily_report')tags.push('데일리리포트');
+  if(c.subType)tags.push(c.subType);
+  if(!tags.length)tags.push('자비아');
+  return tags.slice(0,2);
+}
+
+function buildContentUrl(c){
+  // 콘텐츠 종류별 URL 생성
+  if(c.url)return c.url;
+  return `https://jarvia.co.kr/?cid=${encodeURIComponent(c.contentId||'')}`;
+}
+
+window.copyMsgAndOpen=function(ev,a){
+  const msg=a.getAttribute('data-prefill')||'';
+  if(msg&&navigator.clipboard){try{navigator.clipboard.writeText(msg);}catch(e){}}
+  // 카카오 채팅 열기는 그대로 진행
+};
+
+window.curatedGoTo=function(idx){
+  _curPageIdx=idx;
+  curatedUpdatePos();
+};
+
+function curatedUpdatePos(){
+  const track=document.getElementById('curatedTrack');
+  if(!track)return;
+  const total=track.children.length;
+  if(_curPageIdx<0)_curPageIdx=0;
+  if(_curPageIdx>=total)_curPageIdx=total-1;
+  track.style.transform=`translateX(-${_curPageIdx*100}%)`;
+  // 닷 업데이트
+  const dots=document.querySelectorAll('.curated-dot');
+  dots.forEach((d,i)=>d.classList.toggle('active',i===_curPageIdx));
+  // 페이지 인디케이터 업데이트
+  const nowEl=document.getElementById('curatedPageNow');
+  if(nowEl)nowEl.textContent=_curPageIdx+1;
+}
+
+function setupCuratedSwipe(){
+  const vp=document.getElementById('curatedViewport');
+  if(!vp||vp._swipeBound)return;
+  vp._swipeBound=true;
+  let startX=0,startY=0,dragging=false;
+  vp.addEventListener('touchstart',e=>{
+    startX=e.touches[0].clientX;
+    startY=e.touches[0].clientY;
+    dragging=true;
+  },{passive:true});
+  vp.addEventListener('touchend',e=>{
+    if(!dragging)return;
+    dragging=false;
+    const dx=e.changedTouches[0].clientX-startX;
+    const dy=e.changedTouches[0].clientY-startY;
+    if(Math.abs(dx)<40||Math.abs(dy)>Math.abs(dx))return;
+    const total=document.getElementById('curatedTrack').children.length;
+    if(dx<0&&_curPageIdx<total-1){_curPageIdx++;curatedUpdatePos();}
+    else if(dx>0&&_curPageIdx>0){_curPageIdx--;curatedUpdatePos();}
+  },{passive:true});
 }
 
 // ═══ Render: Consultant ═══
