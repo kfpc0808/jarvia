@@ -922,13 +922,21 @@ async function loadCuratedPicks(fcAuthUid){
     ));
     const picks=pickSnap.docs.map(d=>d.data());
     if(!picks.length){return;}
-    // 콘텐츠 메타 일괄 조회
+    // 콘텐츠 메타 조회: external은 자체 데이터, internal은 contents 컬렉션 조회
     const cMap={};
     for(const p of picks){
+      if(p.external)continue;  // 외부 콘텐츠는 contents 조회 스킵
+      if(!p.contentId)continue;
       const d=await getDoc(doc(db,'contents',p.contentId));
       if(d.exists())cMap[p.contentId]=d.data();
     }
-    _curPicks=picks.filter(p=>cMap[p.contentId]).map(p=>({...p,_content:cMap[p.contentId]}));
+    // 빌드: external은 그대로, internal은 _content 매핑
+    _curPicks=picks.map(p=>{
+      if(p.external)return p;  // external은 _content 불필요 (renderCuratedCard에서 p.external 직접 사용)
+      const c=cMap[p.contentId];
+      if(!c)return null;  // 자비아 콘텐츠 메타 없으면 스킵
+      return {...p,_content:c};
+    }).filter(Boolean);
     if(!_curPicks.length){return;}
     renderCuratedSection();
   }catch(e){
@@ -968,32 +976,44 @@ function renderCuratedSection(){
 }
 
 function renderCuratedCard(p){
-  const c=p._content;
-  const title=esc(c.title||'(제목 없음)');
-  // URL 결정
-  const url=buildContentUrl(c);
-  // 카테고리 태그 (간단 추론)
-  const tags=getCuratedTags(c);
-  const tagsHtml=tags.map((t,i)=>`<span class="curated-card-tag${i%2?' gold':''}">${esc(t)}</span>`).join('');
+  const isExt=!!p.external;
+  const title=esc((isExt?p.external.title:p._content?.title)||'(제목 없음)');
+  // URL 결정 (external이면 external.url, 아니면 자비아 contents URL)
+  const url=isExt?(p.external.url||'#'):buildContentUrl(p._content||{});
+  // 카테고리 태그
+  const tags=isExt?(p.external.tags||[]):getCuratedTags(p._content||{});
+  const tagsHtml=tags.length
+    ?tags.map((t,i)=>`<span class="curated-card-tag${i%2?' gold':''}">${esc(t)}</span>`).join('')
+    :'';
   const msgHtml=p.message
     ?`<div class="curated-card-msg">💬 "${esc(p.message)}"</div>`
+    :'';
+  // external 종류별 보기 버튼 텍스트
+  const _viewBtnIcons={youtube:'📹 영상 보기',blog:'📝 블로그 보기',instagram:'📷 인스타 보기',other:'🔗 콘텐츠 보기'};
+  const viewBtnText=isExt
+    ?(_viewBtnIcons[p.external.type]||'🔗 콘텐츠 보기')
+    :'📖 콘텐츠 보기';
+  // external 종류별 카드 좌측 보더 색상 (시각 차별화)
+  const _extBorderColor={youtube:'#E53935',blog:'#43A047',instagram:'#E1306C',other:'#7B7F8E'};
+  const cardStyle=isExt
+    ?` style="border-left-color:${_extBorderColor[p.external.type]||'#7B7F8E'}"`
     :'';
   // 컨택 버튼: SMS(문자)로만 연결 — 1:1 상담 채널 보장
   // 오픈채팅(fc.kakaoUrl)은 공지방송용이라 큐레이션 카드 1:1 상담에는 부적합
   const fc=fcData||{};
-  const prefillMsg=`안녕하세요, '${(c.title||'').slice(0,40)}' 콘텐츠 보고 연락드렸습니다.`;
+  const prefillMsg=`안녕하세요, '${title.slice(0,40)}' 콘텐츠 보고 연락드렸습니다.`;
   let contactBtnHtml='';
   if(fc.phone){
     const smsHref=`sms:${esc(fc.phone)}?body=${encodeURIComponent(prefillMsg)}`;
     contactBtnHtml=`<a class="curated-card-btn kakao" href="${smsHref}">📱 문자로 상담받기</a>`;
   }
   // 전화번호 없으면 컨택 버튼 미표시 (콘텐츠 보기 버튼만 노출)
-  return `<div class="curated-card">
+  return `<div class="curated-card"${cardStyle}>
     <div class="curated-card-tags">${tagsHtml}</div>
     <div class="curated-card-title">${title}</div>
     ${msgHtml}
     <div class="curated-card-actions">
-      <a class="curated-card-btn view" href="${esc(url)}" target="_blank" rel="noopener">📖 콘텐츠 보기</a>
+      <a class="curated-card-btn view" href="${esc(url)}" target="_blank" rel="noopener">${viewBtnText}</a>
       ${contactBtnHtml}
     </div>
   </div>`;
