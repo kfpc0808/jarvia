@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="format-detection" content="telephone=no">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#1B3A6B">
 <title>JARVIA — FC 채널</title>
 <meta name="description" content="자비아 컨설턴트 전용 채널 — 데일리리포트, 추천 콘텐츠, 무료 재무진단 신청">
 
@@ -29,9 +31,10 @@
   --radius:12px;--radius-sm:8px;--radius-lg:14px;
   --shadow:0 2px 6px rgba(0,0,0,.04);--shadow-md:0 6px 18px rgba(27,58,107,.18);
   --kakao:#FEE500;--success:#10B981;--danger:#DC2626;--warning:#F59E0B;
+  color-scheme:light;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",sans-serif;color:var(--text);background:var(--bg);-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",sans-serif;color:var(--text);background:var(--bg);-webkit-tap-highlight-color:transparent;color-scheme:light}
 body{min-height:100vh;line-height:1.55;font-size:14px}
 button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
 button{cursor:pointer;border:none;background:none}
@@ -424,14 +427,14 @@ a{color:inherit;text-decoration:none}
         <div class="more" id="testimonialMore"></div>
       </div>
 
-      <!-- ─── 신청 폼 ─── -->
-      <div class="formDivider">
+      <!-- ─── 신청 폼 (초기에는 숨김 — 안내 카드의 [신청 폼 작성하기] 버튼 클릭 시 노출) ─── -->
+      <div class="formDivider" id="formDivider" style="display:none">
         <div class="line"></div>
         <div class="text">REQUEST FORM</div>
         <div class="line"></div>
       </div>
 
-      <div id="formArea">
+      <div id="formArea" style="display:none">
         <form class="consultForm" id="consultForm" novalidate>
           <div class="title">
             <div class="label">FREE · ONLINE FORM</div>
@@ -720,7 +723,8 @@ async function renderCatalog(){
   $('dailyDateDesc').textContent=`${getTodayKST()} · 5분이면 충분한 인사이트`;
   // 재무 대시보드 / 아침독서 링크
   $('cardDashboard').href=`/client-finance.html?fc=${encodeURIComponent(loginId)}`;
-  $('cardMorning').href=`/client-daily.html?fc=${encodeURIComponent(loginId)}#morning`;
+  // ★ 아침독서 — consultants 컬렉션의 morningBookzipUrl (b값 자동 증가) 또는 morningReadingUrl 사용
+  setupMorningCard();
   // 큐레이션 + 자료실 + 후기 동시 로드
   await Promise.all([
     loadCuratedPicks(),
@@ -735,6 +739,53 @@ async function renderCatalog(){
     if(cd.careerHighlights&&cd.careerHighlights.length)certLines.push(...cd.careerHighlights.map(esc));
     $('certBody').innerHTML=certLines.join('<br>');
     $('cardCert').classList.remove('hidden');
+  }
+}
+
+// ═══ 아침독서 카드 — consultants 컬렉션의 bookzip URL 자동 증가 처리 ═══
+// 자비아 마이페이지 → 고객리포트 프로필 → 아침독서에 등록한 URL 사용
+// morningBookzipUrl: bookzip.kr 형식 (b값 매주 +1 자동 증가)
+// morningReadingUrl: 자유 URL (대체 fallback)
+// 우선순위: morningBookzipUrl > morningReadingUrl > 카드 숨김
+function setupMorningCard(){
+  const cardM=$('cardMorning');
+  if(!cardM)return;
+  let morningUrl='';
+  const cd=consultantData||{};
+  // 1순위: morningBookzipUrl (b값 매주 자동 +1)
+  if(cd.morningBookzipUrl){
+    let bzUrl=cd.morningBookzipUrl;
+    try{
+      const u=new URL(bzUrl);
+      const bParam=parseInt(u.searchParams.get('b')||'0');
+      if(bParam>0&&cd.bookzipBaseDate){
+        const baseDate=new Date(cd.bookzipBaseDate+'T00:00:00+09:00');
+        const now=new Date();
+        const diffMs=now-baseDate;
+        const diffWeeks=Math.floor(diffMs/(7*24*60*60*1000));
+        const newB=bParam+Math.max(0,diffWeeks);
+        u.searchParams.set('b',newB);
+        bzUrl=u.toString();
+      }
+    }catch(e){console.warn('[bookzip URL parse]',e);}
+    morningUrl=bzUrl;
+  }
+  // 2순위: morningReadingUrl (자유 URL)
+  if(!morningUrl&&cd.morningReadingUrl)morningUrl=cd.morningReadingUrl;
+  if(morningUrl){
+    cardM.href=morningUrl;
+    cardM.target='_blank';
+    cardM.rel='noopener';
+    // 라벨 커스터마이즈 (consultants에 morningReadingLabel 있으면 사용)
+    if(cd.morningReadingLabel){
+      const titleEl=cardM.querySelector('.iconTitle');
+      if(titleEl)titleEl.textContent=cd.morningReadingLabel;
+    }
+  }else{
+    // URL 미등록 시 카드 숨김 + 부모 grid를 1열로 변경 (재무 대시보드만 풀폭)
+    cardM.style.display='none';
+    const grid=cardM.parentElement;
+    if(grid)grid.style.gridTemplateColumns='1fr';
   }
 }
 
@@ -906,10 +957,30 @@ function bindFormEvents(){
   document.querySelectorAll('.modalBg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('active');}));
   // 음성 입력
   $('voiceBtn').addEventListener('click',toggleVoice);
-  // 안내 카드 → 폼으로 스크롤
+  // 안내 카드 → 폼 펼침 + 스크롤 + 버튼 비활성화
   $('scrollToFormBtn').addEventListener('click',()=>{
-    $('formArea').scrollIntoView({behavior:'smooth',block:'start'});
-    setTimeout(()=>{$('consultForm').style.transition='box-shadow 0.6s';$('consultForm').style.boxShadow='0 4px 14px rgba(201,169,110,.6)';setTimeout(()=>{$('consultForm').style.boxShadow='';},800);},400);
+    // 폼이 이미 펼쳐진 경우 스크롤만
+    const isOpen=$('formArea').style.display!=='none';
+    if(!isOpen){
+      $('formDivider').style.display='flex';
+      $('formArea').style.display='block';
+      // 펼침 강조 애니메이션
+      $('formArea').style.opacity='0';
+      $('formArea').style.transform='translateY(-10px)';
+      $('formArea').style.transition='opacity .3s, transform .3s';
+      requestAnimationFrame(()=>{
+        $('formArea').style.opacity='1';
+        $('formArea').style.transform='translateY(0)';
+      });
+      // 버튼 텍스트 변경 (스크롤은 유지하되 펼친 상태 표시)
+      $('scrollToFormBtn').textContent='✓ 폼이 열렸습니다 — 아래로 스크롤';
+      $('scrollToFormBtn').style.background='linear-gradient(135deg,#10B981,#059669)';
+    }
+    // 약간 지연 후 스크롤 (display 적용 후)
+    setTimeout(()=>{
+      $('formArea').scrollIntoView({behavior:'smooth',block:'start'});
+      setTimeout(()=>{$('consultForm').style.transition='box-shadow 0.6s';$('consultForm').style.boxShadow='0 4px 14px rgba(201,169,110,.6)';setTimeout(()=>{$('consultForm').style.boxShadow='';},800);},400);
+    },isOpen?0:80);
   });
   // 제출
   $('consultForm').addEventListener('submit',e=>{e.preventDefault();submitForm();});
