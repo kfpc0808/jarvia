@@ -5148,29 +5148,28 @@ async function removeTestimonial(id){
   }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
-// ─── 채널 공유 이미지 (Storage 업로드는 client-profile과 동일 패턴 - 단순 base64 임시 또는 서버 압축) ───
+// ─── 채널 공유 이미지 (자비아 표준: consultants/{uid}/ 경로 + 압축 업로드) ───
 async function onChannelShareImageSelect(ev){
   const file=ev.target.files[0];
   if(!file)return;
   if(file.size>10*1024*1024){toast('10MB 이하 이미지만 업로드 가능합니다','warning');return;}
-  // FileReader로 base64 변환 → 미리보기
-  const reader=new FileReader();
-  reader.onload=async e=>{
-    const base64=e.target.result;
-    $('ch-share-img-preview').src=base64;
+  try{
+    // ★ 자비아 표준: 이미지 압축 (800x400, 85% JPG)
+    const compressed=await compressImage(file,800,400,0.85);
+    // ★ 자비아 표준 path: consultants/{uid}/... (storage.rules의 consultants/{fcId}/ 규칙 활용)
+    const path=`consultants/${me.uid}/channel_share_${Date.now()}.jpg`;
+    const storage=getStorage(app);
+    const r=stRef(storage,path);
+    await uploadBytes(r,compressed,{contentType:'image/jpeg'});
+    const url=await getDownloadURL(r);
+    $('ch-share-img-preview').src=url;
     $('ch-share-img-preview').style.display='block';
-    // Storage 업로드 (정적 import한 stRef, uploadString, getDownloadURL, getStorage 재사용)
-    try{
-      const storage=getStorage(app);
-      const path=`fc_share_channel/${me.uid}_${Date.now()}.png`;
-      const r=stRef(storage,path);
-      await uploadString(r,base64,'data_url');
-      const url=await getDownloadURL(r);
-      $('ch-share-img-url').value=url;
-      toast('이미지가 업로드되었습니다','success');
-    }catch(err){toast('이미지 업로드 실패: '+err.message,'error');}
-  };
-  reader.readAsDataURL(file);
+    $('ch-share-img-url').value=url;
+    toast('이미지가 업로드되었습니다','success');
+  }catch(err){
+    console.error('channel share image upload error:',err);
+    toast('이미지 업로드 실패: '+err.message,'error');
+  }
 }
 
 function removeChannelShareImage(){
