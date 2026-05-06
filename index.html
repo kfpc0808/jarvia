@@ -4928,8 +4928,13 @@ async function loadChannelData(){
   }catch(e){_chTestimonials=[];console.warn('fc_testimonials load error',e);}
   renderTestimonialList();
   // fc_share_profiles에서 채널용 공유 설정 로드
+  // ★ 자비아 표준: doc ID는 loginId (briefingOg/channelOg가 읽는 위치)
+  // 옛 데이터 호환: loginId에 없으면 uid로 fallback
   try{
-    const spSnap=await getDoc(doc(db,'fc_share_profiles',me.uid));
+    let spSnap=await getDoc(doc(db,'fc_share_profiles',meData.loginId));
+    if(!spSnap.exists()&&me.uid!==meData.loginId){
+      spSnap=await getDoc(doc(db,'fc_share_profiles',me.uid));
+    }
     if(spSnap.exists()){
       const sp=spSnap.data();
       $('ch-share-title').value=sp.channelShareTitle||'';
@@ -5202,16 +5207,25 @@ async function saveChannelData(){
     // 1) users.channelData 저장
     await updateDoc(doc(db,'users',me.uid),{channelData,updatedAt:serverTimestamp()});
     // 2) fc_share_profiles 채널 필드만 업데이트 (기존 데일리 공유 설정 유지)
-    const spRef=doc(db,'fc_share_profiles',me.uid);
-    const spSnap=await getDoc(spRef);
-    const existing=spSnap.exists()?spSnap.data():{};
-    await setDoc(spRef,{
-      ...existing,
+    // ★ 자비아 표준: loginId에 primary 저장 + uid에 mirror 저장 (L6740-6741과 동일 패턴)
+    const channelFields={
       channelShareTitle:chShareTitle||null,
       channelShareDesc:chShareDesc||null,
       channelShareImageUrl:chShareImageUrl||null,
       updatedAt:serverTimestamp()
-    },{merge:true});
+    };
+    // primary: loginId (briefingOg/channelOg가 읽는 위치)
+    const spRefMain=doc(db,'fc_share_profiles',meData.loginId);
+    const spSnapMain=await getDoc(spRefMain);
+    const existingMain=spSnapMain.exists()?spSnapMain.data():{};
+    await setDoc(spRefMain,{...existingMain,...channelFields},{merge:true});
+    // mirror: uid (자비아 호환성 패턴)
+    if(me.uid!==meData.loginId){
+      const spRefUid=doc(db,'fc_share_profiles',me.uid);
+      const spSnapUid=await getDoc(spRefUid);
+      const existingUid=spSnapUid.exists()?spSnapUid.data():{};
+      await setDoc(spRefUid,{...existingUid,...channelFields},{merge:true});
+    }
     showChStatus('success','채널 정보가 저장되었습니다. 미리보기로 확인해보세요.');
     toast('저장 완료','success');
   }catch(e){
