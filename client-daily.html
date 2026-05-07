@@ -782,6 +782,19 @@ let fcData=null;
 let reportData=null;
 let prevIndicators=null; // ★ 전일 경제지표 (전일비 표시용)
 let spData=null; // ★ 컨설턴트 카톡 공유 설정 (fc_share_profiles)
+let fcPreferences=null; // ★ 컨설턴트 리포트 설정 (경제지표 + 관심분야)
+
+// ★ 분야명 → tagClass 매핑 (fc.html 설정값과 일치)
+const FIELD_TAG_MAP={
+  '경제·금리': ['tag-economy'],
+  '부동산·주거':['tag-realestate'],
+  '세금·절세':  ['tag-tax'],
+  '연금·노후':  ['tag-pension'],
+  '재테크·투자':['tag-invest'],
+  '정책·복지':  ['tag-policy'],
+  '생활·물가':  ['tag-life'],
+  '건강·의료비':['tag-health'],
+};
 
 // ═══ Main Init ═══
 async function init(){
@@ -837,11 +850,13 @@ async function init(){
     document.getElementById('mainContent').style.display='block';
     renderConsultant();
 
-    // ★ 2단계: 리포트 + 전일지표 + 공유설정 병렬 조회
-    const [drResult,prevResult,spResult]=await Promise.allSettled([
+    // ★ 2단계: 리포트 + 전일지표 + 공유설정 + preferences 병렬 조회
+    const fcAuthUid=(!userQ.empty)?userQ.docs[0].id:null;
+    const [drResult,prevResult,spResult,prefResult]=await Promise.allSettled([
       getDoc(doc(db,'client_daily_reports',fileDate)),
       getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(2))),
-      getDoc(doc(db,'fc_share_profiles',fcId))
+      getDoc(doc(db,'fc_share_profiles',fcId)),
+      fcAuthUid?getDoc(doc(db,'users',fcAuthUid)):Promise.resolve(null),
     ]);
 
     // 2-1. 리포트 처리
@@ -872,6 +887,12 @@ async function init(){
     // 2-3. 카톡 공유 설정
     if(spResult.status==='fulfilled'&&spResult.value.exists()) spData=spResult.value.data();
 
+    // 2-4. ★ 컨설턴트 리포트 설정 (preferences)
+    if(prefResult.status==='fulfilled'&&prefResult.value&&prefResult.value.exists()){
+      const pData=prefResult.value.data();
+      if(pData.reportPreferences) fcPreferences=pData.reportPreferences;
+    }
+
     // ★ 2단계 완료 → 나머지 렌더링
     renderDateHero();
     renderAudio();
@@ -884,11 +905,8 @@ async function init(){
     // 5. 하단 공유바 표시
     document.getElementById('shareBar').style.display='flex';
 
-    // 6. 📌 컨설턴트 큐레이션 로드 (loginId → uid 매핑 후 onSnapshot)
-    if(!userQ.empty){
-      const _fcAuthUid=userQ.docs[0].id;
-      loadCuratedPicks(_fcAuthUid);
-    }
+    // 6. 📌 컨설턴트 큐레이션 로드
+    if(fcAuthUid) loadCuratedPicks(fcAuthUid);
 
     // 7. 샘플 프로필 안내 팝업 (consultants 미등록 시)
     if(window._isSampleProfile){
@@ -1486,10 +1504,18 @@ document.addEventListener('click',function(e){
 });
 
 function renderIndicators(d){
-  const inds=d.indicators||[];
-  if(!inds.length) return '';
+  const allInds=d.indicators||[];
+  if(!allInds.length) return '';
 
-  const grid=inds.map(ind=>{
+  // ★ preferences.indicators가 있으면 해당 label만 필터링
+  const selectedInds=(fcPreferences&&fcPreferences.indicators&&fcPreferences.indicators.length)
+    ?fcPreferences.indicators:null;
+  const inds=selectedInds
+    ?allInds.filter(i=>selectedInds.includes(i.label))
+    :allInds;
+  const showInds=inds.length?inds:allInds; // 필터 결과 없으면 전체 표시
+
+  const grid=showInds.map(ind=>{
     // ★ 전일비 계산
     let changeHtml='';
     if(prevIndicators){
@@ -1530,17 +1556,29 @@ function renderIndicators(d){
 }
 
 function renderNews(d){
-  const news=d.news||[];
-  if(!news.length) return '';
+  const allNews=d.news||[];
+  if(!allNews.length) return '';
 
-  // 첫 번째 기사 제목만 미리보기로 노출 (접힌 상태에서도 보임)
-  const firstTitle=news.length>0?`
+  // ★ preferences.fields 기반 필터링 — 8건 중 선택 분야 우선 3건
+  let displayNews=allNews;
+  if(fcPreferences&&fcPreferences.fields&&fcPreferences.fields.length){
+    const selectedTags=fcPreferences.fields.flatMap(f=>FIELD_TAG_MAP[f]||[]);
+    const matched=allNews.filter(n=>selectedTags.includes(n.tagClass));
+    const unmatched=allNews.filter(n=>!selectedTags.includes(n.tagClass));
+    // 매칭 우선, 부족하면 비매칭으로 보충 → 총 3건
+    displayNews=[...matched,...unmatched].slice(0,3);
+  } else {
+    displayNews=allNews.slice(0,3);
+  }
+
+  // 첫 번째 기사 미리보기
+  const firstTitle=displayNews.length>0?`
     <div class="sec-preview" style="border-left-color:var(--green)">
-      <span class="news-tag ${news[0].tagClass||'tag-economy'}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;margin-bottom:6px">${esc(news[0].tag)}</span>
-      <div style="font-size:15px;font-weight:700;color:var(--ink);line-height:1.45">${esc(news[0].title)}</div>
+      <span class="news-tag ${displayNews[0].tagClass||'tag-economy'}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;margin-bottom:6px">${esc(displayNews[0].tag)}</span>
+      <div style="font-size:15px;font-weight:700;color:var(--ink);line-height:1.45">${esc(displayNews[0].title)}</div>
     </div>`:'';
 
-  const articles=news.map(n=>{
+  const articles=displayNews.map(n=>{
     const tagClass=n.tagClass||'tag-economy';
     const takeawayClass='takeaway-'+(n.tagClass||'').replace('tag-','');
     return `<div class="news-article">
