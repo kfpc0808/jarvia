@@ -996,7 +996,7 @@
       <button class="tab" data-t="mp-channel" onclick="mpTab(this)" id="tab-channel" style="display:none">📱 내 채널 관리</button>
     </div>
     <div id="mp-info" class="tp">
-      <div class="bal-card"><span>보유 포인트</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
+      <div class="bal-card"><span>충전 잔액</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
       <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
       <form class="info-form" onsubmit="doUpdateProfile(event)">
         <div class="fr"><div class="fg"><label>이름</label><input id="mp-name" readonly class="ro"></div><div class="fg"><label>아이디</label><input id="mp-lid" readonly class="ro"></div></div>
@@ -1052,7 +1052,7 @@
       </div>
       <div id="cur-list" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
-    <div id="mp-referral" class="tp hidden"><div id="ref-info" style="background:#f8f9fa;border-radius:12px;padding:20px;margin-bottom:20px"></div><h3 style="margin-bottom:12px">추천한 회원 목록</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>가입일</th><th>회원유형</th><th>포인트 지급</th></tr></thead><tbody id="tb-referrals"></tbody></table></div></div>
+    <div id="mp-referral" class="tp hidden"><div id="ref-info" style="background:#f8f9fa;border-radius:12px;padding:20px;margin-bottom:20px"></div><h3 style="margin-bottom:12px">추천한 회원 목록</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>가입일</th><th>회원유형</th><th>포인트 지급</th></tr></thead><tbody id="tb-referrals"></tbody></table></div><h3 style="margin-bottom:12px;margin-top:24px">포인트 지급 내역</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>내용</th><th>지급 포인트</th></tr></thead><tbody id="tb-referral-rewards"></tbody></table></div></div>
 
     <!-- ▼ 고객 브리핑 프로필 -->
     <div id="mp-client-profile" class="tp hidden">
@@ -3214,12 +3214,18 @@ async function doRegister(e){
     });
     // 단체 추천인이면 포인트 지급 스킵, 일반 추천인이면 포인트 지급
     if(refCode&&!isGroupRef){
-      // 일반 추천: 추천인에게 5,000P 지급
+      // 일반 추천: 추천인에게 5,000P 지급 (point + referralPoints 동시 업데이트, 트랜젝션 기록)
       try{
         const refSnap2=await getDocs(query(collection(db,'users'),where('referralCode','==',refCode),limit(1)));
         if(!refSnap2.empty){
           const refUid=refSnap2.docs[0].id;
-          await updateDoc(doc(db,'users',refUid),{referralPoints:increment(5000),updatedAt:serverTimestamp()});
+          const txId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+          await runTransaction(db,async tx=>{
+            const rd=(await tx.get(doc(db,'users',refUid))).data();
+            const newPt=(rd.point||0)+5000;
+            tx.update(doc(db,'users',refUid),{referralPoints:increment(5000),point:increment(5000),updatedAt:serverTimestamp()});
+            tx.set(doc(db,'transactions',txId),{txId,userId:refUid,type:'referral_reward',amount:5000,pointAfter:newPt,memo:'추천 가입 보상',createdAt:serverTimestamp()});
+          });
         }
       }catch(e){console.warn('추천 포인트 지급 실패',e);}
     }
@@ -7657,9 +7663,13 @@ async function loadReferrals(){
   // 내 추천코드로 가입한 회원 조회
   let refs=[];
   try{const snap=await getDocs(query(collection(db,'users'),where('referredBy','==',rc)));refs=snap.docs.map(d=>d.data());}catch(e){}
+  // 추천 포인트 지급 내역 조회
+  let rewards=[];
+  try{const rsnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid),where('type','==','referral_reward'),orderBy('createdAt','desc')));rewards=rsnap.docs.map(d=>d.data());}catch(e){}
   const roleLabel=r=>({free_user:'무료회원',user:'일반회원',jarvia_member:'JARVIA멤버십',jarvia_inner:'자비아멤버십(이너서클)',inner_circle:'이너서클',con_homepage:'컨홈페이지',branch_manager:'지사장',jarvia_report:'리포트회원'}[r]||r);
   $('ref-info').innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center"><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">내 추천 코드</div><div style="font-size:20px;font-weight:700;color:var(--primary);letter-spacing:2px;margin:4px 0">${rc} <button onclick="copyRefCode()" style="font-size:12px;padding:4px 10px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">복사</button></div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">추천 성공</div><div style="font-size:20px;font-weight:700;color:var(--accent)">${refs.length}명</div></div><div style="flex:1;min-width:200px"><div style="font-size:13px;color:var(--text-lt)">적립 포인트</div><div style="font-size:20px;font-weight:700;color:var(--success)">${fmt(pts)}P</div></div></div><div style="margin-top:12px"><button onclick="toggleRefPicker()" style="background:linear-gradient(135deg,#FF6B35,#F7931E);color:#fff;border:none;padding:10px 24px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer">🔗 추천 링크 공유</button></div>`;
   $('tb-referrals').innerHTML=refs.length?refs.map(r=>`<tr><td>${esc(r.name)}</td><td>${fdate(r.createdAt)}</td><td>${roleLabel(r.role)}</td><td><span style="color:var(--success);font-weight:600">✅ 5,000P</span></td></tr>`).join(''):'<tr><td colspan="4" class="tc">추천한 회원이 없습니다.</td></tr>';
+  $('tb-referral-rewards').innerHTML=rewards.length?rewards.map(r=>`<tr><td>${fdatetime(r.createdAt)}</td><td>${esc(r.memo||'추천 가입 보상')}</td><td><span style="color:var(--success);font-weight:700">+${fmt(r.amount)}P</span></td></tr>`).join(''):'<tr><td colspan="3" class="tc">지급 내역이 없습니다.</td></tr>';
 }
 // Expose for admin createAdmin (secondary app)
 window._javiaFC=FC;
