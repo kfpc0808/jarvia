@@ -1114,11 +1114,12 @@
             </div>
             <div style="position:absolute;bottom:-2px;right:-2px;width:26px;height:26px;border-radius:50%;background:#2563EB;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;border:2px solid #fff" onclick="document.getElementById('fc-photo-input').click()">✎</div>
           </div>
-          <input type="file" id="fc-photo-input" accept="image/*" style="display:none" onchange="handleFcPhoto(this)">
+          <input type="file" id="fc-photo-input" accept="image/*" style="display:none" onchange="openPhotoEditor(this)">
           <div style="font-size:12px;color:#6B7280;margin-bottom:4px">프로필 사진 <span style="color:#9CA3AF">(선택)</span></div>
           <div style="display:inline-flex;align-items:center;gap:4px;background:#F3F4F6;border-radius:6px;padding:4px 10px;font-size:11px;color:#6B7280">
-            <span>📐</span><span>권장: <strong style="color:#374151">400×400px</strong> · JPG/PNG · <strong style="color:#374151">10MB 이하 (자동 압축)</strong></span>
+            <span>✂️</span><span>업로드 후 <strong style="color:#374151">드래그·확대</strong>로 원하는 부분만 잘라낼 수 있어요 · <strong style="color:#374151">10MB 이하</strong></span>
           </div>
+          <div style="font-size:11px;color:#9CA3AF;margin-top:6px;line-height:1.4">* 이전에 등록한 사진이 있다면 새로 등록 시 더 깔끔하게 표시됩니다</div>
           <div id="fc-photo-progress" style="display:none;font-size:12px;color:#3B82F6;margin-top:6px">⏳ 업로드 중...</div>
         </div>
 
@@ -5801,30 +5802,26 @@ async function doSaveClientProfile(e){
   }
 }
 
-async function handleFcPhoto(input){
-  const file=input.files[0];
-  if(!file||!me)return;
-  if(file.size>10*1024*1024){toast('사진 크기는 10MB 이하로 해주세요.','error');return;}
-  if(!file.type.startsWith('image/')){toast('이미지 파일만 업로드 가능합니다.','error');return;}
+async function handleFcPhoto(blob){
+  // ★ blob은 openPhotoEditor에서 이미 512×512 정사각형 크롭·압축된 JPEG
+  if(!blob||!me)return;
 
   $('fc-photo-progress').style.display='block';
   try{
-    // ★ Canvas로 400×400px 리사이즈·압축 (품질 0.85)
-    const compressed=await compressImage(file,400,400,0.85);
     const path=`consultants/${me.uid}/profile.jpg`;
     const sRef2=stRef(storage,path);
-    await uploadBytes(sRef2,compressed,{contentType:'image/jpeg'});
+    await uploadBytes(sRef2,blob,{contentType:'image/jpeg'});
     const url=await getDownloadURL(sRef2);
 
-    // Firestore 업데이트
-    await setDoc(doc(db,'consultants',meData.loginId),{photoUrl:url,updatedAt:serverTimestamp()},{merge:true});
-    if(me.uid!==meData.loginId){await setDoc(doc(db,'consultants',me.uid),{photoUrl:url,updatedAt:serverTimestamp()},{merge:true});}
+    // Firestore 업데이트 (photoSquare:true — 신규 정사각형 사진 표시)
+    await setDoc(doc(db,'consultants',meData.loginId),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});
+    if(me.uid!==meData.loginId){await setDoc(doc(db,'consultants',me.uid),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});}
 
     // UI 반영
     $('fc-photo-img').src=url;
     $('fc-photo-img').style.display='block';
     $('fc-photo-placeholder').style.display='none';
-    if(_fcData)_fcData.photoUrl=url;
+    if(_fcData){_fcData.photoUrl=url;_fcData.photoSquare=true;}
 
     toast('프로필 사진이 업로드되었습니다!','success');
   }catch(e){
@@ -5832,7 +5829,6 @@ async function handleFcPhoto(input){
     toast('사진 업로드 실패: '+e.message,'error');
   }finally{
     $('fc-photo-progress').style.display='none';
-    input.value='';
   }
 }
 
@@ -7138,6 +7134,174 @@ function compressImage(file, maxW, maxH, quality){
     reader.readAsDataURL(file);
   });
 }
+
+// ════════════════════════════════════════
+//  프로필 사진 편집기 (드래그 + 핀치줌 + 줌 슬라이더)
+//  - 정사각형 가이드 안에 사진 위치/크기 조정
+//  - 출력: 512×512 JPEG blob (quality 0.85)
+//  - EXIF 회전 자동 처리
+// ════════════════════════════════════════
+let _peState=null; // 편집기 상태
+
+async function openPhotoEditor(input){
+  const file=input.files[0];
+  if(!file||!me){input.value='';return;}
+  if(file.size>10*1024*1024){toast('사진 크기는 10MB 이하로 해주세요.','error');input.value='';return;}
+  if(!file.type.startsWith('image/')){toast('이미지 파일만 업로드 가능합니다.','error');input.value='';return;}
+
+  try{
+    // EXIF 회전 처리 (createImageBitmap)
+    let bitmap;
+    try{bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});}
+    catch(_e){bitmap=await createImageBitmap(file);}
+
+    // 비트맵 → data URL (img element용)
+    const _c=document.createElement('canvas');
+    _c.width=bitmap.width;_c.height=bitmap.height;
+    _c.getContext('2d').drawImage(bitmap,0,0);
+    const dataUrl=_c.toDataURL('image/jpeg',0.95);
+    const imgW=bitmap.width,imgH=bitmap.height;
+    bitmap.close();
+
+    const modal=$('photoEditModal');
+    const imgEl=$('pemImg');
+
+    imgEl.onload=()=>{
+      const guideEl=$('pemGuide');
+      const guideRect=guideEl.getBoundingClientRect();
+      const cropSize=guideRect.width; // 정사각형이므로 width=height
+
+      // 짧은 변이 가이드와 같아지는 최소 scale (사진이 가이드 밖으로 빠지지 않음)
+      const minScale=cropSize/Math.min(imgW,imgH);
+      const maxScale=minScale*3;
+
+      _peState={
+        scale:minScale,minScale,maxScale,
+        x:0,y:0,
+        imgW,imgH,cropSize,
+        dragging:false,lastX:0,lastY:0,
+        pinching:false,pinchStartDist:0,pinchStartScale:1
+      };
+      _peApply();
+      $('pemZoom').value=0;
+    };
+    imgEl.src=dataUrl;
+
+    modal.classList.remove('hidden');
+    document.body.style.overflow='hidden';
+  }catch(e){
+    console.error('photo editor open error:',e);
+    toast('사진을 불러올 수 없습니다: '+e.message,'error');
+    input.value='';
+  }
+}
+
+function _peApply(){
+  if(!_peState)return;
+  const s=_peState;
+  // 경계 검사: 가이드 정사각형이 이미지 영역 밖으로 나가지 않게
+  const scaledW=s.imgW*s.scale;
+  const scaledH=s.imgH*s.scale;
+  const halfDx=Math.max(0,(scaledW-s.cropSize)/2);
+  const halfDy=Math.max(0,(scaledH-s.cropSize)/2);
+  s.x=Math.max(-halfDx,Math.min(halfDx,s.x));
+  s.y=Math.max(-halfDy,Math.min(halfDy,s.y));
+  $('pemImg').style.transform='translate(-50%,-50%) translate('+s.x+'px,'+s.y+'px) scale('+s.scale+')';
+}
+
+function _peOnZoomInput(e){
+  if(!_peState)return;
+  const s=_peState;
+  const pct=parseFloat(e.target.value);
+  s.scale=s.minScale+(s.maxScale-s.minScale)*(pct/100);
+  _peApply();
+}
+
+function _peSyncSlider(){
+  if(!_peState)return;
+  const s=_peState;
+  const pct=((s.scale-s.minScale)/(s.maxScale-s.minScale))*100;
+  $('pemZoom').value=Math.max(0,Math.min(100,pct));
+}
+
+// 드래그/핀치줌 핸들러
+function _peStart(e){
+  if(!_peState)return;
+  const s=_peState;
+  if(e.touches&&e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    s.pinching=true;
+    s.pinchStartDist=Math.hypot(dx,dy);
+    s.pinchStartScale=s.scale;
+  }else{
+    const t=e.touches?e.touches[0]:e;
+    s.dragging=true;
+    s.lastX=t.clientX;
+    s.lastY=t.clientY;
+  }
+  if(e.cancelable)e.preventDefault();
+}
+function _peMove(e){
+  if(!_peState)return;
+  const s=_peState;
+  if(s.pinching&&e.touches&&e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    const dist=Math.hypot(dx,dy);
+    s.scale=Math.max(s.minScale,Math.min(s.maxScale,s.pinchStartScale*(dist/s.pinchStartDist)));
+    _peApply();
+    _peSyncSlider();
+  }else if(s.dragging){
+    const t=e.touches?e.touches[0]:e;
+    s.x+=(t.clientX-s.lastX);
+    s.y+=(t.clientY-s.lastY);
+    s.lastX=t.clientX;
+    s.lastY=t.clientY;
+    _peApply();
+  }
+  if(e.cancelable)e.preventDefault();
+}
+function _peEnd(e){
+  if(!_peState)return;
+  const s=_peState;
+  s.dragging=false;
+  if(!e.touches||e.touches.length<2)s.pinching=false;
+}
+
+function closePhotoEditor(){
+  $('photoEditModal').classList.add('hidden');
+  document.body.style.overflow='';
+  $('fc-photo-input').value='';
+  _peState=null;
+}
+
+async function confirmPhotoEditor(){
+  if(!_peState)return;
+  const s=_peState;
+
+  // 원본 이미지 좌표계에서 크롭 영역 계산
+  const cropPxOnImage=s.cropSize/s.scale; // 원본 픽셀 단위 크롭 크기
+  const cropCx=s.imgW/2-s.x/s.scale;       // 크롭 중심 X
+  const cropCy=s.imgH/2-s.y/s.scale;       // 크롭 중심 Y
+  const cropSx=Math.max(0,cropCx-cropPxOnImage/2);
+  const cropSy=Math.max(0,cropCy-cropPxOnImage/2);
+  const cropSize=Math.min(cropPxOnImage,s.imgW-cropSx,s.imgH-cropSy);
+
+  // 결과 512×512 canvas로 그리기
+  const out=document.createElement('canvas');
+  out.width=512;out.height=512;
+  const ctx=out.getContext('2d');
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage($('pemImg'),cropSx,cropSy,cropSize,cropSize,0,0,512,512);
+
+  const blob=await new Promise(r=>out.toBlob(r,'image/jpeg',0.85));
+  if(!blob){toast('이미지 처리 실패','error');return;}
+
+  closePhotoEditor();
+  await handleFcPhoto(blob);
+}
+
 // ── 링크 라벨 수정 (8자 이내) ──
 function editLinkLabel(type){
   const labelId=type==='home'?'fc-label-home':type==='morning'?'fc-label-morning':'fc-label-brochure';
@@ -7153,6 +7317,7 @@ function editLinkLabel(type){
 }
 window.editLinkLabel=editLinkLabel;
 window.doSaveClientProfile=doSaveClientProfile;window.handleFcPhoto=handleFcPhoto;window.previewFcProfile=previewFcProfile;window.copyFcLink=copyFcLink;window.shareFcKakao=shareFcKakao;window.handleFcShareImage=handleFcShareImage;window.doSaveShareProfile=doSaveShareProfile;window.deleteShareImage=deleteShareImage;
+window.openPhotoEditor=openPhotoEditor;window.closePhotoEditor=closePhotoEditor;window.confirmPhotoEditor=confirmPhotoEditor;window._peStart=_peStart;window._peMove=_peMove;window._peEnd=_peEnd;window._peOnZoomInput=_peOnZoomInput;
 window.filterList=filterList;// ★ 더보기 드롭다운
 function toggleMoreDropdown(){
   const wrap=document.getElementById('more-dropdown-wrap');
@@ -8287,7 +8452,57 @@ setTimeout(() => { try{ clearInterval(_fcrAutoCheck); }catch(e){} }, 30000);
   .mdl-launch-footer{padding:13px 18px}
   .mdl-launch-x{font-size:24px;top:6px;right:10px}
 }
+
+/* ════════════════════════════════════════════════
+   프로필 사진 편집기 (pem- = photo editor modal)
+   ════════════════════════════════════════════════ */
+#photoEditModal{position:fixed;inset:0;background:#0A0F1E;z-index:9999;display:flex;flex-direction:column}
+#photoEditModal.hidden{display:none}
+.pem-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;color:#fff;background:rgba(0,0,0,.35);flex-shrink:0}
+.pem-header h3{margin:0;font-size:15px;font-weight:700;letter-spacing:-.3px}
+.pem-header button.pem-x{background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:4px 10px;line-height:1;font-family:inherit}
+.pem-stage{flex:1;position:relative;overflow:hidden;background:#000;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+.pem-stage img{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:none;max-height:none;pointer-events:none;-webkit-user-drag:none;user-drag:none}
+.pem-guide{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(78vw,52vh);aspect-ratio:1/1;max-width:340px;max-height:340px;border:2px solid #fff;border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.6);pointer-events:none}
+.pem-footer{padding:14px 18px 18px;background:rgba(0,0,0,.35);color:#fff;flex-shrink:0}
+.pem-tip{font-size:11px;color:rgba(255,255,255,.55);text-align:center;margin-bottom:10px;letter-spacing:-.2px}
+.pem-zoom-row{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.pem-zoom-row .pem-zoom-icon{font-size:13px;color:rgba(255,255,255,.7);width:18px;text-align:center;flex-shrink:0}
+.pem-zoom-row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:4px;background:rgba(255,255,255,.25);border-radius:2px;outline:none;margin:0}
+.pem-zoom-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:#C9A96E;cursor:pointer;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.pem-zoom-row input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#C9A96E;cursor:pointer;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.pem-actions{display:flex;gap:10px}
+.pem-actions button{flex:1;padding:13px 14px;border-radius:10px;font-size:14px;font-weight:700;border:none;cursor:pointer;font-family:inherit;letter-spacing:-.3px}
+.pem-btn-cancel{background:rgba(255,255,255,.1);color:#fff}
+.pem-btn-cancel:active{background:rgba(255,255,255,.18)}
+.pem-btn-confirm{background:linear-gradient(135deg,#1B3A6B,#2D5DAE);color:#fff;box-shadow:0 4px 12px rgba(27,58,107,.4)}
+.pem-btn-confirm:active{transform:scale(.98)}
 </style>
+<!-- ════════════ 프로필 사진 편집기 모달 ════════════ -->
+<div id="photoEditModal" class="hidden">
+  <div class="pem-header">
+    <h3>사진 위치 조정</h3>
+    <button type="button" class="pem-x" onclick="closePhotoEditor()" aria-label="닫기">×</button>
+  </div>
+  <div class="pem-stage" id="pemStage"
+       onmousedown="_peStart(event)" onmousemove="_peMove(event)" onmouseup="_peEnd(event)" onmouseleave="_peEnd(event)"
+       ontouchstart="_peStart(event)" ontouchmove="_peMove(event)" ontouchend="_peEnd(event)" ontouchcancel="_peEnd(event)">
+    <img id="pemImg" alt="">
+    <div class="pem-guide" id="pemGuide"></div>
+  </div>
+  <div class="pem-footer">
+    <div class="pem-tip">손가락으로 드래그하거나 두 손가락으로 확대·축소하세요</div>
+    <div class="pem-zoom-row">
+      <span class="pem-zoom-icon">−</span>
+      <input type="range" id="pemZoom" min="0" max="100" value="0" oninput="_peOnZoomInput(event)">
+      <span class="pem-zoom-icon">+</span>
+    </div>
+    <div class="pem-actions">
+      <button type="button" class="pem-btn-cancel" onclick="closePhotoEditor()">취소</button>
+      <button type="button" class="pem-btn-confirm" onclick="confirmPhotoEditor()">확인</button>
+    </div>
+  </div>
+</div>
 <div id="mdl-notice" class="modal hidden" style="z-index:220">
   <div class="mdl-bg" onclick="closeNoticeModal()"></div>
   <div class="mdl-box mdl-launch-box">
