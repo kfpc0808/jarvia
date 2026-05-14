@@ -342,6 +342,8 @@ a{color:inherit;text-decoration:none}
 .pwaBanner-title{font-size:14px;font-weight:700;line-height:1.45;letter-spacing:-.2px;color:#fff}
 .pwaBanner-cta{display:block;margin-top:12px;padding:11px 16px;background:linear-gradient(135deg,#C9A96E,#A68B4B);color:#1B3A6B;border-radius:9px;font-size:13px;font-weight:800;text-align:center;border:none;cursor:pointer;font-family:inherit;letter-spacing:-.2px;box-shadow:0 4px 12px rgba(201,169,110,.35);position:relative;width:100%}
 .pwaBanner-cta:active{transform:scale(.98)}
+.pwaBanner-already{display:block;width:100%;margin-top:8px;padding:6px 8px;background:none;color:rgba(255,255,255,.55);font-size:11px;border:none;cursor:pointer;font-family:inherit;text-decoration:underline;text-underline-offset:3px;position:relative;letter-spacing:-.2px}
+.pwaBanner-already:active{color:rgba(255,255,255,.85)}
 
 .pwaIosModal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;display:none;align-items:flex-end;justify-content:center;padding:0}
 .pwaIosModal.show{display:flex}
@@ -426,10 +428,11 @@ a{color:inherit;text-decoration:none}
           </div>
           <div class="pwaBanner-text">
             <div class="pwaBanner-label">HOME SCREEN</div>
-            <div class="pwaBanner-title"><span id="pwaBannerName">컨설턴트</span>님의 채널을<br>바탕화면에 추가하세요</div>
+            <div class="pwaBanner-title" id="pwaBannerTitle"><span id="pwaBannerName">컨설턴트</span>님의 채널을<br>바탕화면에 추가하세요</div>
           </div>
         </div>
         <button class="pwaBanner-cta" id="pwaBannerCta" type="button">📱 한 번 누르고 매일 만나기</button>
+        <button class="pwaBanner-already" id="pwaBannerAlready" type="button">이미 설치했어요 · 다시 보지 않기</button>
       </div>
 
       <!-- 1. 데일리리포트 (Onyx Daily Card - 자체 완결) -->
@@ -1533,10 +1536,19 @@ function setupPWA(){
   if(appleTitle)appleTitle.setAttribute('content',fcShortName);
 
   // 6. 배너 표시 (사진 아이콘 + FC 이름)
+  //    인앱 브라우저(카톡/페북/인스타 등) 감지 시 메시지를 외부 브라우저 안내로 변경
   const iconWrap=$('pwaBannerIcon');
   if(iconWrap)iconWrap.innerHTML='<img src="'+esc(photoUrl)+'" alt="">';
-  const nameEl=$('pwaBannerName');
-  if(nameEl)nameEl.textContent=fcName;
+  const _inApp=isInAppBrowser();
+  const titleEl=$('pwaBannerTitle');
+  const ctaEl=$('pwaBannerCta');
+  if(_inApp){
+    if(titleEl)titleEl.innerHTML=esc(fcName)+'님의 채널을 더 편하게<br>외부 브라우저에서 만나보세요';
+    if(ctaEl)ctaEl.textContent='🌐 외부 브라우저에서 열기';
+  }else{
+    const nameEl=$('pwaBannerName');
+    if(nameEl)nameEl.textContent=fcName;
+  }
   const banner=$('pwaBanner');
   if(banner)banner.classList.add('show');
 
@@ -1548,20 +1560,37 @@ function setupPWA(){
     if(banner)banner.classList.remove('show');
     try{localStorage.setItem('pwaBannerClosed_'+loginId,'1');}catch(_e){}
   };
+  const already=$('pwaBannerAlready');
+  if(already)already.onclick=()=>{
+    if(banner)banner.classList.remove('show');
+    try{localStorage.setItem('pwaBannerClosed_'+loginId,'1');}catch(_e){}
+  };
   const iosClose=$('pwaIosModalClose');
   if(iosClose)iosClose.onclick=closeIosGuide;
   const iosModal=$('pwaIosModal');
   if(iosModal)iosModal.onclick=e=>{if(e.target===iosModal)closeIosGuide();};
 }
 
+// 인앱 브라우저(카톡/페북/인스타/라인/네이버) 감지
+function isInAppBrowser(){
+  const ua=navigator.userAgent||'';
+  return /KAKAOTALK|FBAN|FBAV|Instagram|Line\//i.test(ua)||/NAVER\(inapp/i.test(ua);
+}
+
 function installPWA(){
+  // 1. 인앱 브라우저(카톡 등) → 외부 브라우저 안내
+  if(isInAppBrowser()){
+    showInstallGuide('inapp');
+    return;
+  }
+  // 2. iOS Safari → 통칭 안내 (애플 정책상 자동 prompt 불가)
   const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
   const isStandalone=window.navigator&&window.navigator.standalone;
   if(isIOS&&!isStandalone){
-    showIosGuide();
+    showInstallGuide('install');
     return;
   }
-  // Android Chrome (beforeinstallprompt 캡처됨)
+  // 3. Android Chrome (beforeinstallprompt 캡처됨) → 자동 설치 다이얼로그
   if(_pwaDeferredPrompt){
     _pwaDeferredPrompt.prompt();
     _pwaDeferredPrompt.userChoice.then(choice=>{
@@ -1572,15 +1601,58 @@ function installPWA(){
       _pwaDeferredPrompt=null;
     });
   }else{
-    // beforeinstallprompt 미발생 → 동일 안내 폴백
-    showIosGuide();
+    // 4. beforeinstallprompt 미발생 (옛 Android, 데스크탑 등) → 통칭 안내
+    showInstallGuide('install');
   }
 }
 
-function showIosGuide(){
+// 통칭 안내 모달 — mode: 'inapp'(인앱 브라우저) | 'install'(외부 브라우저에서 설치 안내)
+function showInstallGuide(mode){
+  const titleEl=$('pwaModalTitle');
+  const subEl=$('pwaModalSub');
+  const stepsEl=$('pwaModalSteps');
+  if(!titleEl||!subEl||!stepsEl)return;
+
+  if(mode==='inapp'){
+    titleEl.textContent='외부 브라우저에서 열기';
+    subEl.textContent='카톡 등 인앱 브라우저에서는 바탕화면에 추가할 수 없어요';
+    stepsEl.innerHTML=
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">1</div>'+
+        '<div class="pwaIosModal-step-text">화면 가장자리의 <strong>메뉴 버튼</strong>을 누르세요<br><span style="color:#888;font-size:12px">(점 세 개 ⋮ ⋯ 또는 줄 세 개 ≡ 모양)</span></div>'+
+      '</div>'+
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">2</div>'+
+        '<div class="pwaIosModal-step-text"><strong>"다른 브라우저로 열기"</strong> 또는 <strong>"Safari에서 열기"</strong>를 선택하세요</div>'+
+      '</div>'+
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">3</div>'+
+        '<div class="pwaIosModal-step-text">새로 열린 페이지에서 다시 이 버튼을 누르세요</div>'+
+      '</div>';
+  }else{
+    titleEl.textContent='바탕화면에 추가하기';
+    subEl.textContent='잠시면 끝나요 (10초)';
+    stepsEl.innerHTML=
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">1</div>'+
+        '<div class="pwaIosModal-step-text">화면의 <strong>[공유]</strong> 또는 <strong>[메뉴]</strong> 버튼을 누르세요<br><span style="color:#888;font-size:12px">(공유: ⬆ 화살표 아이콘 / 메뉴: ⋮ ⋯ ≡)</span></div>'+
+      '</div>'+
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">2</div>'+
+        '<div class="pwaIosModal-step-text"><strong>"홈 화면에 추가"</strong> 또는 <strong>"앱 설치"</strong>를 선택하세요</div>'+
+      '</div>'+
+      '<div class="pwaIosModal-step">'+
+        '<div class="pwaIosModal-step-num">3</div>'+
+        '<div class="pwaIosModal-step-text"><strong>"추가"</strong> 버튼을 누르면 완료!</div>'+
+      '</div>';
+  }
+
   const modal=$('pwaIosModal');
   if(modal)modal.classList.add('show');
 }
+
+// 하위 호환을 위한 별칭 (기존 코드에서 showIosGuide 호출 가능성 대비)
+function showIosGuide(){showInstallGuide('install');}
 
 function closeIosGuide(){
   const modal=$('pwaIosModal');
@@ -1591,26 +1663,13 @@ function closeIosGuide(){
 init();
 </script>
 
-<!-- ─── iOS 바탕화면 추가 안내 모달 ─── -->
+<!-- ─── 바탕화면 추가 안내 모달 (내용은 JS가 컨텍스트에 따라 채움) ─── -->
 <div id="pwaIosModal" class="pwaIosModal">
   <div class="pwaIosModal-box">
     <div class="pwaIosModal-handle"></div>
-    <div class="pwaIosModal-title">바탕화면에 추가하기</div>
-    <div class="pwaIosModal-sub">아래 순서대로 따라 해주세요 (10초)</div>
-    <div class="pwaIosModal-steps">
-      <div class="pwaIosModal-step">
-        <div class="pwaIosModal-step-num">1</div>
-        <div class="pwaIosModal-step-text">화면 하단의 <strong>공유 버튼</strong>을 눌러주세요<br><span style="color:#888;font-size:12px">(사각형에 화살표가 위로 향한 아이콘)</span></div>
-      </div>
-      <div class="pwaIosModal-step">
-        <div class="pwaIosModal-step-num">2</div>
-        <div class="pwaIosModal-step-text">아래로 스크롤해서 <strong>"홈 화면에 추가"</strong>를 눌러주세요</div>
-      </div>
-      <div class="pwaIosModal-step">
-        <div class="pwaIosModal-step-num">3</div>
-        <div class="pwaIosModal-step-text">오른쪽 위 <strong>"추가"</strong>를 누르면 완료!</div>
-      </div>
-    </div>
+    <div class="pwaIosModal-title" id="pwaModalTitle">바탕화면에 추가하기</div>
+    <div class="pwaIosModal-sub" id="pwaModalSub">아래 순서대로 따라 해주세요</div>
+    <div class="pwaIosModal-steps" id="pwaModalSteps"></div>
     <button class="pwaIosModal-close" id="pwaIosModalClose" type="button">확인</button>
   </div>
 </div>
