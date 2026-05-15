@@ -3971,7 +3971,7 @@ async function loadPptGenAdmin(){
     $('pg-total').textContent=totalDone;
     $('pg-fail').textContent=totalFail;
     // 테이블 렌더링
-    const stMap={pending:'⏳ 대기',processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
+    const stMap={pending:'⏳ 대기',processing:'🔄 생성중',calc_done:'🔄 생성중',prep_done:'🔄 생성중',step1a_processing:'🔄 1차 영역1',step1a_done:'🔄 1차 영역1',step1b_processing:'🔄 1차 영역2',step1b_done:'🔄 1차 영역2',step1c_processing:'🔄 1차 영역3',step1c_done:'🔄 1차 영역3',step1_done:'🔄 1차 통합',step2_processing:'🔄 교차검증',step2_done:'🔄 교차검증',step3a_processing:'🔄 2차 영역1',step3a_done:'🔄 2차 영역1',step3b_processing:'🔄 2차 영역2',step3b_done:'🔄 2차 영역2',step3c_processing:'🔄 2차 영역3',step3c_done:'🔄 2차 영역3',step3_processing:'🔄 외부검증',step3_gemini_done:'🔄 외부검증',step3_done:'🔄 2차 통합',step4_processing:'🔄 외부검증',step4_done:'🔄 최종합의',step5_processing:'🔄 최종합의',step5_done:'🔄 PPT 생성',step6_processing:'🔄 PPT 생성',fallback_building:'🔄 마무리',completed:'✅ 완료',failed:'❌ 실패'};
     const payMap={hold:'🟡 대기',confirmed:'🟢 확정',refunded:'🔵 환불'};
     if(!_pgList.length){
       tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-lt)">PPT 생성 내역이 없습니다.</td></tr>';return;
@@ -4111,16 +4111,21 @@ async function loadLogsPptGen(){
       sumEl.innerHTML='';return;
     }
     const uc={};let totalCount=0,totalRev=0;_pptRows=[];
-    const stMap={pending:'⏳ 대기',processing:'🔄 생성중',completed:'✅ 완료',failed:'❌ 실패'};
+    const stMap={pending:'⏳ 대기',processing:'🔄 생성중',calc_done:'🔄 생성중',prep_done:'🔄 생성중',step1a_processing:'🔄 1차 영역1',step1a_done:'🔄 1차 영역1',step1b_processing:'🔄 1차 영역2',step1b_done:'🔄 1차 영역2',step1c_processing:'🔄 1차 영역3',step1c_done:'🔄 1차 영역3',step1_done:'🔄 1차 통합',step2_processing:'🔄 교차검증',step2_done:'🔄 교차검증',step3a_processing:'🔄 2차 영역1',step3a_done:'🔄 2차 영역1',step3b_processing:'🔄 2차 영역2',step3b_done:'🔄 2차 영역2',step3c_processing:'🔄 2차 영역3',step3c_done:'🔄 2차 영역3',step3_processing:'🔄 외부검증',step3_gemini_done:'🔄 외부검증',step3_done:'🔄 2차 통합',step4_processing:'🔄 외부검증',step4_done:'🔄 최종합의',step5_processing:'🔄 최종합의',step5_done:'🔄 PPT 생성',step6_processing:'🔄 PPT 생성',fallback_building:'🔄 마무리',completed:'✅ 완료',failed:'❌ 실패'};
+    const catMap={A:'⏱️ 범위초과',B:'📋 구조오류',C:'🌐 외부장애',D:'📦 파일오류',E:'😔 기타'};
+    const catCount={A:0,B:0,C:0,D:0,E:0};let failedTotal=0;
     for(const d of snap.docs){
       const j=d.data();totalCount++;
       if(j.paymentStatus==='confirmed')totalRev+=(j.genPrice||0);
+      if(j.status==='failed'){failedTotal++;if(j.errorCategory&&catCount[j.errorCategory]!==undefined)catCount[j.errorCategory]++;}
       if(!uc[j.userId]){uc[j.userId]=await resolveUserName(j.userId,j.userName||'');}
       const tp=j.clientType==='personal'?'👤 개인':'🏢 기업';
       const cost=j.genPrice>0&&j.paymentStatus==='confirmed'?fmt(j.genPrice)+'원':(j.paymentStatus==='refunded'?'환불':'무료');
-      _pptRows.push(`<tr><td style="white-space:nowrap">${fdatetime(j.createdAt)}</td><td>${esc(uc[j.userId])}</td><td>${tp}</td><td class="ov">${esc(j.formData?.ptTitle||'-')}</td><td>${stMap[j.status]||j.status}</td><td style="text-align:right">${cost}</td></tr>`);
+      const stCat=(j.status==='failed'&&j.errorCategory)?` <span style="font-size:11px;color:var(--text-lt)" title="${esc(j.errorStage||'')}">[${catMap[j.errorCategory]||j.errorCategory}]</span>`:'';
+      _pptRows.push(`<tr><td style="white-space:nowrap">${fdatetime(j.createdAt)}</td><td>${esc(uc[j.userId])}</td><td>${tp}</td><td class="ov">${esc(j.formData?.ptTitle||'-')}</td><td>${stMap[j.status]||j.status}${stCat}</td><td style="text-align:right">${cost}</td></tr>`);
     }
-    sumEl.innerHTML=`<div class="dash-c" style="border-left-color:#E65100"><span>PPT 생성수</span><strong>${totalCount}</strong></div><div class="dash-c" style="border-left-color:#E65100"><span>PPT 매출</span><strong>${fmt(totalRev)}</strong><em>원</em></div>`;
+    const failDistHtml=failedTotal>0?`<div class="dash-c" style="border-left-color:#D4382C"><span>실패 사유 분포</span><strong style="font-size:13px;font-weight:600;line-height:1.6">A ${catCount.A} · B ${catCount.B} · C ${catCount.C} · D ${catCount.D} · E ${catCount.E}</strong></div>`:'';
+    sumEl.innerHTML=`<div class="dash-c" style="border-left-color:#E65100"><span>PPT 생성수</span><strong>${totalCount}</strong></div><div class="dash-c" style="border-left-color:#E65100"><span>PPT 매출</span><strong>${fmt(totalRev)}</strong><em>원</em></div><div class="dash-c" style="border-left-color:#D4382C"><span>실패 건수</span><strong>${failedTotal}</strong></div>${failDistHtml}`;
     renderPptPage(1);
   }catch(e){
     tb.innerHTML=`<tr><td colspan="6" style="text-align:center;color:var(--danger)">로드 실패</td></tr>`;
