@@ -872,6 +872,26 @@
       </div>
     </div>
 
+    <!-- ═══ PPT 생성 실패 안내 모달 ═══ -->
+    <div id="mdl-pptgen-failed" class="modal hidden">
+      <div class="mdl-box" style="max-width:560px;max-height:85vh;overflow-y:auto;padding:32px 28px">
+        <button class="mdl-x" onclick="closeM('mdl-pptgen-failed')">×</button>
+        <div style="text-align:center;margin-bottom:20px">
+          <div id="pptgen-failed-icon" style="font-size:48px;margin-bottom:8px">😔</div>
+          <h2 id="pptgen-failed-title" style="font-size:20px;font-weight:700;color:var(--primary);margin-bottom:6px">PPT 생성에 어려움이 있었습니다</h2>
+        </div>
+        <div id="pptgen-failed-body" style="font-size:14px;line-height:1.8;color:var(--text);background:#FFF8F0;border:1px solid #FFD9B3;border-radius:8px;padding:16px 20px;margin-bottom:14px"></div>
+        <div id="pptgen-failed-refund" style="font-size:13px;color:var(--success);background:#E8F5E9;border-left:3px solid var(--success);padding:10px 14px;border-radius:4px;margin-bottom:14px;display:none">
+          💰 결제하신 금액은 <b>자동으로 환불 처리</b>되었습니다. 잔액에 즉시 반영됩니다.
+        </div>
+        <p style="font-size:11.5px;color:var(--text-lt);line-height:1.6;margin-bottom:16px">불편을 드려 죄송합니다. 동일한 문제가 반복되면 화면 우측 상단의 문의하기를 이용해 주세요.</p>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-sec" style="flex:1;padding:12px" onclick="closeM('mdl-pptgen-failed')">닫기</button>
+          <button class="btn btn-full" style="flex:1;padding:12px;background:linear-gradient(135deg,var(--primary),var(--accent))" onclick="closeM('mdl-pptgen-failed');pptgenReset()">🔄 다시 시도</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══ 이용 가이드 모달 ═══ -->
     <div id="mdl-pptgen-guide" class="modal hidden">
       <div class="mdl-box" style="max-width:680px;max-height:90vh;overflow-y:auto;padding:28px 32px">
@@ -6570,6 +6590,66 @@ function updatePptGenBar(targetPct){
   },300); // 0.3초마다 1%씩
 }
 let _pollTimer=null;
+// ── PPT 생성 실패 사유 분류 + 정중한 안내 모달 ──
+function classifyPptGenError(j){
+  const msg=(j.errorMsg||'').toLowerCase();
+  const st=j.status||'';const pr=j.progress||0;
+  // 실패 단계 식별 (관리자 로그용, 사용자에겐 노출 안 함)
+  let stage='';
+  if(pr<30||st==='processing')stage='1차 자료 생성';
+  else if(pr<45||st==='step1_done'||st==='step2_processing')stage='2차 자료 보완';
+  else if(pr<78||st==='step2_done'||st==='step3_processing')stage='외부 독립 검증';
+  else if(pr<95||st==='step3_gemini_done'||st==='step4_processing')stage='최종 자료 합의';
+  else stage='PPT 파일 생성';
+  // 카테고리 매칭 (3중 시그널: errorMsg + status + progress)
+  // A. 범위 초과 (타임아웃)
+  if(/timeout|aborted|headers\s*timeout|etimedout|deadline/.test(msg)){
+    return {cat:'A',icon:'⏱️',title:'생성 시간이 초과되었습니다',
+      body:'<b>입력하신 주제의 범위가 다소 넓어, AI가 한 번에 다루기에 한계가 있었던 것으로 보입니다.</b><br><br>보다 안정적인 완성을 위해 다음을 권해드립니다.<br><br>'+
+        '• 컨설팅 주제를 <b>단일 핵심 이슈</b>로 좁혀 주세요<br>'+
+        '&nbsp;&nbsp;&nbsp;예) "성장 단계별 전체 로드맵" → "법인 1년차 정관·임원규정 정비"<br>'+
+        '• 재무 정보는 <b>항목별 숫자</b>로 구체적으로 입력해 주세요<br>'+
+        '&nbsp;&nbsp;&nbsp;(자산총액, 부채총액, 자본금, 당기순이익 등)',stage:stage};
+  }
+  // B. AI 출력 구조 오류
+  if(/json|슬라이드\s*수|jsonrepair|extractjson|parse|slides?\s*<|구조\s*검증|파싱/.test(msg)){
+    return {cat:'B',icon:'📋',title:'자료 구조 검증 중 오류가 발견되었습니다',
+      body:'<b>AI 모델이 일시적으로 정형화된 형식을 만들어내지 못한 경우입니다.</b><br><br>'+
+        '대부분 <b>잠시 후 동일한 입력값으로 다시 시도</b>하시면 정상적으로 생성됩니다.<br><br>'+
+        '반복되는 경우, 자유 입력란의 특수문자(따옴표 등)를 일부 제거하고 시도해 주세요.',stage:stage};
+  }
+  // C. 외부 시스템 일시 장애
+  if(/perplexity|gemini|taxnavi|econn|502|503|504|enotfound|socket|fetch\s*failed|network/.test(msg)){
+    return {cat:'C',icon:'🌐',title:'외부 시스템과의 연결에 일시적 문제가 있었습니다',
+      body:'<b>법령·판례 조회 또는 외부 검증 시스템의 일시적 장애로 보입니다.</b><br><br>'+
+        '<b>10~20분 후 다시 시도</b>해 주시면 대부분 정상 처리됩니다.<br><br>'+
+        '문제가 지속되는 경우, 시스템 점검 중일 수 있으니 잠시 후 재시도 부탁드립니다.',stage:stage};
+  }
+  // D. 파일 빌드 오류
+  if(/pptxgenjs|buildpptx|storage|bucket|zip|upload|file\s*size|render/.test(msg)){
+    return {cat:'D',icon:'📦',title:'PPT 파일 생성 마지막 단계에서 문제가 있었습니다',
+      body:'<b>슬라이드 자료는 정상적으로 생성되었으나, 파일 변환 과정에서 오류가 발생했습니다.</b><br><br>'+
+        '<b>다시 시도</b>해 주시면 대부분 정상 처리됩니다.<br><br>'+
+        '반복되는 경우 입력 내용의 특수문자를 일부 정리하고 시도해 주세요.',stage:stage};
+  }
+  // E. 기타
+  return {cat:'E',icon:'😔',title:'PPT 생성 중 예상치 못한 오류가 발생했습니다',
+    body:'<b>일시적인 시스템 문제로 PPT 생성이 완료되지 못했습니다.</b><br><br>'+
+      '<b>잠시 후 다시 시도</b>해 주세요. 동일한 문제가 반복되면 화면 우측 상단의 문의하기를 이용해 주시면 신속히 확인해 드리겠습니다.',stage:stage};
+}
+function showPptGenFailedModal(j){
+  const info=classifyPptGenError(j);
+  $('pptgen-failed-icon').textContent=info.icon;
+  $('pptgen-failed-title').textContent=info.title;
+  $('pptgen-failed-body').innerHTML=info.body;
+  const refundEl=$('pptgen-failed-refund');
+  if(j.genPrice>0&&j.paymentStatus==='refunded'){refundEl.style.display='block';refundEl.innerHTML='💰 결제하신 <b>'+(j.genPrice||0).toLocaleString()+'원</b>은 <b>자동으로 환불 처리</b>되었습니다. 잔액에 즉시 반영됩니다.';}
+  else{refundEl.style.display='none';}
+  // 콘솔에 관리자용 디버그 정보 출력 (사용자 화면엔 노출 안 됨)
+  console.log('[PPT Failed]',{category:info.cat,stage:info.stage,errorMsg:j.errorMsg,status:j.status,progress:j.progress});
+  openM('mdl-pptgen-failed');
+}
+window.showPptGenFailedModal=showPptGenFailedModal;
 function pollPptGenJob(jobId){
   if(_pollTimer)clearInterval(_pollTimer);
   let tick=0;
@@ -6666,8 +6746,7 @@ function pollPptGenJob(jobId){
         clearInterval(_pollTimer);_pollTimer=null;
         $('pptgen-progress').classList.add('hidden');
         pptgenReset();
-        const refundMsg=j.genPrice>0?' 차감된 포인트는 자동 환불됩니다.':'';
-        toast('PPT 생성 실패: '+(j.errorMsg||'알 수 없는 오류')+refundMsg,'error');
+        showPptGenFailedModal(j);
         if(j.genPrice>0){setTimeout(async()=>{await refreshMe();updateBal();},2000);}
         loadPptGenHistory();
       }
