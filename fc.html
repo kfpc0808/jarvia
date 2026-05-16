@@ -680,6 +680,11 @@ a{color:inherit;text-decoration:none}
             <div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="number" inputmode="decimal" id="s_rt_inf_in" value="3" min="1" max="6" step="0.5"><span class="u">%</span></span></div>
           </div>
           <div class="simRow">
+            <div class="simLabel">📊 은퇴 후 운용 수익률 (연)</div>
+            <input type="range" class="simSlider" min="1" max="7" step="0.5" value="4" id="s_rt_rate">
+            <div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="number" inputmode="decimal" id="s_rt_rate_in" value="4" min="1" max="7" step="0.5"><span class="u">%</span></span></div>
+          </div>
+          <div class="simRow">
             <div class="simLabel">🏦 현재 보유 자금</div>
             <input type="range" class="simSlider" min="0" max="100000" step="1000" value="10000" id="s_rt_cur">
             <div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="number" inputmode="numeric" id="s_rt_cur_in" value="10000" min="0" max="100000" step="1000"><span class="u">만원</span></span></div>
@@ -1229,14 +1234,19 @@ function cPV(){
 }
 function cRT(){
   var age=+$('s_rt_age').value, ret=+$('s_rt_ret').value, life=+$('s_rt_life').value;
-  var exp=+$('s_rt_exp').value, inf=+$('s_rt_inf').value, cur=+$('s_rt_cur').value;
+  var exp=+$('s_rt_exp').value, inf=+$('s_rt_inf').value, rate=+$('s_rt_rate').value, cur=+$('s_rt_cur').value;
   if(ret<=age){$('s_rt_result').textContent='—';$('s_rt_desc').textContent='은퇴 희망 나이는 현재 나이보다 커야 합니다';return;}
   var futureExp=exp*Math.pow(1+inf/100,ret-age);
-  var totalNeed=futureExp*12*life;
-  var curFV=cur*Math.pow(1+inf/100,ret-age);
-  var shortage=Math.max(0,totalNeed-curFV);
-  $('s_rt_result').textContent=_simFmtMan(totalNeed);
-  $('s_rt_desc').textContent='월 '+Math.round(futureExp).toLocaleString()+'만원 × 12 × '+life+'년 / 부족액 약 '+Math.round(shortage).toLocaleString()+'만원';
+  var pmt1=futureExp*12;
+  var g=inf/100, r=rate/100, n=life;
+  var pv;
+  if(Math.abs(r-g)<1e-9) pv=pmt1*n/(1+r);
+  else pv=pmt1*(1-Math.pow((1+g)/(1+r),n))/(r-g);
+  var nominal=pmt1*n;
+  var curFV=cur*Math.pow(1+r,ret-age);
+  var shortage=Math.max(0,pv-curFV);
+  $('s_rt_result').textContent=_simFmtMan(pv);
+  $('s_rt_desc').textContent='월 '+Math.round(futureExp).toLocaleString()+'만원 × 12 × '+life+'년 = 명목 '+Math.round(nominal).toLocaleString()+'만원 / 운용 '+rate+'% 가정 시 필요 일시금 '+Math.round(pv).toLocaleString()+'만원 / 부족액 약 '+Math.round(shortage).toLocaleString()+'만원';
 }
 function cSV(){
   var amt=+$('s_sv_amt').value, yr=+$('s_sv_yr').value;
@@ -1332,7 +1342,7 @@ function initSimulators(){
     ['s_fv_amt','s_fv_amt_in',cFV],['s_fv_yr','s_fv_yr_in',cFV],['s_fv_inf','s_fv_inf_in',cFV],
     ['s_pv_amt','s_pv_amt_in',cPV],['s_pv_yr','s_pv_yr_in',cPV],['s_pv_inf','s_pv_inf_in',cPV],
     ['s_rt_age','s_rt_age_in',cRT],['s_rt_ret','s_rt_ret_in',cRT],['s_rt_life','s_rt_life_in',cRT],
-    ['s_rt_exp','s_rt_exp_in',cRT],['s_rt_inf','s_rt_inf_in',cRT],['s_rt_cur','s_rt_cur_in',cRT],
+    ['s_rt_exp','s_rt_exp_in',cRT],['s_rt_inf','s_rt_inf_in',cRT],['s_rt_rate','s_rt_rate_in',cRT],['s_rt_cur','s_rt_cur_in',cRT],
     ['s_sv_amt','s_sv_amt_in',cSV],['s_sv_yr','s_sv_yr_in',cSV],['s_sv_rate','s_sv_rate_in',cSV],['s_sv_inf','s_sv_inf_in',cSV],
     ['s_ih_amt','s_ih_amt_in',cIH],['s_ih_kids','s_ih_kids_in',cIH],['s_ih_cash','s_ih_cash_in',cIH],['s_ih_ins','s_ih_ins_in',cIH]
   ].forEach(function(p){_simSyncPair(p[0],p[1],p[2]);});
@@ -1620,12 +1630,22 @@ async function loadFcTestimonials(){
     const snap=await getDocs(query(collection(db,'fc_testimonials'),where('fcAuthUid','==',fcUid),orderBy('order')));
     const items=snap.docs.map(d=>({id:d.id,...d.data()}));
     if(!items.length)return;
-    const first=items[0];
-    $('testimonialList').innerHTML=`<div class="testimonial">
-      <div class="content">"${esc(first.content||'')}"</div>
-      <div class="author">— ${esc(first.author||'고객')}${first.authorMeta?` (${esc(first.authorMeta)})`:''}</div>
+    const renderItem=t=>`<div class="testimonial">
+      <div class="content">"${esc(t.content||'')}"</div>
+      <div class="author">— ${esc(t.author||'고객')}${t.authorMeta?` (${esc(t.authorMeta)})`:''}</div>
     </div>`;
-    if(items.length>1)$('testimonialMore').textContent=`+ 후기 ${items.length-1}건 더보기`;
+    $('testimonialList').innerHTML=renderItem(items[0]);
+    if(items.length>1){
+      const moreBtn=$('testimonialMore');
+      moreBtn.textContent=`+ 후기 ${items.length-1}건 더보기 ▼`;
+      moreBtn.style.cursor='pointer';
+      let expanded=false;
+      moreBtn.addEventListener('click',()=>{
+        expanded=!expanded;
+        $('testimonialList').innerHTML=expanded?items.map(renderItem).join(''):renderItem(items[0]);
+        moreBtn.textContent=expanded?'▲ 접기':`+ 후기 ${items.length-1}건 더보기 ▼`;
+      });
+    }
     $('cardReview').classList.remove('hidden');
   }catch(e){console.warn('testimonial load fail',e);}
 }
