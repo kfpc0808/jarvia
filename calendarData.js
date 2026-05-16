@@ -16,7 +16,7 @@ window.CALENDAR_DATA={
     {id:'r-03', month:4,  day:25, name:'부가세 1기 예정신고',      deadline:'4.25',  desc:'법인사업자',                          target:['corporate'], category:'tax'},
     {id:'r-04', month:5,  day:31, name:'종합소득세 신고·납부',     deadline:'5.31',  desc:'개인사업자·프리랜서·임대소득자',      target:['personal'],  category:'tax'},
     {id:'r-05', month:5,  day:31, name:'양도소득세 확정신고',      deadline:'5.31',  desc:'전년도 양도분 합산',                  target:['personal'],  category:'tax'},
-    {id:'r-06', month:6,  day:30, name:'재산세 주택 1기분',        deadline:'6.30',  desc:'주택분 1/2 + 건물분 전액',            target:['personal'],  category:'tax'},
+    {id:'r-06', month:7,  day:31, name:'재산세 주택 1기분',        deadline:'7.31',  desc:'주택분 1/2 + 건물분 전액 (납부기간 7.16~7.31)', target:['personal'],  category:'tax'},
     {id:'r-07', month:7,  day:25, name:'부가세 1기 확정신고',      deadline:'7.25',  desc:'1~6월분, 모든 사업자',                target:['both'],      category:'tax'},
     {id:'r-08', month:8,  day:31, name:'법인세 중간예납',          deadline:'8.31',  desc:'전년 산출세액의 1/2',                 target:['corporate'], category:'tax'},
     {id:'r-09', month:9,  day:30, name:'재산세 주택 2기분',        deadline:'9.30',  desc:'주택분 나머지 1/2',                   target:['personal'],  category:'tax'},
