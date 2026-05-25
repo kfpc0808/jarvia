@@ -451,6 +451,7 @@
         </table>
       </div>
       <input type="file" id="cdr-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleCdrAudioUpload(this)">
+      <input type="file" id="cdr-short-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleCdrShortAudioUpload(this)">
     </div>
 
     <!-- ═══ 특급보고서 관리 패널 ═══ -->
@@ -2589,6 +2590,7 @@ async function openFcDetail(fcId){
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteSelectedDR=deleteSelectedDR;window.toggleAllDR=toggleAllDR;
 window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteSelectedCDR=deleteSelectedCDR;window.toggleAllCDR=toggleAllCDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
+window.copyCdrShortScript=copyCdrShortScript;window.triggerCdrShortAudioUpload=triggerCdrShortAudioUpload;window.handleCdrShortAudioUpload=handleCdrShortAudioUpload;window.playCdrShortAudio=playCdrShortAudio;window.deleteCdrShortAudio=deleteCdrShortAudio;
 window.copyAudioScript=copyAudioScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
 window.nuEmailSel=nuEmailSel;window.nuUnlimitedChk=nuUnlimitedChk;window.initNuDates=initNuDates;
@@ -4722,6 +4724,8 @@ function renderClientDailyReports(){
     const fd=r.fileDate||r.id||'';
     const hasScript=!!(r.audioScript);
     const hasAudio=!!r.audioUrl;
+    const hasShortScript=!!(r.audioScriptShort);
+    const hasShortAudio=!!r.audioUrlShort;
     const hasHtml=!!r.htmlUrl;
     return `<tr>
       <td style="text-align:center"><input type="checkbox" class="cdr-chk" value="${fd}"></td>
@@ -4739,6 +4743,9 @@ function renderClientDailyReports(){
         ${hasAudio
           ?`<button class="btn btn-sm btn-sec" onclick="prDownload('${esc(r.audioUrl)}','${fd}_client_audio.m4a')">🎧 다운</button><button class="btn btn-sm btn-success" onclick="playCdrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteCdrAudio('${fd}')" title="오디오 삭제">✕</button>`
           :`<button class="btn btn-sm btn-sec" onclick="triggerCdrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
+        ${(hasShortScript||hasShortAudio)?`${hasShortScript?`<button class="btn btn-sm btn-sec" onclick="copyCdrShortScript('${fd}')" title="5분 핵심 NotebookLM 스크립트 복사" style="border-color:#C9A96E;color:#A68B4B">📋 5분</button>`:''}${hasShortAudio
+          ?`<button class="btn btn-sm btn-sec" onclick="prDownload('${esc(r.audioUrlShort)}','${fd}_client_short.m4a')">⚡ 다운</button><button class="btn btn-sm btn-success" onclick="playCdrShortAudio('${esc(r.audioUrlShort)}')">⚡ 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteCdrShortAudio('${fd}')" title="5분 오디오 삭제">✕</button>`
+          :`<button class="btn btn-sm btn-sec" onclick="triggerCdrShortAudioUpload('${fd}')" style="border-color:#C9A96E;color:#A68B4B">⚡ 5분 업로드</button>`}`:''}
       </td>
     </tr>`;
   }).join('');
@@ -4876,6 +4883,71 @@ async function deleteCdrAudio(fileDate){
     if(idx>=0)_cdrList[idx].audioUrl='';
     renderClientDailyReports();
     toast('오디오 삭제 완료','success');
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
+}
+
+// ─── 5분 핵심 클립 (audioScriptShort / audioUrlShort) ───
+function copyCdrShortScript(fileDate){
+  const r=_cdrList.find(d=>(d.fileDate||d.id)===fileDate);
+  if(!r){toast('리포트를 찾을 수 없습니다.','warning');return;}
+  const script=r.audioScriptShort||'';
+  if(!script.trim()){toast('생성된 5분 스크립트가 없습니다.','warning');return;}
+  navigator.clipboard.writeText(script).then(()=>{
+    toast('📋 5분 핵심 스크립트가 복사되었습니다. NotebookLM에 붙여넣기 하세요!','success');
+  }).catch(()=>{
+    const ta=document.createElement('textarea');
+    ta.value=script;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('📋 5분 스크립트 복사 완료!','success');
+  });
+}
+
+let _cdrShortAudioTarget='';
+function triggerCdrShortAudioUpload(fileDate){
+  _cdrShortAudioTarget=fileDate;
+  const inp=$('cdr-short-audio-file');
+  inp.value='';
+  inp.click();
+}
+
+async function handleCdrShortAudioUpload(input){
+  const file=input.files[0];
+  if(!file||!_cdrShortAudioTarget)return;
+  const fd=_cdrShortAudioTarget;
+  const ext=file.name.split('.').pop()||'m4a';
+  const path=`client-daily-reports/${fd}_short.${ext}`;
+  toast('⚡ 5분 오디오 업로드 중...','');
+  try{
+    const sRef2=stRef(storage,path);
+    const task=uploadBytesResumable(sRef2,file,{contentType:file.type||'audio/mp4'});
+    task.on('state_changed',null,
+      (err)=>{toast('업로드 실패: '+err.message,'error');},
+      async()=>{
+        const url=await getDownloadURL(task.snapshot.ref);
+        await updateDoc(doc(db,'client_daily_reports',fd),{audioUrlShort:url});
+        toast('⚡ 5분 핵심 오디오 등록 완료!','success');
+        const idx=_cdrList.findIndex(d=>(d.fileDate||d.id)===fd);
+        if(idx>=0)_cdrList[idx].audioUrlShort=url;
+        renderClientDailyReports();
+      }
+    );
+  }catch(e){toast('업로드 오류: '+e.message,'error');}
+}
+
+function playCdrShortAudio(url){
+  const w=window.open('','_blank','width=400,height=120');
+  w.document.write('<html><head><title>⚡ 5분 핵심 브리핑 Audio</title></head><body style="margin:20px;font-family:sans-serif"><p style="font-size:14px;margin-bottom:12px">⚡ 5분 핵심 브리핑 오디오</p><audio controls autoplay style="width:100%" src="'+url+'"></audio></body></html>');
+}
+
+async function deleteCdrShortAudio(fileDate){
+  if(!confirm('이 리포트의 5분 핵심 오디오를 삭제할까요?'))return;
+  try{
+    const r=_cdrList.find(d=>(d.fileDate||d.id)===fileDate);
+    if(r&&r.audioUrlShort){try{const p=decodeURIComponent(r.audioUrlShort.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 5분 오디오 삭제 스킵:',e.code);}}
+    await updateDoc(doc(db,'client_daily_reports',fileDate),{audioUrlShort:''});
+    const idx=_cdrList.findIndex(d=>(d.fileDate||d.id)===fileDate);
+    if(idx>=0)_cdrList[idx].audioUrlShort='';
+    renderClientDailyReports();
+    toast('5분 오디오 삭제 완료','success');
   }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
