@@ -15,6 +15,10 @@
   <meta property="og:image:height" content="630">
   <meta property="og:url" content="https://jarvia.co.kr">
   <meta name="twitter:card" content="summary_large_image">
+  <!-- ─── PWA: 로그인 컨설턴트가 메인화면을 홈에 추가 시 본인 사진/채널명 아이콘 (setupPlatformPWA()에서 채워짐) ─── -->
+  <link rel="manifest" id="pwaManifest">
+  <link rel="apple-touch-icon" id="pwaAppleIcon">
+  <meta name="apple-mobile-web-app-title" id="pwaAppleTitle" content="JARVIA">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -3628,6 +3632,45 @@ let _authWait=false;
   }catch(e){console.warn('서브도메인 브랜딩 로드 실패',e);var lt=document.getElementById('hdr-logo-text');var ls=document.getElementById('hdr-logo-sub');if(lt)lt.style.display='';if(ls)ls.style.display='';}
 })();
 function genRefCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let r='';for(let i=0;i<8;i++)r+=c[Math.floor(Math.random()*c.length)];return r;}
+// ★ 메인화면(index.html)을 홈에 추가할 때, 로그인 컨설턴트의 마이페이지 업로드 사진 + 채널명을 아이콘/라벨로 주입
+//   - 사진: consultants/{loginId}.photoUrl (마이페이지 '내플랫폼' 탭 업로드본, fc.html과 동일 소스)
+//   - 라벨: channelTitle(회원이 설정한 "회원명+플랫폼"), 없으면 "{이름} 자산관리"
+//   - 사진 없음/비로그인/일반 사용자 → 아무 것도 안 함(기존 JARVIA 기본값 유지). 정사각 보정 실패 시 원본 유지.
+async function setupPlatformPWA(){
+  try{
+    const _md=window.meData||(typeof meData!=='undefined'?meData:null);
+    const _meu=window.me||(typeof me!=='undefined'?me:null);
+    if(!_meu||!_md||!_md.loginId)return;
+    let cs;
+    try{const _s=await getDoc(doc(db,'consultants',_md.loginId));if(!_s.exists())return;cs=_s.data();}catch(_e){return;}
+    const photoUrl=(cs&&cs.photoUrl)||'';
+    if(!photoUrl)return;
+    const fcName=(cs&&cs.name)||_md.name||_md.loginId;
+    const channelTitle=(cs&&cs.channelTitle)||(fcName+' 자산관리');
+    const channelShortName=channelTitle.length>10?channelTitle.substring(0,10):channelTitle;
+    const startUrl='/@'+_md.loginId;
+    function setIcons(iconSrc){
+      const iconType=(iconSrc.indexOf('data:image/png')===0)?'image/png':'image/jpeg';
+      try{
+        const manifestJson={name:channelTitle,short_name:channelShortName,start_url:startUrl,display:'standalone',background_color:'#1B3A6B',theme_color:'#1B3A6B',orientation:'portrait',icons:[{src:iconSrc,sizes:'512x512',type:iconType,purpose:'any'},{src:iconSrc,sizes:'192x192',type:iconType,purpose:'any'}]};
+        const blob=new Blob([JSON.stringify(manifestJson)],{type:'application/json'});
+        const link=$('pwaManifest');if(link)link.href=URL.createObjectURL(blob);
+      }catch(_e){console.warn('platform manifest gen failed:',_e);}
+      const ai=$('pwaAppleIcon');if(ai)ai.href=iconSrc;
+    }
+    setIcons(photoUrl); // 1차: 원본 즉시 주입(빠르게 추가해도 아이콘 비지 않게)
+    const at=$('pwaAppleTitle');if(at)at.setAttribute('content',channelShortName);
+    document.title=channelTitle;
+    // 정사각 보정: 로드 → 가운데(짧은 변 기준) 크롭 → 512×512 canvas → dataURL 교체. CORS/로드 실패 시 원본 유지.
+    try{
+      const img=new Image();img.crossOrigin='anonymous';
+      img.onload=function(){try{const side=Math.min(img.naturalWidth,img.naturalHeight);if(!side)return;const sx=(img.naturalWidth-side)/2,sy=(img.naturalHeight-side)/2;const cv=document.createElement('canvas');cv.width=512;cv.height=512;const ctx=cv.getContext('2d');ctx.fillStyle='#1B3A6B';ctx.fillRect(0,0,512,512);ctx.drawImage(img,sx,sy,side,side,0,0,512,512);setIcons(cv.toDataURL('image/png'));}catch(_e){}};
+      img.onerror=function(){};
+      img.src=photoUrl;
+    }catch(_e){}
+  }catch(_e){console.warn('setupPlatformPWA error:',_e);}
+}
+
 onAuthStateChanged(auth,async u=>{
   if(u){
     me=u;window.me=u;window.meData=null;
@@ -3741,6 +3784,7 @@ onAuthStateChanged(auth,async u=>{
       checkPaymentResult();
       showLoginPopups();
       checkConsultRequests();
+      setupPlatformPWA();
     }else{
       // ★ 인증은 됐지만 users에 없는 경우 (익명인증 등) → 로그아웃 후 로그인 페이지
       console.warn('인증 유저가 users에 없음 (uid:'+u.uid+', isAnonymous:'+u.isAnonymous+') — 로그아웃 처리');
