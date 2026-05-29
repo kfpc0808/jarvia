@@ -1957,7 +1957,7 @@ async function submitForm(){
 
 // ═══ 컨택 버튼 (카톡 공유 + SMS) ═══
 function setupContactButtons(){
-  const url=`https://jarvia.co.kr/@${loginId}`;
+  const url=`https://jarvia.co.kr/channel?fc=${encodeURIComponent(loginId)}`;
   // ★ KFPC 요청(2026-05): 카드 본체 클릭 시에도 채널 페이지로 이동하도록 통일
   //    이전: content.link=ogLink (channelOg Cloud Function) → 자비아 메인으로 redirect되는 이슈
   //    현재: content.link=url (채널 페이지) — 이미지·제목·설명·버튼 모두 동일 목적지
@@ -2161,11 +2161,10 @@ window.addEventListener('beforeinstallprompt',e=>{
 });
 
 function setupPWA(){
-  // 1. 가드: 사진 없거나 정사각형 크롭 안 된 사진이면 비활성화
-  //    ※ photoUrl/photoSquare는 consultants 컬렉션에 저장됨 (fc.html 기존 패턴과 동일)
-  const _photoUrl=(consultantData&&consultantData.photoUrl)||(fcData&&fcData.photoUrl)||'';
-  const _photoSquare=(consultantData&&consultantData.photoSquare)||(fcData&&fcData.photoSquare)||false;
-  if(!_photoUrl||!_photoSquare){return;}
+  // 1. 가드: 사진이 없으면 비활성화 (정사각 여부는 아래에서 canvas로 보정하므로 photoSquare 요구 제거)
+  //    ※ 사진 해석은 헤더(renderHeader)와 동일: photoUrl → photo → fcData.photoUrl 순 폴백
+  const _photoUrl=(consultantData&&(consultantData.photoUrl||consultantData.photo))||(fcData&&fcData.photoUrl)||'';
+  if(!_photoUrl){return;}
   // 2. 이미 standalone(설치된 상태)이면 배너 안 보임
   if(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches){return;}
   if(window.navigator&&window.navigator.standalone){return;}
@@ -2180,32 +2179,62 @@ function setupPWA(){
   const photoUrl=_photoUrl;
   const startUrl=`/@${loginId}`;
 
-  // 4. manifest 동적 생성 → Blob URL → <link rel="manifest"> 주입
-  try{
-    const manifestJson={
-      name:channelTitle,
-      short_name:channelShortName,
-      start_url:startUrl,
-      display:'standalone',
-      background_color:'#1B3A6B',
-      theme_color:'#1B3A6B',
-      orientation:'portrait',
-      icons:[
-        {src:photoUrl,sizes:'512x512',type:'image/jpeg',purpose:'any'},
-        {src:photoUrl,sizes:'192x192',type:'image/jpeg',purpose:'any'}
-      ]
-    };
-    const blob=new Blob([JSON.stringify(manifestJson)],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const link=$('pwaManifest');
-    if(link)link.href=url;
-  }catch(_e){console.warn('manifest gen failed:',_e);}
+  // 4·5. (C안) 아이콘 주입을 setIcons()로 함수화 → 즉시 원본으로 1차 주입(아이콘 null 방지)
+  //       후, canvas로 정사각 보정에 성공하면 보정본으로 교체. CORS 미설정·로드 실패 시 원본 유지.
+  function setIcons(iconSrc){
+    const iconType=(iconSrc.indexOf('data:image/png')===0)?'image/png':'image/jpeg';
+    // manifest 동적 생성 → Blob URL → <link rel="manifest"> 주입
+    try{
+      const manifestJson={
+        name:channelTitle,
+        short_name:channelShortName,
+        start_url:startUrl,
+        display:'standalone',
+        background_color:'#1B3A6B',
+        theme_color:'#1B3A6B',
+        orientation:'portrait',
+        icons:[
+          {src:iconSrc,sizes:'512x512',type:iconType,purpose:'any'},
+          {src:iconSrc,sizes:'192x192',type:iconType,purpose:'any'}
+        ]
+      };
+      const blob=new Blob([JSON.stringify(manifestJson)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      const link=$('pwaManifest');
+      if(link)link.href=url;
+    }catch(_e){console.warn('manifest gen failed:',_e);}
+    // apple-touch-icon 주입
+    const appleIcon=$('pwaAppleIcon');
+    if(appleIcon)appleIcon.href=iconSrc;
+  }
 
-  // 5. apple-touch-icon + 앱 타이틀 동적 설정
-  const appleIcon=$('pwaAppleIcon');
-  if(appleIcon)appleIcon.href=photoUrl;
+  // 1차: 원본 사진으로 즉시 주입(빠르게 설치해도 아이콘이 비지 않도록)
+  setIcons(photoUrl);
+  // 앱 타이틀(아이콘과 무관, 1회 설정)
   const appleTitle=$('pwaAppleTitle');
   if(appleTitle)appleTitle.setAttribute('content',channelShortName);
+
+  // 정사각 보정: 이미지 로드 → 가운데(짧은 변 기준) 크롭 → 512×512 canvas → dataURL → 아이콘 교체
+  //   crossOrigin='anonymous' 로 로드 → CORS 허용 시 canvas가 깨끗해 toDataURL 성공(정사각 PNG)
+  //   CORS 미설정이면 onerror 발생 → 1차로 넣어둔 원본 아이콘 그대로 유지(폴백)
+  try{
+    const _sqImg=new Image();
+    _sqImg.crossOrigin='anonymous';
+    _sqImg.onload=function(){
+      try{
+        const side=Math.min(_sqImg.naturalWidth,_sqImg.naturalHeight);
+        if(!side)return;
+        const sx=(_sqImg.naturalWidth-side)/2, sy=(_sqImg.naturalHeight-side)/2;
+        const cv=document.createElement('canvas'); cv.width=512; cv.height=512;
+        const ctx=cv.getContext('2d');
+        ctx.fillStyle='#1B3A6B'; ctx.fillRect(0,0,512,512);
+        ctx.drawImage(_sqImg,sx,sy,side,side,0,0,512,512);
+        setIcons(cv.toDataURL('image/png')); // 성공 → 정사각 아이콘으로 교체
+      }catch(_e){/* canvas taint(CORS) 등 → 원본 유지 */}
+    };
+    _sqImg.onerror=function(){/* 로드 실패(CORS 미설정 등) → 원본 유지 */};
+    _sqImg.src=photoUrl;
+  }catch(_e){/* 원본 유지 */}
 
   // 6. 배너 표시 (사진 아이콘 + FC 이름)
   //    인앱 브라우저(카톡/페북/인스타 등) 감지 시 메시지를 외부 브라우저 안내로 변경
