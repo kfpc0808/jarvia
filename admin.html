@@ -760,11 +760,12 @@
       <!-- ─────────────────────────────────────────── -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin:24px 0 10px">
         <h3 style="margin:0;font-size:15px;color:var(--text)">📅 게시 예정 일정 <span style="font-weight:400;font-size:12px;color:var(--text-lt)">— 어드민 풀 (12월까지 모두 표시) · 매월 26일 자비아 메인 노출</span></h3>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <span id="cr-sched-summary" style="font-size:12px;color:var(--text-lt)"></span>
           <select id="cr-sched-month" onchange="crRenderSchedule()" style="padding:5px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
             <option value="all">전체 보기</option>
           </select>
+          <button class="btn btn-sec" onclick="openCrMonthlyTrigger()" style="font-size:12px;padding:5px 12px" title="선택 월 분을 자비아 메인에 노출 + 보고서 생성 시작">📢 월 노출·생성</button>
           <button class="btn" onclick="openCrAnnualRegister()" style="font-size:12px;padding:5px 12px;background:#1976D2">🚀 연간 등록</button>
         </div>
       </div>
@@ -9533,6 +9534,7 @@ const CR_SET_AUDIO_URL = CR_BASE_URL + '/caseReportSetAudioUrl';
 const CR_ANNUAL_REGISTER_URL = CR_BASE_URL + '/triggerAnnualScheduleRegister';
 const CR_MONTHLY_REVEAL_URL  = CR_BASE_URL + '/triggerMonthlyReveal';
 const CR_UPDATE_SCHEDULE_URL = CR_BASE_URL + '/updateScheduleEntry';
+const CR_GENERATE_MONTH_URL  = CR_BASE_URL + '/triggerGenerateMonth';   // [v6.1 v2 수정 4] 수동 월간 생성
 
 // ─── 28 토픽 (v6.1 운영 모델 — active 20 + inactive 8 모두 사용) ──
 // caseReportPrompts.js 의 CORP_SLUGS·PERS_SLUGS 와 *완전 동기*
@@ -9909,8 +9911,6 @@ async function openCrAnnualRegister() {
     label = `${regYear}년 1~12월 (12개월)`;
   }
   
-  const platBlock = await fetch(`https://asia-northeast3-jarvia-platform.cloudfunctions.net/`, {method: 'HEAD'}).then(() => false).catch(() => true);
-  
   const customStart = prompt(
     `연간 일정 등록\n\n` +
     `자동 추천: ${label}\n\n` +
@@ -10018,6 +10018,73 @@ async function openCrScheduleEdit(scheduleId) {
 // ═══════════════════════════════════════════════════════════════════
 // 카드 클릭 — 상태별 분기
 // ═══════════════════════════════════════════════════════════════════
+
+// ─── [v6.1 v2 수정 4] 월별 수동 트리거 — 노출 + 생성 ─────────────
+async function openCrMonthlyTrigger() {
+  // 어드민이 선택한 월 — 셀렉트박스 값 또는 prompt
+  const sel = document.getElementById('cr-sched-month');
+  let targetYM = (sel && sel.value && sel.value !== 'all') ? sel.value : null;
+
+  if (!targetYM) {
+    // 자동 추천 — 다음 달
+    const today = new Date();
+    let nextYear = today.getFullYear();
+    let nextMonth = today.getMonth() + 2;
+    if (nextMonth > 12) { nextYear++; nextMonth -= 12; }
+    targetYM = `${nextYear}-${String(nextMonth).padStart(2,'0')}`;
+  }
+
+  const input = prompt(
+    `[월별 수동 트리거]\n\n` +
+    `선택 월의 일정을 다음 2가지 동시 처리:\n` +
+    `  1. 자비아 메인 게시예정콘텐츠 노출 (upcoming_contents 복사)\n` +
+    `  2. 보고서 생성 시작 (Step 1~6 자동 진행)\n\n` +
+    `대상 연-월 (예: 2026-06):`,
+    targetYM
+  );
+  if (!input) return;
+
+  const m = input.match(/^(\d{4})-(\d{1,2})$/);
+  if (!m) {
+    toast('형식 오류 (YYYY-MM)', 'error');
+    return;
+  }
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+
+  // 두 작업 선택
+  const doReveal = confirm(`${year}-${String(month).padStart(2,'0')}\n\n[1] 자비아 메인 노출 진행?\n(case_report_schedule → upcoming_contents 복사)`);
+  const doGenerate = confirm(`${year}-${String(month).padStart(2,'0')}\n\n[2] 보고서 생성 시작?\n(upcoming_case_reports Step 1~6 진행 — 약 30분~몇 시간)`);
+
+  if (!doReveal && !doGenerate) {
+    toast('선택 없음', 'info');
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({ key: CR_API_KEY, year, month });
+    const results = [];
+
+    if (doReveal) {
+      const r1 = await fetch(`${CR_MONTHLY_REVEAL_URL}?${params}`);
+      const d1 = await r1.json();
+      if (!d1.ok) throw new Error('노출 실패: ' + (d1.error || ''));
+      results.push(`노출 ${d1.copied}건 (스킵 ${d1.skipped})`);
+    }
+    if (doGenerate) {
+      const r2 = await fetch(`${CR_GENERATE_MONTH_URL}?${params}`);
+      const d2 = await r2.json();
+      if (!d2.ok) throw new Error('생성 실패: ' + (d2.error || ''));
+      results.push(`생성 ${d2.created}건 (스킵 ${d2.skipped}, 실패 ${d2.failed})`);
+    }
+
+    toast(`${year}-${String(month).padStart(2,'0')} 완료: ${results.join(' · ')}`, 'success');
+    setTimeout(() => loadCaseReports(), 2000);
+  } catch (err) {
+    toast('실패: ' + err.message, 'error');
+  }
+}
+
 function onCrCardClick(slug) {
   const topic = crFindTopic(slug);
   const state = crCardStates[slug];
