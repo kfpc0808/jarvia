@@ -721,11 +721,12 @@
 
       <!-- 안내 박스 -->
       <div style="background:#f0f7ff;border:1px solid #c2dcfb;border-radius:8px;padding:14px 16px;margin-bottom:16px;font-size:13px;color:#1565c0">
-        <strong>📌 운영 가이드 (v6.1)</strong> · 평일 매일 1편 · 법인·개인 매일 교차 · 28토픽 순환
-        <br>· 매월 26일 09:00 자동 — 익월 평일 일정이 게시예정콘텐츠에 자동 등록
-        <br>· <b>토픽 풀</b> — 어드민이 원할 때 클릭 → 페르소나 미리보기 → 생성 (약 30분)
-        <br>· <b>게시 예정 일정</b> — 게시예정일별 토픽 매핑 · 미리 생성 가능 · 게시일 09:00 자동 게시
-        <br>· <b>제목 수정</b> 가능 · <b>본문/HTML/PDF/오디오</b> 재생성 가능
+        <strong>📌 운영 가이드 (v6.1 v2 — 어드민·메인 분리)</strong>
+        <br>· <b>어드민 풀</b> — 1년치 일정 사전 등록 (12월까지 154편 모두 표시) · 담당자가 제목·시기 수정
+        <br>· <b>자비아 메인</b> — 매월 26일 09:00 자동 → 다음 달 22편만 노출 (점진적)
+        <br>· <b>매월 25일 09:00</b> — 익월 22편 보고서 자동 생성 시작 (기존)
+        <br>· <b>평일 09:00</b> — 당일분 자동 게시 (기존)
+        <br>· <b>매년 12월</b> — 다음 해 1년치 일정 사전 등록 ([연간 등록] 버튼)
       </div>
 
       <!-- ─────────────────────────────────────────── -->
@@ -758,12 +759,13 @@
       <!-- 섹션 2: 게시 예정 일정 (upcoming_contents)         -->
       <!-- ─────────────────────────────────────────── -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin:24px 0 10px">
-        <h3 style="margin:0;font-size:15px;color:var(--text)">📅 게시 예정 일정 <span style="font-weight:400;font-size:12px;color:var(--text-lt)">— 매월 26일 09:00 자동 등록 · 게시일 09:00 자동 게시</span></h3>
-        <div style="display:flex;gap:8px">
-          <select id="cr-sched-month" onchange="loadCrSchedule()" style="padding:5px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+        <h3 style="margin:0;font-size:15px;color:var(--text)">📅 게시 예정 일정 <span style="font-weight:400;font-size:12px;color:var(--text-lt)">— 어드민 풀 (12월까지 모두 표시) · 매월 26일 자비아 메인 노출</span></h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="cr-sched-summary" style="font-size:12px;color:var(--text-lt)"></span>
+          <select id="cr-sched-month" onchange="crRenderSchedule()" style="padding:5px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
             <option value="all">전체 보기</option>
           </select>
-          <button class="btn btn-sec" onclick="openCrManualRegister()" style="font-size:12px;padding:5px 12px">⚙ 수동 등록</button>
+          <button class="btn" onclick="openCrAnnualRegister()" style="font-size:12px;padding:5px 12px;background:#1976D2">🚀 연간 등록</button>
         </div>
       </div>
       <div style="overflow-x:auto">
@@ -9527,6 +9529,10 @@ const CR_PERSONA_PREVIEW_URL = CR_BASE_URL + '/caseReportPersonaPreview';
 const CR_UPDATE_BODY_URL = CR_BASE_URL + '/caseReportUpdateBody';
 const CR_PUBLISH_NOW_URL = CR_BASE_URL + '/caseReportPublishNow';
 const CR_SET_AUDIO_URL = CR_BASE_URL + '/caseReportSetAudioUrl';
+// [v6.1 v2] 신규 — 어드민 풀·연간 등록·메인 노출
+const CR_ANNUAL_REGISTER_URL = CR_BASE_URL + '/triggerAnnualScheduleRegister';
+const CR_MONTHLY_REVEAL_URL  = CR_BASE_URL + '/triggerMonthlyReveal';
+const CR_UPDATE_SCHEDULE_URL = CR_BASE_URL + '/updateScheduleEntry';
 
 // ─── 28 토픽 (v6.1 운영 모델 — active 20 + inactive 8 모두 사용) ──
 // caseReportPrompts.js 의 CORP_SLUGS·PERS_SLUGS 와 *완전 동기*
@@ -9736,15 +9742,13 @@ async function loadCrSchedule() {
   tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-lt)">불러오는 중...</td></tr>';
 
   try {
-    // upcoming_contents 에서 클로징리포트 카테고리만 조회 — date 오름차순
+    // [v6.1 v2] case_report_schedule (어드민 풀) 조회 — 12월까지 모두 표시
     const snap = await getDocs(query(
-      collection(db, 'upcoming_contents'),
+      collection(db, 'case_report_schedule'),
       orderBy('date', 'asc'),
       limit(500)
     ));
-    crScheduleData = snap.docs
-      .map(d => ({ _id: d.id, ...d.data() }))
-      .filter(d => d.category === '클로징리포트');
+    crScheduleData = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
 
     // 월별 필터 옵션 채우기
     const months = [...new Set(crScheduleData.map(d => (d.date || '').slice(0,7)))].sort();
@@ -9754,6 +9758,17 @@ async function loadCrSchedule() {
       sel.innerHTML = '<option value="all">전체 보기</option>' +
         months.map(m => `<option value="${m}">${m} (${crScheduleData.filter(d => d.date && d.date.startsWith(m)).length}편)</option>`).join('');
       if (current && (current === 'all' || months.includes(current))) sel.value = current;
+    }
+
+    // 요약 정보
+    const total = crScheduleData.length;
+    const revealed = crScheduleData.filter(d => d.revealed).length;
+    const completed = crScheduleData.filter(d => d.completed).length;
+    const summary = document.getElementById('cr-sched-summary');
+    if (summary) {
+      summary.textContent = total > 0
+        ? `전체 ${total}편 · 노출 ${revealed} · 게시 ${completed}`
+        : '등록된 일정 없음';
     }
 
     crRenderSchedule();
@@ -9773,23 +9788,25 @@ function crRenderSchedule() {
   }
 
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-lt)">등록된 게시 예정 일정 없음 · 수동 등록 버튼으로 익월 일정 생성 가능</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-lt)">등록된 게시 예정 일정 없음 · [🚀 연간 등록] 버튼으로 1년치 일정 등록</td></tr>';
     return;
   }
 
   tbody.innerHTML = rows.map((r, idx) => {
-    const dateStr = r.date + (r.scheduledWeekday ? ` (${r.scheduledWeekday})` : '');
-    const generated = r.contentId
-      ? crFormatDateTime(r.completedAt || r.updatedAt)
-      : '<span style="color:#bbb;font-style:italic">미생성</span>';
-    const st = r.completed ? 'published' : (r.contentId ? 'ready' : 'pending');
+    const dateStr = r.date + (r.weekday ? ` (${r.weekday})` : '');
+    const generated = r.completed
+      ? crFormatDateTime(r.completedAt)
+      : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>');
+    
+    // 상태: completed → published, revealed → ready (메인 노출 중), else pending
+    const st = r.completed ? 'published' : (r.revealed ? 'ready' : 'pending');
     const sb = crStatusBadge(st);
     const actions = crBuildScheduleActions(r);
-    return `<tr style="border-bottom:1px solid var(--border)">
+    return `<tr style="border-bottom:1px solid var(--border)" data-schedule-id="${r._id}">
       <td style="text-align:center;padding:8px">${idx+1}</td>
       <td style="text-align:center;padding:8px;font-family:monospace;font-size:11px">${esc(dateStr)}</td>
-      <td style="text-align:center;padding:8px">${crClientBadge(r.field === '법인' ? 'corporate' : 'personal')}</td>
-      <td style="padding:8px">${esc(r.title || '')} <span style="font-family:monospace;font-size:10px;color:#999;margin-left:4px">${esc(r.crTopicSlug || '')}</span></td>
+      <td style="text-align:center;padding:8px">${crClientBadge(r.clientType)}</td>
+      <td style="padding:8px"><a href="javascript:void(0)" onclick="openCrScheduleEdit('${r._id}')" style="text-decoration:none;color:var(--text)">${esc(r.emoji || '')} ${esc(r.title || '')}</a> <span style="font-family:monospace;font-size:10px;color:#999;margin-left:4px">${esc(r.topicSlug || '')}</span></td>
       <td style="text-align:center;padding:8px;font-family:monospace;font-size:11px">${generated}</td>
       <td style="text-align:center;padding:8px">${sb}</td>
       <td style="text-align:center;padding:8px">${actions}</td>
@@ -9852,13 +9869,11 @@ function crBuildActions(slug, state) {
 }
 
 function crBuildScheduleActions(r) {
-  if (r.completed) {
-    return `<button class="btn btn-sec" onclick="openCrManageModal('${r.contentId}','${r.crTopicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>`;
+  if (r.completed && r.reportId) {
+    return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>`;
   }
-  if (r.contentId) {
-    return `<button class="btn btn-sec" onclick="openCrManageModal('${r.contentId}','${r.crTopicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>`;
-  }
-  return `<button class="btn" onclick="openCrPersonaPreview('${r.crTopicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>`;
+  return `<button class="btn btn-sec" onclick="openCrScheduleEdit('${r._id}')" style="font-size:10px;padding:3px 8px">✏ 수정</button>
+          <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>`;
 }
 
 // ─── 필터 변경 ──────────────────────────────────────────────────────
@@ -9874,22 +9889,126 @@ function filterCaseReports(filter) {
   crRenderTopicPool();
 }
 
-// ─── 수동 월간 등록 ─────────────────────────────────────────────────
-async function openCrManualRegister() {
+// ─── [v6.1 v2] 연간 일정 등록 ─────────────────────────────────────
+async function openCrAnnualRegister() {
   const today = new Date();
-  let nextYear = today.getFullYear();
-  let nextMonth = today.getMonth() + 2;
-  if (nextMonth > 12) { nextYear++; nextMonth -= 12; }
-  const ym = `${nextYear}-${String(nextMonth).padStart(2,'0')}`;
-  if (!confirm(`${ym} 월간 일정을 수동 등록할까요?\n\n· 평일 매일 1편 · 법인·개인 교차 · 28토픽 순환\n· 이미 등록된 일정은 중복 스킵`)) return;
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth() + 1;
+  
+  // 등록 옵션 선택
+  let regYear = currentYear;
+  let regStartMonth = currentMonth + 1;  // 익월부터
+  let regMonthCount = 12 - currentMonth;  // 올해 남은 개월
+  let label = `${currentYear}년 ${regStartMonth}월~12월 (${regMonthCount}개월)`;
+  
+  if (currentMonth >= 11) {
+    // 11월·12월: 다음 해 1년치
+    regYear = currentYear + 1;
+    regStartMonth = 1;
+    regMonthCount = 12;
+    label = `${regYear}년 1~12월 (12개월)`;
+  }
+  
+  const platBlock = await fetch(`https://asia-northeast3-jarvia-platform.cloudfunctions.net/`, {method: 'HEAD'}).then(() => false).catch(() => true);
+  
+  const customStart = prompt(
+    `연간 일정 등록\n\n` +
+    `자동 추천: ${label}\n\n` +
+    `다른 기간을 원하면 입력:\n` +
+    `시작 연-월 (예: 2026-06)\n` +
+    `취소하면 자동 추천 사용`,
+    `${regYear}-${String(regStartMonth).padStart(2,'0')}`
+  );
+  
+  if (customStart === null) return;  // 사용자 취소
+  
+  if (customStart) {
+    const m = customStart.match(/^(\d{4})-(\d{1,2})$/);
+    if (m) {
+      regYear = parseInt(m[1], 10);
+      regStartMonth = parseInt(m[2], 10);
+      const countStr = prompt(`등록할 개월 수 (1~12):`, `${regMonthCount}`);
+      if (!countStr) return;
+      regMonthCount = parseInt(countStr, 10);
+      if (regMonthCount < 1 || regMonthCount > 12) {
+        toast('개월 수는 1~12 사이여야 합니다', 'error');
+        return;
+      }
+    }
+  }
+  
+  const totalEditions = regMonthCount * 22;  // 대략
+  if (!confirm(
+    `[연간 일정 등록]\n\n` +
+    `시작: ${regYear}년 ${regStartMonth}월\n` +
+    `기간: ${regMonthCount}개월\n` +
+    `예상 편수: 약 ${totalEditions}편\n\n` +
+    `· 평일 매일 1편 · 법인·개인 매일 교차 · 28토픽 순환\n` +
+    `· 어드민 풀에 등록 — 12월까지 모두 표시\n` +
+    `· 매월 26일 자동 → 자비아 메인 22편씩 노출\n` +
+    `· 이미 등록된 일정은 중복 스킵\n\n` +
+    `진행할까요?`
+  )) return;
 
   try {
-    const params = new URLSearchParams({ key: CR_API_KEY, year: nextYear, month: nextMonth });
-    const res = await fetch(`${CR_BASE_URL}/triggerMonthlyCaseReportRegister?${params}`);
+    const params = new URLSearchParams({
+      key: CR_API_KEY,
+      year: regYear,
+      startMonth: regStartMonth,
+      monthCount: regMonthCount,
+    });
+    const res = await fetch(`${CR_ANNUAL_REGISTER_URL}?${params}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '등록 실패');
-    toast(`${ym} 등록 완료! 삽입 ${data.inserted}건, 중복 스킵 ${data.skipped}건`, 'success');
-    setTimeout(() => loadCrSchedule(), 1500);
+    
+    toast(`${regYear}-${regStartMonth} ${regMonthCount}개월 등록 완료! ${data.inserted}건 삽입, ${data.skipped}건 스킵`, 'success');
+    setTimeout(() => loadCrSchedule(), 2000);
+  } catch (err) {
+    toast('실패: ' + err.message, 'error');
+  }
+}
+
+// ─── [v6.1 v2] 일정 수정 모달 (간단한 prompt 기반) ─────────────────
+async function openCrScheduleEdit(scheduleId) {
+  const sched = (crScheduleData || []).find(s => s._id === scheduleId);
+  if (!sched) {
+    toast('일정 정보 없음', 'error');
+    return;
+  }
+  
+  const currentTitle = sched.title || '';
+  const newTitle = prompt(
+    `[일정 수정]\n\n` +
+    `📅 게시예정일: ${sched.date} (${sched.weekday})\n` +
+    `📂 구분: ${sched.field}\n` +
+    `🎯 토픽: ${sched.topicSlug}\n` +
+    `📊 상태: ${sched.completed ? '게시됨' : (sched.revealed ? '메인 노출중' : '대기')}\n\n` +
+    `제목 수정 (5~80자):`,
+    currentTitle
+  );
+  
+  if (newTitle === null) return;  // 취소
+  if (!newTitle || newTitle.length < 5 || newTitle.length > 80) {
+    toast('제목 길이는 5~80자', 'error');
+    return;
+  }
+  if (newTitle === currentTitle) {
+    toast('변경 사항 없음');
+    return;
+  }
+  
+  try {
+    const params = new URLSearchParams({ key: CR_API_KEY });
+    const res = await fetch(`${CR_UPDATE_SCHEDULE_URL}?${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduleId, title: newTitle }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '수정 실패');
+    
+    toast(`제목 수정 완료${sched.revealed ? ' (자비아 메인도 자동 반영)' : ''}`, 'success');
+    setTimeout(() => loadCrSchedule(), 1000);
   } catch (err) {
     toast('실패: ' + err.message, 'error');
   }
