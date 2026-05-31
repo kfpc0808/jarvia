@@ -10099,7 +10099,7 @@ function openCrCustomCreate() {
   const sel = document.getElementById('cr-custom-slug');
   if (sel) {
     sel.innerHTML = CR_TOPICS.map(t =>
-      `<option value="${t.slug}">${t.emoji || ''} ${t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})</option>`
+      `<option value="${t.slug}">${t.emoji || ''} ${t.field || t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})</option>`
     ).join('');
   }
   // 기본 날짜 = 내일
@@ -10288,31 +10288,56 @@ async function fetchPersona() {
   }
 }
 
-function renderPersonaInfo(persona) {
-  if (!persona) { $('cr-persona-info').innerHTML = '<em>(페르소나 데이터 없음)</em>'; return; }
-  
-  // 페르소나 객체를 사람이 읽을 형태로
+function renderPersonaInfo(raw) {
+  const box = $('cr-persona-info');
+  if (!raw) { box.innerHTML = '<em>(페르소나 데이터 없음)</em>'; return; }
+
+  // ★ 응답이 이중 중첩({...메타, persona:{이름·나이·...}})이면 안쪽 페르소나를 꺼내 표시
+  const p = (raw.persona && typeof raw.persona === 'object') ? raw.persona : raw;
+
   const rows = [];
-  const fmt = (k, v) => `<div><strong style="display:inline-block;width:80px;color:var(--text-lt)">${k}</strong> ${v}</div>`;
-  
-  if (persona.name) rows.push(fmt('이름', persona.name));
-  if (persona.age) rows.push(fmt('나이', `${persona.age}세`));
-  if (persona.gender) rows.push(fmt('성별', persona.gender));
-  if (persona.occupation || persona.job) rows.push(fmt('직업', persona.occupation || persona.job));
-  if (persona.businessType) rows.push(fmt('업종', persona.businessType));
-  if (persona.revenue) rows.push(fmt('매출', persona.revenue));
-  if (persona.assets) rows.push(fmt('자산', persona.assets));
-  if (persona.family) rows.push(fmt('가족', persona.family));
-  if (persona.concern || persona.coreIssue) rows.push(fmt('핵심 고민', persona.concern || persona.coreIssue));
-  
-  // 추가 필드도 모두 표시
-  for (const [k, v] of Object.entries(persona)) {
-    if (['name','age','gender','occupation','job','businessType','revenue','assets','family','concern','coreIssue'].includes(k)) continue;
-    if (typeof v === 'object') continue;
-    rows.push(fmt(k, v));
+  const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmt = (k, v) => `<div style="margin:3px 0"><strong style="display:inline-block;width:88px;color:var(--text-lt);vertical-align:top">${k}</strong> <span>${v}</span></div>`;
+
+  if (p.label)               rows.push(fmt('사례명', esc(p.label)));
+  if (p.name)                rows.push(fmt('이름', esc(p.name)));
+  if (p.age)                 rows.push(fmt('나이', `${esc(p.age)}세`));
+  if (p.gender)              rows.push(fmt('성별', esc(p.gender)));
+  if (p.occupation || p.job) rows.push(fmt('직업', esc(p.occupation || p.job)));
+  if (p.businessType)        rows.push(fmt('업종', esc(p.businessType)));
+  if (p.revenue)             rows.push(fmt('매출', esc(p.revenue)));
+  if (p.assets)              rows.push(fmt('자산', esc(p.assets)));
+  if (p.familyStructure || p.family)  rows.push(fmt('가족구성', esc(p.familyStructure || p.family)));
+  if (p.incomeStructure)     rows.push(fmt('소득구조', esc(p.incomeStructure)));
+  if (p.currentSituation)    rows.push(fmt('현재상황', esc(p.currentSituation)));
+  if (p.healthStatus)        rows.push(fmt('건강상태', esc(p.healthStatus)));
+  if (p.biggestConcern || p.concern || p.coreIssue)
+    rows.push(fmt('핵심고민', esc(p.biggestConcern || p.concern || p.coreIssue)));
+
+  // 스토리훅 (배열) → 리스트로
+  if (Array.isArray(p.narrativeHooks) && p.narrativeHooks.length) {
+    rows.push(fmt('스토리훅',
+      '<ul style="margin:4px 0 0;padding-left:18px">' +
+      p.narrativeHooks.map(h => `<li>${esc(h)}</li>`).join('') + '</ul>'));
   }
-  
-  $('cr-persona-info').innerHTML = rows.join('');
+
+  // 그 외 문자열 필드도 표시 (이미 다룬 키·객체·배열은 제외)
+  const handled = ['label','name','age','gender','occupation','job','businessType','revenue','assets',
+    'family','familyStructure','incomeStructure','currentSituation','healthStatus',
+    'biggestConcern','concern','coreIssue','narrativeHooks'];
+  for (const [k, v] of Object.entries(p)) {
+    if (handled.includes(k)) continue;
+    if (v === null || typeof v === 'object') continue;
+    rows.push(fmt(k, esc(v)));
+  }
+
+  // 맥락(래퍼 메타) — 이중 중첩이었을 때만
+  if (raw !== p) {
+    if (raw.psychType)          rows.push(fmt('심리유형', esc(raw.psychType)));
+    if (raw.scenarioDisclaimer) rows.push(`<div style="margin-top:8px;font-size:12px;color:var(--text-lt)">${esc(raw.scenarioDisclaimer)}</div>`);
+  }
+
+  box.innerHTML = rows.length ? rows.join('') : '<em>(표시할 페르소나 정보 없음)</em>';
 }
 
 async function regeneratePersona() {
