@@ -767,6 +767,7 @@
           </select>
           <button class="btn btn-sec" onclick="openCrMonthlyTrigger()" style="font-size:12px;padding:5px 12px" title="선택 월 분을 자비아 메인에 노출 + 보고서 생성 시작">📢 월 노출·생성</button>
           <button class="btn" onclick="openCrAnnualRegister()" style="font-size:12px;padding:5px 12px;background:#1976D2">🚀 연간 등록</button>
+          <button class="btn" onclick="openCrCustomCreate()" style="font-size:12px;padding:5px 12px;background:#6a1b9a">➕ 새 보고서 추가</button>
         </div>
       </div>
       <div style="overflow-x:auto">
@@ -816,6 +817,48 @@
             <button class="btn btn-sec" onclick="regeneratePersona()" id="cr-persona-regen">🔄 다시 생성</button>
             <button class="btn btn-sec" onclick="closeCrPersonaModal()">취소</button>
             <button class="btn" onclick="startCaseReportGeneration()" id="cr-persona-go">✅ 이 페르소나로 진행 →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────────────────────────────────────────────────────── -->
+      <!-- 모달: 관리자 임의 보고서 추가 (v6.2)                              -->
+      <!-- ──────────────────────────────────────────────────────────── -->
+      <div id="cr-custom-modal" class="modal hidden" style="z-index:9000">
+        <div class="modal-content" style="max-width:560px">
+          <div class="modal-header">
+            <h3>🆕 새 보고서 추가</h3>
+            <button class="modal-close" onclick="closeCrCustomCreate()">×</button>
+          </div>
+          <div class="modal-body">
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <div>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">분야</label>
+                <label style="margin-right:16px;cursor:pointer"><input type="radio" name="cr-custom-clientType" value="corporate" checked> 법인</label>
+                <label style="cursor:pointer"><input type="radio" name="cr-custom-clientType" value="personal"> 개인</label>
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">게시예정일 <span style="color:#dc3545">*</span> <span style="font-weight:400;font-size:11px;color:var(--text-lt)">평일만 · 공휴일 제외</span></label>
+                <input type="date" id="cr-custom-date" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box">
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">토픽 <span style="color:#dc3545">*</span> <span style="font-weight:400;font-size:11px;color:var(--text-lt)">28토픽 중 선택 (페르소나·계산 엔진)</span></label>
+                <select id="cr-custom-slug" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box"></select>
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">제목 (5~80자) <span style="color:#dc3545">*</span></label>
+                <input type="text" id="cr-custom-title" maxlength="80" placeholder="예: 2026 세법 개정 발표 후 법인 대응" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box">
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">페르소나 시드 (선택)</label>
+                <textarea id="cr-custom-persona-seed" rows="2" placeholder="예: 50대 자영업자, 매출 30억, 임원 1인…" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;resize:vertical"></textarea>
+                <div style="font-size:11px;color:var(--text-lt);margin-top:4px">페르소나 본문은 Claude 가 작성하며, 이 시드는 방향 힌트로만 쓰입니다.</div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-sec" onclick="closeCrCustomCreate()">취소</button>
+            <button class="btn" id="cr-custom-go" onclick="submitCrCustomCreate()" style="background:#6a1b9a">생성 시작 →</button>
           </div>
         </div>
       </div>
@@ -9535,6 +9578,8 @@ const CR_ANNUAL_REGISTER_URL = CR_BASE_URL + '/triggerAnnualScheduleRegister';
 const CR_MONTHLY_REVEAL_URL  = CR_BASE_URL + '/triggerMonthlyReveal';
 const CR_UPDATE_SCHEDULE_URL = CR_BASE_URL + '/updateScheduleEntry';
 const CR_GENERATE_MONTH_URL  = CR_BASE_URL + '/triggerGenerateMonth';   // [v6.1 v2 수정 4] 수동 월간 생성
+const CR_DELETE_SCHEDULE_URL = CR_BASE_URL + '/deleteScheduleEntry';     // [v6.2] 일정 삭제
+const CR_CUSTOM_CREATE_URL   = CR_BASE_URL + '/triggerCustomCaseReport'; // [v6.2] 임의 보고서 추가
 
 // ─── 28 토픽 (v6.1 운영 모델 — active 20 + inactive 8 모두 사용) ──
 // caseReportPrompts.js 의 CORP_SLUGS·PERS_SLUGS 와 *완전 동기*
@@ -9875,7 +9920,8 @@ function crBuildScheduleActions(r) {
     return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>`;
   }
   return `<button class="btn btn-sec" onclick="openCrScheduleEdit('${r._id}')" style="font-size:10px;padding:3px 8px">✏ 수정</button>
-          <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>`;
+          <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>
+          <button class="btn btn-sec" onclick="openCrScheduleDelete('${r._id}')" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">🗑 삭제</button>`;
 }
 
 // ─── 필터 변경 ──────────────────────────────────────────────────────
@@ -10011,6 +10057,103 @@ async function openCrScheduleEdit(scheduleId) {
     setTimeout(() => loadCrSchedule(), 1000);
   } catch (err) {
     toast('실패: ' + err.message, 'error');
+  }
+}
+
+// [v6.2] 일정 삭제 — 게시 예정 일정에서 공휴일/불필요 항목 제거
+async function openCrScheduleDelete(scheduleId) {
+  const sched = (crScheduleData || []).find(s => s._id === scheduleId);
+  if (!sched) return;
+  if (sched.completed) {
+    toast('이미 게시된 일정은 삭제 불가', 'error');
+    return;
+  }
+  if (sched.reportId) {
+    toast('이미 보고서가 생성된 일정은 삭제 불가 (보고서 먼저 처리)', 'error');
+    return;
+  }
+
+  const msg = sched.revealed
+    ? `${sched.date} ${sched.title}\n\n이미 자비아 메인에 노출된 일정입니다.\n메인 노출분도 함께 삭제할까요?\n\n[확인] 둘 다 삭제 / [취소] 작업 중단`
+    : `${sched.date} ${sched.title}\n\n이 일정을 삭제할까요?`;
+  if (!confirm(msg)) return;
+
+  try {
+    const params = new URLSearchParams({ key: CR_API_KEY });
+    const res = await fetch(`${CR_DELETE_SCHEDULE_URL}?${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduleId, alsoDeleteUpcomingContent: sched.revealed }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '삭제 실패');
+    toast(`삭제 완료${data.deletedUpcoming ? ` (메인 노출 ${data.deletedUpcoming}건 포함)` : ''}`, 'success');
+    setTimeout(() => loadCrSchedule(), 1000);
+  } catch (err) {
+    toast('실패: ' + err.message, 'error');
+  }
+}
+
+// [v6.2] 관리자 임의 보고서 추가 — 모달 열기/채우기
+function openCrCustomCreate() {
+  const sel = document.getElementById('cr-custom-slug');
+  if (sel) {
+    sel.innerHTML = CR_TOPICS.map(t =>
+      `<option value="${t.slug}">${t.emoji || ''} ${t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})</option>`
+    ).join('');
+  }
+  // 기본 날짜 = 내일
+  const d = new Date(); d.setDate(d.getDate() + 1);
+  const ds = d.toISOString().slice(0, 10);
+  const dateEl = document.getElementById('cr-custom-date');
+  if (dateEl) { dateEl.value = ds; dateEl.min = ds; }
+  document.getElementById('cr-custom-title').value = '';
+  document.getElementById('cr-custom-persona-seed').value = '';
+  document.getElementById('cr-custom-modal').classList.remove('hidden');
+}
+
+function closeCrCustomCreate() {
+  document.getElementById('cr-custom-modal').classList.add('hidden');
+}
+
+async function submitCrCustomCreate() {
+  const clientType = document.querySelector('input[name="cr-custom-clientType"]:checked')?.value;
+  const date = document.getElementById('cr-custom-date').value;
+  const topicSlug = document.getElementById('cr-custom-slug').value;
+  const title = document.getElementById('cr-custom-title').value.trim();
+  const personaSeed = document.getElementById('cr-custom-persona-seed').value.trim();
+
+  if (!date) { toast('게시예정일을 입력하세요', 'error'); return; }
+  if (!topicSlug) { toast('토픽을 선택하세요', 'error'); return; }
+  if (!title || title.length < 5 || title.length > 80) { toast('제목은 5~80자', 'error'); return; }
+
+  if (!confirm(
+    `새 보고서를 생성합니다.\n\n` +
+    `분야: ${clientType === 'corporate' ? '법인' : '개인'}\n` +
+    `게시일: ${date}\n` +
+    `토픽: ${topicSlug}\n` +
+    `제목: ${title}\n\n` +
+    `진행할까요? (생성에 수 분 소요)`
+  )) return;
+
+  const goBtn = document.getElementById('cr-custom-go');
+  if (goBtn) { goBtn.disabled = true; goBtn.textContent = '생성 요청 중...'; }
+  try {
+    const params = new URLSearchParams({ key: CR_API_KEY });
+    const res = await fetch(`${CR_CUSTOM_CREATE_URL}?${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, clientType, topicSlug, title, personaSeed }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '생성 실패');
+    toast(`생성 시작! (reportId: ${data.reportId})`, 'success');
+    closeCrCustomCreate();
+    setTimeout(() => loadCrSchedule(), 1500);
+  } catch (err) {
+    toast('실패: ' + err.message, 'error');
+  } finally {
+    if (goBtn) { goBtn.disabled = false; goBtn.textContent = '생성 시작 →'; }
   }
 }
 
@@ -10667,6 +10810,10 @@ window.crDownload = crDownload;
 // [v6.1 v2] 신규 함수 전역 노출
 window.openCrAnnualRegister = openCrAnnualRegister;
 window.openCrScheduleEdit = openCrScheduleEdit;
+window.openCrScheduleDelete = openCrScheduleDelete;
+window.openCrCustomCreate = openCrCustomCreate;
+window.submitCrCustomCreate = submitCrCustomCreate;
+window.closeCrCustomCreate = closeCrCustomCreate;
 window.openCrMonthlyTrigger = openCrMonthlyTrigger;
 window.openCrManageModal = openCrManageModal;
 window.openCrPersonaPreview = openCrPersonaPreview;
