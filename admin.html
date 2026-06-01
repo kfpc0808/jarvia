@@ -746,7 +746,7 @@
               <th style="padding:8px;text-align:center;width:140px">최근 생성일시</th>
               <th style="padding:8px;text-align:center;width:50px">누적</th>
               <th style="padding:8px;text-align:center;width:70px">상태</th>
-              <th style="padding:8px;text-align:center;width:200px">관리</th>
+              <th style="padding:8px;text-align:center;width:auto;min-width:340px">관리</th>
             </tr>
           </thead>
           <tbody id="cr-pool-body">
@@ -9922,6 +9922,16 @@ async function crDeleteCompletely(opts) {
 }
 window.crDeleteCompletely = crDeleteCompletely;
 
+function crRowUploadAudio(reportId) {
+  crCurrentReportId = reportId;
+  const inp = document.getElementById('cr-mp3-file');
+  if (!inp) { toast('업로드 입력을 찾을 수 없습니다', 'error'); return; }
+  inp.value = '';
+  toast('오디오(m4a) 파일을 선택하세요', 'info');
+  inp.click();
+}
+window.crRowUploadAudio = crRowUploadAudio;
+
 function crBuildActions(slug, state) {
   if (state.status === 'pending') {
     return `<button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">페르소나</button>
@@ -9932,13 +9942,32 @@ function crBuildActions(slug, state) {
             <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   if (state.status === 'ready' || state.status === 'published') {
-    const pubBtn = state.status === 'ready'
-      ? `<button class="btn" onclick="publishCrNow('${state.reportId}')" style="font-size:10px;padding:3px 8px;background:#2e7d32;color:#fff">🚀 게시</button>`
-      : '';
-    return `<button class="btn btn-sec" onclick="openCrManageModal('${state.reportId}','${slug}')" style="font-size:10px;padding:3px 8px">관리</button>
-            ${pubBtn}
-            <button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">신규 생성</button>
-            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
+    const d = state.doc || {};
+    const rid = state.reportId;
+    const htmlUrl   = (d.step5 && d.step5.htmlUrl) ? d.step5.htmlUrl : '';
+    const pdfUrl    = (d.step5 && d.step5.pdfUrl) ? d.step5.pdfUrl : '';
+    const scriptUrl = (d.step6 && d.step6.audioScriptUrl) ? d.step6.audioScriptUrl : '';
+    const mp3Url    = (d.step6 && d.step6.audioMp3Url) ? d.step6.audioMp3Url : '';
+    const safe = String(d.title || d.topicLabel || slug).replace(/[^\w가-힣]/g, '_').slice(0, 40);
+    const isPub = state.status === 'published';
+    const S = 'font-size:10px;padding:3px 8px';
+    const B = [];
+    if (htmlUrl)   B.push(`<button class="btn" onclick="window.open('${htmlUrl}','_blank')" style="${S};background:#1e293b;color:#fff">📄 보기</button>`);
+    if (htmlUrl)   B.push(`<button class="btn btn-sec" onclick="prDownload('${htmlUrl}','${safe}.html')" style="${S}">⬇ HTML</button>`);
+    if (scriptUrl) B.push(`<button class="btn btn-sec" onclick="prDownload('${scriptUrl}','${safe}_스크립트.txt')" style="${S}">📝 스크립트</button>`);
+    if (pdfUrl)    B.push(`<button class="btn btn-sec" onclick="prDownload('${pdfUrl}','${safe}.pdf')" style="${S}">⬇ PDF</button>`);
+    B.push(`<button class="btn" onclick="crRowUploadAudio('${rid}')" style="${S};background:#6d28d9;color:#fff">🎵 오디오 업로드</button>`);
+    if (mp3Url) {
+      B.push(`<button class="btn btn-sec" onclick="prDownload('${mp3Url}','${safe}.m4a')" style="${S}">🎧 오디오</button>`);
+      B.push(`<button class="btn" onclick="playDrAudio('${mp3Url}')" style="${S};background:#0891b2;color:#fff">▶ 듣기</button>`);
+    }
+    B.push(`<button class="btn btn-sec" onclick="openCrManageModal('${rid}','${slug}')" style="${S}">✏ 수정</button>`);
+    B.push(isPub
+      ? `<button class="btn" disabled title="이미 게시됨 (비공개 전환은 백엔드 미지원)" style="${S};background:#7B1FA2;color:#fff;opacity:.75">✅ 게시됨</button>`
+      : `<button class="btn" onclick="publishCrNow('${rid}')" style="${S};background:#2e7d32;color:#fff">🚀 게시</button>`);
+    B.push(`<button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="${S}">🔄 신규</button>`);
+    B.push(`<button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${rid}',label:'${slug}'})" style="${S};background:#dc3545;color:#fff">🗑 삭제</button>`);
+    return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center">${B.join('')}</div>`;
   }
   if (state.status === 'error') {
     return `<button class="btn btn-sec" onclick="crRetry('${state.reportId}')" style="font-size:10px;padding:3px 8px;color:#c62828">재시도</button>
@@ -10526,8 +10555,8 @@ function closeCrProgressModal() {
 
 function onCrProgressComplete() {
   closeCrProgressModal();
-  openManageModal(crCurrentReportId);
   loadCaseReports();
+  toast('보고서 생성 완료 — 목록에서 확인하세요', 'success');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -10792,6 +10821,7 @@ async function handleCrMp3Upload() {
       if (data.ok) {
         $('cr-mp3-status').textContent = '✅ 오디오 적용 완료';
         toast('오디오 적용 완료!', 'success');
+        if (typeof loadCaseReports === 'function') loadCaseReports();
       } else {
         $('cr-mp3-status').textContent = '⚠ URL 저장 실패: ' + (data.error || '');
       }
