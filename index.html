@@ -3822,14 +3822,12 @@ async function loadMain(){
       cSnap=await getDocs(collection(db,'contents'));
     }
     allContents=cSnap.docs.map(d=>d.data()).filter(c=>c.isActive===true).filter(c=>!c.adminOnly||(meData&&meData.role==='admin')).sort((a,b)=>{const s=(a.sortOrder||0)-(b.sortOrder||0);if(s!==0)return s;const at=a.createdAt?.toMillis?a.createdAt.toMillis():0;const bt=b.createdAt?.toMillis?b.createdAt.toMillis():0;return bt-at;});
-    // ★ 관리자 한정: 게시된 클로징 Report(case_reports)를 메인 그리드에 카드로 노출
-    if(meData&&meData.role==='admin'){
-      try{
-        const crSnap=await getDocs(collection(db,'case_reports'));
-        const crItems=crSnap.docs.map(d=>{const x=d.data();return{contentId:'cr_'+(x.reportId||d.id),type:'case_report',title:x.title||x.topicLabel||'클로징 Report',summary:x.summary||x.topicLabel||'',url:(x.step5&&x.step5.htmlUrl)||x.url||'',topicSlug:x.topicSlug||'',price:0,isActive:true,createdAt:x.publishedAt||x.createdAt||null};});
-        allContents=allContents.concat(crItems);
-      }catch(e){console.warn('case_reports(admin) 로드 실패:',e.message);}
-    }
+    // ★ 게시된 클로징 Report(case_reports)를 메인 그리드에 노출 (TCW 동일: 일반회원 2,000원 / 그 외 무료)
+    try{
+      const crSnap=await getDocs(collection(db,'case_reports'));
+      const crItems=crSnap.docs.map(d=>{const x=d.data();return{contentId:'cr_'+(x.reportId||d.id),type:'case_report',title:x.title||x.topicLabel||'클로징 Report',summary:x.summary||x.topicLabel||'',url:(x.step5&&x.step5.htmlUrl)||x.url||'',audioUrl:(x.step6&&x.step6.audioMp3Url)||x.audioUrl||'',pdfUrl:(x.step5&&x.step5.pdfUrl)||x.pdfUrl||'',topicSlug:x.topicSlug||'',subType:x.subType||x.corpType||'',price:2000,isActive:true,createdAt:x.publishedAt||x.createdAt||null};});
+      allContents=allContents.filter(c=>c.type!=='case_report').concat(crItems);
+    }catch(e){console.warn('case_reports 로드 실패:',e.message);}
     if($('hero-content-count'))$('hero-content-count').textContent=allContents.length;
     try{const ts=await getDoc(doc(db,'settings','thumb_settings'));thumbSettings=ts.exists()?ts.data():null;}catch(e){thumbSettings=null;}
     if(me){const fSnap=await getDocs(query(collection(db,'favorites'),where('userId','==',me.uid)));myFavSet=new Set(fSnap.docs.map(d=>d.data().contentId));}
@@ -4036,9 +4034,31 @@ async function showDetail(cid){
   }
   /* ★ [v6.2] 클로징 Report: 곧 오픈 안내 팝업 (배너·썸네일 공통) */
   if(c.type==='case_report'){
-    /* ★ 관리자: 게시된 보고서 직접 열람 (그 외: 곧오픈 안내) */
-    if(meData&&meData.role==='admin'&&c.url){window.open(c.url,'_blank');return;}
-    showClosingComingSoon();return;
+    const _crFav=myFavSet.has(cid);
+    const _hasAudio=!!(c.audioUrl);
+    const _hasPdf=!!(c.pdfUrl);
+    /* ★ TCW 동일 기준: 일반회원(user/jarvia_report) 2,000원, 그 외 회원 무료 */
+    const _isFreeRole=me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager'||meData.role==='free_user');
+    const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
+    const _freeLabels={admin:'관리자 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',free_user:'자비아(기간제) 무료'};
+    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`:'';
+    const _btnSuffix=_isFreeRole?'(무료)':'(2,000원)';
+    let crActions=`<div class="closing-actions">
+      <div class="cd-notice" style="background:#FFF8E1;border-left-color:#C9A84C">📋 보험계약 클로징 Report — 케이스별 개인/법인 영업 클로징 자료</div>
+      <div class="closing-row row-2col">
+        ${c.url?`<button class="btn" onclick="crPayAndOpen('${cid}','html')" style="background:linear-gradient(135deg,#0F2440,#1E3458)">HTML ${_btnSuffix}</button>`:''}
+        ${_hasAudio?`<button class="btn btn-sec" onclick="crPayAndOpen('${cid}','audio')">오디오 ${_btnSuffix}</button>`:''}
+        ${_hasPdf?`<button class="btn btn-sec" onclick="crPayAndOpen('${cid}','pdf')">PDF ${_btnSuffix}</button>`:''}
+      </div>
+      <div class="closing-row row-2col">
+        <button class="btn btn-sec" onclick="crSample()" style="background:#FFF8E1;border-color:#D4A03C;color:#8B6914">🆓 무료 샘플 보기</button>
+        <button class="btn btn-sec" onclick="closeM('mdl-detail')">닫기</button>
+      </div>
+      <div class="closing-row"><button class="fav-btn ${_crFav?'active':''}" onclick="doFav('${cid}',this)">${_crFav?'★ 즐겨찾기 해제':'☆ 즐겨찾기'}</button></div>
+    </div>`;
+    $('detail-inner').innerHTML=`<div class="cd"><span style="display:inline-block;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:800;color:#0F2440;background:linear-gradient(135deg,#E0B846,#F0D58C);margin-bottom:8px">보험계약 · 클로징 Report</span> <h2>${esc(c.title)}</h2><div class="cd-meta">${c.subType?`<span class="badge" style="background:#FFF7ED;color:#C2410C">${esc(c.subType)}</span>`:''} <span class="cd-date">업데이트: ${fdate(c.createdAt)}</span></div><div class="cd-price">2,000원${_priceLabel}</div><p class="cd-summary">${esc(c.summary||'')}</p>${crActions}</div>`;
+    openM('mdl-detail');$('detail-inner').scrollTop=0;const _mb=$('mdl-detail').querySelector('.mdl-box');if(_mb)_mb.scrollTop=0;
+    return;
   }
   /* ★ 메디컬 위클리: 모달 먼저 표시, 콘텐츠 열람 시 결제 (TCW 동일 패턴) */
   if(c.type==='medical_weekly'){
@@ -7230,6 +7250,30 @@ function openTaxWeeklyCardsSeamless(cid){
   document.body.appendChild(wrap);
 }
 window.twPayAndOpen=twPayAndOpen;
+// ★ 클로징 Report 결제·열람 (TCW 동일: 일반회원 2,000원 차감 / 그 외 무료)
+async function crPayAndOpen(cid,action){
+  const c=allContents.find(x=>x.contentId===cid);if(!c)return;
+  if(!me){toast('로그인이 필요합니다.','warning');return;}
+  const _isFreeOnly=meData&&(meData.role==='user'||meData.role==='jarvia_report');
+  if(_isFreeOnly){
+    const _pt=meData.balance||0;
+    if(_pt<2000){toast('잔액이 부족합니다. 2,000원 필요합니다.','warning');return;}
+    if(!confirm(`클로징 Report 열람 시 2,000원이 차감됩니다.\n현재 잔액: ${fmt(_pt)}원\n\n계속하시겠습니까?`))return;
+    try{
+      await updateDoc(doc(db,'users',me.uid),{balance:increment(-2000)});
+      meData.balance=_pt-2000;updateBal();
+      const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+      await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:2000,txId:'balance',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+    }catch(e){toast('처리 중 오류가 발생했습니다.','error');return;}
+  }else{
+    try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
+      await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
+    }catch(e){}
+  }
+  const url=action==='audio'?c.audioUrl:action==='pdf'?c.pdfUrl:c.url;
+  if(url)window.open(url,'_blank');else toast('콘텐츠 URL이 없습니다.','warning');
+}
+window.crPayAndOpen=crPayAndOpen;
 // ═══════════════════════════════════════════════════════════
 // ★ 병의원 컨설팅 (Medical Weekly) — TCW 동일 패턴
 //   - 가격: 2,000원 (free_user/user role만 차감, 그 외 무료)
