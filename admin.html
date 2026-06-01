@@ -938,16 +938,17 @@
             <!-- 다운로드 + MP3 업로드 -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
               <div style="background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:14px">
-                <div style="font-weight:600;margin-bottom:8px;font-size:13px">📥 파일 다운로드</div>
+                <div style="font-weight:600;margin-bottom:8px;font-size:13px">📄 보기 · 다운로드</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <button class="btn" onclick="crPreviewHtml()" style="font-size:12px">🔍 HTML 보기</button>
                   <button class="btn btn-sec" onclick="crDownload('html')" style="font-size:12px">HTML</button>
                   <button class="btn btn-sec" onclick="crDownload('pdf')" style="font-size:12px">PDF</button>
                   <button class="btn btn-sec" onclick="crDownload('audio')" style="font-size:12px">스크립트 (.txt)</button>
                 </div>
               </div>
               <div style="background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:14px">
-                <div style="font-weight:600;margin-bottom:8px;font-size:13px">📤 MP3 업로드 (NotebookLM)</div>
-                <input type="file" id="cr-mp3-file" accept="audio/mpeg,audio/mp3" onchange="handleCrMp3Upload()" style="font-size:12px;width:100%">
+                <div style="font-weight:600;margin-bottom:8px;font-size:13px">📤 오디오 업로드 (NotebookLM · m4a)</div>
+                <input type="file" id="cr-mp3-file" accept=".m4a,audio/*" onchange="handleCrMp3Upload()" style="font-size:12px;width:100%">
                 <div id="cr-mp3-status" style="font-size:11px;color:var(--text-lt);margin-top:6px"></div>
               </div>
             </div>
@@ -9580,6 +9581,7 @@ const CR_UPDATE_SCHEDULE_URL = CR_BASE_URL + '/updateScheduleEntry';
 const CR_GENERATE_MONTH_URL  = CR_BASE_URL + '/triggerGenerateMonth';   // [v6.1 v2 수정 4] 수동 월간 생성
 const CR_DELETE_SCHEDULE_URL = CR_BASE_URL + '/deleteScheduleEntry';     // [v6.2] 일정 삭제
 const CR_CUSTOM_CREATE_URL   = CR_BASE_URL + '/triggerCustomCaseReport'; // [v6.2] 임의 보고서 추가
+const CR_DELETE_COMPLETE_URL = CR_BASE_URL + '/deleteCaseReportCompletely'; // 완전 삭제 (cascade purge)
 
 // ─── 28 토픽 (v6.1 운영 모델 — active 20 + inactive 8 모두 사용) ──
 // caseReportPrompts.js 의 CORP_SLUGS·PERS_SLUGS 와 *완전 동기*
@@ -9897,31 +9899,59 @@ function crFormatDateTime(ts) {
   } catch (e) { return '<span style="color:#bbb">-</span>'; }
 }
 
+async function crDeleteCompletely(opts) {
+  const o = opts || {};
+  const label = o.label || o.reportId || o.scheduleId || '';
+  const msg = `\u26A0\uFE0F \uC644\uC804 \uC0AD\uC81C\n\n${label}\n\n\uC774 \uBCF4\uACE0\uC11C\uC758 \uBAA8\uB4E0 \uC790\uB8CC(\uBB38\uC11C + PDF\u00B7\uC624\uB514\uC624\u00B7HTML \uD30C\uC77C)\uAC00 \uBC31\uC5D4\uB4DC\uC5D0\uC11C \uC601\uAD6C \uC0AD\uC81C\uB429\uB2C8\uB2E4.\n\uAC8C\uC2DC\uB41C \uAC83\u00B7\uC0DD\uC131 \uC911\uC778 \uAC83\uB3C4 \uBB34\uC870\uAC74 \uC0AD\uC81C\uB418\uBA70, \uB418\uB3CC\uB9B4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.\n\n\uC0AD\uC81C\uD560\uAE4C\uC694?`;
+  if (!confirm(msg)) return;
+  try {
+    const params = new URLSearchParams({ key: CR_API_KEY });
+    const res = await fetch(`${CR_DELETE_COMPLETE_URL}?${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportId: o.reportId || null, scheduleId: o.scheduleId || null }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '\uC0AD\uC81C \uC2E4\uD328');
+    const d = data.deleted || {};
+    const docCnt = Object.values(d.docs || {}).reduce((a, b) => a + b, 0);
+    toast(`\uC644\uC804 \uC0AD\uC81C \uC644\uB8CC (\uBB38\uC11C ${docCnt}\uAC74, \uD30C\uC77C ${d.storageFiles || 0}\uAC74)`, 'success');
+    setTimeout(() => { loadCrTopicPool(); loadCrSchedule(); }, 1000);
+  } catch (err) {
+    toast('\uC0AD\uC81C \uC2E4\uD328: ' + err.message, 'error');
+  }
+}
+window.crDeleteCompletely = crDeleteCompletely;
+
 function crBuildActions(slug, state) {
   if (state.status === 'pending') {
     return `<button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">페르소나</button>
             <button class="btn" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">생성</button>`;
   }
   if (state.status === 'running') {
-    return `<button class="btn btn-sec" onclick="openCrProgressModal('${state.reportId}','${slug}')" style="font-size:10px;padding:3px 8px">진행 보기</button>`;
+    return `<button class="btn btn-sec" onclick="openCrProgressModal('${state.reportId}','${slug}')" style="font-size:10px;padding:3px 8px">진행 보기</button>
+            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   if (state.status === 'ready' || state.status === 'published') {
     return `<button class="btn btn-sec" onclick="openCrManageModal('${state.reportId}','${slug}')" style="font-size:10px;padding:3px 8px">관리</button>
-            <button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">신규 생성</button>`;
+            <button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">신규 생성</button>
+            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   if (state.status === 'error') {
-    return `<button class="btn btn-sec" onclick="crRetry('${state.reportId}')" style="font-size:10px;padding:3px 8px;color:#c62828">재시도</button>`;
+    return `<button class="btn btn-sec" onclick="crRetry('${state.reportId}')" style="font-size:10px;padding:3px 8px;color:#c62828">재시도</button>
+            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   return '';
 }
 
 function crBuildScheduleActions(r) {
   if (r.completed && r.reportId) {
-    return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>`;
+    return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>
+            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${r.reportId}',label:'${r.topicSlug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   return `<button class="btn btn-sec" onclick="openCrScheduleEdit('${r._id}')" style="font-size:10px;padding:3px 8px">✏ 수정</button>
           <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>
-          <button class="btn btn-sec" onclick="openCrScheduleDelete('${r._id}')" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">🗑 삭제</button>`;
+          <button class="btn btn-sec" onclick="crDeleteCompletely({scheduleId:'${r._id}',label:'${r.topicSlug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">🗑 삭제</button>`;
 }
 
 // ─── 필터 변경 ──────────────────────────────────────────────────────
@@ -10102,8 +10132,8 @@ function openCrCustomCreate() {
       `<option value="${t.slug}">${t.emoji || ''} ${t.field || t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})</option>`
     ).join('');
   }
-  // 기본 날짜 = 내일
-  const d = new Date(); d.setDate(d.getDate() + 1);
+  // 기본 날짜 = 오늘 (KST) — 하루 다건 생성 허용 (오늘 포함)
+  const d = new Date(Date.now() + 9 * 3600 * 1000);
   const ds = d.toISOString().slice(0, 10);
   const dateEl = document.getElementById('cr-custom-date');
   if (dateEl) { dateEl.value = ds; dateEl.min = ds; }
@@ -10706,6 +10736,14 @@ async function crDownload(type) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
+// 렌더링된 HTML 새 탭 미리보기 (관리자 검수용 — 다운로드 없이 바로 확인)
+function crPreviewHtml() {
+  if (!crManageData) return;
+  const url = crManageData.step5?.htmlUrl;
+  if (!url) { toast('HTML이 아직 생성 안 됐습니다', 'warning'); return; }
+  window.open(url, '_blank');
+}
+
 async function handleCrMp3Upload() {
   const file = $('cr-mp3-file').files[0];
   if (!file) return;
@@ -10718,9 +10756,9 @@ async function handleCrMp3Upload() {
   try {
     // Firebase Storage 업로드
     const storage = getStorage();
-    const path = `case-reports/${crCurrentReportId}/audio.mp3`;
+    const path = `case-reports/${crCurrentReportId}/audio.m4a`;
     const storageRef = stRef(storage, path);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    const uploadTask = uploadBytesResumable(storageRef, file, { contentType: 'audio/mp4' });
 
     uploadTask.on('state_changed', (snap) => {
       const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
@@ -10741,8 +10779,8 @@ async function handleCrMp3Upload() {
       });
       const data = await res.json();
       if (data.ok) {
-        $('cr-mp3-status').textContent = '✅ MP3 적용 완료';
-        toast('MP3 적용 완료!', 'success');
+        $('cr-mp3-status').textContent = '✅ 오디오 적용 완료';
+        toast('오디오 적용 완료!', 'success');
       } else {
         $('cr-mp3-status').textContent = '⚠ URL 저장 실패: ' + (data.error || '');
       }
@@ -10831,6 +10869,7 @@ window.openManageModal = openManageModal;
 window.saveCrBody = saveCrBody;
 window.publishCrNow = publishCrNow;
 window.crDownload = crDownload;
+window.crPreviewHtml = crPreviewHtml;
 
 // [v6.1 v2] 신규 함수 전역 노출
 window.openCrAnnualRegister = openCrAnnualRegister;
