@@ -811,6 +811,10 @@
               <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:14px 16px;font-size:13px;color:#8d6e63">
                 <strong>💡 안내</strong> 이 페르소나는 *가상 고객*입니다. 보고서 본문 안의 데이터도 모두 가상 시뮬레이션입니다.
               </div>
+              <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">📝 보고서 제목 <span style="font-weight:400;color:var(--text-lt)">— 생성 전 수정 가능 (5~80자)</span></label>
+                <input id="cr-persona-title-input" type="text" maxlength="80" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:var(--font);box-sizing:border-box" placeholder="제목 (비워두거나 그대로 두면 토픽 기본 제목 사용)">
+              </div>
             </div>
           </div>
           <div class="modal-footer">
@@ -10322,6 +10326,7 @@ async function openPersonaPreview(slug) {
   crCurrentPersona = null;
 
   $('cr-persona-title').textContent = `${topic.emoji} ${topic.label} — 페르소나 미리보기`;
+  if ($('cr-persona-title-input')) $('cr-persona-title-input').value = topic.label;
   $('cr-persona-loading').style.display = 'block';
   $('cr-persona-result').style.display = 'none';
   document.getElementById('cr-persona-modal').classList.remove('hidden');
@@ -10442,6 +10447,23 @@ async function startCaseReportGeneration() {
     if (!data.reportId) throw new Error('reportId 없음');
 
     crCurrentReportId = data.reportId;
+
+    // 생성 전 지정한 제목 적용 (기본 라벨과 다르고 5~80자일 때만)
+    // caseReportUpdateBody 는 재생성 플래그가 없으면 status 를 건드리지 않으므로 진행 중 파이프라인에 무해
+    const _topic = crFindTopic(crCurrentSlug);
+    const _defLabel = _topic ? _topic.label : '';
+    const _customTitle = ($('cr-persona-title-input')?.value || '').trim();
+    if (_customTitle && _customTitle !== _defLabel && _customTitle.length >= 5 && _customTitle.length <= 80) {
+      try {
+        const _p = new URLSearchParams({ key: CR_API_KEY });
+        await fetch(`${CR_UPDATE_BODY_URL}?${_p}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reportId: data.reportId, newTitle: _customTitle })
+        });
+      } catch (e) { console.warn('[CR] 제목 사전적용 실패(생성은 진행):', e); }
+    }
+
     closeCrPersonaModal();
     openProgressModal(data.reportId);
     toast('생성 시작! 약 30분 소요됩니다.', 'success');
