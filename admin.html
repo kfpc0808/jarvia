@@ -708,9 +708,9 @@
 
       <!-- 필터 + 안내 -->
       <div class="toolbar" style="margin-bottom:16px">
-        <button class="btn btn-sec" onclick="filterCaseReports('all')" id="cr-filter-all">전체 (20)</button>
-        <button class="btn btn-sec" onclick="filterCaseReports('corporate')" id="cr-filter-corp">법인 (9)</button>
-        <button class="btn btn-sec" onclick="filterCaseReports('personal')" id="cr-filter-pers">개인 (11)</button>
+        <button class="btn btn-sec" onclick="filterCaseReports('all')" id="cr-filter-all">전체 (28)</button>
+        <button class="btn btn-sec" onclick="filterCaseReports('corporate')" id="cr-filter-corp">법인 (13)</button>
+        <button class="btn btn-sec" onclick="filterCaseReports('personal')" id="cr-filter-pers">개인 (15)</button>
         <button class="btn btn-sec" onclick="filterCaseReports('pending')" id="cr-filter-pend">대기</button>
         <button class="btn btn-sec" onclick="filterCaseReports('running')" id="cr-filter-run">진행중</button>
         <button class="btn btn-sec" onclick="filterCaseReports('ready')" id="cr-filter-ready">완료</button>
@@ -962,7 +962,6 @@
           <div class="modal-footer">
             <button class="btn btn-sec" onclick="closeCrManageModal()">닫기</button>
             <button class="btn btn-sec" onclick="saveCrBody()">💾 제목·본문 저장 (재생성 옵션 적용)</button>
-            <button class="btn" onclick="publishCrNow()" id="cr-publish-btn" style="background:#2e7d32">🚀 즉시 게시</button>
           </div>
         </div>
       </div>
@@ -9933,7 +9932,11 @@ function crBuildActions(slug, state) {
             <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
   if (state.status === 'ready' || state.status === 'published') {
+    const pubBtn = state.status === 'ready'
+      ? `<button class="btn" onclick="publishCrNow('${state.reportId}')" style="font-size:10px;padding:3px 8px;background:#2e7d32;color:#fff">🚀 게시</button>`
+      : '';
     return `<button class="btn btn-sec" onclick="openCrManageModal('${state.reportId}','${slug}')" style="font-size:10px;padding:3px 8px">관리</button>
+            ${pubBtn}
             <button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">신규 생성</button>
             <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${state.reportId}',label:'${slug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
@@ -10582,11 +10585,7 @@ async function openManageModal(reportId) {
       ${crManageData.scheduledDate ? `<div><strong>게시 예정일:</strong> ${crManageData.scheduledDate}</div>` : ''}
     `;
 
-    if (crManageData._published) {
-      $('cr-publish-btn').style.display = 'none';
-    } else {
-      $('cr-publish-btn').style.display = 'inline-block';
-    }
+    // 즉시 게시 버튼은 완료 리스트 행으로 이동(모달에서 제거됨)
   } catch (err) {
     $('cr-manage-info').innerHTML = `<p style="color:#c62828">오류: ${err.message}</p>`;
   }
@@ -10652,10 +10651,18 @@ async function saveCrBody() {
   const regenerateHtml = $('cr-regen-html').checked;
   const regenerateAudio = $('cr-regen-audio').checked;
   
-  // 변경 감지
-  const titleChanged = newTitle && newTitle !== (crManageData?.title || crManageData?.topicLabel || '');
-  const bodyChanged = newBody && newBody !== (crManageData?.step4?.finalText || '');
-  
+  // 변경 감지 (모달을 채울 때 쓴 기준과 동일하게 맞춤 — openManageModal 참조)
+  const baseTitle = crManageData?.title || crManageData?.topicLabel || crManageData?.topicSlug || '';
+  const baseBody  = crManageData?.step4?.finalText || crManageData?.step2?.refinedText || crManageData?.step1?.draftText || '';
+  const titleChanged = newTitle && newTitle !== baseTitle;
+  const bodyChanged  = newBody && newBody !== baseBody;
+
+  // 변경도 없고 재생성 옵션도 없으면 → 빈 요청(400) 대신 친절 안내 후 종료
+  if (!titleChanged && !bodyChanged && !regenerateHtml && !regenerateAudio) {
+    toast('변경된 내용이 없습니다. 제목·본문을 수정하거나 재생성 옵션을 선택하세요.', 'warning');
+    return;
+  }
+
   const confirmMsg = `변경 사항을 저장합니다.\n\n` +
     `${titleChanged ? '✓ 제목 변경\n' : ''}` +
     `${bodyChanged ? '✓ 본문 변경\n' : ''}` +
@@ -10670,6 +10677,8 @@ async function saveCrBody() {
     const body = { reportId: crCurrentReportId, regenerateHtml, regenerateAudio };
     if (titleChanged) body.newTitle = newTitle;
     if (bodyChanged) body.newBody = newBody;
+    // 텍스트 변경 없이 재생성만 요청한 경우: 백엔드 필수값(newTitle/newBody) 충족 위해 현재 본문을 그대로 전송
+    if (!body.newTitle && !body.newBody && baseBody) body.newBody = baseBody;
     
     const res = await fetch(`${CR_UPDATE_BODY_URL}?${params}`, {
       method: 'POST',
@@ -10689,7 +10698,9 @@ async function saveCrBody() {
   }
 }
 
-async function publishCrNow() {
+async function publishCrNow(reportId) {
+  const rid = reportId || crCurrentReportId;
+  if (!rid) { toast('reportId가 없습니다', 'error'); return; }
   if (!confirm('이 보고서를 *즉시* 회원에게 게시합니다.\n\n' +
     '• HTML·PDF·오디오 스크립트 모두 확인하셨나요?\n' +
     '• MP3 업로드도 완료됐나요? (없어도 게시는 가능)\n\n' +
@@ -10700,7 +10711,7 @@ async function publishCrNow() {
     const res = await fetch(`${CR_PUBLISH_NOW_URL}?${params}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reportId: crCurrentReportId })
+      body: JSON.stringify({ reportId: rid })
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '게시 실패');
