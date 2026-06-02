@@ -955,6 +955,8 @@
                 <div style="font-weight:600;margin-bottom:8px;font-size:13px">📤 오디오 업로드 (NotebookLM · m4a)</div>
                 <input type="file" id="cr-mp3-file" accept=".m4a,audio/*" onchange="handleCrMp3Upload()" style="font-size:12px;width:100%">
                 <div id="cr-mp3-status" style="font-size:11px;color:var(--text-lt);margin-top:6px"></div>
+                <input type="file" id="cr-html-file" accept=".html,text/html" onchange="handleCrHtmlUpload()" style="display:none">
+                <input type="file" id="cr-pdf-file" accept=".pdf,application/pdf" onchange="handleCrPdfUpload()" style="display:none">
               </div>
             </div>
 
@@ -9595,6 +9597,7 @@ const CR_PERSONA_PREVIEW_URL = CR_BASE_URL + '/caseReportPersonaPreview';
 const CR_UPDATE_BODY_URL = CR_BASE_URL + '/caseReportUpdateBody';
 const CR_PUBLISH_NOW_URL = CR_BASE_URL + '/caseReportPublishNow';
 const CR_SET_AUDIO_URL = CR_BASE_URL + '/caseReportSetAudioUrl';
+const CR_SET_REPORT_URL = CR_BASE_URL + '/caseReportSetReportUrl';
 // [v6.1 v2] 신규 — 어드민 풀·연간 등록·메인 노출
 const CR_ANNUAL_REGISTER_URL = CR_BASE_URL + '/triggerAnnualScheduleRegister';
 const CR_MONTHLY_REVEAL_URL  = CR_BASE_URL + '/triggerMonthlyReveal';
@@ -10095,6 +10098,66 @@ function crRowUploadAudio(reportId) {
 }
 window.crRowUploadAudio = crRowUploadAudio;
 
+/* ★ HTML/PDF 교체 업로드 (담당자 수정본 → Storage 업로드 → caseReportSetReportUrl 로 URL 교체) */
+function crRowUploadHtml(reportId){
+  crCurrentReportId = reportId;
+  const inp = document.getElementById('cr-html-file');
+  if (!inp) { toast('업로드 입력을 찾을 수 없습니다', 'error'); return; }
+  inp.value = '';
+  toast('수정한 HTML 파일을 선택하세요', 'info');
+  inp.click();
+}
+function crRowUploadPdf(reportId){
+  crCurrentReportId = reportId;
+  const inp = document.getElementById('cr-pdf-file');
+  if (!inp) { toast('업로드 입력을 찾을 수 없습니다', 'error'); return; }
+  inp.value = '';
+  toast('수정한 PDF 파일을 선택하세요', 'info');
+  inp.click();
+}
+async function handleCrReportUpload(fileType){
+  const inpId = fileType === 'html' ? 'cr-html-file' : 'cr-pdf-file';
+  const file = document.getElementById(inpId).files[0];
+  if (!file) return;
+  if (!crCurrentReportId) { toast('보고서를 먼저 선택하세요', 'error'); return; }
+  const label = fileType.toUpperCase();
+  try {
+    const storage = getStorage();
+    const ext = fileType === 'html' ? 'html' : 'pdf';
+    const ct  = fileType === 'html' ? 'text/html' : 'application/pdf';
+    const path = `case-reports/${crCurrentReportId}/report.${ext}`;
+    const storageRef = stRef(storage, path);
+    toast(`⏳ ${label} 업로드 중...`, 'info');
+    const uploadTask = uploadBytesResumable(storageRef, file, { contentType: ct });
+    uploadTask.on('state_changed', null, (err) => {
+      toast(`${label} 업로드 실패: ` + err.message, 'error');
+    }, async () => {
+      const url = await getDownloadURL(uploadTask.snapshot.ref);
+      const params = new URLSearchParams({ key: CR_API_KEY });
+      const res = await fetch(`${CR_SET_REPORT_URL}?${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId: crCurrentReportId, fileType, url })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        toast(`✅ ${label} 교체 완료!`, 'success');
+        if (typeof loadCaseReports === 'function') loadCaseReports();
+      } else {
+        toast(`⚠ ${label} 교체 실패: ` + (data.error || ''), 'error');
+      }
+    });
+  } catch (err) {
+    toast(`❌ ` + err.message, 'error');
+  }
+}
+function handleCrHtmlUpload(){ handleCrReportUpload('html'); }
+function handleCrPdfUpload(){ handleCrReportUpload('pdf'); }
+window.crRowUploadHtml = crRowUploadHtml;
+window.crRowUploadPdf = crRowUploadPdf;
+window.handleCrHtmlUpload = handleCrHtmlUpload;
+window.handleCrPdfUpload = handleCrPdfUpload;
+
 function crBuildActions(slug, state) {
   if (state.status === 'pending') {
     return `<button class="btn btn-sec" onclick="openCrPersonaPreview('${slug}')" style="font-size:10px;padding:3px 8px">페르소나</button>
@@ -10117,8 +10180,10 @@ function crBuildActions(slug, state) {
     const B = [];
     if (htmlUrl)   B.push(`<button class="btn" onclick="window.open('${htmlUrl}','_blank')" style="${S};background:#1e293b;color:#fff">📄 보기</button>`);
     if (htmlUrl)   B.push(`<button class="btn btn-sec" onclick="prDownload('${htmlUrl}','${safe}.html')" style="${S}">⬇ HTML</button>`);
+    if (htmlUrl)   B.push(`<button class="btn" onclick="crRowUploadHtml('${rid}')" style="${S};background:#0369a1;color:#fff">📄 HTML 교체</button>`);
     if (scriptUrl) B.push(`<button class="btn btn-sec" onclick="prDownload('${scriptUrl}','${safe}_스크립트.txt')" style="${S}">📝 스크립트</button>`);
     if (pdfUrl)    B.push(`<button class="btn btn-sec" onclick="prDownload('${pdfUrl}','${safe}.pdf')" style="${S}">⬇ PDF</button>`);
+    if (pdfUrl)    B.push(`<button class="btn" onclick="crRowUploadPdf('${rid}')" style="${S};background:#b91c1c;color:#fff">📑 PDF 교체</button>`);
     B.push(`<button class="btn" onclick="crRowUploadAudio('${rid}')" style="${S};background:#6d28d9;color:#fff">🎵 오디오 업로드</button>`);
     if (mp3Url) {
       B.push(`<button class="btn btn-sec" onclick="prDownload('${mp3Url}','${safe}.m4a')" style="${S}">🎧 오디오</button>`);
