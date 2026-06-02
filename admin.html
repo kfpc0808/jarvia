@@ -767,6 +767,7 @@
           </select>
           <button class="btn btn-sec" onclick="openCrMonthlyTrigger()" style="font-size:12px;padding:5px 12px" title="선택 월 분을 자비아 메인에 노출 + 보고서 생성 시작">📢 월 노출·생성</button>
           <button class="btn" onclick="openCrAnnualRegister()" style="font-size:12px;padding:5px 12px;background:#1976D2">🚀 연간 등록</button>
+          <button class="btn btn-danger" onclick="crBulkClearSchedule()" style="font-size:12px;padding:5px 12px" title="선택 날짜 이후 미생성 일정 일괄 삭제 (완료·생성된 건 보존)">🧹 일괄 비우기</button>
           <button class="btn" onclick="openCrCustomCreate()" style="font-size:12px;padding:5px 12px;background:#6a1b9a">➕ 새 보고서 추가</button>
         </div>
       </div>
@@ -10162,6 +10163,39 @@ function filterCaseReports(filter) {
 }
 
 // ─── [v6.1 v2] 연간 일정 등록 ─────────────────────────────────────
+// [신규] 지정일 이후 미생성 일정 일괄 삭제 (완료/보고서생성 건은 서버가 거부 → 보존)
+async function crBulkClearSchedule() {
+  const cutoff = prompt(
+    '일괄 비우기\n\n이 날짜(포함) 이후의 미생성 일정을 삭제합니다.\n' +
+    '완료됐거나 보고서가 생성된 건은 자동 보존됩니다.\n\n기준일 (YYYY-MM-DD):',
+    '2026-07-01'
+  );
+  if (!cutoff) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff)) { toast('날짜 형식 오류 (YYYY-MM-DD)', 'error'); return; }
+
+  const targets = (crScheduleData || []).filter(r =>
+    r.date >= cutoff && !r.completed && !r.reportId
+  );
+  if (!targets.length) { toast('삭제할 미생성 일정이 없습니다.', 'error'); return; }
+  if (!confirm(`${cutoff} 이후 미생성 일정 ${targets.length}건을 삭제할까요?\n(완료·생성된 건은 제외됨)`)) return;
+
+  let ok = 0, fail = 0;
+  for (const r of targets) {
+    try {
+      const params = new URLSearchParams({ key: CR_API_KEY });
+      const res = await fetch(`${CR_DELETE_SCHEDULE_URL}?${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduleId: r._id, alsoDeleteUpcomingContent: !!r.revealed }),
+      });
+      const data = await res.json();
+      if (data.ok) ok++; else fail++;
+    } catch (e) { fail++; }
+  }
+  toast(`삭제 완료: ${ok}건${fail ? ` / 실패 ${fail}건` : ''}`, fail ? 'error' : 'success');
+  setTimeout(() => loadCrSchedule(), 1000);
+}
+
 async function openCrAnnualRegister() {
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -11105,6 +11139,7 @@ window.crPreviewHtml = crPreviewHtml;
 
 // [v6.1 v2] 신규 함수 전역 노출
 window.openCrAnnualRegister = openCrAnnualRegister;
+window.crBulkClearSchedule = crBulkClearSchedule;
 window.openCrScheduleEdit = openCrScheduleEdit;
 window.openCrScheduleDelete = openCrScheduleDelete;
 window.openCrCustomCreate = openCrCustomCreate;
