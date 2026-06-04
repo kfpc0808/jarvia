@@ -8783,6 +8783,7 @@ function _fcrRenderList(filter){
   list.innerHTML = arr.map(r => {
     const c = colorMap[r.status] || '#888780';
     const tc = textColor[r.status] || '#5A6484';
+    const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
     const tags = (r.fields || []).slice(0, 3).map(f =>
       '<span style="font-size:10px;padding:2px 7px;background:#EEF4FF;color:#1B3A6B;border-radius:8px;font-weight:600">' + _fcrEsc(_fcrFieldLabels[f] || f) + '</span>'
     ).join('');
@@ -8794,7 +8795,7 @@ function _fcrRenderList(filter){
       + '<div style="font-size:10px;font-weight:800;color:' + tc + '">' + (_fcrStatusLabels[r.status] || r.status) + '</div>'
       + '</div>'
       + '<div style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">' + _fcrEsc(_fcrFmtPhone(r.phone)) + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
   }).join('');
 }
@@ -8822,6 +8823,36 @@ window.fcrFilter = function(btn){
 };
 
 // 상세 모달
+// ─── ⏱ 진단 신청 표시 헬퍼 (Phase 4, 2026-06) ───
+const _fcrQuizLabels = {
+  coverage:{name:'보장진단',icon:'\uD83D\uDEE1',q:{q1:'연령대',q2:'가족 구성',q3:'실손보험',q4:'암 보장',q5:'뇌·심장 보장',q6:'수술·입원 보장',q7:'사망보장',q8:'보험료 인지',q9:'마지막 점검',q10:'최근 상황'}},
+  retirement:{name:'은퇴준비',icon:'\uD83C\uDFD6',q:{q1:'연령대',q2:'희망 은퇴 시점',q3:'국민연금 인지',q4:'퇴직연금 유형',q5:'개인연금',q6:'생활비 계산',q7:'노후 저축률',q8:'주택 외 자산',q9:'의료·간병 준비',q10:'부모 부양'}}};
+function _fcrQuizBadge(r){
+  if(r.source !== 'quiz') return '';
+  const L = _fcrQuizLabels[r.quizType] || _fcrQuizLabels.coverage;
+  return '<span style="font-size:10px;padding:2px 7px;background:#FFF4DC;color:#A68B4B;border:0.5px solid #C9A96E;border-radius:8px;font-weight:800">' + L.icon + ' ' + L.name + ' ' + (Number(r.quizScore)||0) + '점</span>';
+}
+function _fcrQuizSection(r){
+  if(r.source !== 'quiz') return '';
+  const L = _fcrQuizLabels[r.quizType] || _fcrQuizLabels.coverage;
+  const sig = (r.quizSignals||[]).map(s => '<span style="font-size:10px;padding:3px 8px;background:#FFF4DC;color:#A68B4B;border:0.5px solid #C9A96E;border-radius:9px;font-weight:700">' + _fcrEsc(s) + '</span>').join('') || '<span style="font-size:10px;color:#B4B2A9">특이 신호 없음</span>';
+  const a = r.quizAnswers || {};
+  const rows = Object.keys(L.q).map(k => {
+    const v = a[k]; const vs = Array.isArray(v) ? v.join(', ') : (v == null ? '-' : String(v));
+    const warn = /모름|없음|받은 적 없음|생각 안 해봄/.test(vs) && vs !== '해당없음';
+    return '<tr><td style="padding:3px 8px 3px 0;color:#8B93AE;white-space:nowrap;vertical-align:top">' + L.q[k] + '</td><td style="padding:3px 0;font-weight:' + (warn?800:600) + ';color:' + (warn?'#C0392B':'#2C3E50') + '">' + _fcrEsc(vs) + '</td></tr>';
+  }).join('');
+  return '<div style="margin-bottom:12px;background:linear-gradient(135deg,#FFFDF8,#FFF8E7);border:1px solid #C9A96E;border-radius:10px;padding:12px 13px">'
+    + '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">'
+    + '<div style="font-size:11px;font-weight:800;color:#A68B4B">' + L.icon + ' ' + L.name + ' 결과</div>'
+    + '<div style="font-size:20px;font-weight:900;color:#A68B4B">' + (Number(r.quizScore)||0) + '<span style="font-size:11px;font-weight:600"> 점</span></div>'
+    + '</div>'
+    + '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:9px">' + sig + '</div>'
+    + '<details><summary style="font-size:10px;font-weight:700;color:#8B93AE;cursor:pointer">10문항 답변 전체 보기</summary>'
+    + '<table style="width:100%;font-size:10.5px;margin-top:6px;border-collapse:collapse">' + rows + '</table>'
+    + '</details>'
+    + '</div>';
+}
 window.openFcRequestDetail = function(reqId){
   const r = _fcrAllRequests.find(x => x.id === reqId);
   if(!r){
@@ -8857,6 +8888,7 @@ window.openFcRequestDetail = function(reqId){
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">관심 분야' + otherTxt + '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' + (tags || '<span style="color:#B4B2A9;font-size:11px">-</span>') + '</div></div>'
+    + _fcrQuizSection(r)
     + messageBlock
     + '<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><div style="font-size:10px;font-weight:700;color:#8B93AE;letter-spacing:.3px">컨설턴트 메모 (500자 이내)</div><span style="font-size:9px;color:#B4B2A9">접수: ' + _fcrFmtTime(r.createdAt) + lastResp + '</span></div>'
     + '<textarea id="fcr-memo-edit" maxlength="500" style="width:100%;min-height:70px;padding:9px 11px;background:#FFFBEB;border:0.5px solid #FCD34D;border-radius:7px;font-size:11px;color:#92400E;line-height:1.6;font-family:inherit;resize:vertical;box-sizing:border-box">' + _fcrEsc(r.memo || '') + '</textarea>'

@@ -2189,6 +2189,7 @@ async function refreshRequestList(filter){
       const ageStr=ageLabels[r.ageGroup]||'';
       const assetStr=r.assetGroup?(' · '+(assetLabels[r.assetGroup]||r.assetGroup)):'';
       const tags=(r.fields||[]).slice(0,2).map(f=>`<span class="tag">${esc(fieldLabels[f]||f)}</span>`).join('');
+      const quizBadge=qzReqBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
       const created=r.createdAt?.toDate?r.createdAt.toDate():null;
       const when=created?relativeTime(created):'-';
       return `<div class="requestItem ${status}" data-id="${r.id}">
@@ -2197,7 +2198,7 @@ async function refreshRequestList(filter){
           <div class="status">${statusLabel}</div>
         </div>
         <div class="phone">${esc(r.phone||'')}</div>
-        <div class="tagsRow">${tags}<span class="when">${when}</span></div>
+        <div class="tagsRow">${quizBadge}${tags}<span class="when">${when}</span></div>
       </div>`;
     }).join('');
     // 클릭 시 상세 모달
@@ -2215,6 +2216,36 @@ function relativeTime(d){
   return d.getFullYear()+'.'+(d.getMonth()+1)+'.'+d.getDate();
 }
 
+// ─── ⏱ 진단 신청 표시 헬퍼 (Phase 4, 2026-06) ───
+const QZ_REQ_LABELS={
+  coverage:{name:'보장진단',icon:'\uD83D\uDEE1',q:{q1:'연령대',q2:'가족 구성',q3:'실손보험',q4:'암 보장',q5:'뇌·심장 보장',q6:'수술·입원 보장',q7:'사망보장',q8:'보험료 인지',q9:'마지막 점검',q10:'최근 상황'}},
+  retirement:{name:'은퇴준비',icon:'\uD83C\uDFD6',q:{q1:'연령대',q2:'희망 은퇴 시점',q3:'국민연금 인지',q4:'퇴직연금 유형',q5:'개인연금',q6:'생활비 계산',q7:'노후 저축률',q8:'주택 외 자산',q9:'의료·간병 준비',q10:'부모 부양'}}};
+function qzReqBadge(r){
+  if(r.source!=='quiz')return '';
+  const L=QZ_REQ_LABELS[r.quizType]||QZ_REQ_LABELS.coverage;
+  return `<span class="tag" style="background:#FFF4DC;color:var(--gold-dark);border:.5px solid var(--gold);font-weight:800">${L.icon} ${L.name} ${Number(r.quizScore)||0}점</span>`;
+}
+function qzReqSection(r){
+  if(r.source!=='quiz')return '';
+  const L=QZ_REQ_LABELS[r.quizType]||QZ_REQ_LABELS.coverage;
+  const sig=(r.quizSignals||[]).map(s=>`<span style="font-size:10px;padding:3px 8px;background:#FFF4DC;color:var(--gold-dark);border:.5px solid var(--gold);border-radius:9px;font-weight:700">${esc(s)}</span>`).join('')||'<span style="font-size:10px;color:var(--text-mute)">특이 신호 없음</span>';
+  const a=r.quizAnswers||{};
+  const rows=Object.keys(L.q).map(k=>{
+    const v=a[k];const vs=Array.isArray(v)?v.join(', '):(v==null?'-':String(v));
+    const warn=/모름|없음|받은 적 없음|생각 안 해봄/.test(vs)&&vs!=='해당없음';
+    return `<tr><td style="padding:3px 8px 3px 0;color:var(--text-sub);white-space:nowrap;vertical-align:top">${L.q[k]}</td><td style="padding:3px 0;font-weight:${warn?800:600};color:${warn?'#C0392B':'var(--text)'}">${esc(vs)}</td></tr>`;
+  }).join('');
+  return `<div style="margin-bottom:14px;background:linear-gradient(135deg,#FFFDF8,#FFF8E7);border:1px solid var(--gold);border-radius:10px;padding:12px 13px">
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:800;color:var(--gold-dark)">${L.icon} ${L.name} 결과</div>
+      <div style="font-size:20px;font-weight:900;color:var(--gold-dark);font-family:'Noto Serif KR',Georgia,serif">${Number(r.quizScore)||0}<span style="font-size:11px;font-weight:600"> 점</span></div>
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:9px">${sig}</div>
+    <details><summary style="font-size:10px;font-weight:700;color:var(--text-sub);cursor:pointer">10문항 답변 전체 보기</summary>
+      <table style="width:100%;font-size:10.5px;margin-top:6px;border-collapse:collapse">${rows}</table>
+    </details>
+  </div>`;
+}
 async function openRequestDetail(reqId){
   const r=allRequests.find(x=>x.id===reqId);
   if(!r)return;
@@ -2251,6 +2282,7 @@ async function openRequestDetail(reqId){
           ${r.fieldOther?`<span style="font-size:10px;padding:4px 9px;background:#FFF8E7;color:var(--gold-dark);border-radius:11px;font-weight:600">기타: ${esc(r.fieldOther)}</span>`:''}
         </div>
       </div>
+      ${qzReqSection(r)}
       ${r.message?`<div style="margin-bottom:14px;background:#F7F8FA;border-left:3px solid var(--gold);padding:10px 12px;border-radius:0 7px 7px 0">
         <div style="font-size:10px;font-weight:700;color:var(--gold-dark);margin-bottom:4px">💬 고객 메시지</div>
         <div style="font-size:11px;line-height:1.65">${esc(r.message)}</div>
