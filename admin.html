@@ -9662,6 +9662,12 @@ const CR_TOPICS = CR_TOPICS_ALL.filter(t => t.active !== false);
 let crCardStates = {};       // { [slug]: { status, reportId, ... } }
 let crCurrentPersona = null;
 let crCurrentSlug = null;
+// [v6.4] 일정 행 생성 컨텍스트(날짜·문서ID) + 진행중 추적 (새로고침 대비 localStorage 백업)
+let crCurrentScheduleId = null;
+let crCurrentScheduleDate = null;
+let crSchedRunning = {};
+try { crSchedRunning = JSON.parse(localStorage.getItem('crSchedRunning') || '{}'); } catch (e) { crSchedRunning = {}; }
+function crSaveSchedRunning() { try { localStorage.setItem('crSchedRunning', JSON.stringify(crSchedRunning)); } catch (e) {} }
 let crCurrentClientType = null;
 let crCurrentReportId = null;
 let crProgressUnsub = null;  // Firestore listener
@@ -10017,12 +10023,16 @@ function crRenderSchedule() {
 
   tbody.innerHTML = rows.map((r, idx) => {
     const dateStr = r.date + (r.weekday ? ` (${r.weekday})` : '');
+    // [v6.4] 진행중 추적 — 완료된 행은 추적 자동 해제
+    if (r.completed && crSchedRunning[r._id]) { delete crSchedRunning[r._id]; crSaveSchedRunning(); }
+    const _running = !r.completed && crSchedRunning[r._id];
     const generated = r.completed
       ? crFormatDateTime(r.completedAt)
-      : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>');
+      : (_running ? '<span style="color:#0d47a1;font-weight:600">생성중</span>'
+        : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>'));
     
-    // 상태: completed → published, revealed → ready (메인 노출 중), else pending
-    const st = r.completed ? 'published' : (r.revealed ? 'ready' : 'pending');
+    // 상태: completed → published, 생성중 → running, revealed → ready, else pending
+    const st = r.completed ? 'published' : (_running ? 'running' : (r.revealed ? 'ready' : 'pending'));
     const sb = crStatusBadge(st);
     const actions = crBuildScheduleActions(r);
     return `<tr style="border-bottom:1px solid var(--border)" data-schedule-id="${r._id}">
@@ -10218,9 +10228,23 @@ function crBuildScheduleActions(r) {
     return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>
             <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${r.reportId}',label:'${r.topicSlug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
   }
+  // [v6.4] 생성 진행 중인 행 — 재클릭 시 새 생성 대신 진행 모달
+  const _runId = crSchedRunning[r._id];
+  if (_runId) {
+    return `<button class="btn" onclick="openProgressModal('${_runId}')" style="font-size:10px;padding:3px 8px;background:#0d47a1;color:#fff">⏳ 진행 보기</button>
+            <button class="btn btn-sec" onclick="crCancelSchedRun('${r._id}','${_runId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">🗑 삭제</button>`;
+  }
   return `<button class="btn btn-sec" onclick="openCrScheduleEdit('${r._id}')" style="font-size:10px;padding:3px 8px">✏ 수정</button>
-          <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>
+          <button class="btn" onclick="openCrPersonaPreview('${r.topicSlug}','${r._id}','${r.date}')" style="font-size:10px;padding:3px 8px;background:#1976D2">지금 생성</button>
           <button class="btn btn-sec" onclick="crDeleteCompletely({scheduleId:'${r._id}',label:'${r.topicSlug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">🗑 삭제</button>`;
+}
+
+// [v6.4] 진행중 행의 생성 취소: 보고서 완전삭제 + 추적 해제
+async function crCancelSchedRun(schedId, reportId, label) {
+  try { await crDeleteCompletely({ reportId, label }); } catch (e) {}
+  delete crSchedRunning[schedId];
+  crSaveSchedRunning();
+  if (typeof crRenderSchedule === 'function') crRenderSchedule();
 }
 
 // ─── 필터 변경 ──────────────────────────────────────────────────────
@@ -10567,6 +10591,7 @@ function onCrCardClick(slug) {
   if (!topic) return;
 
   if (state.status === 'pending') {
+    crCurrentScheduleId = null; crCurrentScheduleDate = null; // 풀 카드 컨텍스트
     openPersonaPreview(slug);
   } else if (state.status === 'running') {
     openProgressModal(state.reportId);
@@ -10713,7 +10738,8 @@ async function startCaseReportGeneration() {
       body: JSON.stringify({
         topicSlug: crCurrentSlug,
         clientType: crCurrentClientType,
-        scheduledDate: new Date().toISOString().substring(0, 10),
+        scheduledDate: crCurrentScheduleDate || new Date().toISOString().substring(0, 10),
+        scheduleId: crCurrentScheduleId || undefined,
         persona: crCurrentPersona,   // ★ 미리 본 페르소나 그대로 전달 (없으면 서버가 새로 생성)
       })
     });
@@ -10722,6 +10748,13 @@ async function startCaseReportGeneration() {
     if (!data.reportId) throw new Error('reportId 없음');
 
     crCurrentReportId = data.reportId;
+
+    // [v6.4] 일정 행 발 생성이면 해당 행을 '진행중'으로 추적 (새로고침에도 유지)
+    if (crCurrentScheduleId) {
+      crSchedRunning[crCurrentScheduleId] = data.reportId;
+      crSaveSchedRunning();
+      if (typeof crRenderSchedule === 'function') crRenderSchedule();
+    }
 
     // 생성 전 지정한 제목 적용 (기본 라벨과 다르고 5~80자일 때만)
     // caseReportUpdateBody 는 재생성 플래그가 없으면 status 를 건드리지 않으므로 진행 중 파이프라인에 무해
@@ -10934,10 +10967,13 @@ async function openCrManageModal(reportId, slug) {
 }
 
 // 페르소나 미리보기 (테이블 액션) — 기존 openCrPersonaPreview 와 동일
-async function openCrPersonaPreview(slug) {
-  // v6.1 v2: 기존 카드 클릭 핸들러(onCrCardClick)로 위임 — 페르소나 미리보기 모달 열림
-  if (typeof onCrCardClick === 'function') return onCrCardClick(slug);
+async function openCrPersonaPreview(slug, scheduleId, scheduleDate) {
+  // [v6.4] 일정 행에서 호출 시 해당 회차 날짜·ID를 생성 요청에 연결 (풀에서 호출 시 자동 해제)
+  crCurrentScheduleId = scheduleId || null;
+  crCurrentScheduleDate = scheduleDate || null;
+  // 일정 행/신규 버튼의 의도는 항상 '새 보고서 생성' → 카드 상태 라우팅 없이 바로 미리보기
   if (typeof openPersonaPreview === 'function') return openPersonaPreview(slug);
+  if (typeof onCrCardClick === 'function') return onCrCardClick(slug);
   toast('페르소나 미리보기 함수 없음 (onCrCardClick 정의 필요)', 'error');
 }
 
