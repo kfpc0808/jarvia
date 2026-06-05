@@ -705,6 +705,21 @@
         <div style="font-size:12px;color:#888;margin-top:8px">[생성] 클릭 시 아래 수동 생성 폼에 제목·트랙이 입력되어 시작됩니다(게시예정일 없음 = 자동 게시 안 됨). 동시 1~2편 권장.</div>
       </div>
 
+      <!-- 연간 편성표 -->
+      <div class="form-box">
+        <h3 style="margin-bottom:12px;font-size:15px;color:#7a1f2b">📅 연간 편성표 — 화=개인(보험/연금 격주) · 수=법인, 게시 전일 11:00 자동 생성</h3>
+        <div class="toolbar" style="margin-bottom:10px">
+          <select id="mg-sch-month" onchange="mgRenderSchedule()" style="padding:6px;font-size:13px">
+            <option value="">전체 기간</option>
+            <option value="2026-06" selected>2026-06</option><option value="2026-07">2026-07</option><option value="2026-08">2026-08</option><option value="2026-09">2026-09</option><option value="2026-10">2026-10</option><option value="2026-11">2026-11</option><option value="2026-12">2026-12</option><option value="2027-01">2027-01</option><option value="2027-02">2027-02</option><option value="2027-03">2027-03</option><option value="2027-04">2027-04</option><option value="2027-05">2027-05</option>
+          </select>
+          <select id="mg-sch-track" onchange="mgRenderSchedule()" style="padding:6px;font-size:13px"><option value="">전체 트랙</option><option value="법인">법인</option><option value="보험">보험</option><option value="연금">연금</option></select>
+          <button class="btn btn-sm" onclick="mgLoadSchedule()">🔄 조회</button>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No</th><th>일자</th><th>요일</th><th>트랙</th><th>제목</th><th>상태</th><th>리포트</th><th>관리</th></tr></thead><tbody id="mg-tb-schedule"><tr><td colspan="8" class="tc" style="color:#999">[🔄 조회] 를 누르면 표시됩니다.</td></tr></tbody></table></div>
+        <div style="font-size:12px;color:#888;margin-top:8px">planned = 전일 11시 자동 생성 대상 · ★선공개 = 오픈일 아카이브 선공개분(자동 생성 제외) · [생성] = 자동을 기다리지 않고 즉시 생성(예정일 08:00 자동 게시는 그대로 작동)</div>
+      </div>
+
       <!-- 수동 생성 -->
       <div class="form-box">
         <h3 style="margin-bottom:12px;font-size:15px;color:#7a1f2b">▶ 수동 생성 (테스트·임의 주제)</h3>
@@ -9850,7 +9865,71 @@ function mgCloseProgress(){
   loadMasterGuides();
 }
 
-window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;
+// ─── 연간 편성표 (master_guide_schedule) ──────────────────────────────
+let _mgSched=[];
+async function mgLoadSchedule(){
+  try{
+    const snap=await getDocs(collection(db,'master_guide_schedule'));
+    _mgSched=snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>((a.scheduledDate||'').localeCompare(b.scheduledDate||''))||((a.order||0)-(b.order||0)));
+    mgRenderSchedule();
+  }catch(e){toast('편성표 로드 실패: '+e.message);console.error(e);}
+}
+
+function mgRenderSchedule(){
+  const tb=$('mg-tb-schedule');if(!tb)return;
+  if(!_mgSched.length){tb.innerHTML='<tr><td colspan="8" class="tc" style="color:#999">편성 데이터가 없습니다 — seedMasterGuideSchedule.js 투입 후 [🔄 조회].</td></tr>';return;}
+  const ym=$('mg-sch-month').value,tr=$('mg-sch-track').value;
+  const wk=['일','월','화','수','목','금','토'];
+  const list=_mgSched.filter(s=>(!ym||s.ym===ym)&&(!tr||s.track===tr));
+  tb.innerHTML=list.length?list.map(s=>{
+    const d=new Date((s.scheduledDate||'1970-01-01')+'T00:00:00+09:00');
+    const stMap={planned:'<span style="color:#888">planned</span>',queued:'<span style="color:#9a7b2d;font-weight:700">queued</span>',showcase:'<span style="color:#7a1f2b;font-weight:700">★선공개</span>',done:'<span style="color:#1565C0">완료(수동)</span>'};
+    let live='';
+    if(s.reportId){
+      const pub=_mgPub.find(g=>g._id===s.reportId);
+      const up=_mgUp.find(g=>g._id===s.reportId);
+      if(pub)live='<span style="color:#1565C0;font-weight:700">published</span>';
+      else if(up)live=up.status==='ready'?'<span style="color:#1a7a4a;font-weight:700">ready</span>':up.status==='error'?'<span style="color:#C62828;font-weight:700">error</span>':`<a href="javascript:void(0)" onclick="mgShowProgress('${s.reportId}')" style="color:#9a7b2d;font-weight:700;text-decoration:underline">생성중 ${up.progress||0}%</a>`;
+    }
+    const rpt=s.reportId?(live||'<span style="color:#999;font-size:11px">'+esc(s.reportId.slice(0,10))+'…</span>'):'-';
+    const act=[`<button class="btn btn-sm" onclick="mgSchedEdit('${s._id}','title')">제목</button>`,`<button class="btn btn-sm" onclick="mgSchedEdit('${s._id}','date')">일자</button>`];
+    if(s.status==='planned')act.push(`<button class="btn btn-sm" style="background:#7a1f2b" onclick="mgSchedGenerate('${s._id}')">생성</button>`);
+    return `<tr><td>${s.order||'-'}</td><td>${esc(s.scheduledDate||'-')}</td><td>${wk[d.getDay()]}</td><td>${esc(s.track||'-')}</td><td class="ov" style="max-width:300px">${s.star?'★ ':''}${esc(s.title||'')}</td><td>${stMap[s.status]||esc(s.status||'-')}</td><td>${rpt}</td><td style="white-space:nowrap">${act.join(' ')}</td></tr>`;
+  }).join(''):'<tr><td colspan="8" class="tc">해당 조건의 편성이 없습니다.</td></tr>';
+}
+
+async function mgSchedGenerate(id){
+  const s=_mgSched.find(x=>x._id===id);if(!s)return;
+  if(!confirm(`이 편성분을 지금 생성할까요?\n\n${s.scheduledDate} [${s.track}] ${s.title}\n\n약 40~70분 소요, AI API 비용이 발생합니다.\n생성 완료 후 게시예정일 08:00에 자동 게시됩니다.`))return;
+  try{
+    const res=await fetch(MG_BASE+'/mgTriggerOne',{method:'POST',headers:{'Content-Type':'application/json','x-bridge-secret':MG_API_KEY},body:JSON.stringify({title:s.title,track:s.track,scheduledDate:s.scheduledDate,playbook:s.playbook||undefined,background:s.background||undefined})});
+    const j=await res.json();
+    if(!j.ok)throw new Error(j.error||'실패');
+    await updateDoc(doc(db,'master_guide_schedule',id),{status:'queued',reportId:j.reportId,queuedAt:serverTimestamp()});
+    toast('생성 큐 투입: '+j.reportId);
+    setTimeout(()=>{loadMasterGuides();mgLoadSchedule();},1500);
+  }catch(e){toast('생성 실패: '+e.message);}
+}
+
+async function mgSchedEdit(id,kind){
+  const s=_mgSched.find(x=>x._id===id);if(!s)return;
+  if(kind==='title'){
+    const nt=prompt('새 제목을 입력하세요:',s.title||'');
+    if(nt===null)return;
+    const t=nt.trim();
+    if(!t){toast('제목이 비어 있습니다');return;}
+    if(t===(s.title||''))return;
+    try{await updateDoc(doc(db,'master_guide_schedule',id),{title:t,updatedAt:serverTimestamp()});toast('제목 수정 완료');mgLoadSchedule();}catch(e){toast('수정 실패: '+e.message);}
+  }else{
+    const nd=prompt('새 게시예정일 (YYYY-MM-DD):',s.scheduledDate||'');
+    if(nd===null)return;
+    const v=nd.trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){toast('YYYY-MM-DD 형식으로 입력하세요');return;}
+    try{await updateDoc(doc(db,'master_guide_schedule',id),{scheduledDate:v,ym:v.slice(0,7),updatedAt:serverTimestamp()});toast('일자 수정 완료');mgLoadSchedule();}catch(e){toast('수정 실패: '+e.message);}
+  }
+}
+
+window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;
 
 // ─── API 인증·URL (자비아 패턴 — URL 쿼리 ?key=) ──────────────────────
 // CR_API_KEY 는 자비아 functions/.env 의 process.env.CR_API_KEY 와 동일 값
