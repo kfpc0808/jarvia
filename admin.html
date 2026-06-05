@@ -733,13 +733,12 @@
         <div style="font-size:12px;color:#888;margin-top:10px;line-height:1.6">생성에는 40~70분이 걸립니다(8단계 파이프라인 자동 진행). [🔄 새로고침]으로 진행률을 확인하세요.<br>게시예정일을 비우면 자동 게시되지 않습니다(테스트에 적합). ready 상태가 되면 [게시] 버튼으로 즉시 게시할 수 있습니다.</div>
       </div>
 
-      <!-- 생성·진행 목록 -->
-      <div class="toolbar" style="margin-top:24px"><strong style="font-size:14px">생성·진행 목록</strong><button class="btn btn-sm" onclick="loadMasterGuides()">🔄 새로고침</button></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No</th><th>제목</th><th>트랙</th><th>상태</th><th>진행</th><th>게시예정</th><th>생성일</th><th>산출물</th><th>관리</th></tr></thead><tbody id="mg-tb-upcoming"></tbody></table></div>
-
-      <!-- 게시본 -->
-      <div class="toolbar" style="margin-top:28px"><strong style="font-size:14px">게시본 (메인·아카이브 노출분)</strong></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No</th><th>제목</th><th>트랙</th><th>게시일</th><th>조회수</th><th>오디오</th><th>관리</th></tr></thead><tbody id="mg-tb-published"></tbody></table></div>
+      <!-- 마스터가이드 통합 목록 (생성·진행 + 게시 상태 병합 — 클로징 스타일) -->
+      <div class="toolbar" style="margin-top:24px"><strong style="font-size:14px">마스터가이드 목록</strong><button class="btn btn-sm" onclick="loadMasterGuides()">🔄 새로고침</button></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No</th><th>제목</th><th>트랙</th><th>상태</th><th>진행</th><th>게시예정</th><th>게시일</th><th>조회수</th><th>산출물</th><th>관리</th></tr></thead><tbody id="mg-tb-upcoming"></tbody></table></div>
+      <input type="file" id="mg-html-file" accept=".html,text/html" onchange="handleMgHtmlUpload()" style="display:none">
+      <input type="file" id="mg-pdf-file" accept=".pdf,application/pdf" onchange="handleMgPdfUpload()" style="display:none">
+      <div style="font-size:12px;color:#888;margin-top:8px;line-height:1.6">📄 HTML 교체: 담당자가 수정한 HTML 업로드 → 교체 직후 [PDF 재생성]을 함께 실행하면 수정본 그대로 PDF 가 다시 만들어집니다(HTML=PDF 동일 유지).<br>📑 PDF 교체: 별도 PDF 를 직접 올릴 때만 사용 — HTML 과 어긋날 수 있으니 가급적 [PDF 재생성]을 권장합니다.</div>
     </div>
 
     <div id="p-case-report" class="panel hidden">
@@ -9659,26 +9658,40 @@ async function loadMasterGuides(){
   try{
     const upSnap=await getDocs(collection(db,'upcoming_master_guides'));
     _mgUp=upSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>((b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0)-(a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0)));
-    const tb=$('mg-tb-upcoming');
-    tb.innerHTML=_mgUp.length?_mgUp.map((g,i)=>{
-      const st=g.status||'';
-      const stHtml=st==='error'?`<span style="color:#C62828;font-weight:700">error</span><div style="font-size:11px;color:#C62828;max-width:220px;white-space:normal">${esc(g.error||'')}</div>`
-        :st==='ready'?'<span style="color:#1a7a4a;font-weight:700">ready</span>'
-        :st==='published'?'<span style="color:#1565C0;font-weight:700">published</span>'
-        :esc(st);
-      const outs=[(g.step5&&g.step5.htmlUrl)?`<a href="${g.step5.htmlUrl}" target="_blank">HTML</a>`:'',(g.step5&&g.step5.pdfUrl)?`<a href="${g.step5.pdfUrl}" target="_blank">PDF</a>`:'',(g.step6&&g.step6.audioScriptUrl)?`<a href="${g.step6.audioScriptUrl}" target="_blank">원고</a>`:''].filter(Boolean).join(' · ')||'-';
-      return `<tr><td>${i+1}</td><td class="ov" style="max-width:260px">${esc(g.title||'')}</td><td>${esc(g.track||'-')}</td><td>${stHtml}</td><td><a href="javascript:void(0)" onclick="mgShowProgress('${g._id}')" style="font-weight:700;text-decoration:underline">${g.progress||0}%</a></td><td>${g.scheduledDate||'-'}</td><td>${fdate(g.createdAt)}</td><td style="white-space:nowrap">${outs}</td>
-        <td style="white-space:nowrap">
-          <select id="mg-step-${g._id}" style="padding:4px;font-size:12px"><option value="step1">전체(step1)</option><option value="step2">본문(step2)</option><option value="step4">다듬기(step4)</option><option value="step5" selected>HTML(step5)</option><option value="step6">오디오원고(step6)</option></select>
-          <button class="btn btn-sm" onclick="mgRetryStep('${g._id}')">재시도</button>
-          ${st==='ready'?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="mgPublishNowAdm('${g._id}')">게시</button>`:''}
-          <button class="btn btn-sm" onclick="mgEditTitle('up','${g._id}')">제목수정</button>
-          <button class="btn btn-sm" style="background:#C62828" onclick="mgDelete('up','${g._id}')">삭제</button>
-        </td></tr>`;}).join(''):'<tr><td colspan="9" class="tc">생성된 마스터가이드가 없습니다.</td></tr>';
-
     const pubSnap=await getDocs(collection(db,'master_guides'));
     _mgPub=pubSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>((b.publishedAt&&b.publishedAt.toMillis?b.publishedAt.toMillis():0)-(a.publishedAt&&a.publishedAt.toMillis?a.publishedAt.toMillis():0)));
-    $('mg-tb-published').innerHTML=_mgPub.length?_mgPub.map((g,i)=>`<tr><td>${i+1}</td><td class="ov" style="max-width:280px">${esc(g.title||'')}</td><td>${esc(g.track||'-')}</td><td>${fdate(g.publishedAt)}</td><td>${g.viewCount||0}</td><td>${(g.step6&&g.step6.audioMp3Url)?'🎧 등록됨':'-'}</td><td style="white-space:nowrap">${(g.step5&&g.step5.htmlUrl)?`<a class="btn btn-sm" href="${g.step5.htmlUrl}" target="_blank">HTML</a> `:''}<button class="btn btn-sm" onclick="mgRegisterAudio('${g._id}')">오디오등록</button> <button class="btn btn-sm" onclick="mgEditTitle('pub','${g._id}')">제목수정</button> <button class="btn btn-sm" style="background:#C62828" onclick="mgDelete('pub','${g._id}')">삭제</button></td></tr>`).join(''):'<tr><td colspan="7" class="tc">게시본이 없습니다.</td></tr>';
+    const pubMap=new Map(_mgPub.map(p=>[p._id,p]));
+    // 통합 행: upcoming 기준 + 게시 정보 병합. 게시본에만 남은 고아 문서도 함께 표시.
+    const upIds=new Set(_mgUp.map(g=>g._id));
+    const rows=_mgUp.map(g=>({g,pub:pubMap.get(g._id)||null,orphan:false}))
+      .concat(_mgPub.filter(p=>!upIds.has(p._id)).map(p=>({g:p,pub:p,orphan:true})));
+    const tb=$('mg-tb-upcoming');
+    tb.innerHTML=rows.length?rows.map((row,i)=>{
+      const g=row.g,pub=row.pub,orphan=row.orphan;
+      const st=orphan?'published':(g.status||'');
+      const isPub=!!pub;
+      const stHtml=st==='error'?`<span style="color:#C62828;font-weight:700">error</span><div style="font-size:11px;color:#C62828;max-width:220px;white-space:normal">${esc(g.error||'')}</div>`
+        :st==='ready'?'<span style="color:#1a7a4a;font-weight:700">ready</span>'
+        :st==='published'?`<span style="color:#1565C0;font-weight:700">published</span>${orphan?'<div style="font-size:11px;color:#8B6914">게시본만 존재</div>':''}`
+        :esc(st);
+      const hasHtml=!!(g.step5&&g.step5.htmlUrl),hasPdf=!!(g.step5&&g.step5.pdfUrl);
+      const outs=[hasHtml?`<a href="${g.step5.htmlUrl}" target="_blank">HTML</a>`:'',hasPdf?`<a href="${g.step5.pdfUrl}" target="_blank">PDF</a>`:'',(g.step6&&g.step6.audioScriptUrl)?`<a href="${g.step6.audioScriptUrl}" target="_blank">원고</a>`:'',(g.step6&&g.step6.audioMp3Url)?'🎧':''].filter(Boolean).join(' · ')||'-';
+      const ctl=orphan
+        ?`<button class="btn btn-sm" onclick="mgRegisterAudio('${g._id}')">오디오등록</button>
+          <button class="btn btn-sm" onclick="mgEditTitle('pub','${g._id}')">제목수정</button>
+          <button class="btn btn-sm" style="background:#C62828" onclick="mgDelete('pub','${g._id}')">삭제</button>`
+        :`<select id="mg-step-${g._id}" style="padding:4px;font-size:12px"><option value="step1">전체(step1)</option><option value="step2">본문(step2)</option><option value="step4">다듬기(step4)</option><option value="step5" selected>HTML(step5)</option><option value="step6">오디오원고(step6)</option></select>
+          <button class="btn btn-sm" onclick="mgRetryStep('${g._id}')">재시도</button>
+          ${st==='ready'?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="mgPublishNowAdm('${g._id}')">게시</button>`:''}
+          ${hasHtml?`<button class="btn btn-sm" style="background:#0369a1" onclick="mgRowUploadHtml('${g._id}')">📄 HTML 교체</button>`:''}
+          ${hasHtml?`<button class="btn btn-sm" style="background:#7a1f2b" onclick="mgRebuildPdfAdm('${g._id}')">🔁 PDF 재생성</button>`:''}
+          ${hasHtml?`<button class="btn btn-sm" style="background:#b91c1c" onclick="mgRowUploadPdf('${g._id}')">${hasPdf?'📑 PDF 교체':'📑 PDF 업로드'}</button>`:''}
+          ${isPub||st==='published'?`<button class="btn btn-sm" onclick="mgRegisterAudio('${g._id}')">오디오등록</button>`:''}
+          <button class="btn btn-sm" onclick="mgEditTitle('up','${g._id}')">제목수정</button>
+          ${isPub?`<button class="btn btn-sm" style="background:#8B6914" onclick="mgDelete('pub','${g._id}')">게시내리기</button>`:''}
+          <button class="btn btn-sm" style="background:#C62828" onclick="mgDelete('up','${g._id}')">삭제</button>`;
+      return `<tr><td>${i+1}</td><td class="ov" style="max-width:240px">${esc(g.title||'')}</td><td>${esc(g.track||'-')}</td><td>${stHtml}</td><td>${orphan?'-':`<a href="javascript:void(0)" onclick="mgShowProgress('${g._id}')" style="font-weight:700;text-decoration:underline">${g.progress||0}%</a>`}</td><td>${g.scheduledDate||'-'}</td><td>${pub?fdate(pub.publishedAt):'-'}</td><td>${pub?(pub.viewCount||0):'-'}</td><td style="white-space:nowrap">${outs}</td>
+        <td style="max-width:340px">${ctl}</td></tr>`;}).join(''):'<tr><td colspan="10" class="tc">생성된 마스터가이드가 없습니다.</td></tr>';
     mgRenderShowcase();
   }catch(e){toast('마스터가이드 로드 실패: '+e.message);console.error(e);}
 }
@@ -9720,6 +9733,65 @@ async function mgRegisterAudio(id){
     const res=await fetch(MG_BASE+'/mgSetAudioUrl',{method:'POST',headers:{'Content-Type':'application/json','x-bridge-secret':MG_API_KEY},body:JSON.stringify({reportId:id,audioUrl:url.trim()})});
     const j=await res.json();toast(j.ok?'오디오 등록 완료':'실패: '+(j.error||''));setTimeout(loadMasterGuides,800);
   }catch(e){toast('실패: '+e.message);}
+}
+
+// ─── ★ HTML/PDF 교체 업로드 (담당자 수정본 → Storage 리비전 업로드 → 양쪽 컬렉션 URL 교체) ───
+//     클로징(crRowUpload*) 패턴 이식. 기존 파일은 보존(리비전 파일명)하므로 롤백 가능.
+let _mgUploadId=null;
+function mgRowUploadHtml(id){
+  _mgUploadId=id;
+  const inp=document.getElementById('mg-html-file');
+  if(!inp){toast('업로드 입력을 찾을 수 없습니다','error');return;}
+  inp.value='';toast('수정한 HTML 파일을 선택하세요','info');inp.click();
+}
+function mgRowUploadPdf(id){
+  _mgUploadId=id;
+  const inp=document.getElementById('mg-pdf-file');
+  if(!inp){toast('업로드 입력을 찾을 수 없습니다','error');return;}
+  inp.value='';toast('수정한 PDF 파일을 선택하세요','info');inp.click();
+}
+async function handleMgFileUpload(fileType){
+  const inpId=fileType==='html'?'mg-html-file':'mg-pdf-file';
+  const file=document.getElementById(inpId).files[0];
+  if(!file)return;
+  if(!_mgUploadId){toast('가이드를 먼저 선택하세요','error');return;}
+  const id=_mgUploadId,label=fileType.toUpperCase();
+  const ext=fileType==='html'?'html':'pdf';
+  const ct=fileType==='html'?'text/html; charset=utf-8':'application/pdf';
+  const path=`upcoming_master_guides/${id}/${id}_rev${Date.now()}.${ext}`;
+  try{
+    toast(`⏳ ${label} 업로드 중...`,'info');
+    const meta={contentType:ct};
+    if(fileType==='pdf')meta.contentDisposition=`attachment; filename="master-guide-${id}.pdf"`;
+    const task=uploadBytesResumable(stRef(storage,path),file,meta);
+    task.on('state_changed',null,(err)=>{toast(`${label} 업로드 실패: `+err.message,'error');},async()=>{
+      try{
+        const url=await getDownloadURL(task.snapshot.ref);
+        const patch=fileType==='html'
+          ?{'step5.htmlUrl':url,'step5.htmlPath':path,updatedAt:serverTimestamp()}
+          :{'step5.pdfUrl':url,'step5.pdfPath':path,updatedAt:serverTimestamp()};
+        await updateDoc(doc(db,'upcoming_master_guides',id),patch);
+        try{await updateDoc(doc(db,'master_guides',id),fileType==='html'?{'step5.htmlUrl':url,'step5.htmlPath':path}:{'step5.pdfUrl':url,'step5.pdfPath':path});}catch(e2){/* 미게시 — 무시 */}
+        toast(`✅ ${label} 교체 완료!`,'success');
+        loadMasterGuides();
+        if(fileType==='html'&&confirm('교체한 HTML 그대로 PDF 를 재생성할까요?\n(권장 — HTML 과 PDF 가 동일하게 유지됩니다. 약 1~2분 소요)')){mgRebuildPdfAdm(id);}
+      }catch(e3){toast(`⚠ ${label} 교체 실패: `+e3.message,'error');}
+    });
+  }catch(err){toast('❌ '+err.message,'error');}
+}
+function handleMgHtmlUpload(){handleMgFileUpload('html');}
+function handleMgPdfUpload(){handleMgFileUpload('pdf');}
+
+// ─── ★ PDF 재생성 — 현재 step5.htmlUrl 의 HTML 을 그대로 캡처해 PDF·발행본 재제작 (수정분 보존) ───
+async function mgRebuildPdfAdm(id){
+  if(!confirm('현재 HTML 기준으로 PDF 와 발행본을 다시 만들까요?\n(Sonnet 재생성 없음 — 담당자 수정분 보존, 약 1~2분 소요)'))return;
+  toast('⏳ PDF 재생성 중... (약 1~2분, 완료 후 자동 새로고침)','info');
+  try{
+    const res=await fetch(MG_BASE+'/mgRebuildPdf',{method:'POST',headers:{'Content-Type':'application/json','x-bridge-secret':MG_API_KEY},body:JSON.stringify({reportId:id})});
+    const j=await res.json();
+    toast(j.ok?`✅ PDF 재생성 완료 (${j.pages}p${j.publishedUpdated?' · 게시본 갱신':''})`:'실패: '+(j.error||''),j.ok?'success':'error');
+    loadMasterGuides();
+  }catch(e){toast('PDF 재생성 실패: '+e.message,'error');}
 }
 
 // ─── ★ 런칭 선공개 10편 (아카이브 초기 재고) ──────────────────────────
@@ -9788,8 +9860,8 @@ async function mgDelete(kind,id){
   const isPubDoc=kind==='pub';
   const upIsPublished=kind==='up'&&(it.status==='published');
   let msg=`정말 삭제할까요?\n\n제목: ${it.title||''}\n대상: ${isPubDoc?'게시본(master_guides)':'생성·진행 목록(upcoming_master_guides)'}`;
-  if(isPubDoc)msg+='\n\n⚠ 메인·아카이브에서 내려갑니다. 생성·진행 목록의 원본과 산출물 파일은 보존됩니다.';
-  else if(upIsPublished)msg+='\n\n⚠ 이 건은 이미 게시됨 상태입니다. 게시본은 게시본 목록에서 별도로 삭제하세요. 산출물 파일은 보존됩니다.';
+  if(isPubDoc)msg+='\n\n⚠ 메인·아카이브에서 내려갑니다(게시내리기). 원본과 산출물 파일은 보존됩니다.';
+  else if(upIsPublished)msg+='\n\n⚠ 이 건은 게시 중입니다. 먼저 [게시내리기]로 내린 뒤 삭제하는 것을 권장합니다. 산출물 파일은 보존됩니다.';
   else msg+='\n\nStorage의 HTML·PDF·원고 파일도 함께 삭제를 시도합니다. 되돌릴 수 없습니다.';
   if(!confirm(msg))return;
   if((isPubDoc||upIsPublished)&&!confirm('한 번 더 확인합니다. 삭제할까요?'))return;
@@ -9929,7 +10001,7 @@ async function mgSchedEdit(id,kind){
   }
 }
 
-window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;
+window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;window.mgRowUploadHtml=mgRowUploadHtml;window.mgRowUploadPdf=mgRowUploadPdf;window.handleMgHtmlUpload=handleMgHtmlUpload;window.handleMgPdfUpload=handleMgPdfUpload;window.mgRebuildPdfAdm=mgRebuildPdfAdm;
 
 // ─── API 인증·URL (자비아 패턴 — URL 쿼리 ?key=) ──────────────────────
 // CR_API_KEY 는 자비아 functions/.env 의 process.env.CR_API_KEY 와 동일 값
