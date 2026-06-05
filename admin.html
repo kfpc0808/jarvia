@@ -715,6 +715,7 @@
           </select>
           <select id="mg-sch-track" onchange="mgRenderSchedule()" style="padding:6px;font-size:13px"><option value="">전체 트랙</option><option value="법인">법인</option><option value="보험">보험</option><option value="연금">연금</option></select>
           <button class="btn btn-sm" onclick="mgLoadSchedule()">🔄 조회</button>
+          <button class="btn btn-sm" style="background:#7a1f2b" onclick="mgSchedAdd()">➕ 편성 추가</button>
         </div>
         <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No</th><th>일자</th><th>요일</th><th>트랙</th><th>제목</th><th>상태</th><th>리포트</th><th>관리</th></tr></thead><tbody id="mg-tb-schedule"><tr><td colspan="8" class="tc" style="color:#999">[🔄 조회] 를 누르면 표시됩니다.</td></tr></tbody></table></div>
         <div style="font-size:12px;color:#888;margin-top:8px">planned = 전일 11시 자동 생성 대상 · ★선공개 = 오픈일 아카이브 선공개분(자동 생성 제외) · [생성] = 자동을 기다리지 않고 즉시 생성(예정일 08:00 자동 게시는 그대로 작동)</div>
@@ -9693,6 +9694,7 @@ async function loadMasterGuides(){
       return `<tr><td>${i+1}</td><td class="ov" style="max-width:240px">${esc(g.title||'')}</td><td>${esc(g.track||'-')}</td><td>${stHtml}</td><td>${orphan?'-':`<a href="javascript:void(0)" onclick="mgShowProgress('${g._id}')" style="font-weight:700;text-decoration:underline">${g.progress||0}%</a>`}</td><td>${g.scheduledDate||'-'}</td><td>${pub?fdate(pub.publishedAt):'-'}</td><td>${pub?(pub.viewCount||0):'-'}</td><td style="white-space:nowrap">${outs}</td>
         <td style="max-width:340px">${ctl}</td></tr>`;}).join(''):'<tr><td colspan="10" class="tc">생성된 마스터가이드가 없습니다.</td></tr>';
     mgRenderShowcase();
+    mgLoadSchedule(); // 편성표 자동 조회 — [조회] 버튼 없이도 패널 진입 시 표시
   }catch(e){toast('마스터가이드 로드 실패: '+e.message);console.error(e);}
 }
 
@@ -9857,22 +9859,26 @@ async function mgEditTitle(kind,id){
 async function mgDelete(kind,id){
   const list=kind==='up'?_mgUp:_mgPub;
   const it=list.find(g=>g._id===id);if(!it)return;
-  const isPubDoc=kind==='pub';
-  const upIsPublished=kind==='up'&&(it.status==='published');
-  let msg=`정말 삭제할까요?\n\n제목: ${it.title||''}\n대상: ${isPubDoc?'게시본(master_guides)':'생성·진행 목록(upcoming_master_guides)'}`;
-  if(isPubDoc)msg+='\n\n⚠ 메인·아카이브에서 내려갑니다(게시내리기). 원본과 산출물 파일은 보존됩니다.';
-  else if(upIsPublished)msg+='\n\n⚠ 이 건은 게시 중입니다. 먼저 [게시내리기]로 내린 뒤 삭제하는 것을 권장합니다. 산출물 파일은 보존됩니다.';
-  else msg+='\n\nStorage의 HTML·PDF·원고 파일도 함께 삭제를 시도합니다. 되돌릴 수 없습니다.';
+  if(kind==='pub'){
+    // 게시내리기(또는 고아 게시본 삭제) — master_guides 문서만 제거, 원본·파일 보존
+    if(!confirm(`게시본을 내릴까요?\n\n제목: ${it.title||''}\n\n⚠ 메인·아카이브에서 내려갑니다. 원본과 산출물 파일은 보존되어 [게시]로 다시 올릴 수 있습니다.`))return;
+    if(!confirm('한 번 더 확인합니다. 진행할까요?'))return;
+    try{await deleteDoc(doc(db,'master_guides',id));toast('게시 내림 완료');loadMasterGuides();}catch(e){toast('실패: '+e.message);}
+    return;
+  }
+  // 통합 목록 [삭제] = 완전 삭제 — 게시본이 있으면 함께 삭제해 선공개·편성 표가 미생성으로 돌아간다
+  const hasPub=_mgPub.some(g=>g._id===id)||it.status==='published';
+  let msg=`정말 완전 삭제할까요?\n\n제목: ${it.title||''}`;
+  if(hasPub)msg+='\n\n⚠ 게시본(메인·아카이브 노출분)도 함께 삭제되어 즉시 내려가며, 선공개 10편·편성 표 상태가 미생성으로 돌아갑니다.';
+  msg+='\n\nStorage의 HTML·PDF·원고 파일도 함께 삭제를 시도합니다. 되돌릴 수 없습니다.';
   if(!confirm(msg))return;
-  if((isPubDoc||upIsPublished)&&!confirm('한 번 더 확인합니다. 삭제할까요?'))return;
+  if(hasPub&&!confirm('한 번 더 확인합니다. 게시본까지 완전 삭제할까요?'))return;
   try{
-    // 미게시 upcoming 삭제 시에만 산출물 파일 best-effort 삭제 (게시본이 참조 중이면 보존)
-    if(kind==='up'&&!upIsPublished){
-      const urls=[it.step5&&it.step5.htmlUrl,it.step5&&it.step5.pdfUrl,it.step6&&it.step6.audioScriptUrl,it.step6&&it.step6.audioMp3Url].filter(Boolean);
-      for(const u of urls){try{await deleteObject(stRef(storage,u));}catch(e2){console.warn('Storage 파일 삭제 실패(무시):',e2.message);}}
-    }
-    await deleteDoc(doc(db,isPubDoc?'master_guides':'upcoming_master_guides',id));
-    toast('삭제 완료');loadMasterGuides();
+    try{await deleteDoc(doc(db,'master_guides',id));}catch(e2){/* 게시본 없음 — 무시 */}
+    const urls=[it.step5&&it.step5.htmlUrl,it.step5&&it.step5.pdfUrl,it.step6&&it.step6.audioScriptUrl,it.step6&&it.step6.audioMp3Url].filter(Boolean);
+    for(const u of urls){try{await deleteObject(stRef(storage,u));}catch(e2){console.warn('Storage 파일 삭제 실패(무시):',e2.message);}}
+    await deleteDoc(doc(db,'upcoming_master_guides',id));
+    toast('완전 삭제 완료');loadMasterGuides();
   }catch(e){toast('삭제 실패: '+e.message);}
 }
 
@@ -9947,9 +9953,32 @@ async function mgLoadSchedule(){
   }catch(e){toast('편성표 로드 실패: '+e.message);console.error(e);}
 }
 
+// ─── ★ 편성 직접 추가 — seed 스크립트 없이 admin 에서 연간 편성을 등록 ───
+async function mgSchedAdd(){
+  const date=prompt('게시 예정일을 입력하세요 (YYYY-MM-DD):','');
+  if(date===null)return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date.trim())){toast('날짜 형식이 올바르지 않습니다 (예: 2026-06-10)');return;}
+  const track=prompt('트랙을 입력하세요 (법인 / 보험 / 연금):','법인');
+  if(track===null)return;
+  if(!['법인','보험','연금'].includes(track.trim())){toast('트랙은 법인·보험·연금 중 하나여야 합니다');return;}
+  const title=prompt('마스터가이드 제목을 입력하세요:','');
+  if(title===null||!title.trim()){if(title!==null)toast('제목이 비어 있습니다');return;}
+  const star=confirm('선공개(★) 분으로 등록할까요?\n(확인=선공개: 자동 생성 제외 · 취소=일반 planned: 전일 11시 자동 생성)');
+  const d=date.trim();
+  const order=(_mgSched.reduce((m,s)=>Math.max(m,s.order||0),0))+1;
+  try{
+    await setDoc(doc(collection(db,'master_guide_schedule')),{
+      order,scheduledDate:d,ym:d.slice(0,7),track:track.trim(),title:title.trim(),
+      status:star?'showcase':'planned',star,
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
+    });
+    toast('편성 추가 완료');mgLoadSchedule();
+  }catch(e){toast('편성 추가 실패: '+e.message);}
+}
+
 function mgRenderSchedule(){
   const tb=$('mg-tb-schedule');if(!tb)return;
-  if(!_mgSched.length){tb.innerHTML='<tr><td colspan="8" class="tc" style="color:#999">편성 데이터가 없습니다 — seedMasterGuideSchedule.js 투입 후 [🔄 조회].</td></tr>';return;}
+  if(!_mgSched.length){tb.innerHTML='<tr><td colspan="8" class="tc" style="color:#999">편성 데이터가 없습니다 — [➕ 편성 추가]로 직접 등록하거나 seedMasterGuideSchedule.js 투입 후 [🔄 조회].</td></tr>';return;}
   const ym=$('mg-sch-month').value,tr=$('mg-sch-track').value;
   const wk=['일','월','화','수','목','금','토'];
   const list=_mgSched.filter(s=>(!ym||s.ym===ym)&&(!tr||s.track===tr));
@@ -10001,7 +10030,7 @@ async function mgSchedEdit(id,kind){
   }
 }
 
-window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;window.mgRowUploadHtml=mgRowUploadHtml;window.mgRowUploadPdf=mgRowUploadPdf;window.handleMgHtmlUpload=handleMgHtmlUpload;window.handleMgPdfUpload=handleMgPdfUpload;window.mgRebuildPdfAdm=mgRebuildPdfAdm;
+window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;window.mgRowUploadHtml=mgRowUploadHtml;window.mgRowUploadPdf=mgRowUploadPdf;window.handleMgHtmlUpload=handleMgHtmlUpload;window.handleMgPdfUpload=handleMgPdfUpload;window.mgRebuildPdfAdm=mgRebuildPdfAdm;window.mgSchedAdd=mgSchedAdd;
 
 // ─── API 인증·URL (자비아 패턴 — URL 쿼리 ?key=) ──────────────────────
 // CR_API_KEY 는 자비아 functions/.env 의 process.env.CR_API_KEY 와 동일 값
