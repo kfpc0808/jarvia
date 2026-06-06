@@ -394,6 +394,33 @@ h2{font-size:27px}
     },120);
   }
 
+  /* ── 나레이션 오디오 (mp3 우선) ──
+     같은 경로의 self-diagnosis-1.mp3 ~ -6.mp3 를 장면 순서대로 재생.
+     파일이 없거나 재생 실패 시 → 브라우저 TTS 폴백 → 그것도 불가 시 무음 진행 */
+  const AUDIO_BASE='self-diagnosis-';   // 파일명 규칙: self-diagnosis-1.mp3 …
+  const narrAudio=new Audio();
+  narrAudio.preload='auto';
+  let mp3Broken=false;                  // 전 파일 누락 등 환경 단위 실패 시
+
+  function playNarration(idx,text,onDone){
+    if(muted){onDone&&onDone(false);return;}
+    if(mp3Broken){speak(text,onDone);return;}
+    let settled=false;
+    const done=ok=>{if(settled)return;settled=true;
+      narrAudio.onended=narrAudio.onerror=null;
+      onDone&&onDone(ok);};
+    const fallback=()=>{if(settled)return;settled=true;
+      narrAudio.onended=narrAudio.onerror=null;
+      speak(text,onDone);};
+    narrAudio.onended=()=>done(true);
+    narrAudio.onerror=fallback;
+    try{
+      narrAudio.src=AUDIO_BASE+(idx+1)+'.mp3';
+      const p=narrAudio.play();
+      if(p&&p.catch)p.catch(fallback);
+    }catch(e){fallback();}
+  }
+
   /* ── 점 네비 ── */
   scenes.forEach((s,i)=>{
     const d=document.createElement('button');
@@ -434,6 +461,8 @@ h2{font-size:27px}
     gen++; const myGen=gen;
     clearTimeout(timer); clearTimeout(safetyTimer);
     if('speechSynthesis' in window)speechSynthesis.cancel();
+    narrAudio.onended=narrAudio.onerror=null;
+    try{narrAudio.pause();}catch(e){}
 
     if(cur>=0){scenes[cur].classList.remove('active');resetRings(scenes[cur]);}
     cur=i;
@@ -459,7 +488,7 @@ h2{font-size:27px}
     timer=setTimeout(()=>{minDone=true;tryNext();},dur);
 
     if(!speechDone){
-      speak(narr,()=>{
+      playNarration(cur,narr,()=>{
         if(myGen!==gen)return;
         speechDone=true;
         setTimeout(tryNext,900);       // 음성 종료 후 잠깐의 여백
@@ -474,13 +503,15 @@ h2{font-size:27px}
     started=true;
     gate.classList.add('hide');
     if('speechSynthesis' in window){speechSynthesis.cancel();pickVoice();}
-    setTimeout(()=>go(0),550);
+    // 모바일(iOS 등) 오디오 재생 허용을 위해 클릭 제스처 안에서 즉시 시작
+    go(0);
   };
   replayBtn.onclick=()=>{ if(started)go(0); };
   muteBtn.onclick=()=>{
     muted=!muted;
     muteBtn.textContent=muted?'🔇 음소거':'🔊 음성';
     if('speechSynthesis' in window)speechSynthesis.cancel();
+    try{narrAudio.pause();}catch(e){}
     if(started&&cur>=0)go(cur); // 새 설정으로 현재 장면 재시작
   };
 })();
