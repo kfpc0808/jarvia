@@ -361,8 +361,8 @@ h2{font-size:27px}
   const muteBtn=document.getElementById('muteBtn');
   const replayBtn=document.getElementById('replayBtn');
 
-  let cur=-1, timer=null, muted=false, started=false;
-  let koVoice=null;
+  let cur=-1, timer=null, safetyTimer=null, muted=false, started=false, gen=0;
+  let koVoice=null, ttsBroken=false;
 
   /* ── 한국어 음성 선택 ── */
   function pickVoice(){
@@ -375,15 +375,23 @@ h2{font-size:27px}
     speechSynthesis.onvoiceschanged=pickVoice;
   }
 
-  function speak(text,onEnd){
-    if(muted||!('speechSynthesis' in window)){onEnd&&onEnd();return null;}
+  function speak(text,onDone){
+    if(muted||ttsBroken||!('speechSynthesis' in window)){onDone&&onDone(false);return;}
     speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(text);
-    u.lang='ko-KR'; if(koVoice)u.voice=koVoice;
-    u.rate=0.96; u.pitch=1.0;
-    if(onEnd){u.onend=onEnd; u.onerror=onEnd;}
-    speechSynthesis.speak(u);
-    return u;
+    // Chrome 계열: cancel 직후 speak 호출 시 발화가 무시되는 현상 회피
+    setTimeout(()=>{
+      const u=new SpeechSynthesisUtterance(text);
+      u.lang='ko-KR'; if(koVoice)u.voice=koVoice;
+      u.rate=0.96; u.pitch=1.0;
+      let started=false;
+      u.onstart=()=>{started=true;};
+      u.onend=()=>{onDone&&onDone(true);};
+      u.onerror=()=>{
+        if(!started)ttsBroken=true; // 시작도 못 하면 이 환경은 TTS 미지원으로 간주
+        onDone&&onDone(false);
+      };
+      try{speechSynthesis.speak(u);}catch(e){ttsBroken=true;onDone&&onDone(false);}
+    },120);
   }
 
   /* ── 점 네비 ── */
@@ -417,10 +425,14 @@ h2{font-size:27px}
     scene.querySelectorAll('[data-count]').forEach(e=>e.textContent='0');
   }
 
-  /* ── 장면 전환 ── */
+  /* ── 장면 전환 ──
+     이중 게이트: ① 최소 표시시간(data-dur) 경과 + ② 나레이션 종료(또는 실패/음소거)
+     두 조건이 모두 충족되어야 다음 장면으로 넘어간다.
+     → TTS가 실패해도 각 장면은 최소 data-dur 만큼 반드시 표시됨 */
   function go(i,manual){
     if(i>=scenes.length)i=scenes.length-1;
-    clearTimeout(timer);
+    gen++; const myGen=gen;
+    clearTimeout(timer); clearTimeout(safetyTimer);
     if('speechSynthesis' in window)speechSynthesis.cancel();
 
     if(cur>=0){scenes[cur].classList.remove('active');resetRings(scenes[cur]);}
@@ -436,15 +448,24 @@ h2{font-size:27px}
     const narr=sc.dataset.narr||'';
     const isLast=cur===scenes.length-1;
 
-    let spoken=false;
-    const next=()=>{ if(!isLast)go(cur+1); };
+    let minDone=false;
+    let speechDone=muted||ttsBroken||!narr||!('speechSynthesis' in window);
 
-    if(!muted&&narr){
-      speak(narr,()=>{ spoken=true; clearTimeout(timer); timer=setTimeout(next,1200); });
-      // 음성 실패 대비 안전 타이머
-      timer=setTimeout(()=>{if(!spoken)next();},dur+6000);
-    }else{
-      timer=setTimeout(next,dur);
+    const tryNext=()=>{
+      if(myGen!==gen)return;           // 수동 이동 등으로 무효화된 콜백 차단
+      if(minDone&&speechDone&&!isLast)go(cur+1);
+    };
+
+    timer=setTimeout(()=>{minDone=true;tryNext();},dur);
+
+    if(!speechDone){
+      speak(narr,()=>{
+        if(myGen!==gen)return;
+        speechDone=true;
+        setTimeout(tryNext,900);       // 음성 종료 후 잠깐의 여백
+      });
+      // 안전장치: 음성 이벤트가 영영 안 오는 환경 대비
+      safetyTimer=setTimeout(()=>{speechDone=true;tryNext();},dur+15000);
     }
   }
 
@@ -459,12 +480,8 @@ h2{font-size:27px}
   muteBtn.onclick=()=>{
     muted=!muted;
     muteBtn.textContent=muted?'🔇 음소거':'🔊 음성';
-    if(muted&&'speechSynthesis' in window)speechSynthesis.cancel();
-    if(muted&&cur>=0){ // 음소거 시 타이머 기반으로 계속 진행
-      clearTimeout(timer);
-      const dur=+scenes[cur].dataset.dur||8000;
-      if(cur<scenes.length-1)timer=setTimeout(()=>go(cur+1),dur);
-    }
+    if('speechSynthesis' in window)speechSynthesis.cancel();
+    if(started&&cur>=0)go(cur); // 새 설정으로 현재 장면 재시작
   };
 })();
 </script>
