@@ -2048,6 +2048,9 @@ function goPanel(el){
       try{stopMwProgressMonitor?.();}catch(_){}
       try{stopMwAutoRefresh?.();}catch(_){}
     }
+    if(prevActive==='p-master-guide'&&el.dataset.p!=='p-master-guide'){
+      try{stopMgAutoRefresh?.();}catch(_){}
+    }
   }catch(_){}
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
@@ -9713,7 +9716,33 @@ async function loadMasterGuides(){
         <td style="max-width:340px">${ctl}</td></tr>`;}).join(''):'<tr><td colspan="10" class="tc">생성된 마스터가이드가 없습니다.</td></tr>';
     mgRenderShowcase();
     mgLoadSchedule(); // 편성표 자동 조회 — [조회] 버튼 없이도 패널 진입 시 표시
+    mgAutoRefreshSync(); // 진행중 건이 있으면 자동 새로고침 시작, 없으면 중지
   }catch(e){toast('마스터가이드 로드 실패: '+e.message);console.error(e);}
+}
+
+// ─── 진행중 자동 새로고침 (메디컬위클리 startMwAutoRefresh 패턴 이식) ───
+// 생성이 도는 동안 선공개·통합 목록의 "진행중 N%"가 12초마다 갱신된다.
+// 진행중 0건 또는 탭 이탈 시 자동 중지. needs_* 정지 상태는 스스로 변하지 않으므로 폴링 대상에서 제외.
+let _mgAutoRefresh=null;
+function _mgHasActive(){
+  return _mgUp.some(g=>{
+    const st=g.status||'';
+    return st&&st!=='ready'&&st!=='error'&&st!=='published'&&!st.startsWith('needs_');
+  });
+}
+function stopMgAutoRefresh(){if(_mgAutoRefresh){clearInterval(_mgAutoRefresh);_mgAutoRefresh=null;}}
+function mgAutoRefreshSync(){
+  const panel=$('p-master-guide');
+  const visible=panel&&!panel.classList.contains('hidden');
+  if(visible&&_mgHasActive()){
+    if(!_mgAutoRefresh)_mgAutoRefresh=setInterval(()=>{
+      const p=$('p-master-guide');
+      if(!p||p.classList.contains('hidden')){stopMgAutoRefresh();return;} // 탭 이탈 안전망
+      loadMasterGuides(); // 재호출 끝에서 mgAutoRefreshSync가 다시 판단 — 완주 시 자동 중지
+    },12000);
+  }else{
+    stopMgAutoRefresh();
+  }
 }
 
 async function mgCreate(){
