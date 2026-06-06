@@ -314,6 +314,7 @@ h2{font-size:26px}
   <div class="controls">
     <div class="dots" id="dots"></div>
     <div class="ctl-btns">
+      <button class="ctl" id="pauseBtn">⏸ 정지</button>
       <button class="ctl" id="muteBtn">🔊 음성</button>
       <button class="ctl" id="replayBtn">↺ 처음부터</button>
     </div>
@@ -326,10 +327,12 @@ h2{font-size:26px}
   const dotsBox=document.getElementById('dots');
   const gate=document.getElementById('gate');
   const playBtn=document.getElementById('playBtn');
+  const pauseBtn=document.getElementById('pauseBtn');
   const muteBtn=document.getElementById('muteBtn');
   const replayBtn=document.getElementById('replayBtn');
 
   let cur=-1, timer=null, safetyTimer=null, muted=false, started=false, gen=0;
+  let paused=false, curTryNext=null;
   let koVoice=null, ttsBroken=false;
 
   /* ── 한국어 음성 선택 (TTS 폴백용) ── */
@@ -426,6 +429,8 @@ h2{font-size:26px}
 
     if(cur>=0){scenes[cur].classList.remove('active');resetCounts(scenes[cur]);}
     cur=i;
+    paused=false;
+    if(pauseBtn)pauseBtn.textContent='⏸ 정지';
     const sc=scenes[cur];
     void sc.offsetWidth;
     sc.classList.add('active');
@@ -441,8 +446,10 @@ h2{font-size:26px}
 
     const tryNext=()=>{
       if(myGen!==gen)return;
+      if(paused)return;                 // 일시정지 중에는 전환 보류 (재개 시 재호출됨)
       if(minDone&&speechDone&&!isLast)go(cur+1);
     };
+    curTryNext=tryNext;
 
     timer=setTimeout(()=>{minDone=true;tryNext();},dur);
 
@@ -465,6 +472,19 @@ h2{font-size:26px}
     go(0);
   };
   replayBtn.onclick=()=>{ if(started)go(0); };
+  pauseBtn.onclick=()=>{
+    if(!started)return;
+    paused=!paused;
+    pauseBtn.textContent=paused?'▶ 재개':'⏸ 정지';
+    if(paused){
+      try{narrAudio.pause();}catch(e){}                          // mp3 — 위치 유지한 채 정지
+      if('speechSynthesis' in window)speechSynthesis.pause();    // TTS 폴백 정지
+    }else{
+      if(narrAudio.src&&!narrAudio.ended){narrAudio.play().catch(()=>{});} // mp3 이어 재생
+      if('speechSynthesis' in window)speechSynthesis.resume();
+      if(curTryNext)curTryNext();      // 정지 중 보류된 장면 전환 재시도
+    }
+  };
   muteBtn.onclick=()=>{
     muted=!muted;
     muteBtn.textContent=muted?'🔇 음소거':'🔊 음성';
