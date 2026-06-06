@@ -472,17 +472,31 @@ window.openDetail=async function(cid){
 // ── 결제 게이트 (버튼 클릭 시 결제 후 콘텐츠 열기) ──
 window.archPayAndOpen=async function(cid,action){
   const c=allContents.find(x=>(x.contentId||x.id)===cid);if(!c)return;
+  if(!me){toast('로그인이 필요합니다.');return;}
   const role=meData?.role||'';
-  const isFreeUser=role==='free_user'||role==='user';
-  if(isFreeUser){
-    const pt=meData?.point||0;
-    if(pt<2000){toast('포인트가 부족합니다. 2,000P 필요합니다.');return;}
-    if(!confirm(`병의원 컨설팅 열람 시 2,000P가 차감됩니다.\n현재 포인트: ${pt.toLocaleString()}P\n\n계속하시겠습니까?`))return;
+  /* ★ [2026-06-06] 유료: user·jarvia_report — 2,000원(balance) 차감. free_user 포함 그 외 role 무료 (index 기준 통일) */
+  const isPaidRole=role==='user'||role==='jarvia_report';
+  /* ★ 무료 샘플(최초 1건)은 전 회원 무료 */
+  const _smp=[...allContents].sort((a,b)=>{const at=a.createdAt?.toMillis?a.createdAt.toMillis():0;const bt=b.createdAt?.toMillis?b.createdAt.toMillis():0;return at-bt;});
+  const _isSample=_smp.length>0&&(_smp[0].contentId||_smp[0].id)===cid;
+  if(isPaidRole&&!_isSample){
+    /* ★ 30일 이내 결제 이력 확인 — 재열람 무료 */
+    let _hasValid=false;
     try{
-      await updateDoc(doc(db,'users',me.uid),{point:increment(-2000)});
-      meData.point=pt-2000;
-      await setDoc(doc(db,'view_logs',gid()),{logId:gid(),userId:me.uid,contentId:cid,price:2000,txId:'point',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(new Date(Date.now()+30*24*60*60*1000)),createdAt:serverTimestamp()});
-    }catch(e){toast('처리 중 오류: '+e.message);return;}
+      const _now=Date.now();
+      const _vs=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),where('contentId','==',cid)));
+      _hasValid=_vs.docs.some(d=>{const ex=d.data().expiresAt;return ex&&ex.toMillis&&ex.toMillis()>_now;});
+    }catch(e){}
+    if(!_hasValid){
+      const bal=meData?.balance||0;
+      if(bal<2000){toast('잔액이 부족합니다. 2,000원 필요합니다.');return;}
+      if(!confirm(`병의원 컨설팅 열람 시 2,000원이 차감됩니다.\n현재 잔액: ${bal.toLocaleString()}원\n(결제 후 30일간 재열람 무료)\n\n계속하시겠습니까?`))return;
+      try{
+        await updateDoc(doc(db,'users',me.uid),{balance:increment(-2000)});
+        meData.balance=bal-2000;
+        await setDoc(doc(db,'view_logs',gid()),{logId:gid(),userId:me.uid,contentId:cid,price:2000,txId:'balance',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(new Date(Date.now()+30*24*60*60*1000)),createdAt:serverTimestamp()});
+      }catch(e){toast('처리 중 오류: '+e.message);return;}
+    }
   }else{
     try{await setDoc(doc(db,'view_logs',gid()),{logId:gid(),userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(new Date(Date.now()+30*24*60*60*1000)),createdAt:serverTimestamp()});}catch(e){}
   }
