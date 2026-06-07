@@ -3946,11 +3946,22 @@ async function loadUpcoming(){
     const _kstNow=new Date(Date.now()+9*3600*1000);
     const _minDate=`${_kstNow.getUTCFullYear()}-${String(_kstNow.getUTCMonth()+1).padStart(2,'0')}-01`;
     const _norm=s=>(s||'').replace(/\s+/g,'').toLowerCase();
+    const _pipeCats=['클로징리포트','마스터가이드','메디컬'];
     const rows=[];const _seen=new Map();
     const pushRow=r=>{
       if(!r.date||r.date<_minDate)return;
-      const k=r.category+'|'+r.date+'|'+_norm(r.title);
-      if(_seen.has(k)){if(r.completed)_seen.get(k).completed=true;return;}
+      /* 파이프라인 콘텐츠: 하루 1편 전제 → 날짜+구분 키로 병합 (토픽·보고서·게시분 문서 간 제목 차이 흡수)
+         그 외(수동 등록 등): 제목 포함 키 (같은 날 같은 카테고리 다건 허용) */
+      const k=_pipeCats.includes(r.category)
+        ? r.category+'|'+r.date+'|'+(r.field||'')
+        : r.category+'|'+r.date+'|'+_norm(r.title);
+      if(_seen.has(k)){
+        const ex=_seen.get(k);
+        if(r.completed)ex.completed=true;
+        if(!ex.title&&r.title)ex.title=r.title;
+        ['video','audio','html','pdf','ppt'].forEach(f=>{if(r[f]&&!ex[f])ex[f]=r[f];});
+        return;
+      }
       _seen.set(k,r);rows.push(r);
     };
 
@@ -3964,7 +3975,7 @@ async function loadUpcoming(){
       const crSnap=await getDocs(collection(db,'upcoming_case_reports'));
       crSnap.docs.forEach(d=>{const c=d.data();const dt=c.scheduledDate||c.date;if(!dt)return;
         const fld=((c.clientType||c.salesType)==='corporate')?'법인':'개인';
-        pushRow({date:dt,category:'클로징리포트',field:fld,title:c.title||c.label||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:c.status==='published'});});
+        pushRow({date:dt,category:'클로징리포트',field:fld,title:c.title||c.label||c.topicLabel||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:c.status==='published'});});
     }catch(e){console.warn('클로징리포트 일정 로드 실패:',e);}
 
     /* ③ 마스터가이드 연간 편성 */
