@@ -3940,15 +3940,61 @@ function _normTitle(s){return(s||'').replace(/^\([^)]*\)/,'').replace(/[_ ]/g,''
 function _groupByTitle(list){const map=new Map();list.forEach(c=>{const k=_normTitle(c.title);if(!map.has(k))map.set(k,[]);map.get(k).push(c);});return[...map.values()].map(arr=>{if(arr.length===1)return arr[0];arr.sort((a,b)=>_fmtPri(a)-_fmtPri(b));const rep=Object.assign({},arr[0]);const fmts=new Set(),subs=new Set();arr.forEach(c=>{if(c.formats&&c.formats.length)c.formats.forEach(f2=>fmts.add(f2));else{const u=((c.url||'').split('/').pop()||'').split('?')[0].toLowerCase();if(u.endsWith('.mp3')||c.type==='audio')fmts.add('audio');else if(u.endsWith('.mp4')||c.type==='video')fmts.add('video');else if(u.endsWith('.pdf'))fmts.add('pdf');else if(u.endsWith('.pptx'))fmts.add('ppt');else fmts.add('html');}if(c.subType)subs.add(c.subType);});rep.formats=[...fmts];if(subs.size>1)rep.subType=[...subs].join('/');return rep;});}
 async function loadUpcoming(){
   try{
+    /* ★ [2026-06-07 개편] 게시예정 통합 — ① upcoming_contents ② 클로징리포트 일정(upcoming_case_reports)
+       ③ 마스터가이드 편성(master_guide_schedule) ④ 당월 게시완료분 보강(contents: 케이스/마스터/메디컬)
+       표시 범위: 당월 1일 이후 전체 (게시완료분은 ✓완료 표시, 익월분은 등록되는 대로 표시) */
+    const _kstNow=new Date(Date.now()+9*3600*1000);
+    const _minDate=`${_kstNow.getUTCFullYear()}-${String(_kstNow.getUTCMonth()+1).padStart(2,'0')}-01`;
+    const _norm=s=>(s||'').replace(/\s+/g,'').toLowerCase();
+    const rows=[];const _seen=new Map();
+    const pushRow=r=>{
+      if(!r.date||r.date<_minDate)return;
+      const k=r.category+'|'+r.date+'|'+_norm(r.title);
+      if(_seen.has(k)){if(r.completed)_seen.get(k).completed=true;return;}
+      _seen.set(k,r);rows.push(r);
+    };
+
+    /* ① upcoming_contents (기존 소스 — AI 초안은 사용자에게 숨김) */
     const snap=await getDocs(query(collection(db,'upcoming_contents'),orderBy('date','asc')));
-    /* ★ AI 초안(ai_draft)은 사용자에게 숨김 — 담당자 검토 후 published 전환 시 표시 */
-    const visibleDocs=snap.docs.filter(d=>{const s=d.data().eduStatus;return s!=='ai_draft';});
-    if(!visibleDocs.length){$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">등록된 예정 콘텐츠가 없습니다.</td></tr>';return;}
+    snap.docs.forEach(d=>{const c=d.data();if(c.eduStatus==='ai_draft')return;
+      pushRow({date:c.date,category:c.category||'',field:c.field||'',title:c.title||'',video:c.video,audio:c.audio,html:c.html,pdf:c.pdf,ppt:c.ppt,completed:c.completed===true});});
+
+    /* ② 클로징리포트 월간 일정 */
+    try{
+      const crSnap=await getDocs(collection(db,'upcoming_case_reports'));
+      crSnap.docs.forEach(d=>{const c=d.data();const dt=c.scheduledDate||c.date;if(!dt)return;
+        const fld=((c.clientType||c.salesType)==='corporate')?'법인':'개인';
+        pushRow({date:dt,category:'클로징리포트',field:fld,title:c.title||c.label||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:c.status==='published'});});
+    }catch(e){console.warn('클로징리포트 일정 로드 실패:',e);}
+
+    /* ③ 마스터가이드 연간 편성 */
+    try{
+      const mgSnap=await getDocs(collection(db,'master_guide_schedule'));
+      mgSnap.docs.forEach(d=>{const c=d.data();if(!c.scheduledDate)return;
+        pushRow({date:c.scheduledDate,category:'마스터가이드',field:c.track||'',title:c.title||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:['published','done','completed'].includes(c.status)});});
+    }catch(e){console.warn('마스터가이드 편성 로드 실패:',e);}
+
+    /* ④ 당월 게시완료분 보강 — 일정 컬렉션에 없어도(수동·비상 생성 포함) ✓완료로 표시 */
+    try{
+      (typeof allContents!=='undefined'?allContents:[]).forEach(c=>{
+        if(!['case_report','master_guide','medical_weekly'].includes(c.type))return;
+        let dt=c.scheduledDate;
+        if(!dt&&c.createdAt){const d2=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);dt=`${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-${String(d2.getDate()).padStart(2,'0')}`;}
+        const cat=c.type==='case_report'?'클로징리포트':c.type==='master_guide'?'마스터가이드':'메디컬';
+        const fmts=c.formats||[];
+        pushRow({date:dt,category:cat,field:c.subType||'',title:c.title||'',
+          video:fmts.includes('video')?'O':'',audio:(c.audioUrl||fmts.includes('audio'))?'O':'',
+          html:(c.url||fmts.includes('html'))?'O':'',pdf:fmts.includes('pdf')?'O':'',ppt:(c.pptUrl||c.pptxUrl||fmts.includes('ppt'))?'O':'',completed:true});
+      });
+    }catch(e){console.warn('게시완료분 보강 실패:',e);}
+
+    rows.sort((a,b)=>((a.date||'').localeCompare(b.date||''))||((a.category||'').localeCompare(b.category||'')));
+    if(!rows.length){$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">등록된 예정 콘텐츠가 없습니다.</td></tr>';return;}
     const ck=v=>v?'<span style="color:#2e86ab;font-weight:700">✓</span>':'';
     const fmtDate=d=>(d||'').replace(/-/g,'.');
-    const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${esc(c)}</span>`;};
-    $('upcoming-tbody').innerHTML=visibleDocs.map((d,i)=>{const c=d.data();const bg=i%2===1?'background:#f8f9fa':'';const done=c.completed===true;const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">&mdash;</td>';return`<tr style="${bg};border-bottom:1px solid #e9ecef"><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center">${esc(c.field||'')}</td><td style="text-align:left">${esc(c.title||'')}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}</tr>`;}).join('');
-  }catch(e){console.error('게시예정 로드 오류:',e);$('upcoming-tbody').innerHTML='<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-lt)">로드 중 오류가 발생했습니다.</td></tr>';}
+    const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910'],'택스컨설팅위클리':['#e3eaf6','#1a3a6b'],'클로징리포트':['#fdf3d7','#8a6d1a'],'마스터가이드':['#e8ecfb','#3b4f9e'],'메디컬':['#fde4e4','#b91c1c']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${esc(c)}</span>`;};
+    $('upcoming-tbody').innerHTML=rows.map((c,i)=>{const bg=i%2===1?'background:#f8f9fa':'';const done=c.completed===true;const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">&mdash;</td>';return`<tr style="${bg};border-bottom:1px solid #e9ecef"><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center">${esc(c.field||'')}</td><td style="text-align:left">${esc(c.title||'')}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}</tr>`;}).join('');
+  }catch(e){console.error('게시예정 로드 오류:',e);$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">로드 중 오류가 발생했습니다.</td></tr>';}
 }
 function toggleRecent(){const g=$('recent-grid'),t=$('recent-toggle');if(!g)return;const open=g.style.display!=='none';g.style.display=open?'none':'';t.textContent=open?'▶':'▼';}
 window.toggleRecent=toggleRecent;
