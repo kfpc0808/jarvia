@@ -10008,6 +10008,8 @@ async function mgDelete(kind,id){
     const urls=[it.step5&&it.step5.htmlUrl,it.step5&&it.step5.pdfUrl,it.step6&&it.step6.audioScriptUrl,it.step6&&it.step6.audioMp3Url].filter(Boolean);
     for(const u of urls){try{await deleteObject(stRef(storage,u));}catch(e2){console.warn('Storage 파일 삭제 실패(무시):',e2.message);}}
     await deleteDoc(doc(db,'upcoming_master_guides',id));
+    // 편성표 동기화: 이 리포트를 참조하던 편성 행을 planned 로 되돌려 고아 방지
+    try{const sq=await getDocs(query(collection(db,'master_guide_schedule'),where('reportId','==',id)));for(const sd of sq.docs){await updateDoc(sd.ref,{status:'planned',reportId:deleteField(),queuedAt:deleteField(),updatedAt:serverTimestamp()});}}catch(e3){console.warn('편성 동기화 실패(무시):',e3.message);}
     toast('완전 삭제 완료');loadMasterGuides();
   }catch(e){toast('삭제 실패: '+e.message);}
 }
@@ -10179,6 +10181,8 @@ function mgRenderSchedule(){
     const _pbHas=!!(s.playbook&&Array.isArray(s.playbook.mandatoryConcepts)&&s.playbook.mandatoryConcepts.length);
     act.push(`<button class="btn btn-sm" style="background:${_pbHas?'#1a7a4a':'#9a7b2d'}" onclick="mgPbOpen('${s._id}')" title="PLAYBOOK ${_pbHas?'저장분 있음 — 열람·수정':'점검·생성·수정'}">PB${_pbHas?'✓':''}</button>`);
     if(s.status==='planned')act.push(`<button class="btn btn-sm" style="background:#7a1f2b" onclick="mgSchedGenerate('${s._id}')">생성</button>`);
+    if(s.status==='queued'||s.status==='done')act.push(`<button class="btn btn-sm" style="background:#475569" onclick="mgSchedReset('${s._id}')" title="planned로 되돌려 재생성 가능 상태로 초기화(생성물은 보존)">초기화</button>`);
+    act.push(`<button class="btn btn-sm" style="background:#C62828" onclick="mgSchedDelete('${s._id}')" title="이 편성 행 삭제(생성물·게시본은 별도)">삭제</button>`);
     return `<tr><td>${s.order||'-'}</td><td>${esc(s.scheduledDate||'-')}</td><td>${wk[d.getDay()]}</td><td>${esc(s.track||'-')}</td><td class="ov" style="max-width:300px">${s.star?'★ ':''}${esc(s.title||'')}</td><td>${stMap[s.status]||esc(s.status||'-')}</td><td>${rpt}</td><td style="white-space:nowrap">${act.join(' ')}</td></tr>`;
   }).join(''):'<tr><td colspan="8" class="tc">해당 조건의 편성이 없습니다.</td></tr>';
 }
@@ -10194,6 +10198,21 @@ async function mgSchedGenerate(id){
     toast('생성 큐 투입: '+j.reportId);
     setTimeout(()=>{loadMasterGuides();mgLoadSchedule();},1500);
   }catch(e){toast('생성 실패: '+e.message);}
+}
+
+async function mgSchedReset(id){
+  const s=_mgSched.find(x=>x._id===id);if(!s)return;
+  if(!confirm(`planned(미생성)로 되돌릴까요?\n\n${s.scheduledDate} [${s.track}] ${s.title}\n\n연결된 reportId를 비워 [생성]으로 다시 생성할 수 있습니다.\n※ 이미 만들어진 생성물·게시본은 삭제되지 않습니다(필요 시 마스터가이드 목록에서 정리).`))return;
+  try{
+    await updateDoc(doc(db,'master_guide_schedule',id),{status:'planned',reportId:deleteField(),queuedAt:deleteField(),updatedAt:serverTimestamp()});
+    toast('초기화 완료 — planned');mgLoadSchedule();
+  }catch(e){toast('초기화 실패: '+e.message);}
+}
+
+async function mgSchedDelete(id){
+  const s=_mgSched.find(x=>x._id===id);if(!s)return;
+  if(!confirm(`이 편성을 삭제할까요?\n\n${s.scheduledDate} [${s.track}] ${s.title}\n\n⚠ 편성표에서 영구 제거됩니다(생성물·게시본은 별도 — 마스터가이드 목록에서 관리).`))return;
+  try{await deleteDoc(doc(db,'master_guide_schedule',id));toast('편성 삭제 완료');mgLoadSchedule();}catch(e){toast('삭제 실패: '+e.message);}
 }
 
 async function mgSchedEdit(id,kind){
@@ -10214,7 +10233,7 @@ async function mgSchedEdit(id,kind){
   }
 }
 
-window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedEdit=mgSchedEdit;window.mgRowUploadHtml=mgRowUploadHtml;window.mgRowUploadPdf=mgRowUploadPdf;window.handleMgHtmlUpload=handleMgHtmlUpload;window.handleMgPdfUpload=handleMgPdfUpload;window.handleMgAudioUpload=handleMgAudioUpload;window.mgRebuildPdfAdm=mgRebuildPdfAdm;window.mgSchedAdd=mgSchedAdd;window.mgPbOpen=mgPbOpen;window.mgPbGenerate=mgPbGenerate;window.mgPbSave=mgPbSave;window.mgPbClose=mgPbClose;
+window.loadMasterGuides=loadMasterGuides;window.mgCreate=mgCreate;window.mgRetryStep=mgRetryStep;window.mgPublishNowAdm=mgPublishNowAdm;window.mgRegisterAudio=mgRegisterAudio;window.mgShowcaseCreate=mgShowcaseCreate;window.mgEditTitle=mgEditTitle;window.mgDelete=mgDelete;window.mgShowProgress=mgShowProgress;window.mgCloseProgress=mgCloseProgress;window.mgLoadSchedule=mgLoadSchedule;window.mgRenderSchedule=mgRenderSchedule;window.mgSchedGenerate=mgSchedGenerate;window.mgSchedReset=mgSchedReset;window.mgSchedDelete=mgSchedDelete;window.mgSchedEdit=mgSchedEdit;window.mgRowUploadHtml=mgRowUploadHtml;window.mgRowUploadPdf=mgRowUploadPdf;window.handleMgHtmlUpload=handleMgHtmlUpload;window.handleMgPdfUpload=handleMgPdfUpload;window.handleMgAudioUpload=handleMgAudioUpload;window.mgRebuildPdfAdm=mgRebuildPdfAdm;window.mgSchedAdd=mgSchedAdd;window.mgPbOpen=mgPbOpen;window.mgPbGenerate=mgPbGenerate;window.mgPbSave=mgPbSave;window.mgPbClose=mgPbClose;
 
 // ─── API 인증·URL (자비아 패턴 — URL 쿼리 ?key=) ──────────────────────
 // CR_API_KEY 는 자비아 functions/.env 의 process.env.CR_API_KEY 와 동일 값
