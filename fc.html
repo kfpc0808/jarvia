@@ -1344,13 +1344,69 @@ function renderOpMonth(){
   const isThisM=(opY===t.y&&opM===t.m);
   $('opAlertList').innerHTML=ev.map(e=>{
     const isToday=isThisM&&e.d===t.d;
-    return '<div style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#E5E7EB')+';border-radius:8px;padding:7px 10px'+(isToday?';background:#F0F4F8':'')+'">'
+    return '<div class="op-al-row" data-mk="'+e.k+'" data-mn="'+opEsc(e.n)+'" data-mm="'+opM+'" data-md="'+e.d+'" data-mp="'+opEsc(e.k==='만기'?e.sub:'')+'" style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#E5E7EB')+';border-radius:8px;padding:7px 10px'+(isToday?';background:#F0F4F8':'')+';cursor:pointer">'
       +'<span style="font-size:12px;font-weight:800;color:#1F2937;min-width:36px">'+opM+'/'+e.d+'</span>'
       +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+e.k+(isToday?' 오늘':'')+'</span>'
       +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+opEsc(e.n)+'</span>'
       +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(e.sub)+'</span>'
+      +'<span style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬</span>'
       +'</div>';
   }).join('');
+}
+/* ── 💬 알림 행 멘트 (수정·복사·카톡 공유) — 2026-06-11 ── */
+function opMsgTpl(k,n,m,d,p){
+  if(k==='생일')return n+'님, 생신 축하드립니다! 🎂 늘 건강하시고, 올해도 좋은 일만 가득하시길 바랍니다. 조만간 안부 인사 겸 찾아뵙겠습니다.';
+  if(k==='상령일')return n+'님, 안부 인사드립니다. '+m+'월 '+d+'일이면 보험나이가 한 살 올라가 같은 보장도 보험료가 달라지는 시점이에요. 그 전에 보장 점검 한번 받아보시면 어떨까요?';
+  return n+'님, 가입하신 '+(p||'보험')+' 상품이 '+m+'월 '+d+'일 만기 예정입니다. 환급금 안내와 함께 이후 플랜을 정리해드리고 싶은데, 이번 주 중 잠깐 통화 가능하실까요?';
+}
+function opCopyText(t){
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(()=>toast('멘트가 복사되었습니다 — 카톡·문자에 붙여넣으세요')).catch(()=>opCopyFallback(t));
+  }else opCopyFallback(t);
+}
+function opCopyFallback(t){
+  const ta=document.createElement('textarea');ta.value=t;ta.style.cssText='position:fixed;opacity:0';
+  document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');toast('멘트가 복사되었습니다 — 카톡·문자에 붙여넣으세요');}catch(e){toast('복사에 실패했습니다');}
+  document.body.removeChild(ta);
+}
+function opMsgShareKakao(msg){
+  const url=location.href.split('#')[0];
+  if(window.Kakao&&Kakao.isInitialized()){
+    try{
+      Kakao.Share.sendDefault({
+        objectType:'text',
+        text:msg.slice(0,200),
+        link:{mobileWebUrl:url,webUrl:url},
+        buttonTitle:'채널 보러가기',
+        installTalk:true
+      });
+    }catch(e){opCopyText(msg);}
+  }else{opCopyText(msg);}
+}
+function opMsgRowClick(e){
+  const act=e.target&&e.target.closest?e.target.closest('[data-act]'):null;
+  if(act){
+    const ta=act.closest('.op-msg-ed').querySelector('.op-msg-ta');
+    if(act.getAttribute('data-act')==='copy')opCopyText(ta.value);
+    else opMsgShareKakao(ta.value);
+    return;
+  }
+  if(e.target&&e.target.closest&&e.target.closest('.op-msg-ed'))return;   // 입력칸 클릭은 무시
+  const row=e.target&&e.target.closest?e.target.closest('.op-al-row'):null;
+  if(!row)return;
+  const next=row.nextElementSibling;
+  const wasOpen=next&&next.classList&&next.classList.contains('op-msg-ed');
+  $('opAlertList').querySelectorAll('.op-msg-ed').forEach(x=>x.remove());   // 하나만 열림
+  if(wasOpen)return;   // 재탭 = 닫기
+  const msg=opMsgTpl(row.getAttribute('data-mk'),row.getAttribute('data-mn'),row.getAttribute('data-mm'),row.getAttribute('data-md'),row.getAttribute('data-mp'));
+  row.insertAdjacentHTML('afterend',
+    '<div class="op-msg-ed" style="border:1px solid #D4A03C;background:#FFFDF5;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px">'
+    +'<textarea class="op-msg-ta" rows="4" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;border:1px solid #E5E7EB;border-radius:6px;padding:8px;resize:vertical;font-family:inherit">'+opEsc(msg)+'</textarea>'
+    +'<div style="display:flex;gap:6px;justify-content:flex-end">'
+    +'<button type="button" data-act="copy" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:8px;padding:7px 14px;cursor:pointer">📋 복사</button>'
+    +'<button type="button" data-act="kakao" style="font-size:12px;font-weight:700;color:#3C1E1E;background:#FEE500;border:none;border-radius:8px;padding:7px 14px;cursor:pointer">카톡 공유</button>'
+    +'</div></div>');
 }
 let opEditTarget=null;   // 보험 추가 모드 대상 고객 (null = 신규 등록 모드)
 function opAddCtRow(p,m){
@@ -1950,6 +2006,7 @@ async function init(){
         const _ovs=$('opVwSeg'); if(_ovs)_ovs.onclick=(e)=>{const b=e.target&&e.target.closest&&e.target.closest('[data-opvw]');if(b)opVwSetMode(b.getAttribute('data-opvw'));};
         const _ovp=$('opVwPrev'); if(_ovp)_ovp.onclick=()=>opVwNavM(-1);
         const _ovn=$('opVwNext'); if(_ovn)_ovn.onclick=()=>opVwNavM(1);
+        const _oal=$('opAlertList'); if(_oal)_oal.onclick=opMsgRowClick;
         // ★ 본인 채널이면 샘플 안내 배너 즉시 숨김 (2026-05-09)
         const _smb=$('sampleNoticeBanner');
         if(_smb)_smb.classList.add('hidden-by-user');

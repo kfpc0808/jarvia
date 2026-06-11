@@ -309,9 +309,9 @@
         </div>
       </div>
       <div id="fcc-bd-cur-label" style="font-size:11px;font-weight:700;color:#9CA3AF;margin-bottom:5px"></div>
-      <div id="fcc-bd-cur" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
+      <div id="fcc-bd-cur" onclick="fccMsgClick(event)" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
       <div id="fcc-bd-next-label" style="font-size:11px;font-weight:700;color:#9CA3AF;margin-bottom:5px"></div>
-      <div id="fcc-bd-next" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
+      <div id="fcc-bd-next" onclick="fccMsgClick(event)" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
       <div style="display:flex;justify-content:flex-end;border-top:1px solid #F3F4F6;padding-top:8px">
         <button type="button" onclick="fccOpenTab()" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #D1D5DB;border-radius:8px;padding:6px 14px;cursor:pointer">📇 고객 관리 열기 →</button>
       </div>
@@ -5257,15 +5257,72 @@ function fccRenderMonthInto(elId,Y,M){
   const isThisM=(Y===t.y&&M===t.m);
   el.innerHTML=ev.map(e=>{
     const isToday=isThisM&&e.d===t.d;
-    return '<div style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#EDF0F4')+';border-radius:8px;padding:6px 10px'+(isToday?';background:#F0F4F8':'')+'">'
+    return '<div class="fcc-al-row" data-mk="'+e.k+'" data-mn="'+fccEsc(e.n)+'" data-mm="'+M+'" data-md="'+e.d+'" data-mp="'+fccEsc(e.k==='만기'?e.sub:'')+'" style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#EDF0F4')+';border-radius:8px;padding:6px 10px'+(isToday?';background:#F0F4F8':'')+';cursor:pointer">'
       +'<span style="font-size:12px;font-weight:800;color:#1F2937;min-width:36px">'+M+'/'+e.d+'</span>'
       +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+e.k+(isToday?' 오늘':'')+'</span>'
       +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+fccEsc(e.n)+'</span>'
       +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fccEsc(e.sub)+'</span>'
+      +'<span style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬 멘트</span>'
       +'</div>';
   }).join('');
   return ev.length;
 }
+/* ── 💬 알림 행 멘트 (수정·복사·카톡 공유) — 2026-06-11 ── */
+function fccMsgTpl(k,n,m,d,p){
+  if(k==='생일')return n+'님, 생신 축하드립니다! 🎂 늘 건강하시고, 올해도 좋은 일만 가득하시길 바랍니다. 조만간 안부 인사 겸 찾아뵙겠습니다.';
+  if(k==='상령일')return n+'님, 안부 인사드립니다. '+m+'월 '+d+'일이면 보험나이가 한 살 올라가 같은 보장도 보험료가 달라지는 시점이에요. 그 전에 보장 점검 한번 받아보시면 어떨까요?';
+  return n+'님, 가입하신 '+(p||'보험')+' 상품이 '+m+'월 '+d+'일 만기 예정입니다. 환급금 안내와 함께 이후 플랜을 정리해드리고 싶은데, 이번 주 중 잠깐 통화 가능하실까요?';
+}
+function fccCopyText(t){
+  const done=()=>toast('멘트가 복사되었습니다 — 카톡·문자에 붙여넣으세요','success');
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done).catch(()=>fccCopyFallback(t));}
+  else fccCopyFallback(t);
+}
+function fccCopyFallback(t){
+  const ta=document.createElement('textarea');ta.value=t;ta.style.cssText='position:fixed;opacity:0';
+  document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');toast('멘트가 복사되었습니다 — 카톡·문자에 붙여넣으세요','success');}catch(e){toast('복사에 실패했습니다');}
+  document.body.removeChild(ta);
+}
+function fccMsgShareKakao(msg){
+  const lid=(meData&&meData.loginId)||'';
+  const url=lid?('https://jarvia.co.kr/client-daily?fc='+lid):'https://jarvia.co.kr';
+  if(window.Kakao&&Kakao.isInitialized()){
+    try{
+      Kakao.Share.sendDefault({
+        objectType:'text',
+        text:msg.slice(0,200),
+        link:{mobileWebUrl:url,webUrl:url},
+        buttonTitle:'브리핑 보러가기',
+        installTalk:true
+      });
+    }catch(e){fccCopyText(msg);}
+  }else{fccCopyText(msg);}
+}
+window.fccMsgClick=function(e){
+  const act=e.target&&e.target.closest?e.target.closest('[data-act]'):null;
+  if(act){
+    const ta=act.closest('.fcc-msg-ed').querySelector('.fcc-msg-ta');
+    if(act.getAttribute('data-act')==='copy')fccCopyText(ta.value);
+    else fccMsgShareKakao(ta.value);
+    return;
+  }
+  if(e.target&&e.target.closest&&e.target.closest('.fcc-msg-ed'))return;
+  const row=e.target&&e.target.closest?e.target.closest('.fcc-al-row'):null;
+  if(!row)return;
+  const next=row.nextElementSibling;
+  const wasOpen=next&&next.classList&&next.classList.contains('fcc-msg-ed');
+  document.querySelectorAll('#fcc-bd-cur .fcc-msg-ed,#fcc-bd-next .fcc-msg-ed').forEach(x=>x.remove());
+  if(wasOpen)return;
+  const msg=fccMsgTpl(row.getAttribute('data-mk'),row.getAttribute('data-mn'),row.getAttribute('data-mm'),row.getAttribute('data-md'),row.getAttribute('data-mp'));
+  row.insertAdjacentHTML('afterend',
+    '<div class="fcc-msg-ed" style="border:1px solid #D4A03C;background:#FFFDF5;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px">'
+    +'<textarea class="fcc-msg-ta" rows="3" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;border:1px solid #E5E7EB;border-radius:6px;padding:8px;resize:vertical;font-family:inherit">'+fccEsc(msg)+'</textarea>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end">'
+    +'<button type="button" data-act="copy" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:8px;padding:7px 16px;cursor:pointer">📋 복사</button>'
+    +'<button type="button" data-act="kakao" style="font-size:12px;font-weight:700;color:#3C1E1E;background:#FEE500;border:none;border-radius:8px;padding:7px 16px;cursor:pointer">카톡 공유</button>'
+    +'</div></div>');
+};
 /* ── 🔔 메인 알림 보드 ── */
 async function loadFcAlertBoard(){
   try{
