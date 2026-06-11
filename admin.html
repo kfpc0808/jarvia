@@ -1845,9 +1845,9 @@
     <p style="font-size:12px;color:#888;margin:8px 0">💡 회원 행을 클릭하면 일자별 상세가 펼쳐집니다. 콘텐츠 열은 실제 열람(view_logs), 도구·서비스 열은 진입 기록(service_logs/calc_logs) 기준입니다. 기간 내 활동이 있는 회원만 표시됩니다.</p>
     <span id="as-page-info" style="font-size:13px;color:var(--text-lt)"></span>
     <div class="tbl-wrap mt"><table class="tbl" id="as-table"><thead>
-      <tr><th rowspan="2">No</th><th rowspan="2">회원</th><th rowspan="2">소속</th><th colspan="2" style="text-align:center">접속</th><th colspan="7" style="text-align:center">콘텐츠 열람</th><th colspan="10" style="text-align:center">도구·서비스</th><th rowspan="2">합계</th></tr>
+      <tr><th rowspan="2">No</th><th rowspan="2">회원</th><th rowspan="2">소속</th><th rowspan="2">합계</th><th colspan="2" style="text-align:center">접속</th><th colspan="7" style="text-align:center">콘텐츠 열람</th><th colspan="10" style="text-align:center">도구·서비스</th></tr>
       <tr><th>프로그램</th><th>내채널</th><th>데일리</th><th>클로징</th><th>택스</th><th>메디컬</th><th>마스터</th><th>특급</th><th>토요특강</th><th>기업마당</th><th>연구노트</th><th>예규판례</th><th>금융통계</th><th>재무계산기</th><th>PPT생성</th><th>병의원</th><th>아침독서</th><th>고객Report</th><th>메디컬진입</th></tr>
-    </thead><tbody id="as-tbody"><tr><td colspan="23" class="tc" style="color:#999">[조회]를 누르면 표시됩니다.</td></tr></tbody></table></div>
+    </thead><tbody id="as-tbody"><tr><td colspan="23" class="tc" style="color:#999">[조회]를 누르면 표시됩니다.</td></tr></tbody><tfoot id="as-tfoot"></tfoot></table></div>
     <div id="as-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
   </div>
 
@@ -12004,13 +12004,18 @@ function renderAccessPage(page){
   if(_asPage>totalPages)_asPage=totalPages;
   const start=(_asPage-1)*per;const paged=rows.slice(start,start+per);
   const tb=$('as-tbody');
-  if(!paged.length){tb.innerHTML='<tr><td colspan="23" class="tc">데이터가 없습니다.</td></tr>';$('as-pager').innerHTML='';$('as-page-info').textContent='';return;}
+  if(!paged.length){tb.innerHTML='<tr><td colspan="23" class="tc">데이터가 없습니다.</td></tr>';$('as-pager').innerHTML='';$('as-page-info').textContent='';$('as-tfoot').innerHTML='';return;}
   let html='';
   paged.forEach((r,i)=>{
     const cells=AS_COLS.map(c=>{const v=r.cols[c.key]||0;return `<td style="text-align:center${v?'':';color:#ccc'}">${v||'·'}</td>`;}).join('');
-    html+=`<tr style="cursor:pointer" onclick="toggleAccessDetail('${r.uid}',this)"><td>${start+i+1}</td><td style="white-space:nowrap">${esc(r.name)}</td><td class="ov">${esc(r.company)}</td>${cells}<td style="text-align:center;font-weight:700;color:var(--accent)">${fmt(r.total)}</td></tr>`;
+    html+=`<tr style="cursor:pointer" onclick="toggleAccessDetail('${r.uid}',this)"><td>${start+i+1}</td><td style="white-space:nowrap">${esc(r.name)}</td><td class="ov">${esc(r.company)}</td><td style="text-align:center;font-weight:700;color:var(--accent)">${fmt(r.total)}</td>${cells}</tr>`;
   });
   tb.innerHTML=html;
+  // 계 행 (검색 필터 적용된 전체 합계, 페이지 무관)
+  const _sums={};let _grand=0;AS_COLS.forEach(c=>_sums[c.key]=0);
+  rows.forEach(r=>{AS_COLS.forEach(c=>_sums[c.key]+=(r.cols[c.key]||0));_grand+=r.total;});
+  const _footCells=AS_COLS.map(c=>`<td style="text-align:center;font-weight:700">${_sums[c.key]?fmt(_sums[c.key]):'·'}</td>`).join('');
+  $('as-tfoot').innerHTML=`<tr style="background:#EEF2FF;border-top:2px solid var(--primary)"><td colspan="3" style="text-align:center;font-weight:800">계 (${rows.length}명)</td><td style="text-align:center;font-weight:800;color:var(--accent)">${fmt(_grand)}</td>${_footCells}</tr>`;
   $('as-page-info').textContent=`총 ${rows.length}명 / ${_asPage}·${totalPages}p`;
   let pg='';for(let p=1;p<=totalPages;p++){if(totalPages>9&&Math.abs(p-_asPage)>3&&p!==1&&p!==totalPages){if(p===2||p===totalPages-1)pg+='<span style="padding:0 4px">…</span>';continue;}pg+=`<button class="btn btn-sm ${p===_asPage?'':'btn-sec'}" onclick="renderAccessPage(${p})">${p}</button>`;}
   $('as-pager').innerHTML=pg;
@@ -12031,8 +12036,10 @@ function toggleAccessDetail(uid,tr){
 }
 function exportAccessCSV(){
   if(!_asRows.length)return toast('데이터 없음','error');
-  let csv='\uFEFF회원,소속,'+AS_COLS.map(c=>c.label).join(',')+',합계\n';
-  _asRows.slice().sort((a,b)=>b.total-a.total).forEach(r=>{csv+=`"${(r.name||'').replace(/"/g,'""')}","${(r.company||'').replace(/"/g,'""')}",`+AS_COLS.map(c=>r.cols[c.key]||0).join(',')+`,${r.total}\n`;});
+  let csv='\uFEFF회원,소속,합계,'+AS_COLS.map(c=>c.label).join(',')+'\n';
+  _asRows.slice().sort((a,b)=>b.total-a.total).forEach(r=>{csv+=`"${(r.name||'').replace(/"/g,'""')}","${(r.company||'').replace(/"/g,'""')}",${r.total},`+AS_COLS.map(c=>r.cols[c.key]||0).join(',')+`\n`;});
+  const _cs={};let _cg=0;AS_COLS.forEach(c=>_cs[c.key]=0);_asRows.forEach(r=>{AS_COLS.forEach(c=>_cs[c.key]+=(r.cols[c.key]||0));_cg+=r.total;});
+  csv+=`"계","${_asRows.length}명",${_cg},`+AS_COLS.map(c=>_cs[c.key]).join(',')+`\n`;
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='access_stats_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
 }
 window.loadAccessStats=loadAccessStats;window.renderAccessPage=renderAccessPage;window.setAsRange=setAsRange;window.toggleAccessDetail=toggleAccessDetail;window.exportAccessCSV=exportAccessCSV;window.initAsDates=initAsDates;
