@@ -1284,7 +1284,6 @@ function showError(title,msg){$('loadingState').classList.add('hidden');$('conte
 function getTodayKST(){const now=new Date();const k=new Date(now.getTime()+9*3600000);return k.getUTCFullYear()+'.'+String(k.getUTCMonth()+1).padStart(2,'0')+'.'+String(k.getUTCDate()).padStart(2,'0');}
 // ═══ 📇 FC 고객 알림·간편등록 (⋮ 소유자 패널) — 2026-06-11 ═══
 let opClientsCache=null;  // fc_clients 캐시 (패널 내 월 이동 시 재조회 방지)
-let opStage=[];           // 저장 대기 목록
 let opY=0,opM=0;          // 조회 중인 연·월
 function opEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function opSangMmdd(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 익월 1일)
@@ -1399,8 +1398,6 @@ function opEnterEdit(id){
   $('opFind').value='';$('opFindRes').style.display='none';
   $('opEditBadge').style.display='flex';
   $('opEditBadgeText').textContent='✚ '+c.name+'님 보험 추가 — 기존 계약 '+((c.contracts&&c.contracts.length)||0)+'건';
-  $('opAddBtn').style.display='none';
-  $('opStageWrap').style.display='none';
   $('opSaveBtn').textContent='💾 보험 추가 저장';
   opResetCtRows();
 }
@@ -1408,35 +1405,10 @@ function opExitEdit(){
   opEditTarget=null;
   $('opName').disabled=false;$('opBirth').disabled=false;
   $('opEditBadge').style.display='none';
-  $('opAddBtn').style.display='';
   $('opSaveBtn').textContent='💾 저장';
   opClearForm();
-  renderOpStage();
 }
-function renderOpStage(){
-  const w=$('opStageWrap');
-  if(!opStage.length||opEditTarget){w.style.display='none';return;}
-  w.style.display='block';
-  $('opStageCount').textContent=opStage.length+'명';
-  $('opStageList').innerHTML=opStage.map((s,i)=>{
-    let line=opEsc(s.name)+' · '+s.birthDate;
-    if(s.contracts.length)line+=' · '+opEsc(s.contracts[0].productName||'(상품명 미입력)')+(s.contracts.length>1?' 외 '+(s.contracts.length-1)+'건':'');
-    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;color:#374151;background:#fff;border:1px solid #E5E7EB;border-radius:6px;padding:6px 8px">'
-      +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+line+'</span>'
-      +'<button type="button" data-opdel="'+i+'" style="font-size:13px;color:#9CA3AF;background:none;border:none;cursor:pointer;padding:0 4px;line-height:1">×</button>'
-      +'</div>';
-  }).join('');
-}
-function opQuickAdd(){
-  if(opEditTarget)return;   // 보험 추가 모드에서는 대기 적재 비활성
-  const e=opReadForm();if(!e)return;
-  const ex=opStage.find(s=>s.name===e.name&&s.birthDate===e.birthDate);
-  if(ex){ex.contracts=ex.contracts.concat(e.contracts).slice(0,20);}
-  else{opStage.push(e);}
-  renderOpStage();opClearForm();
-  $('opName').focus();
-  toast('대기 목록에 담았습니다 — 저장을 눌러야 등록됩니다');
-}
+
 async function opSaveAll(){
   if(!isOwnerView||!currentUser)return;
   const btn=$('opSaveBtn');
@@ -1458,35 +1430,29 @@ async function opSaveAll(){
     }finally{btn.disabled=false;if(opEditTarget)btn.textContent='💾 보험 추가 저장';}
     return;
   }
-  // ── 신규 등록 모드 ──
-  if(!opStage.length){
-    const e=opReadForm();if(!e)return;
-    opStage.push(e);
-  }
+  // ── 신규 등록 모드: 단건 저장 → 폼 비움 → 이어서 입력 ──
+  const s=opReadForm();if(!s)return;
   btn.disabled=true;btn.textContent='저장 중...';
-  const failed=[];let ok=0;
-  for(const s of opStage){
-    try{
-      const ref=doc(collection(db,'fc_clients'));
-      const data={
-        fcAuthUid:currentUser.uid,
-        fcLoginId:loginId,
-        name:s.name,birthDate:s.birthDate,contracts:s.contracts,
-        birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),
-        sangryeongMmdd:opSangMmdd(s.birthDate),
-        createdAt:serverTimestamp(),updatedAt:serverTimestamp()
-      };
-      await setDoc(ref,data);
-      if(opClientsCache)opClientsCache.push({id:ref.id,...data});
-      ok++;
-    }catch(err){console.error('opSaveAll error:',err);failed.push(s);}
-  }
-  opStage=failed;
-  renderOpStage();
-  if(failed.length)toast(ok+'명 저장, '+failed.length+'명 실패 — 실패분은 대기 목록에 남아있습니다');
-  else{opClearForm();toast(ok+'명 저장 완료');}
-  btn.disabled=false;btn.textContent='💾 저장';
-  renderOpMonth();
+  try{
+    const ref=doc(collection(db,'fc_clients'));
+    const data={
+      fcAuthUid:currentUser.uid,
+      fcLoginId:loginId,
+      name:s.name,birthDate:s.birthDate,contracts:s.contracts,
+      birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),
+      sangryeongMmdd:opSangMmdd(s.birthDate),
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+    };
+    await setDoc(ref,data);
+    if(opClientsCache)opClientsCache.push({id:ref.id,...data});
+    opClearForm();
+    $('opName').focus();
+    toast(s.name+'님 저장 완료 — 이어서 입력할 수 있습니다');
+    renderOpMonth();
+  }catch(err){
+    console.error('opSaveAll error:',err);
+    toast('저장에 실패했습니다. 다시 시도해주세요');
+  }finally{btn.disabled=false;btn.textContent='💾 저장';}
 }
 
 // ═══ 👁 FC 조회현황 표시 + 열람 비콘 (Phase 2) — 2026-06-11 ═══
@@ -1504,18 +1470,16 @@ function opStatLine(label,d){
 }
 async function loadOpViewStats(){
   const box=$('opViewStats');if(!box)return;
+  // 집계 문서가 아직 없으면 규칙 특성상(resource 기반 read) permission-denied가 발생함
+  // → 개별 getDoc을 격리하고, 실패는 '집계 없음'으로 간주 (오류 아님)
+  const safeGet=(ymd)=>getDoc(doc(db,'fc_view_stats',loginId+'_'+ymd)).then(s=>s.exists()?s.data():null).catch(()=>null);
   try{
-    const [tSnap,ySnap]=await Promise.all([
-      getDoc(doc(db,'fc_view_stats',loginId+'_'+opYmdKst(0))),
-      getDoc(doc(db,'fc_view_stats',loginId+'_'+opYmdKst(-1)))
-    ]);
-    const t=tSnap.exists()?tSnap.data():null;
-    const y=ySnap.exists()?ySnap.data():null;
+    const [t,y]=await Promise.all([safeGet(opYmdKst(0)),safeGet(opYmdKst(-1))]);
     if(!t&&!y){box.innerHTML='<span style="color:#9CA3AF">아직 집계된 열람이 없습니다. 고객이 채널·데일리를 열람하면 여기에 표시됩니다.</span>';return;}
     box.innerHTML=opStatLine('오늘',t)+opStatLine('어제',y);
   }catch(e){
     console.error('loadOpViewStats error:',e);
-    box.innerHTML='<span style="color:#9CA3AF">집계를 불러오지 못했습니다.</span>';
+    box.innerHTML='<span style="color:#9CA3AF">아직 집계된 열람이 없습니다.</span>';
   }
 }
 // ── 방문자 열람 비콘 — 채널 주인 본인 열람은 전송 시점(이탈)에 제외 ──
@@ -1887,11 +1851,9 @@ async function init(){
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
         // 📇 고객 알림·등록 패널 바인딩 (2026-06-11)
         const _odb=$('ownerDotsBtn'); if(_odb){_odb.style.display='flex';_odb.onclick=openOwnerPanel;}
-        const _oab=$('opAddBtn'); if(_oab)_oab.onclick=opQuickAdd;
         const _osb=$('opSaveBtn'); if(_osb)_osb.onclick=opSaveAll;
         const _opm=$('opPrevM'); if(_opm)_opm.onclick=()=>opNavM(-1);
         const _onm=$('opNextM'); if(_onm)_onm.onclick=()=>opNavM(1);
-        const _osl=$('opStageList'); if(_osl)_osl.onclick=(e)=>{const i=e.target&&e.target.getAttribute&&e.target.getAttribute('data-opdel');if(i!=null){opStage.splice(parseInt(i,10),1);renderOpStage();}};
         const _oca=$('opCtAddBtn'); if(_oca)_oca.onclick=()=>{if($('opCtRows').children.length<20)opAddCtRow();};
         const _ocr=$('opCtRows'); if(_ocr)_ocr.onclick=(e)=>{const x=e.target&&e.target.closest&&e.target.closest('.op-ct-x');if(x&&_ocr.children.length>1)x.parentElement.remove();};
         const _ofd=$('opFind'); if(_ofd)_ofd.oninput=opRenderFind;
@@ -3093,17 +3055,9 @@ init();
     <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">계약 (상품명 · 만기일) <span style="color:#9CA3AF">선택 · 여러 개 가능</span></label>
     <div id="opCtRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
     <button type="button" id="opCtAddBtn" style="width:100%;padding:7px;font-size:12px;font-weight:700;color:#64748B;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;cursor:pointer;margin-bottom:8px">＋ 상품 추가</button>
-    <div style="font-size:11px;color:#9CA3AF;margin-bottom:10px">생일 → 상령일 자동계산 · 만기일 입력 시 D-60/30/7 알림 · 같은 고객을 다시 추가하면 상품이 합쳐집니다</div>
+    <div style="font-size:11px;color:#9CA3AF;margin-bottom:10px">생일 → 상령일 자동계산 · 만기일 입력 시 D-60/30/7 알림 · 저장하면 바로 등록되고 이어서 입력할 수 있습니다</div>
 
-    <div id="opStageWrap" style="display:none;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;padding:10px;margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px">📋 저장 대기 <span id="opStageCount" style="color:#1B3A5C"></span> — 아직 등록 전입니다</div>
-      <div id="opStageList" style="display:flex;flex-direction:column;gap:4px"></div>
-    </div>
-
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <button id="opAddBtn" type="button" style="flex:1;padding:11px;font-size:13px;font-weight:700;color:#1B3A5C;background:#fff;border:1.5px solid #1B3A5C;border-radius:8px;cursor:pointer">+ 고객 추가</button>
-      <button id="opSaveBtn" type="button" style="flex:1;padding:11px;font-size:13px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer">💾 저장</button>
-    </div>
+    <button id="opSaveBtn" type="button" style="width:100%;padding:12px;font-size:14px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer;margin-bottom:14px">💾 저장</button>
 
     <div style="border-top:1px solid #E5E7EB;padding-top:12px;margin-bottom:12px">
       <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:6px">👁 고객 조회 현황</div>
