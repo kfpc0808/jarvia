@@ -654,7 +654,7 @@ a{color:inherit;text-decoration:none}
             <div class="company" id="company">소속</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <div class="name" id="name">컨설턴트명</div>
-              <a id="ownerEditBtn" href="/?action=channel-manage" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">✏️ 편집</a><a id="manualBtn" href="https://jarvia.co.kr/platform-guide.html" target="_blank" rel="noopener" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">📖 매뉴얼</a>
+              <a id="ownerEditBtn" href="/?action=channel-manage" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">✏️ 편집</a><a id="manualBtn" href="https://jarvia.co.kr/platform-guide.html" target="_blank" rel="noopener" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">📖 매뉴얼</a><button id="ownerDotsBtn" type="button" aria-label="고객 알림·등록" style="display:none;align-items:center;justify-content:center;width:24px;height:24px;font-size:14px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:50%;padding:0;cursor:pointer;line-height:1">⋮</button>
             </div>
             <div class="bio" id="bio">"고객의 자산을 함께 지키는 자산관리 전문가"</div>
           </div>
@@ -1282,6 +1282,85 @@ const gid=()=>'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 function toast(msg,type='info'){const t=$('toast');t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.classList.remove('show'),2400);}
 function showError(title,msg){$('loadingState').classList.add('hidden');$('contentState').classList.add('hidden');$('errorState').classList.remove('hidden');$('errorTitle').textContent=title;if(msg)$('errorMsg').textContent=msg;}
 function getTodayKST(){const now=new Date();const k=new Date(now.getTime()+9*3600000);return k.getUTCFullYear()+'.'+String(k.getUTCMonth()+1).padStart(2,'0')+'.'+String(k.getUTCDate()).padStart(2,'0');}
+// ═══ 📇 FC 고객 알림·간편등록 (⋮ 소유자 패널) — 2026-06-11 ═══
+function opEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function opSangMmdd(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 익월 1일)
+  let m=parseInt(birth.slice(5,7),10),d=parseInt(birth.slice(8,10),10);
+  m+=6;if(m>12)m-=12;
+  const dim=[31,28,31,30,31,30,31,31,30,31,30,31];
+  if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}
+  return String(m).padStart(2,'0')+String(d).padStart(2,'0');
+}
+function opDiffDays(dateStr){ // 특정 날짜까지 남은 일수 (KST 기준, 과거면 음수)
+  const now=new Date();const k=new Date(now.getTime()+9*3600000);
+  const today=Date.UTC(k.getUTCFullYear(),k.getUTCMonth(),k.getUTCDate());
+  const t=Date.UTC(parseInt(dateStr.slice(0,4),10),parseInt(dateStr.slice(5,7),10)-1,parseInt(dateStr.slice(8,10),10));
+  return Math.round((t-today)/86400000);
+}
+async function openOwnerPanel(){
+  if(!isOwnerView||!currentUser)return;
+  $('ownerPanel').classList.add('active');
+  const list=$('opAlertList');
+  list.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">불러오는 중...</div>';
+  try{
+    const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',currentUser.uid)));
+    const alerts=[];
+    snap.forEach(s=>{
+      const c=s.data();if(!c.birthDate||c.birthDate.length!==10)return;
+      const bm=parseInt(c.birthDate.slice(5,7),10),bd=parseInt(c.birthDate.slice(8,10),10);
+      const dB=calcDday(bm,bd);
+      if(dB===0||dB===7)alerts.push({k:'생일',bg:'#E1F5EE',fg:'#085041',dd:dB,n:c.name,sub:bm+'/'+bd+' 생일'});
+      const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd(c.birthDate);
+      const dS=calcDday(parseInt(sg.slice(0,2),10),parseInt(sg.slice(2,4),10));
+      if(dS===0||dS===7||dS===14||dS===30)alerts.push({k:'상령일',bg:'#FAEEDA',fg:'#633806',dd:dS,n:c.name,sub:'보험나이 +1'});
+      (c.contracts||[]).forEach(ct=>{
+        if(!ct||!ct.maturityDate||ct.maturityDate.length!==10)return;
+        const dM=opDiffDays(ct.maturityDate);
+        if(dM===7||dM===30||dM===60)alerts.push({k:'만기',bg:'#FAECE7',fg:'#712B13',dd:dM,n:c.name,sub:(ct.productName||'')+' 만기'});
+      });
+    });
+    alerts.sort((a,b)=>a.dd-b.dd);
+    if(!alerts.length){list.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">오늘 예정된 알림이 없습니다.</div>';return;}
+    list.innerHTML=alerts.map(a=>'<div style="display:flex;align-items:center;gap:8px;border:1px solid #E5E7EB;border-radius:8px;padding:8px 10px">'
+      +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+a.bg+';color:'+a.fg+'">'+a.k+(a.dd===0?' 오늘':' D-'+a.dd)+'</span>'
+      +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+opEsc(a.n)+'</span>'
+      +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(a.sub)+'</span>'
+      +'</div>').join('');
+  }catch(e){
+    console.error('openOwnerPanel error:',e);
+    list.innerHTML='<div style="font-size:12px;color:#DC2626;padding:8px 0">알림을 불러오지 못했습니다.</div>';
+  }
+}
+async function opQuickAdd(){
+  if(!isOwnerView||!currentUser)return;
+  const name=$('opName').value.trim();
+  const birth=$('opBirth').value;
+  const product=$('opProduct').value.trim();
+  const maturity=$('opMaturity').value;
+  if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return;}
+  if(!birth||birth.length!==10){toast('생일을 선택해주세요');return;}
+  const contracts=[];
+  if(product||maturity)contracts.push({productName:product,maturityDate:maturity||null});
+  const btn=$('opAddBtn');btn.disabled=true;btn.textContent='등록 중...';
+  try{
+    const ref=doc(collection(db,'fc_clients'));
+    await setDoc(ref,{
+      fcAuthUid:currentUser.uid,
+      fcLoginId:loginId,
+      name,birthDate:birth,contracts,
+      birthMmdd:birth.slice(5,7)+birth.slice(8,10),
+      sangryeongMmdd:opSangMmdd(birth),
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+    });
+    toast('고객이 등록되었습니다');
+    $('opName').value='';$('opBirth').value='';$('opProduct').value='';$('opMaturity').value='';
+    openOwnerPanel(); // 알림 목록 새로고침
+  }catch(e){
+    console.error('opQuickAdd error:',e);
+    toast('등록에 실패했습니다. 다시 시도해주세요');
+  }finally{btn.disabled=false;btn.textContent='+ 고객 추가';}
+}
+
 // ═══ 📅 일정·이벤트 캘린더 (Phase 1) ═══
 function calcDday(month,day){
   const now=new Date();
@@ -1628,6 +1707,8 @@ async function init(){
         loadFcAdminSection();
         const _eb=$('ownerEditBtn'); if(_eb)_eb.style.display='inline-flex';
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
+        const _odb=$('ownerDotsBtn'); if(_odb){_odb.style.display='inline-flex';_odb.onclick=openOwnerPanel;}   // 📇 고객 알림·등록 패널 (2026-06-11)
+        const _oab=$('opAddBtn'); if(_oab)_oab.onclick=opQuickAdd;
         // ★ 본인 채널이면 샘플 안내 배너 즉시 숨김 (2026-05-09)
         const _smb=$('sampleNoticeBanner');
         if(_smb)_smb.classList.add('hidden-by-user');
@@ -2791,6 +2872,32 @@ init();
     <div class="pwaIosModal-sub" id="pwaModalSub">아래 순서대로 따라 해주세요</div>
     <div class="pwaIosModal-steps" id="pwaModalSteps"></div>
     <button class="pwaIosModal-close" id="pwaIosModalClose" type="button">확인</button>
+  </div>
+</div>
+
+<!-- ─── 📇 FC 고객 알림·간편등록 패널 (⋮ 소유자 전용) — 2026-06-11 ─── -->
+<div class="modalBg" id="ownerPanel">
+  <div class="modalBox">
+    <div class="modalHeader"><div class="t">📇 내 고객 알림·등록</div><button class="x" data-close="ownerPanel">×</button></div>
+    <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px">🔔 오늘의 고객 알림</div>
+    <div id="opAlertList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px"></div>
+    <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px;border-top:1px solid #E5E7EB;padding-top:14px">✏️ 간편 고객 등록</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+      <div style="display:flex;gap:8px">
+        <input id="opName" maxlength="20" placeholder="이름 (필수)" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px">
+        <input id="opBirth" type="date" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151">
+      </div>
+      <div style="display:flex;gap:8px">
+        <input id="opProduct" maxlength="40" placeholder="보험상품명 (선택)" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px">
+        <input id="opMaturity" type="date" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151">
+      </div>
+      <div style="display:flex;gap:6px;font-size:11px;color:#9CA3AF"><span>생일 → 상령일 자동계산</span><span>·</span><span>만기일 입력 시 D-60/30/7 알림</span></div>
+      <button id="opAddBtn" type="button" style="width:100%;padding:11px;font-size:14px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer">+ 고객 추가</button>
+    </div>
+    <div style="display:flex;gap:8px;border-top:1px solid #E5E7EB;padding-top:12px">
+      <a href="/?action=clients" style="flex:1;text-align:center;padding:9px;font-size:12px;font-weight:600;color:#1B3A5C;border:1px solid #D1D5DB;border-radius:8px;text-decoration:none">📋 고객 전체 관리</a>
+      <a href="/?action=channel-manage" style="flex:1;text-align:center;padding:9px;font-size:12px;font-weight:600;color:#1B3A5C;border:1px solid #D1D5DB;border-radius:8px;text-decoration:none">⚙️ 채널 관리</a>
+    </div>
   </div>
 </div>
 
