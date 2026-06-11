@@ -1786,12 +1786,21 @@
 
       <div style="background:#fff;border:0.5px solid #E1E8EE;border-radius:12px;padding:16px;margin-bottom:14px">
         <div style="font-size:13px;font-weight:700;color:#1B3A6B;margin-bottom:10px">✏️ 고객 등록</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:6px">
+        <div id="fcc-edit-badge" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#FFF8E1;border:1px solid #D4A03C;border-radius:8px;padding:7px 12px;margin-bottom:8px">
+          <span id="fcc-edit-badge-text" style="font-size:12px;font-weight:700;color:#8B6914;flex:1;min-width:0"></span>
+          <button type="button" onclick="fccCancelEdit()" style="font-size:12px;color:#8B6914;background:none;border:1px solid #D4A03C;border-radius:6px;padding:2px 12px;cursor:pointer;flex-shrink:0">취소</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:8px">
           <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">이름 <span style="color:#DC2626">필수</span></label><input id="fcc-name" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box"></div>
           <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#DC2626">필수</span></label><input id="fcc-birth" type="date" style="width:100%;box-sizing:border-box"></div>
-          <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">보험상품명 <span style="color:#9CA3AF">선택</span></label><input id="fcc-product" maxlength="40" placeholder="○○종신보험" style="width:100%;box-sizing:border-box"></div>
-          <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">만기일 <span style="color:#9CA3AF">선택</span></label><input id="fcc-maturity" type="date" style="width:100%;box-sizing:border-box"></div>
         </div>
+        <div id="fcc-exist-wrap" style="display:none;margin-bottom:8px">
+          <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">기존 계약 <span style="color:#9CA3AF">×로 삭제 가능</span></label>
+          <div id="fcc-exist-list" onclick="fccExistDel(event)" style="display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+        <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px"><span id="fcc-ct-label">계약 (상품명 · 만기일)</span> <span style="color:#9CA3AF">선택 · 여러 개 가능</span></label>
+        <div id="fcc-ct-rows" onclick="fccCtDel(event)" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
+        <button type="button" onclick="fccCtAdd()" style="width:100%;padding:7px;font-size:12px;font-weight:700;color:#64748B;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;cursor:pointer;margin-bottom:8px">＋ 상품 추가</button>
         <div style="font-size:11px;color:#9CA3AF;margin-bottom:10px">CSV 일괄 등록 형식: 이름,생일,상품명,만기일 (날짜는 YYYY-MM-DD · 값에 쉼표 사용 불가)</div>
         <div id="fcc-stage-wrap" style="display:none;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;padding:10px;margin-bottom:10px">
           <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px">📋 저장 대기 <span id="fcc-stage-count" style="color:#1B3A5C"></span> — 아직 등록 전입니다</div>
@@ -1814,7 +1823,7 @@
         </select>
       </div>
       <div id="fcc-summary" style="font-size:12px;color:#8B93AE;margin-bottom:8px"></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th style="width:60px">삭제</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="5" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="5" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
     </div>
     <!-- ═══ /📇 내 고객 관리 탭 ═══ -->
 
@@ -9893,6 +9902,7 @@ window.fccOpenTab=function(){
 async function loadFcClients(){
   if(!me)return;
   $('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">불러오는 중...</td></tr>';
+  if(!$('fcc-ct-rows').children.length)fccCtReset();   // 첫 진입 시 상품 입력행 1개
   try{await fccFetch(true);}
   catch(e){console.error('loadFcClients error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">고객 정보를 불러오지 못했습니다.</td></tr>';return;}
   window.fccRenderTable();fccRenderStage();
@@ -9929,11 +9939,13 @@ window.fccRenderTable=function(){
       +'<td>'+fccEsc(c.birthDate||'')+'</td>'
       +'<td>'+(sgNow?'<span style="background:#FAEEDA;color:#633806;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">'+sgTxt+'</span>':sgTxt)+'</td>'
       +'<td>'+ctHtml+'</td>'
-      +'<td class="tc"><button type="button" data-fccdel="'+fccEsc(c.id)+'" style="font-size:12px;color:#DC2626;background:none;border:1px solid #FCA5A5;border-radius:6px;padding:3px 10px;cursor:pointer">삭제</button></td>'
+      +'<td class="tc" style="white-space:nowrap"><button type="button" data-fccedit="'+fccEsc(c.id)+'" style="font-size:12px;color:#1B3A5C;background:none;border:1px solid #C7D2DE;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">✏️</button><button type="button" data-fccdel="'+fccEsc(c.id)+'" style="font-size:12px;color:#DC2626;background:none;border:1px solid #FCA5A5;border-radius:6px;padding:3px 8px;cursor:pointer">삭제</button></td>'
       +'</tr>';
   }).join('');
 };
 window.fccRowAction=async function(ev){
+  const eb=ev.target&&ev.target.closest?ev.target.closest('[data-fccedit]'):null;
+  if(eb){fccEnterEdit(eb.getAttribute('data-fccedit'));return;}
   const btn=ev.target&&ev.target.closest?ev.target.closest('[data-fccdel]'):null;
   if(!btn)return;
   const id=btn.getAttribute('data-fccdel');
@@ -9943,26 +9955,89 @@ window.fccRowAction=async function(ev){
   try{
     await deleteDoc(doc(db,'fc_clients',id));
     fccCache=fccCache.filter(x=>x.id!==id);
+    if(fccEdit&&fccEdit.id===id)window.fccCancelEdit();
     window.fccRenderTable();
     if(fccBoardY)fccRenderBoard();
     toast('삭제되었습니다.','success');
   }catch(e){console.error('fccDelete error:',e);toast('삭제에 실패했습니다.');}
 };
+let fccEdit=null;   // 수정 모드: {id, keep:[유지할 기존 계약]}
+function fccCtAddRow(p,m){
+  const row=document.createElement('div');
+  row.className='fcc-ct-row';
+  row.style.cssText='display:flex;gap:6px;align-items:center';
+  row.innerHTML='<input class="fcc-ct-p" maxlength="40" placeholder="보험상품명" value="'+fccEsc(p||'')+'" style="flex:1;min-width:0">'
+    +'<input class="fcc-ct-m" type="date" value="'+fccEsc(m||'')+'" style="flex:1;min-width:0">'
+    +'<button type="button" class="fcc-ct-x" style="font-size:14px;color:#9CA3AF;background:none;border:none;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0">×</button>';
+  $('fcc-ct-rows').appendChild(row);
+}
+window.fccCtAdd=function(){if($('fcc-ct-rows').children.length<20)fccCtAddRow();};
+window.fccCtDel=function(ev){
+  const x=ev.target&&ev.target.closest?ev.target.closest('.fcc-ct-x'):null;
+  if(x&&$('fcc-ct-rows').children.length>1)x.parentElement.remove();
+};
+function fccCtRead(){
+  const out=[];
+  $('fcc-ct-rows').querySelectorAll('.fcc-ct-row').forEach(r=>{
+    const p=r.querySelector('.fcc-ct-p').value.trim();
+    const m=r.querySelector('.fcc-ct-m').value;
+    if(p||m)out.push({productName:p,maturityDate:m||null});
+  });
+  return out;
+}
+function fccCtReset(){$('fcc-ct-rows').innerHTML='';fccCtAddRow();}
 function fccReadForm(){
   const name=$('fcc-name').value.trim();
   const birth=$('fcc-birth').value;
-  const product=$('fcc-product').value.trim();
-  const maturity=$('fcc-maturity').value;
   if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
   if(!birth||birth.length!==10){toast('생일을 선택해주세요');return null;}
-  const contracts=[];
-  if(product||maturity)contracts.push({productName:product,maturityDate:maturity||null});
-  return{name,birthDate:birth,contracts};
+  return{name,birthDate:birth,contracts:fccCtRead().slice(0,20)};
 }
-function fccClearForm(){$('fcc-name').value='';$('fcc-birth').value='';$('fcc-product').value='';$('fcc-maturity').value='';}
+function fccClearForm(){$('fcc-name').value='';$('fcc-birth').value='';fccCtReset();}
+function fccRenderExist(){
+  const w=$('fcc-exist-wrap');
+  if(!fccEdit){w.style.display='none';return;}
+  w.style.display='block';
+  $('fcc-exist-list').innerHTML=fccEdit.keep.length
+    ? fccEdit.keep.map((ct,i)=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;color:#374151;background:#F8FAFC;border:1px solid #E5E7EB;border-radius:6px;padding:6px 10px">'
+        +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fccEsc(ct.productName||'(상품명 미입력)')+(ct.maturityDate?' · '+ct.maturityDate:'')+'</span>'
+        +'<button type="button" data-fccex="'+i+'" style="font-size:13px;color:#9CA3AF;background:none;border:none;cursor:pointer;padding:0 4px;line-height:1">×</button>'
+        +'</div>').join('')
+    : '<div style="font-size:12px;color:#C5CAD6;padding:4px 0">기존 계약 없음</div>';
+}
+window.fccExistDel=function(ev){
+  const b=ev.target&&ev.target.closest?ev.target.closest('[data-fccex]'):null;
+  if(!b||!fccEdit)return;
+  fccEdit.keep.splice(parseInt(b.getAttribute('data-fccex'),10),1);
+  fccRenderExist();
+};
+function fccEnterEdit(id){
+  const c=(fccCache||[]).find(x=>x.id===id);
+  if(!c)return;
+  fccEdit={id:c.id,keep:(c.contracts||[]).map(ct=>({productName:ct.productName||'',maturityDate:ct.maturityDate||null}))};
+  $('fcc-name').value=c.name||'';
+  $('fcc-birth').value=c.birthDate||'';
+  $('fcc-edit-badge').style.display='flex';
+  $('fcc-edit-badge-text').textContent='✏️ \''+c.name+'\' 고객 수정 중 — 저장 시 변경사항이 반영됩니다';
+  $('fcc-ct-label').textContent='추가할 계약 (상품명 · 만기일)';
+  $('fcc-stage-wrap').style.display='none';
+  $('fcc-save-btn').textContent='💾 수정 저장';
+  fccCtReset();
+  fccRenderExist();
+  const pane=$('mp-fc-clients');if(pane&&pane.scrollIntoView)pane.scrollIntoView({behavior:'smooth',block:'start'});
+}
+window.fccCancelEdit=function(){
+  fccEdit=null;
+  $('fcc-edit-badge').style.display='none';
+  $('fcc-exist-wrap').style.display='none';
+  $('fcc-ct-label').textContent='계약 (상품명 · 만기일)';
+  $('fcc-save-btn').textContent='💾 저장';
+  fccClearForm();
+  fccRenderStage();
+};
 function fccRenderStage(){
   const w=$('fcc-stage-wrap');if(!w)return;
-  if(!fccStage.length){w.style.display='none';return;}
+  if(!fccStage.length||fccEdit){w.style.display='none';return;}
   w.style.display='block';
   $('fcc-stage-count').textContent=fccStage.length+'명';
   $('fcc-stage-list').innerHTML=fccStage.map((s,i)=>{
@@ -9986,6 +10061,7 @@ window.fccStageDel=function(ev){
   fccRenderStage();
 };
 window.fccAddStage=function(){
+  if(fccEdit){toast('수정 모드에서는 사용할 수 없습니다 — 취소 후 이용해주세요');return;}
   const e=fccReadForm();if(!e)return;
   fccStageMerge(e);
   fccRenderStage();fccClearForm();
@@ -10001,6 +10077,7 @@ function fccNormDate(s){
   return null;
 }
 window.fccCsvLoad=function(ev){
+  if(fccEdit){toast('수정 모드에서는 사용할 수 없습니다 — 취소 후 이용해주세요');ev.target.value='';return;}
   const f=ev.target.files&&ev.target.files[0];
   if(!f)return;
   const reader=new FileReader();
@@ -10009,7 +10086,7 @@ window.fccCsvLoad=function(ev){
     String(reader.result||'').split(/\r?\n/).forEach((line,idx)=>{
       const cells=line.split(',').map(x=>x.trim());
       if(!cells[0])return;
-      if(idx===0&&(cells[0]==='이름'||cells[0].toLowerCase()==='name'))return;  // 헤더 행 무시
+      if(idx===0&&(cells[0]==='이름'||cells[0].toLowerCase()==='name'))return;
       const name=cells[0],birth=fccNormDate(cells[1]);
       if(!name||name.length>20||!birth){skip++;return;}
       const contracts=[];
@@ -10026,11 +10103,37 @@ window.fccCsvLoad=function(ev){
 };
 window.fccSaveAll=async function(){
   if(!me){toast('로그인이 필요합니다.');return;}
+  const btn=$('fcc-save-btn');
+  // ── 수정 모드: 이름·생일·계약 전체 갱신 (updateDoc — createdAt 비접촉으로 rules 정합) ──
+  if(fccEdit){
+    const e=fccReadForm();if(!e)return;
+    const merged=fccEdit.keep.concat(e.contracts);
+    if(merged.length>20){toast('계약은 고객당 최대 20건까지 등록할 수 있습니다');return;}
+    btn.disabled=true;btn.textContent='저장 중...';
+    try{
+      await updateDoc(doc(db,'fc_clients',fccEdit.id),{
+        name:e.name,birthDate:e.birthDate,contracts:merged,
+        birthMmdd:e.birthDate.slice(5,7)+e.birthDate.slice(8,10),
+        sangryeongMmdd:fccSang(e.birthDate),
+        updatedAt:serverTimestamp()
+      });
+      const idx=fccCache.findIndex(x=>x.id===fccEdit.id);
+      if(idx>-1)fccCache[idx]={...fccCache[idx],name:e.name,birthDate:e.birthDate,contracts:merged,
+        birthMmdd:e.birthDate.slice(5,7)+e.birthDate.slice(8,10),sangryeongMmdd:fccSang(e.birthDate)};
+      toast('\''+e.name+'\' 고객 정보가 수정되었습니다','success');
+      window.fccCancelEdit();
+      window.fccRenderTable();
+      if(fccBoardY)fccRenderBoard();
+    }catch(err){console.error('fccSaveAll(edit) error:',err);toast('수정에 실패했습니다. 다시 시도해주세요');}
+    finally{btn.disabled=false;btn.textContent=fccEdit?'💾 수정 저장':'💾 저장';}
+    return;
+  }
+  // ── 신규 등록 모드 ──
   if(!fccStage.length){
     const e=fccReadForm();if(!e)return;
     fccStage.push(e);
   }
-  const btn=$('fcc-save-btn');btn.disabled=true;btn.textContent='저장 중...';
+  btn.disabled=true;btn.textContent='저장 중...';
   const failed=[];let ok=0;
   for(const s of fccStage){
     try{
