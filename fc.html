@@ -1460,27 +1460,115 @@ function opYmdKst(offsetDays){
   const k=new Date(Date.now()+9*3600000+(offsetDays||0)*86400000);
   return k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');
 }
+const OP_CARD_LABELS={cardDailyLink:'고객용 데일리',cardCalendar:'일정 캘린더',cardSim:'시뮬레이션',cardCurated:'콘텐츠리스트',cardDashboard:'재무대시보드',cardMorning:'아침독서',cardCert:'자격증',cardResource:'자료실',cardReview:'후기'};
 function opStatLine(label,d){
   if(!d)return '<div><span style="color:#6B7280">'+label+'</span> · 집계 없음</div>';
-  const cards=d.byCard?Object.values(d.byCard).reduce((a,b)=>a+b,0):0;
-  return '<div><span style="color:#6B7280">'+label+'</span> · 채널 방문 <b>'+(d.channelVisit||0)+'</b>건'
+  return '<div><span style="color:#6B7280">'+label+'</span> · 채널 <b>'+(d.channelVisit||0)+'</b>건'
     +(d.uniqueViewers?' (고유 '+d.uniqueViewers+(d.newViewers?' · 신규 '+d.newViewers:'')+')':'')
-    +' · 데일리 '+(d.dailyVisit||0)+'건'
-    +(cards?' · 카드 클릭 '+cards+'건':'')+'</div>';
+    +' · 데일리 <b>'+(d.dailyVisit||0)+'</b>건</div>';
+}
+function opAggStats(docs){ // 7일 합산
+  const a={ch:0,dl:0,uniq:0,nw:0,byCard:{},bySec:{}};
+  docs.forEach(d=>{
+    if(!d)return;
+    a.ch+=d.channelVisit||0;a.dl+=d.dailyVisit||0;a.uniq+=d.uniqueViewers||0;a.nw+=d.newViewers||0;
+    Object.entries(d.byCard||{}).forEach(([k,v])=>a.byCard[k]=(a.byCard[k]||0)+v);
+    Object.entries(d.bySection||{}).forEach(([k,v])=>a.bySec[k]=(a.bySec[k]||0)+v);
+  });
+  return a;
+}
+function opBarRow(label,v,max,color){
+  const w=max>0?Math.max(6,Math.round(v/max*100)):0;
+  return '<div style="display:flex;align-items:center;gap:6px">'
+    +'<span style="flex:0 0 84px;font-size:11px;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(label)+'</span>'
+    +'<div style="flex:1;height:7px;background:#F3F4F6;border-radius:4px;min-width:0"><div style="width:'+w+'%;height:7px;background:'+color+';border-radius:4px"></div></div>'
+    +'<span style="flex:0 0 22px;font-size:11px;color:#6B7280;text-align:right">'+v+'</span>'
+    +'</div>';
+}
+let opVwMode='7d',opVwY=0,opVwM=0;
+const opVwDayCache={};   // {ymd: data|null} — 오늘자는 캐시하지 않음(실시간성)
+function opVwDim(y,m){return [31,(y%4===0&&y%100!==0)||y%400===0?29:28,31,30,31,30,31,31,30,31,30,31][m-1];}
+function opVwDates(){ // 모드별 조회 날짜 목록 [{ymd,label}] 과거→현재 순
+  const t=opTodayKst();const out=[];
+  const push=(y,m,d)=>out.push({ymd:y+String(m).padStart(2,'0')+String(d).padStart(2,'0'),label:m+'/'+d});
+  if(opVwMode==='month'){
+    if(!opVwY){opVwY=t.y;opVwM=t.m;}
+    const last=(opVwY===t.y&&opVwM===t.m)?t.d:opVwDim(opVwY,opVwM);  // 미래 일자는 제외
+    for(let d=1;d<=last;d++)push(opVwY,opVwM,d);
+  }else{
+    const n=opVwMode==='30d'?30:7;
+    for(let i=n-1;i>=0;i--){
+      const k=new Date(Date.now()+9*3600000-i*86400000);
+      push(k.getUTCFullYear(),k.getUTCMonth()+1,k.getUTCDate());
+    }
+  }
+  return out;
 }
 async function loadOpViewStats(){
   const box=$('opViewStats');if(!box)return;
-  // 집계 문서가 아직 없으면 규칙 특성상(resource 기반 read) permission-denied가 발생함
-  // → 개별 getDoc을 격리하고, 실패는 '집계 없음'으로 간주 (오류 아님)
-  const safeGet=(ymd)=>getDoc(doc(db,'fc_view_stats',loginId+'_'+ymd)).then(s=>s.exists()?s.data():null).catch(()=>null);
+  const nav=$('opVwMonthNav');
+  if(nav)nav.style.display=opVwMode==='month'?'flex':'none';
+  const dates=opVwDates();
+  if(opVwMode==='month')$('opVwYmLbl').textContent=opVwY+'.'+String(opVwM).padStart(2,'0');
+  box.innerHTML='<span style="color:#9CA3AF">집계를 불러오는 중...</span>';
+  const todayYmd=opYmdKst(0);
+  const safeGet=(ymd)=>{
+    if(ymd!==todayYmd&&ymd in opVwDayCache)return Promise.resolve(opVwDayCache[ymd]);
+    return getDoc(doc(db,'fc_view_stats',loginId+'_'+ymd))
+      .then(s=>{const d=s.exists()?s.data():null;if(ymd!==todayYmd)opVwDayCache[ymd]=d;return d;})
+      .catch(()=>{if(ymd!==todayYmd)opVwDayCache[ymd]=null;return null;});
+  };
   try{
-    const [t,y]=await Promise.all([safeGet(opYmdKst(0)),safeGet(opYmdKst(-1))]);
-    if(!t&&!y){box.innerHTML='<span style="color:#9CA3AF">아직 집계된 열람이 없습니다. 고객이 채널·데일리를 열람하면 여기에 표시됩니다.</span>';return;}
-    box.innerHTML=opStatLine('오늘',t)+opStatLine('어제',y);
+    const docs=await Promise.all(dates.map(x=>safeGet(x.ymd)));
+    if(docs.every(d=>!d)){
+      box.innerHTML='<span style="color:#9CA3AF">이 기간에 집계된 열람이 없습니다.</span>';
+      return;
+    }
+    const a=opAggStats(docs);
+    const rangeLbl=opVwMode==='month'?(opVwM+'월'):(opVwMode==='30d'?'최근 30일':'최근 7일');
+    let h='';
+    if(opVwMode!=='month'){
+      h+=opStatLine('오늘',docs[docs.length-1])+opStatLine('어제',docs[docs.length-2]||null);
+    }
+    h+='<div style="font-size:11px;font-weight:700;color:#6B7280;'+(h?'margin-top:8px;border-top:1px dashed #E5E7EB;padding-top:8px':'')+'">'+rangeLbl+' · 채널 '+a.ch+'건 · 데일리 '+a.dl+'건 · 고유 '+a.uniq+'명 (신규 '+a.nw+')</div>';
+    // 일자별 추이 (방문 합계 막대, 0건 날 제외하지 않고 전부 표시)
+    const daily=dates.map((x,i)=>({label:x.label,v:docs[i]?((docs[i].channelVisit||0)+(docs[i].dailyVisit||0)):0}));
+    const dmx=Math.max(1,...daily.map(r=>r.v));
+    h+='<div style="font-size:11px;font-weight:700;color:#6B7280;margin-top:6px">일자별 방문</div>';
+    h+='<div style="display:flex;flex-direction:column;gap:3px;margin-top:4px;max-height:170px;overflow-y:auto">'
+      +daily.map(r=>opBarRow(r.label,r.v,dmx,'#8B6914')).join('')+'</div>';
+    const cards=Object.entries(a.byCard).sort((x,z)=>z[1]-x[1]).slice(0,5);
+    if(cards.length){
+      const mx=cards[0][1];
+      h+='<div style="font-size:11px;font-weight:700;color:#6B7280;margin-top:8px">카드 클릭 TOP</div>';
+      h+='<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">'+cards.map(([k,v])=>opBarRow(OP_CARD_LABELS[k]||k,v,mx,'#378ADD')).join('')+'</div>';
+    }
+    const secs=Object.entries(a.bySec).sort((x,z)=>z[1]-x[1]);
+    if(secs.length){
+      const mx=secs[0][1];
+      h+='<div style="font-size:11px;font-weight:700;color:#6B7280;margin-top:8px">데일리 섹션 열람</div>';
+      h+='<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">'+secs.map(([k,v])=>opBarRow(k.replace(/_/g,' '),v,mx,'#1D9E75')).join('')+'</div>';
+    }
+    box.innerHTML=h;
   }catch(e){
     console.error('loadOpViewStats error:',e);
-    box.innerHTML='<span style="color:#9CA3AF">아직 집계된 열람이 없습니다.</span>';
+    box.innerHTML='<span style="color:#9CA3AF">집계를 불러오지 못했습니다.</span>';
   }
+}
+function opVwSetMode(mode){
+  opVwMode=mode;
+  $('opVwSeg').querySelectorAll('[data-opvw]').forEach(b=>{
+    const on=b.getAttribute('data-opvw')===mode;
+    b.style.background=on?'#1B3A5C':'#fff';
+    b.style.color=on?'#fff':'#6B7280';
+  });
+  loadOpViewStats();
+}
+function opVwNavM(dir){
+  opVwM+=dir;
+  if(opVwM>12){opVwM=1;opVwY++;}
+  if(opVwM<1){opVwM=12;opVwY--;}
+  loadOpViewStats();
 }
 // ── 방문자 열람 비콘 — 채널 주인 본인 열람은 전송 시점(이탈)에 제외 ──
 const JV_EP='https://asia-northeast3-jarvia-platform.cloudfunctions.net/logView';
@@ -1859,6 +1947,9 @@ async function init(){
         const _ofd=$('opFind'); if(_ofd)_ofd.oninput=opRenderFind;
         const _ofr=$('opFindRes'); if(_ofr)_ofr.onclick=(e)=>{const b=e.target&&e.target.closest&&e.target.closest('[data-opedit]');if(b)opEnterEdit(b.getAttribute('data-opedit'));};
         const _ocb=$('opCancelBtn'); if(_ocb)_ocb.onclick=opExitEdit;
+        const _ovs=$('opVwSeg'); if(_ovs)_ovs.onclick=(e)=>{const b=e.target&&e.target.closest&&e.target.closest('[data-opvw]');if(b)opVwSetMode(b.getAttribute('data-opvw'));};
+        const _ovp=$('opVwPrev'); if(_ovp)_ovp.onclick=()=>opVwNavM(-1);
+        const _ovn=$('opVwNext'); if(_ovn)_ovn.onclick=()=>opVwNavM(1);
         // ★ 본인 채널이면 샘플 안내 배너 즉시 숨김 (2026-05-09)
         const _smb=$('sampleNoticeBanner');
         if(_smb)_smb.classList.add('hidden-by-user');
@@ -3060,7 +3151,19 @@ init();
     <button id="opSaveBtn" type="button" style="width:100%;padding:12px;font-size:14px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer;margin-bottom:14px">💾 저장</button>
 
     <div style="border-top:1px solid #E5E7EB;padding-top:12px;margin-bottom:12px">
-      <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:6px">👁 고객 조회 현황</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-size:12px;font-weight:700;color:#6B7280">👁 고객 조회 현황</div>
+        <div id="opVwSeg" style="display:flex;gap:0;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden">
+          <button type="button" data-opvw="7d" style="font-size:11px;font-weight:700;padding:4px 10px;border:none;cursor:pointer;background:#1B3A5C;color:#fff">7일</button>
+          <button type="button" data-opvw="30d" style="font-size:11px;font-weight:700;padding:4px 10px;border:none;cursor:pointer;background:#fff;color:#6B7280">30일</button>
+          <button type="button" data-opvw="month" style="font-size:11px;font-weight:700;padding:4px 10px;border:none;cursor:pointer;background:#fff;color:#6B7280">월별</button>
+        </div>
+      </div>
+      <div id="opVwMonthNav" style="display:none;align-items:center;justify-content:flex-end;gap:4px;margin-bottom:6px">
+        <button type="button" id="opVwPrev" aria-label="이전 달" style="width:26px;height:24px;font-size:11px;color:#6B7280;background:#F3F4F6;border:1px solid #E5E7EB;border-radius:7px;cursor:pointer;padding:0">◀</button>
+        <span id="opVwYmLbl" style="font-size:12px;font-weight:800;color:#1F2937;min-width:64px;text-align:center">-</span>
+        <button type="button" id="opVwNext" aria-label="다음 달" style="width:26px;height:24px;font-size:11px;color:#6B7280;background:#F3F4F6;border:1px solid #E5E7EB;border-radius:7px;cursor:pointer;padding:0">▶</button>
+      </div>
       <div id="opViewStats" style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#374151"><span style="color:#9CA3AF">집계를 불러오는 중...</span></div>
     </div>
 
