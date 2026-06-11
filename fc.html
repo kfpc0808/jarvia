@@ -1311,6 +1311,7 @@ async function openOwnerPanel(){
     }
   }
   renderOpMonth();
+  loadOpViewStats();
 }
 function opNavM(dir){
   opM+=dir;
@@ -1415,6 +1416,56 @@ async function opSaveAll(){
   opClientsCache=null;       // 캐시 무효화 후 월별 현황 새로고침
   await openOwnerPanel();
 }
+
+// ═══ 👁 FC 조회현황 표시 + 열람 비콘 (Phase 2) — 2026-06-11 ═══
+function opYmdKst(offsetDays){
+  const k=new Date(Date.now()+9*3600000+(offsetDays||0)*86400000);
+  return k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');
+}
+function opStatLine(label,d){
+  if(!d)return '<div><span style="color:#6B7280">'+label+'</span> · 집계 없음</div>';
+  const cards=d.byCard?Object.values(d.byCard).reduce((a,b)=>a+b,0):0;
+  return '<div><span style="color:#6B7280">'+label+'</span> · 채널 방문 <b>'+(d.channelVisit||0)+'</b>건'
+    +(d.uniqueViewers?' (고유 '+d.uniqueViewers+(d.newViewers?' · 신규 '+d.newViewers:'')+')':'')
+    +' · 데일리 '+(d.dailyVisit||0)+'건'
+    +(cards?' · 카드 클릭 '+cards+'건':'')+'</div>';
+}
+async function loadOpViewStats(){
+  const box=$('opViewStats');if(!box)return;
+  try{
+    const [tSnap,ySnap]=await Promise.all([
+      getDoc(doc(db,'fc_view_stats',loginId+'_'+opYmdKst(0))),
+      getDoc(doc(db,'fc_view_stats',loginId+'_'+opYmdKst(-1)))
+    ]);
+    const t=tSnap.exists()?tSnap.data():null;
+    const y=ySnap.exists()?ySnap.data():null;
+    if(!t&&!y){box.innerHTML='<span style="color:#9CA3AF">아직 집계된 열람이 없습니다. 고객이 채널·데일리를 열람하면 여기에 표시됩니다.</span>';return;}
+    box.innerHTML=opStatLine('오늘',t)+opStatLine('어제',y);
+  }catch(e){
+    console.error('loadOpViewStats error:',e);
+    box.innerHTML='<span style="color:#9CA3AF">집계를 불러오지 못했습니다.</span>';
+  }
+}
+// ── 방문자 열람 비콘 — 채널 주인 본인 열람은 전송 시점(이탈)에 제외 ──
+const JV_EP='https://asia-northeast3-jarvia-platform.cloudfunctions.net/logView';
+let _jvQ=[],_jvVK=null,_jvNew=false;
+try{
+  _jvVK=localStorage.getItem('jv_vk');
+  if(!_jvVK){_jvVK=Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem('jv_vk',_jvVK);_jvNew=true;}
+}catch(e){_jvVK='na';}
+function jvTrack(t,id){_jvQ.push(id?{t:t,id:id}:{t:t});}
+function jvFlush(){
+  if(!_jvQ.length||!loginId)return;
+  if(isOwnerView){_jvQ.length=0;return;}
+  const ev=_jvQ.splice(0);
+  try{navigator.sendBeacon(JV_EP,new Blob([JSON.stringify({fcLoginId:loginId,viewerKey:_jvVK,isNew:_jvNew,page:'channel',events:ev})],{type:'text/plain'}));}catch(e){}
+}
+window.addEventListener('pagehide',jvFlush);
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')jvFlush();});
+jvTrack('channel_visit');
+['cardDailyLink','cardCalendar','cardSim','cardCurated','cardDashboard','cardMorning','cardCert','cardResource','cardReview'].forEach(function(cid){
+  const el=$(cid);if(el)el.addEventListener('click',function(){jvTrack('card',cid);},{passive:true});
+});
 
 // ═══ 📅 일정·이벤트 캘린더 (Phase 1) ═══
 function calcDday(month,day){
@@ -2951,10 +3002,9 @@ init();
     <div id="opMonthSummary" style="font-size:11px;color:#9CA3AF;margin-bottom:6px"></div>
     <div id="opAlertList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:200px;overflow-y:auto"></div>
 
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid #E5E7EB;padding-top:12px;margin-bottom:12px">
-      <span style="font-size:12px;font-weight:700;color:#6B7280">👁 고객 조회 현황</span>
-      <span style="font-size:10px;font-weight:700;color:#8B6914;background:#FFF8E1;border:1px solid #D4A03C;border-radius:8px;padding:1px 8px">오픈 예정</span>
-      <span style="font-size:11px;color:#9CA3AF">콘텐츠 열람 추적은 다음 업데이트에서 제공됩니다</span>
+    <div style="border-top:1px solid #E5E7EB;padding-top:12px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:6px">👁 고객 조회 현황</div>
+      <div id="opViewStats" style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#374151"><span style="color:#9CA3AF">집계를 불러오는 중...</span></div>
     </div>
 
     <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px;border-top:1px solid #E5E7EB;padding-top:12px">✏️ 간편 고객 등록</div>
