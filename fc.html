@@ -643,7 +643,7 @@ a{color:inherit;text-decoration:none}
       <div class="heroInner">
         <div class="heroLabel">
           <div class="badge">FINANCIAL ADVISOR</div>
-          <div class="urlTag" id="urlTag"></div>
+          <div class="urlTag" id="urlTag"></div><button id="ownerDotsBtn" type="button" aria-label="고객 알림·등록" style="display:none;align-items:center;justify-content:center;width:30px;height:30px;font-size:16px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:50%;padding:0;cursor:pointer;line-height:1;flex-shrink:0">⋮</button>
         </div>
         <div class="profileRow">
           <div class="avatarRing">
@@ -654,7 +654,7 @@ a{color:inherit;text-decoration:none}
             <div class="company" id="company">소속</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <div class="name" id="name">컨설턴트명</div>
-              <a id="ownerEditBtn" href="/?action=channel-manage" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">✏️ 편집</a><a id="manualBtn" href="https://jarvia.co.kr/platform-guide.html" target="_blank" rel="noopener" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">📖 매뉴얼</a><button id="ownerDotsBtn" type="button" aria-label="고객 알림·등록" style="display:none;align-items:center;justify-content:center;width:24px;height:24px;font-size:14px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:50%;padding:0;cursor:pointer;line-height:1">⋮</button>
+              <a id="ownerEditBtn" href="/?action=channel-manage" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">✏️ 편집</a><a id="manualBtn" href="https://jarvia.co.kr/platform-guide.html" target="_blank" rel="noopener" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#C9A96E;background:rgba(201,169,110,.15);border:1px solid rgba(201,169,110,.4);border-radius:999px;padding:3px 10px;text-decoration:none;white-space:nowrap;cursor:pointer">📖 매뉴얼</a>
             </div>
             <div class="bio" id="bio">"고객의 자산을 함께 지키는 자산관리 전문가"</div>
           </div>
@@ -1283,6 +1283,9 @@ function toast(msg,type='info'){const t=$('toast');t.textContent=msg;t.className
 function showError(title,msg){$('loadingState').classList.add('hidden');$('contentState').classList.add('hidden');$('errorState').classList.remove('hidden');$('errorTitle').textContent=title;if(msg)$('errorMsg').textContent=msg;}
 function getTodayKST(){const now=new Date();const k=new Date(now.getTime()+9*3600000);return k.getUTCFullYear()+'.'+String(k.getUTCMonth()+1).padStart(2,'0')+'.'+String(k.getUTCDate()).padStart(2,'0');}
 // ═══ 📇 FC 고객 알림·간편등록 (⋮ 소유자 패널) — 2026-06-11 ═══
+let opClientsCache=null;  // fc_clients 캐시 (패널 내 월 이동 시 재조회 방지)
+let opStage=[];           // 저장 대기 목록
+let opY=0,opM=0;          // 조회 중인 연·월
 function opEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function opSangMmdd(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 익월 1일)
   let m=parseInt(birth.slice(5,7),10),d=parseInt(birth.slice(8,10),10);
@@ -1291,74 +1294,126 @@ function opSangMmdd(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 �
   if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}
   return String(m).padStart(2,'0')+String(d).padStart(2,'0');
 }
-function opDiffDays(dateStr){ // 특정 날짜까지 남은 일수 (KST 기준, 과거면 음수)
-  const now=new Date();const k=new Date(now.getTime()+9*3600000);
-  const today=Date.UTC(k.getUTCFullYear(),k.getUTCMonth(),k.getUTCDate());
-  const t=Date.UTC(parseInt(dateStr.slice(0,4),10),parseInt(dateStr.slice(5,7),10)-1,parseInt(dateStr.slice(8,10),10));
-  return Math.round((t-today)/86400000);
-}
+function opTodayKst(){const k=new Date(Date.now()+9*3600000);return{y:k.getUTCFullYear(),m:k.getUTCMonth()+1,d:k.getUTCDate()};}
 async function openOwnerPanel(){
   if(!isOwnerView||!currentUser)return;
   $('ownerPanel').classList.add('active');
-  const list=$('opAlertList');
-  list.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">불러오는 중...</div>';
-  try{
-    const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',currentUser.uid)));
-    const alerts=[];
-    snap.forEach(s=>{
-      const c=s.data();if(!c.birthDate||c.birthDate.length!==10)return;
-      const bm=parseInt(c.birthDate.slice(5,7),10),bd=parseInt(c.birthDate.slice(8,10),10);
-      const dB=calcDday(bm,bd);
-      if(dB===0||dB===7)alerts.push({k:'생일',bg:'#E1F5EE',fg:'#085041',dd:dB,n:c.name,sub:bm+'/'+bd+' 생일'});
-      const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd(c.birthDate);
-      const dS=calcDday(parseInt(sg.slice(0,2),10),parseInt(sg.slice(2,4),10));
-      if(dS===0||dS===7||dS===14||dS===30)alerts.push({k:'상령일',bg:'#FAEEDA',fg:'#633806',dd:dS,n:c.name,sub:'보험나이 +1'});
-      (c.contracts||[]).forEach(ct=>{
-        if(!ct||!ct.maturityDate||ct.maturityDate.length!==10)return;
-        const dM=opDiffDays(ct.maturityDate);
-        if(dM===7||dM===30||dM===60)alerts.push({k:'만기',bg:'#FAECE7',fg:'#712B13',dd:dM,n:c.name,sub:(ct.productName||'')+' 만기'});
-      });
-    });
-    alerts.sort((a,b)=>a.dd-b.dd);
-    if(!alerts.length){list.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">오늘 예정된 알림이 없습니다.</div>';return;}
-    list.innerHTML=alerts.map(a=>'<div style="display:flex;align-items:center;gap:8px;border:1px solid #E5E7EB;border-radius:8px;padding:8px 10px">'
-      +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+a.bg+';color:'+a.fg+'">'+a.k+(a.dd===0?' 오늘':' D-'+a.dd)+'</span>'
-      +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+opEsc(a.n)+'</span>'
-      +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(a.sub)+'</span>'
-      +'</div>').join('');
-  }catch(e){
-    console.error('openOwnerPanel error:',e);
-    list.innerHTML='<div style="font-size:12px;color:#DC2626;padding:8px 0">알림을 불러오지 못했습니다.</div>';
+  if(!opY){const t=opTodayKst();opY=t.y;opM=t.m;}
+  if(!opClientsCache){
+    $('opAlertList').innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">불러오는 중...</div>';
+    try{
+      const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',currentUser.uid)));
+      opClientsCache=[];snap.forEach(s=>opClientsCache.push(s.data()));
+    }catch(e){
+      console.error('openOwnerPanel error:',e);
+      $('opAlertList').innerHTML='<div style="font-size:12px;color:#DC2626;padding:8px 0">고객 정보를 불러오지 못했습니다.</div>';
+      return;
+    }
   }
+  renderOpMonth();
 }
-async function opQuickAdd(){
-  if(!isOwnerView||!currentUser)return;
+function opNavM(dir){
+  opM+=dir;
+  if(opM>12){opM=1;opY++;}
+  if(opM<1){opM=12;opY--;}
+  renderOpMonth();
+}
+function renderOpMonth(){
+  const t=opTodayKst();
+  const mm=String(opM).padStart(2,'0');
+  $('opYmLabel').textContent=opY+'.'+mm;
+  const ev=[];
+  (opClientsCache||[]).forEach(c=>{
+    if(!c.birthDate||c.birthDate.length!==10)return;
+    const bm=(c.birthMmdd&&c.birthMmdd.length===4)?c.birthMmdd:(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));
+    if(bm.slice(0,2)===mm)ev.push({d:parseInt(bm.slice(2,4),10),k:'생일',bg:'#E1F5EE',fg:'#085041',n:c.name,sub:''});
+    const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd(c.birthDate);
+    if(sg.slice(0,2)===mm)ev.push({d:parseInt(sg.slice(2,4),10),k:'상령일',bg:'#FAEEDA',fg:'#633806',n:c.name,sub:'보험나이 +1'});
+    (c.contracts||[]).forEach(ct=>{
+      if(!ct||!ct.maturityDate||String(ct.maturityDate).length!==10)return;
+      if(ct.maturityDate.slice(0,7)===opY+'-'+mm)ev.push({d:parseInt(ct.maturityDate.slice(8,10),10),k:'만기',bg:'#FAECE7',fg:'#712B13',n:c.name,sub:ct.productName||''});
+    });
+  });
+  ev.sort((a,b)=>a.d-b.d);
+  $('opMonthSummary').textContent='이벤트 '+ev.length+'건 · 등록 고객 '+(opClientsCache?opClientsCache.length:0)+'명';
+  if(!ev.length){
+    $('opAlertList').innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">'+opM+'월에 예정된 이벤트가 없습니다.</div>';
+    return;
+  }
+  const isThisM=(opY===t.y&&opM===t.m);
+  $('opAlertList').innerHTML=ev.map(e=>{
+    const isToday=isThisM&&e.d===t.d;
+    return '<div style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#E5E7EB')+';border-radius:8px;padding:7px 10px'+(isToday?';background:#F0F4F8':'')+'">'
+      +'<span style="font-size:12px;font-weight:800;color:#1F2937;min-width:36px">'+opM+'/'+e.d+'</span>'
+      +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+e.k+(isToday?' 오늘':'')+'</span>'
+      +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+opEsc(e.n)+'</span>'
+      +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(e.sub)+'</span>'
+      +'</div>';
+  }).join('');
+}
+function opReadForm(){
   const name=$('opName').value.trim();
   const birth=$('opBirth').value;
   const product=$('opProduct').value.trim();
   const maturity=$('opMaturity').value;
-  if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return;}
-  if(!birth||birth.length!==10){toast('생일을 선택해주세요');return;}
+  if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
+  if(!birth||birth.length!==10){toast('생일을 선택해주세요');return null;}
   const contracts=[];
   if(product||maturity)contracts.push({productName:product,maturityDate:maturity||null});
-  const btn=$('opAddBtn');btn.disabled=true;btn.textContent='등록 중...';
-  try{
-    const ref=doc(collection(db,'fc_clients'));
-    await setDoc(ref,{
-      fcAuthUid:currentUser.uid,
-      fcLoginId:loginId,
-      name,birthDate:birth,contracts,
-      birthMmdd:birth.slice(5,7)+birth.slice(8,10),
-      sangryeongMmdd:opSangMmdd(birth),
-      createdAt:serverTimestamp(),updatedAt:serverTimestamp()
-    });
-    toast('고객이 등록되었습니다');
-    $('opName').value='';$('opBirth').value='';$('opProduct').value='';$('opMaturity').value='';
-    openOwnerPanel(); // 알림 목록 새로고침
-  }catch(e){
-    console.error('opQuickAdd error:',e);
-    toast('등록에 실패했습니다. 다시 시도해주세요');
-  }finally{btn.disabled=false;btn.textContent='+ 고객 추가';}
+  return{name,birthDate:birth,contracts};
+}
+function opClearForm(){$('opName').value='';$('opBirth').value='';$('opProduct').value='';$('opMaturity').value='';}
+function renderOpStage(){
+  const w=$('opStageWrap');
+  if(!opStage.length){w.style.display='none';return;}
+  w.style.display='block';
+  $('opStageCount').textContent=opStage.length+'명';
+  $('opStageList').innerHTML=opStage.map((s,i)=>{
+    let line=opEsc(s.name)+' · '+s.birthDate;
+    if(s.contracts.length)line+=' · '+opEsc(s.contracts[0].productName||'(상품명 미입력)')+(s.contracts.length>1?' 외 '+(s.contracts.length-1)+'건':'');
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;color:#374151;background:#fff;border:1px solid #E5E7EB;border-radius:6px;padding:6px 8px">'
+      +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+line+'</span>'
+      +'<button type="button" data-opdel="'+i+'" style="font-size:13px;color:#9CA3AF;background:none;border:none;cursor:pointer;padding:0 4px;line-height:1">×</button>'
+      +'</div>';
+  }).join('');
+}
+function opQuickAdd(){
+  const e=opReadForm();if(!e)return;
+  const ex=opStage.find(s=>s.name===e.name&&s.birthDate===e.birthDate);
+  if(ex){ex.contracts=ex.contracts.concat(e.contracts).slice(0,20);}
+  else{opStage.push(e);}
+  renderOpStage();opClearForm();
+  $('opName').focus();
+  toast('대기 목록에 담았습니다 — 저장을 눌러야 등록됩니다');
+}
+async function opSaveAll(){
+  if(!isOwnerView||!currentUser)return;
+  if(!opStage.length){
+    const e=opReadForm();if(!e)return;   // 대기 목록 없이 바로 저장 — 입력값 1건 저장
+    opStage.push(e);
+  }
+  const btn=$('opSaveBtn');btn.disabled=true;btn.textContent='저장 중...';
+  const failed=[];let ok=0;
+  for(const s of opStage){
+    try{
+      await setDoc(doc(collection(db,'fc_clients')),{
+        fcAuthUid:currentUser.uid,
+        fcLoginId:loginId,
+        name:s.name,birthDate:s.birthDate,contracts:s.contracts,
+        birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),
+        sangryeongMmdd:opSangMmdd(s.birthDate),
+        createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+      });
+      ok++;
+    }catch(err){console.error('opSaveAll error:',err);failed.push(s);}
+  }
+  opStage=failed;
+  renderOpStage();
+  if(failed.length)toast(ok+'명 저장, '+failed.length+'명 실패 — 실패분은 대기 목록에 남아있습니다');
+  else{opClearForm();toast(ok+'명 저장 완료');}
+  btn.disabled=false;btn.textContent='💾 저장';
+  opClientsCache=null;       // 캐시 무효화 후 월별 현황 새로고침
+  await openOwnerPanel();
 }
 
 // ═══ 📅 일정·이벤트 캘린더 (Phase 1) ═══
@@ -1707,8 +1762,13 @@ async function init(){
         loadFcAdminSection();
         const _eb=$('ownerEditBtn'); if(_eb)_eb.style.display='inline-flex';
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
-        const _odb=$('ownerDotsBtn'); if(_odb){_odb.style.display='inline-flex';_odb.onclick=openOwnerPanel;}   // 📇 고객 알림·등록 패널 (2026-06-11)
+        // 📇 고객 알림·등록 패널 바인딩 (2026-06-11)
+        const _odb=$('ownerDotsBtn'); if(_odb){_odb.style.display='flex';_odb.onclick=openOwnerPanel;}
         const _oab=$('opAddBtn'); if(_oab)_oab.onclick=opQuickAdd;
+        const _osb=$('opSaveBtn'); if(_osb)_osb.onclick=opSaveAll;
+        const _opm=$('opPrevM'); if(_opm)_opm.onclick=()=>opNavM(-1);
+        const _onm=$('opNextM'); if(_onm)_onm.onclick=()=>opNavM(1);
+        const _osl=$('opStageList'); if(_osl)_osl.onclick=(e)=>{const i=e.target&&e.target.getAttribute&&e.target.getAttribute('data-opdel');if(i!=null){opStage.splice(parseInt(i,10),1);renderOpStage();}};
         // ★ 본인 채널이면 샘플 안내 배너 즉시 숨김 (2026-05-09)
         const _smb=$('sampleNoticeBanner');
         if(_smb)_smb.classList.add('hidden-by-user');
@@ -2879,21 +2939,43 @@ init();
 <div class="modalBg" id="ownerPanel">
   <div class="modalBox">
     <div class="modalHeader"><div class="t">📇 내 고객 알림·등록</div><button class="x" data-close="ownerPanel">×</button></div>
-    <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px">🔔 오늘의 고객 알림</div>
-    <div id="opAlertList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px"></div>
-    <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px;border-top:1px solid #E5E7EB;padding-top:14px">✏️ 간편 고객 등록</div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-      <div style="display:flex;gap:8px">
-        <input id="opName" maxlength="20" placeholder="이름 (필수)" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px">
-        <input id="opBirth" type="date" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:12px;font-weight:700;color:#6B7280">🔔 월별 고객 현황</div>
+      <div style="display:flex;align-items:center;gap:4px">
+        <button id="opPrevM" type="button" aria-label="이전 달" style="width:28px;height:28px;font-size:12px;color:#6B7280;background:#F3F4F6;border:1px solid #E5E7EB;border-radius:8px;cursor:pointer;padding:0">◀</button>
+        <span id="opYmLabel" style="font-size:13px;font-weight:800;color:#1F2937;min-width:66px;text-align:center">-</span>
+        <button id="opNextM" type="button" aria-label="다음 달" style="width:28px;height:28px;font-size:12px;color:#6B7280;background:#F3F4F6;border:1px solid #E5E7EB;border-radius:8px;cursor:pointer;padding:0">▶</button>
       </div>
-      <div style="display:flex;gap:8px">
-        <input id="opProduct" maxlength="40" placeholder="보험상품명 (선택)" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px">
-        <input id="opMaturity" type="date" style="flex:1;min-width:0;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151">
-      </div>
-      <div style="display:flex;gap:6px;font-size:11px;color:#9CA3AF"><span>생일 → 상령일 자동계산</span><span>·</span><span>만기일 입력 시 D-60/30/7 알림</span></div>
-      <button id="opAddBtn" type="button" style="width:100%;padding:11px;font-size:14px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer">+ 고객 추가</button>
     </div>
+    <div id="opMonthSummary" style="font-size:11px;color:#9CA3AF;margin-bottom:6px"></div>
+    <div id="opAlertList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:200px;overflow-y:auto"></div>
+
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid #E5E7EB;padding-top:12px;margin-bottom:12px">
+      <span style="font-size:12px;font-weight:700;color:#6B7280">👁 고객 조회 현황</span>
+      <span style="font-size:10px;font-weight:700;color:#8B6914;background:#FFF8E1;border:1px solid #D4A03C;border-radius:8px;padding:1px 8px">오픈 예정</span>
+      <span style="font-size:11px;color:#9CA3AF">콘텐츠 열람 추적은 다음 업데이트에서 제공됩니다</span>
+    </div>
+
+    <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px;border-top:1px solid #E5E7EB;padding-top:12px">✏️ 간편 고객 등록</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px">
+      <div><label for="opName" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">이름 <span style="color:#DC2626">필수</span></label><input id="opName" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px"></div>
+      <div><label for="opBirth" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#DC2626">필수</span></label><input id="opBirth" type="date" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff"></div>
+      <div><label for="opProduct" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">보험상품명 <span style="color:#9CA3AF">선택</span></label><input id="opProduct" maxlength="40" placeholder="○○종신보험" style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px"></div>
+      <div><label for="opMaturity" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">만기일 <span style="color:#9CA3AF">선택</span></label><input id="opMaturity" type="date" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff"></div>
+    </div>
+    <div style="font-size:11px;color:#9CA3AF;margin-bottom:10px">생일 → 상령일 자동계산 · 만기일 입력 시 D-60/30/7 알림 · 같은 고객을 다시 추가하면 상품이 합쳐집니다</div>
+
+    <div id="opStageWrap" style="display:none;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px">📋 저장 대기 <span id="opStageCount" style="color:#1B3A5C"></span> — 아직 등록 전입니다</div>
+      <div id="opStageList" style="display:flex;flex-direction:column;gap:4px"></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button id="opAddBtn" type="button" style="flex:1;padding:11px;font-size:13px;font-weight:700;color:#1B3A5C;background:#fff;border:1.5px solid #1B3A5C;border-radius:8px;cursor:pointer">+ 고객 추가</button>
+      <button id="opSaveBtn" type="button" style="flex:1;padding:11px;font-size:13px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:8px;cursor:pointer">💾 저장</button>
+    </div>
+
     <div style="display:flex;gap:8px;border-top:1px solid #E5E7EB;padding-top:12px">
       <a href="/?action=clients" style="flex:1;text-align:center;padding:9px;font-size:12px;font-weight:600;color:#1B3A5C;border:1px solid #D1D5DB;border-radius:8px;text-decoration:none">📋 고객 전체 관리</a>
       <a href="/?action=channel-manage" style="flex:1;text-align:center;padding:9px;font-size:12px;font-weight:600;color:#1B3A5C;border:1px solid #D1D5DB;border-radius:8px;text-decoration:none">⚙️ 채널 관리</a>
