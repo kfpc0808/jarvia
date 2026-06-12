@@ -71,6 +71,11 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .newb{font-size:10px;font-weight:800;color:#E14848;margin-right:5px;letter-spacing:.3px}
 .oth-tg{margin:14px 0 4px;padding:10px;text-align:center;font-size:13px;font-weight:700;color:#5A6B7B;background:#F1F5F9;border:1px dashed #C9D6E2;border-radius:10px;cursor:pointer}
 .oth-tg:hover{background:#EAF1F8}
+.tchips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-2px 0 12px}
+.tlab{font-size:12px;color:#8A99A8;font-weight:700;margin-right:2px}
+.tc{font-size:12px;padding:6px 12px;border-radius:14px;border:1px solid #D5DEE8;background:#fff;color:#5A6B7B;cursor:pointer;font-family:inherit}
+.tc.on{background:#1B3A5C;color:#fff;border-color:#1B3A5C;font-weight:700}
+.tsep{width:1px;height:16px;background:#E2E8F0;margin:0 6px}
 .dd{font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;flex-shrink:0}
 .dd-red{background:#FDECEC;color:#C0392B}
 .dd-amb{background:#FBF1DE;color:#9A6B14}
@@ -121,6 +126,18 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
   </div>
 
   <div class="chips" id="chips"></div>
+  <!-- ★ 기간 필터 (2026-06-12): 등록일 기준 신규 · 마감일 기준 마감 — 분야와 AND 결합 -->
+  <div class="tchips">
+    <span class="tlab">신규</span>
+    <button class="tc" data-n="today">오늘</button>
+    <button class="tc" data-n="week">금주</button>
+    <button class="tc" data-n="month">당월</button>
+    <span class="tsep"></span>
+    <span class="tlab">마감</span>
+    <button class="tc" data-d="week">금주</button>
+    <button class="tc" data-d="month">당월</button>
+    <button class="tc" data-d="nmonth">익월</button>
+  </div>
 
   <div class="search"><input type="text" id="q" placeholder="공고 제목·내용 검색 (예: 물류비, 스마트공장, 수출바우처)"></div>
 
@@ -268,10 +285,40 @@ const ALL_SIZE_WORDS=['소상공인','중소기업','중견기업','중견'];
 let PROGRAMS=[];          // 전처리된 공고
 let KSIC=null;            // 지연 로드
 let ME=null;              // 로그인 사용자 (Firestore 저장용)
-let state={chip:'',q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[]};
+let state={chip:'',q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[],fNew:'',fDue:''};
 let shown=PAGE_SIZE;
 const todayStr=(()=>{const d=new Date(Date.now()+9*3600*1000);return d.toISOString().slice(0,10).replace(/-/g,'');})();
 const freshCut=(()=>{const d=new Date(Date.now()+9*3600*1000-7*86400000);return d.toISOString().slice(0,10);})(); // 최근 7일 = NEW
+
+/* ═══ ★ 기간 필터 (2026-06-12): 달력 주(월~일)·달력 월 기준, '상시'는 마감 필터 시 제외 ═══ */
+function _kst(){ return new Date(Date.now()+9*3600*1000); }
+function _ymd(d){ return d.toISOString().slice(0,10).replace(/-/g,''); }
+function weekRange(){ const d=_kst(); const dow=(d.getUTCDay()+6)%7; // 월=0
+  const mon=new Date(d); mon.setUTCDate(d.getUTCDate()-dow);
+  const sun=new Date(mon); sun.setUTCDate(mon.getUTCDate()+6);
+  return [_ymd(mon),_ymd(sun)]; }
+function monthRange(off){ const d=_kst();
+  const a=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+off,1));
+  const b=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+off+1,0));
+  return [_ymd(a),_ymd(b)]; }
+function timePass(p){
+  if(state.fNew){
+    const rd=(p.registeredDate||'').slice(0,10).replace(/-/g,'');
+    if(rd.length!==8) return false;
+    if(state.fNew==='today' && rd!==todayStr) return false;
+    if(state.fNew==='week'){ const[a,b]=weekRange(); if(rd<a||rd>b) return false; }
+    if(state.fNew==='month'){ const[a,b]=monthRange(0); if(rd<a||rd>b) return false; }
+  }
+  if(state.fDue){
+    const ed=p.endDate||'';
+    if(ed.length!==8) return false;            // 상시(마감일 없음) 제외
+    if(ed<todayStr) return false;
+    if(state.fDue==='week'){ const[,b]=weekRange(); if(ed>b) return false; }
+    if(state.fDue==='month'){ const[,b]=monthRange(0); if(ed>b) return false; }
+    if(state.fDue==='nmonth'){ const[a,b]=monthRange(1); if(ed<a||ed>b) return false; }
+  }
+  return true;
+}
 
 /* ═══ ★ 서버 정밀 매칭 (2026-06-12) ═══
    조건 입력 시 0.5초 디바운스 후 기업마당 서버의 검증된 필터(getJarviaPrograms?조건)를 호출,
@@ -368,6 +415,17 @@ async function init(){
   // 입력 바인딩
   $('q').addEventListener('input',e=>{state.q=e.target.value.trim().toLowerCase();shown=PAGE_SIZE;render();});
   [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;scheduleMatch();render();}));
+  // ★ 기간 칩: 같은 그룹 내 택1 토글 (재클릭 해제), 신규·마감 동시 선택 = AND
+  document.querySelectorAll('.tc').forEach(b=>b.addEventListener('click',()=>{
+    if(b.dataset.n!==undefined){
+      state.fNew=state.fNew===b.dataset.n?'':b.dataset.n;
+      document.querySelectorAll('.tc[data-n]').forEach(x=>x.classList.toggle('on',x.dataset.n===state.fNew&&state.fNew!==''));
+    }else{
+      state.fDue=state.fDue===b.dataset.d?'':b.dataset.d;
+      document.querySelectorAll('.tc[data-d]').forEach(x=>x.classList.toggle('on',x.dataset.d===state.fDue&&state.fDue!==''));
+    }
+    shown=PAGE_SIZE; othOpen=false; render();
+  }));
   [['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;scheduleMatch();render();}));
   // ★ 보유 인증 체크칩 (2026-06-12)
   $('certs').innerHTML=CERT_DEFS.map(c=>`<label class="ck"><input type="checkbox" value="${c.v}">${c.label}</label>`).join('');
@@ -393,6 +451,8 @@ async function init(){
     document.querySelectorAll('#certs input').forEach(x=>{x.checked=false;});
     $('q').value='';['f-region','f-size','f-ind','f-year','f-emp'].forEach(id=>$(id).value='');
     setKsicCascade('');
+    state.fNew=''; state.fDue='';
+    document.querySelectorAll('.tc').forEach(x=>x.classList.remove('on'));
     shown=PAGE_SIZE;render();
   });
   $('btn-save').addEventListener('click',saveCompany);
@@ -434,6 +494,7 @@ function applyFilters(){
   let s1=PROGRAMS.filter(p=>{
     if(state.chip && p.category!==state.chip) return false;
     if(state.q && !p.txt.includes(state.q)) return false;
+    if(!timePass(p)) return false;
     return true;
   });
   // 2단계: 고객기업 조건
@@ -493,6 +554,7 @@ function render(){
     let list=SERVER.list.filter(p=>{
       if(state.chip && p.category!==state.chip) return false;
       if(state.q){ const t=((p.name||'')+' '+(p.target||'')+' '+(p.summary||'')).toLowerCase(); if(!t.includes(state.q)) return false; }
+      if(!timePass(p)) return false;
       return true;
     });
     view={mode:'server',total:SERVER.total,main:list.filter(p=>p.signal),oth:list.filter(p=>!p.signal)};
@@ -509,9 +571,9 @@ function render(){
     nh=`<span class="now">🔄 서버 정밀 매칭 중…</span>`;
   }else if(view.mode==='fallback'){
     nh=`<s>${view.total.toLocaleString()}건</s> → <span class="now">${view.c2.toLocaleString()}건 일치</span> <span style="color:#C0392B;font-size:12px">⚠ 서버 연결 실패 — 간이 매칭 결과</span>`;
-  }else if(view.condUsed||state.chip||state.q){
+  }else if(view.condUsed||state.chip||state.q||state.fNew||state.fDue){
     nh=`<s>${view.total.toLocaleString()}건</s>`;
-    if((state.chip||state.q)&&view.condUsed) nh+=` → <s>${view.c1.toLocaleString()}건</s>`;
+    if((state.chip||state.q||state.fNew||state.fDue)&&view.condUsed) nh+=` → <s>${view.c1.toLocaleString()}건</s>`;
     nh+=` → <span class="now">${view.c2.toLocaleString()}건 일치</span>`;
   }else{
     nh=`<span class="now">${view.total.toLocaleString()}건</span><span>전체 공고</span>`;
