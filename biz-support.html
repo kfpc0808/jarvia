@@ -36,6 +36,10 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .ksic-sel b{font-size:13px;color:#1B3A5C;background:#EAF1F8;border-radius:7px;padding:4px 10px}
 .ksic-link{border:none;background:none;color:#1B6FB5;font-size:12px;cursor:pointer;text-decoration:underline;padding:0;margin-left:8px}
 @media (max-width:560px){.ksic-cas{grid-template-columns:1fr 1fr}}
+.certs{display:flex;flex-wrap:wrap;gap:8px}
+.ck{font-size:12.5px;display:inline-flex;align-items:center;gap:6px;border:1px solid #D5DEE8;border-radius:16px;padding:7px 12px;background:#fff;cursor:pointer;color:#5A6B7B;user-select:none}
+.ck input{accent-color:#1B3A5C;width:14px;height:14px;margin:0}
+.ck:has(input:checked){background:#1B3A5C;border-color:#1B3A5C;color:#fff}
 .infer{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .infer span{font-size:12px;padding:4px 10px;border-radius:12px;background:#E8F6EF;color:#0B6E4F}
 .cond-ft{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
@@ -143,6 +147,10 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
       <div><label>설립연도</label><input type="text" id="f-year" placeholder="예: 2014" maxlength="4" inputmode="numeric"></div>
       <div><label>직원수</label><input type="text" id="f-emp" placeholder="예: 12" maxlength="6" inputmode="numeric"></div>
     </div>
+    <div style="margin-bottom:10px">
+      <label style="font-size:12px;color:#5A6B7B;display:block;margin-bottom:6px">보유 인증 <span style="color:#A0AEBB">(해당 시 체크)</span></label>
+      <div class="certs" id="certs"></div>
+    </div>
     <div class="infer" id="infer"></div>
     <div class="cond-ft">
       <div class="narrow" id="narrow"></div>
@@ -234,13 +242,24 @@ const IND_GROUPS=[
   {v:'etc',  label:'기타 서비스업', words:['서비스']},
 ];
 const SIZE_WORDS={ '소상공인':['소상공인'], '중소기업':['중소기업'], '중견기업':['중견기업','중견'] };
+// ★ 보유 인증 (2026-06-12) — exclusive: 미보유 시 '전용' 공고 제외 / 전체: 보유 시 관련 공고 가점
+const CERT_DEFS=[
+  {v:'venture', label:'벤처기업',   words:['벤처기업']},
+  {v:'innobiz', label:'이노비즈',   words:['이노비즈']},
+  {v:'mainbiz', label:'메인비즈',   words:['메인비즈']},
+  {v:'woman',   label:'여성기업',   words:['여성기업'], exclusive:true},
+  {v:'social',  label:'사회적기업', words:['사회적기업','사회적 기업'], exclusive:true},
+  {v:'disabled',label:'장애인기업', words:['장애인기업','장애인 기업'], exclusive:true},
+  {v:'lab',     label:'연구소 보유', words:['기업부설연구소','연구전담부서']},
+];
+const GENERIC_TARGET=/중소기업|소상공인|중견|제한\s*없음|누구나/;
 const ALL_SIZE_WORDS=['소상공인','중소기업','중견기업','중견'];
 
 /* ════════ 상태 ════════ */
 let PROGRAMS=[];          // 전처리된 공고
 let KSIC=null;            // 지연 로드
 let ME=null;              // 로그인 사용자 (Firestore 저장용)
-let state={chip:'',q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:''};
+let state={chip:'',q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[]};
 let shown=PAGE_SIZE;
 const todayStr=(()=>{const d=new Date(Date.now()+9*3600*1000);return d.toISOString().slice(0,10).replace(/-/g,'');})();
 const freshCut=(()=>{const d=new Date(Date.now()+9*3600*1000-7*86400000);return d.toISOString().slice(0,10);})(); // 최근 7일 = NEW
@@ -306,6 +325,13 @@ async function init(){
   $('q').addEventListener('input',e=>{state.q=e.target.value.trim().toLowerCase();shown=PAGE_SIZE;render();});
   [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;render();}));
   [['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;render();}));
+  // ★ 보유 인증 체크칩 (2026-06-12)
+  $('certs').innerHTML=CERT_DEFS.map(c=>`<label class="ck"><input type="checkbox" value="${c.v}">${c.label}</label>`).join('');
+  $('certs').addEventListener('change',()=>{
+    state.certs=[...document.querySelectorAll('#certs input:checked')].map(x=>x.value);
+    shown=PAGE_SIZE; render();
+  });
+
   // ★ KSIC 계단식 선택 (중분류→소분류→세분류→세세분류) — 2026-06-12
   await ensureKsic();
   fillKsicLevel('k2','',2);
@@ -319,7 +345,8 @@ async function init(){
   });
   $('k5').addEventListener('change',updateKsicState);
   $('btn-reset').addEventListener('click',()=>{
-    state={chip:state.chip,q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:''};
+    state={chip:state.chip,q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[]};
+    document.querySelectorAll('#certs input').forEach(x=>{x.checked=false;});
     $('q').value='';['f-region','f-size','f-ind','f-year','f-emp'].forEach(id=>$(id).value='');
     setKsicCascade('');
     shown=PAGE_SIZE;render();
@@ -388,11 +415,18 @@ function applyFilters(){
       const m=p.txt.match(/(\d+)\s*인\s*이상/);
       if(m && emp<parseInt(m[1],10)) return false;
     }
+    // 보유 인증: 미보유 인증의 '전용' 공고 제외 (지원대상에 그 인증만 명시 + 일반 대상어 없음)
+    for(const cd of CERT_DEFS){
+      if(!cd.exclusive || state.certs.includes(cd.v)) continue;
+      const tgt=p.target||'';
+      if(cd.words.some(w=>tgt.includes(w)) && !GENERIC_TARGET.test(tgt)) return false;
+    }
     return true;
   });
   // 업종: 제외하지 않고 '우선 정렬' (오탐 방지 — 업종 무관 공고가 다수)
   const ksicName = getKsicName(state.ksic);
-  const boostWords = [...(indG?indG.words:[]), ...(ksicName? ksicName.split(/[ ·,]/).filter(w=>w.length>=2).slice(0,3):[])];
+  const certWords = CERT_DEFS.filter(c=>state.certs.includes(c.v)).flatMap(c=>c.words);
+  const boostWords = [...(indG?indG.words:[]), ...(ksicName? ksicName.split(/[ ·,]/).filter(w=>w.length>=2).slice(0,3):[]), ...certWords];
   s2.forEach(p=>{ p._boost = boostWords.length && boostWords.some(w=>p.txt.includes(w.toLowerCase())) ? 1 : 0; });
   s2.sort((a,b)=> b._boost-a._boost || (a.endDate||'99999999').localeCompare(b.endDate||'99999999'));
   return {total, c1:s1.length, c2:s2.length, list:s2,
@@ -429,6 +463,9 @@ function render(){
   if(kn) inf.push(`✓ ${state.ksic} ${kn}`);
   else if(state.ksic && KSIC) inf.push(`⚠ KSIC ${state.ksic} — 코드를 찾을 수 없습니다`);
   if(state.emp&&/^\d+$/.test(state.emp)) inf.push(`✓ 직원 ${state.emp}인 — 인원 요건 미달 공고 제외`);
+  for(const cd of CERT_DEFS){
+    if(state.certs.includes(cd.v)) inf.push(cd.exclusive?`✓ ${cd.label} — 전용 공고 포함·우선`:`✓ ${cd.label} — 관련 공고 우선`);
+  }
   $('infer').innerHTML=inf.map(t=>`<span>${esc(t)}</span>`).join('');
   $('sort-label').textContent = r.boosted ? '업종 관련 우선 · 마감 임박순' : '마감 임박순';
   // 리스트
@@ -476,8 +513,8 @@ async function persistSaved(){
   try{ await setDoc(doc(db,'biz_companies',ME.uid),{list:SAVED,updatedAt:Date.now()}); }
   catch(e){ try{localStorage.setItem('biz_saved_companies',JSON.stringify(SAVED));}catch(_){ } }
 }
-function curCond(){ return {region:state.region,size:state.size,ind:state.ind,ksic:state.ksic,year:state.year,emp:state.emp}; }
-function condEmpty(){ const c=curCond(); return !(c.region||c.size||c.ind||c.ksic||c.year||c.emp); }
+function curCond(){ return {region:state.region,size:state.size,ind:state.ind,ksic:state.ksic,year:state.year,emp:state.emp,certs:[...state.certs]}; }
+function condEmpty(){ const c=curCond(); return !(c.region||c.size||c.ind||c.ksic||c.year||c.emp||(c.certs&&c.certs.length)); }
 async function saveCompany(){
   if(condEmpty()){ alert('저장할 조건을 먼저 입력해주세요.'); return; }
   if(editIdx>=0 && SAVED[editIdx]){
@@ -521,6 +558,8 @@ function applyCompany(i){
   state={...state,region:'',size:'',ind:'',ksic:'',year:'',emp:'',...c.cond};
   $('f-region').value=c.cond.region||'';$('f-size').value=c.cond.size||'';$('f-ind').value=c.cond.ind||'';
   $('f-year').value=c.cond.year||'';$('f-emp').value=c.cond.emp||'';
+  state.certs=Array.isArray(c.cond.certs)?[...c.cond.certs]:[];
+  document.querySelectorAll('#certs input').forEach(x=>{x.checked=state.certs.includes(x.value);});
   setKsicCascade(c.cond.ksic||'');
   setEdit(i); shown=PAGE_SIZE;
   render();
