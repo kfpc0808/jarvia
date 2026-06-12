@@ -29,8 +29,13 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .cond-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
 .cond-grid label{font-size:12px;color:#5A6B7B;display:block;margin-bottom:4px}
 .cond-grid select,.cond-grid input{width:100%;height:42px;padding:0 12px;border:1px solid #D5DEE8;border-radius:8px;font-size:14px;background:#fff}
-.ksic-box{position:relative}
-.ksic-box .ksic-find{position:absolute;right:8px;bottom:8px;width:28px;height:28px;border:none;background:#EAF1F8;border-radius:6px;cursor:pointer;font-size:13px}
+.ksic-cas{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.ksic-cas select{width:100%;height:42px;padding:0 10px;border:1px solid #D5DEE8;border-radius:8px;font-size:13px;background:#fff}
+.ksic-cas select:disabled{background:#F3F6F9;color:#A0AEBB}
+.ksic-sel{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:#5A6B7B}
+.ksic-sel b{font-size:13px;color:#1B3A5C;background:#EAF1F8;border-radius:7px;padding:4px 10px}
+.ksic-link{border:none;background:none;color:#1B6FB5;font-size:12px;cursor:pointer;text-decoration:underline;padding:0;margin-left:8px}
+@media (max-width:560px){.ksic-cas{grid-template-columns:1fr 1fr}}
 .infer{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .infer span{font-size:12px;padding:4px 10px;border-radius:12px;background:#E8F6EF;color:#0B6E4F}
 .cond-ft{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
@@ -124,8 +129,17 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
       <div><label>기업규모</label><select id="f-size"><option value="">무관</option><option value="소상공인">소상공인</option><option value="중소기업">중소기업</option><option value="중견기업">중견기업</option></select></div>
       <div><label>업종 (대분류)</label><select id="f-ind"><option value="">무관</option></select></div>
     </div>
+    <div style="margin-bottom:10px">
+      <label style="font-size:12px;color:#5A6B7B;display:block;margin-bottom:4px">표준산업분류 (KSIC) <span style="color:#A0AEBB">(선택)</span><button class="ksic-link" id="ksic-find">🔍 이름으로 검색</button></label>
+      <div class="ksic-cas">
+        <select id="k2"><option value="">중분류(2자리)</option></select>
+        <select id="k3" disabled><option value="">소분류(3자리)</option></select>
+        <select id="k4" disabled><option value="">세분류(4자리)</option></select>
+        <select id="k5" disabled><option value="">세세분류(5자리)</option></select>
+      </div>
+      <div class="ksic-sel">선택된 코드: <b id="ksic-sel">미선택</b></div>
+    </div>
     <div class="cond-grid">
-      <div class="ksic-box"><label>KSIC 코드 <span style="color:#A0AEBB">(선택)</span></label><input type="text" id="f-ksic" placeholder="예: 29271" maxlength="5" inputmode="numeric"><button class="ksic-find" id="ksic-find" title="업종코드 검색">🔍</button></div>
       <div><label>설립연도</label><input type="text" id="f-year" placeholder="예: 2014" maxlength="4" inputmode="numeric"></div>
       <div><label>직원수</label><input type="text" id="f-emp" placeholder="예: 12" maxlength="6" inputmode="numeric"></div>
     </div>
@@ -291,10 +305,23 @@ async function init(){
   // 입력 바인딩
   $('q').addEventListener('input',e=>{state.q=e.target.value.trim().toLowerCase();shown=PAGE_SIZE;render();});
   [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;render();}));
-  [['f-ksic','ksic'],['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;render();}));
+  [['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;render();}));
+  // ★ KSIC 계단식 선택 (중분류→소분류→세분류→세세분류) — 2026-06-12
+  await ensureKsic();
+  fillKsicLevel('k2','',2);
+  [['k2','k3',3],['k3','k4',4],['k4','k5',5]].forEach(([cur,next,len])=>{
+    $(cur).addEventListener('change',()=>{
+      const v=$(cur).value;
+      cascadeReset(next);
+      if(v) fillKsicLevel(next,v,len);
+      updateKsicState();
+    });
+  });
+  $('k5').addEventListener('change',updateKsicState);
   $('btn-reset').addEventListener('click',()=>{
     state={chip:state.chip,q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:''};
-    $('q').value='';['f-region','f-size','f-ind','f-ksic','f-year','f-emp'].forEach(id=>$(id).value='');
+    $('q').value='';['f-region','f-size','f-ind','f-year','f-emp'].forEach(id=>$(id).value='');
+    setKsicCascade('');
     shown=PAGE_SIZE;render();
   });
   $('btn-save').addEventListener('click',saveCompany);
@@ -431,9 +458,11 @@ function render(){
 function toDate(ymd){return new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8));}
 
 /* ════════ 고객기업 저장 — 서버(Firestore) 동기화 (2026-06-12) ════════
-   biz_companies/{본인uid} 문서 1개에 목록(최대 20개) 저장 → 기기 간 동기화.
+   biz_companies/{본인uid} 문서 1개에 목록(최대 100개) 저장 → 기기 간 동기화.
    서버 실패 시 localStorage 폴백, 기존 localStorage 데이터는 최초 1회 서버로 자동 이전. */
+const SAVED_MAX=100;   // ★ 고객기업 저장 한도 (2026-06-12: 20→100)
 let SAVED=[]; let editIdx=-1;
+let savedOpen=false; let savedQ='';   // 전체 보기 패널 상태
 function loadLocal(){ try{return JSON.parse(localStorage.getItem('biz_saved_companies')||'[]');}catch(e){return [];} }
 async function loadSavedServer(){
   try{
@@ -443,7 +472,7 @@ async function loadSavedServer(){
   }catch(e){ SAVED=loadLocal(); }
 }
 async function persistSaved(){
-  SAVED=SAVED.slice(0,20);
+  SAVED=SAVED.slice(0,SAVED_MAX);
   try{ await setDoc(doc(db,'biz_companies',ME.uid),{list:SAVED,updatedAt:Date.now()}); }
   catch(e){ try{localStorage.setItem('biz_saved_companies',JSON.stringify(SAVED));}catch(_){ } }
 }
@@ -485,21 +514,44 @@ function setEdit(i){
   }
 }
 function applyCompany(i){
-  const c=SAVED[i]; if(!c) return;
+  if(!SAVED[i]) return;
+  // ★ 최근 사용순: 불러온 기업을 맨 앞으로 (목록 순서 = 최근 사용 순서)
+  if(i>0){ const [mv]=SAVED.splice(i,1); SAVED.unshift(mv); persistSaved(); i=0; }
+  const c=SAVED[i];
   state={...state,region:'',size:'',ind:'',ksic:'',year:'',emp:'',...c.cond};
   $('f-region').value=c.cond.region||'';$('f-size').value=c.cond.size||'';$('f-ind').value=c.cond.ind||'';
-  $('f-ksic').value=c.cond.ksic||'';$('f-year').value=c.cond.year||'';$('f-emp').value=c.cond.emp||'';
+  $('f-year').value=c.cond.year||'';$('f-emp').value=c.cond.emp||'';
+  setKsicCascade(c.cond.ksic||'');
   setEdit(i); shown=PAGE_SIZE;
-  if(c.cond.ksic){ ensureKsic().then(render); }
   render();
 }
 function renderSaved(){
   $('saved-row').style.display=SAVED.length?'flex':'none';
-  $('saved-chips').innerHTML=SAVED.map((c,i)=>{
+  const mkChip=(c,i)=>{
     const parts=[c.cond.region,c.cond.ind?(IND_GROUPS.find(g=>g.v===c.cond.ind)||{}).label:'',c.cond.size].filter(Boolean).join('·');
     return `<span class="sc" data-i="${i}"><b>${esc(c.name)}</b>${parts?' '+esc(parts):''} <span class="x" data-x="${i}">✕</span></span>`;
-  }).join(' ');
-  document.querySelectorAll('#saved-chips .sc').forEach(el=>el.addEventListener('click',async e=>{
+  };
+  let html='';
+  if(savedOpen){
+    html+=`<input type="text" id="saved-q" placeholder="기업 이름 검색" style="height:30px;padding:0 10px;border:1px solid #D5DEE8;border-radius:8px;font-size:12px;width:130px;margin-right:2px" value="${esc(savedQ)}">`;
+    const q=savedQ.trim().toLowerCase();
+    const items=SAVED.map((c,i)=>({c,i})).filter(x=>!q||x.c.name.toLowerCase().includes(q));
+    html+=items.map(x=>mkChip(x.c,x.i)).join(' ');
+    if(!items.length) html+=`<span style="font-size:12px;color:#A0AEBB">검색 결과 없음</span>`;
+    html+=` <span class="sc" id="saved-toggle" style="background:#EEF2F6;color:#5A6B7B">접기 ▴</span>`;
+  }else{
+    html+=SAVED.slice(0,6).map((c,i)=>mkChip(c,i)).join(' ');
+    if(SAVED.length>6) html+=` <span class="sc" id="saved-toggle" style="background:#EEF2F6;color:#5A6B7B">전체 ${SAVED.length}개 ▾</span>`;
+  }
+  $('saved-chips').innerHTML=html;
+  const tg=$('saved-toggle');
+  if(tg&&SAVED.length>6||savedOpen){ if(tg) tg.addEventListener('click',e=>{e.stopPropagation();savedOpen=!savedOpen;savedQ='';renderSaved();}); }
+  const sq=document.getElementById('saved-q');
+  if(sq){ sq.addEventListener('click',e=>e.stopPropagation());
+    sq.addEventListener('input',e=>{ savedQ=e.target.value; renderSaved();
+      const el=document.getElementById('saved-q'); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } });
+  }
+  document.querySelectorAll('#saved-chips .sc[data-i]').forEach(el=>el.addEventListener('click',async e=>{
     if(e.target.dataset.x!==undefined){
       e.stopPropagation();
       const i=parseInt(e.target.dataset.x,10);
@@ -518,9 +570,42 @@ async function ensureKsic(){
   if(KSIC) return;
   try{ const r=await fetch('./ksic_data.json'); KSIC=await r.json(); }catch(e){ KSIC=[]; }
 }
+
+/* ── KSIC 계단식 선택 (2026-06-12) ── */
+function fillKsicLevel(selId,prefix,len){
+  const items=(KSIC||[]).filter(k=>k.code.length===len&&k.code.startsWith(prefix));
+  const ph={2:'중분류(2자리)',3:'소분류(3자리)',4:'세분류(4자리)',5:'세세분류(5자리)'}[len];
+  $(selId).innerHTML=`<option value="">${ph}</option>`+items.map(k=>`<option value="${esc(k.code)}">${esc(k.code)} ${esc(k.name)}</option>`).join('');
+  $(selId).disabled=items.length===0;
+}
+function cascadeReset(fromId){
+  const order=['k3','k4','k5'];
+  for(let i=order.indexOf(fromId);i<order.length;i++){
+    if(i<0) break;
+    const id=order[i];
+    $(id).innerHTML=`<option value="">${ {k3:'소분류(3자리)',k4:'세분류(4자리)',k5:'세세분류(5자리)'}[id] }</option>`;
+    $(id).disabled=true;
+  }
+}
+function updateKsicState(){
+  const code=$('k5').value||$('k4').value||$('k3').value||$('k2').value||'';
+  state.ksic=code;
+  $('ksic-sel').textContent=code?`${code} ${getKsicName(code)}`:'미선택';
+  shown=PAGE_SIZE; render();
+}
+function setKsicCascade(code){
+  code=String(code||'');
+  fillKsicLevel('k2','',2); cascadeReset('k3');
+  if(code.length>=2){ $('k2').value=code.slice(0,2); fillKsicLevel('k3',code.slice(0,2),3); }
+  if(code.length>=3){ $('k3').value=code.slice(0,3); fillKsicLevel('k4',code.slice(0,3),4); }
+  if(code.length>=4){ $('k4').value=code.slice(0,4); fillKsicLevel('k5',code.slice(0,4),5); }
+  if(code.length>=5){ $('k5').value=code; }
+  state.ksic=code;
+  $('ksic-sel').textContent=code?`${code} ${getKsicName(code)}`:'미선택';
+}
 async function openKsic(){
   $('kmodal').style.display='flex';
-  $('km-q').value=$('f-ksic').value||''; 
+  $('km-q').value='';
   await ensureKsic(); renderKsic(); $('km-q').focus();
 }
 function renderKsic(){
@@ -531,7 +616,7 @@ function renderKsic(){
   if(!hits.length){ $('km-ls').innerHTML='<div class="empty">검색 결과가 없습니다</div>'; return; }
   $('km-ls').innerHTML=hits.map(k=>`<div class="ki" data-c="${esc(k.code)}"><span class="kc">${esc(k.code)}</span><span>${esc(k.name)}</span></div>`).join('');
   document.querySelectorAll('.ki').forEach(el=>el.addEventListener('click',()=>{
-    $('f-ksic').value=el.dataset.c; state.ksic=el.dataset.c;
+    setKsicCascade(el.dataset.c);   // ★ 검색 선택 → 계단식 자동 채움
     $('kmodal').style.display='none'; shown=PAGE_SIZE; render();
   }));
 }
