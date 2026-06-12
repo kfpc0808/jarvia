@@ -317,7 +317,7 @@ body{font-family:var(--body);
   ];
   const N=SC.length;
   const $=id=>document.getElementById(id);
-  let cur=0,paused=false,gen=0,timer=null,started=false,dragging=false,muted=false,curTryNext=null,koVoice=null;
+  let cur=0,paused=false,gen=0,timer=null,started=false,dragging=false,muted=false,curTryNext=null,koVoice=null,curAudio=null;
   const tt=$('tt'),seekFill=$('seekFill'),seekHandle=$('seekHandle'),seekLabel=$('seekLabel'),seekTrack=$('seekTrack');
 
   // ── 음성 나레이션 (브라우저 TTS) ──
@@ -332,9 +332,23 @@ body{font-family:var(--body);
     if(muted||!text||!('speechSynthesis' in window)){cb&&cb();return;}
     try{speechSynthesis.cancel();}catch(e){}
     const u=new SpeechSynthesisUtterance(text);
-    u.lang='ko-KR';u.rate=1.02;u.pitch=1.0;if(koVoice)u.voice=koVoice;
+    u.lang='ko-KR';u.rate=1.22;u.pitch=1.0;if(koVoice)u.voice=koVoice;
     let done=false;u.onend=u.onerror=()=>{if(done)return;done=true;cb&&cb();};
     try{speechSynthesis.speak(u);}catch(e){cb&&cb();}
+  }
+
+  // ── 나레이션 재생: mp3 우선, 없으면 브라우저 음성 폴백 ──
+  const AUDIO_PREFIX='alert-narr-';   // GitHub 루트의 alert-narr-1.mp3 ~ -8.mp3
+  function stopAudio(){try{if(curAudio){curAudio.pause();curAudio.src='';curAudio=null;}}catch(e){}}
+  function playNarr(i,text,cb){
+    if(muted){cb&&cb();return;}
+    let done=false;const fin=()=>{if(done)return;done=true;cb&&cb();};
+    stopAudio();
+    const a=new Audio(AUDIO_PREFIX+(i+1)+'.mp3');
+    curAudio=a;
+    a.onended=fin;
+    a.onerror=()=>{curAudio=null;speak(text,fin);};
+    a.play().catch(()=>{curAudio=null;speak(text,fin);});
   }
 
   function showScr(i){const sid=SC[i].sid;document.querySelectorAll('.scr').forEach(s=>s.classList.toggle('on',+s.dataset.s===sid));}
@@ -397,6 +411,7 @@ body{font-family:var(--body);
   function go(i){
     if(i<0)i=0;if(i>=N)i=N-1;
     gen++;const my=gen;clearTimeout(timer);
+    stopAudio();if('speechSynthesis' in window)try{speechSynthesis.cancel();}catch(e){}
     cur=i;paused=false;$('pauseBtn').textContent='⏸';
     showScr(i);
     const c=SC[i];
@@ -408,7 +423,7 @@ body{font-family:var(--body);
     const tryNext=()=>{if(my!==gen||paused||dragging)return;if(minDone&&speechDone&&!isLast)go(i+1);};
     curTryNext=tryNext;
     timer=setTimeout(()=>{minDone=true;tryNext();},c.dur);
-    if(c.narr&&!muted){speak(c.narr,()=>{if(my!==gen)return;speechDone=true;setTimeout(tryNext,500);});}
+    if(c.narr&&!muted){playNarr(i,c.narr,()=>{if(my!==gen)return;speechDone=true;setTimeout(tryNext,500);});}
   }
 
   $('playBtn').onclick=()=>{started=true;$('gate').classList.add('hide');
@@ -418,10 +433,10 @@ body{font-family:var(--body);
   $('nextBtn').onclick=()=>{if(started)go(Math.min(N-1,cur+1));};
   $('replayBtn').onclick=()=>{if(started)go(0);};
   $('pauseBtn').onclick=()=>{if(!started)return;paused=!paused;$('pauseBtn').textContent=paused?'▶':'⏸';
-    if(paused){if('speechSynthesis' in window)try{speechSynthesis.pause();}catch(e){}}
-    else{if('speechSynthesis' in window)try{speechSynthesis.resume();}catch(e){}if(curTryNext)curTryNext();else go(cur);}};
+    if(paused){if('speechSynthesis' in window)try{speechSynthesis.pause();}catch(e){}if(curAudio)try{curAudio.pause();}catch(e){}}
+    else{if('speechSynthesis' in window)try{speechSynthesis.resume();}catch(e){}if(curAudio)try{curAudio.play();}catch(e){}if(curTryNext)curTryNext();else go(cur);}};
   $('muteBtn').onclick=()=>{muted=!muted;$('muteBtn').textContent=muted?'🔇':'🔊';
-    if('speechSynthesis' in window)try{speechSynthesis.cancel();}catch(e){}
+    if('speechSynthesis' in window)try{speechSynthesis.cancel();}catch(e){}stopAudio();
     if(started)go(cur);};
 
   function ratioFromX(x){const r=seekTrack.getBoundingClientRect();return Math.min(1,Math.max(0,(x-r.left)/r.width));}
