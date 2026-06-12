@@ -69,6 +69,8 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .row .mt{font-size:12px;color:#8A99A8;margin-top:3px}
 .row .star{color:#C9A05C;font-size:12px;margin-right:3px}
 .newb{font-size:10px;font-weight:800;color:#E14848;margin-right:5px;letter-spacing:.3px}
+.oth-tg{margin:14px 0 4px;padding:10px;text-align:center;font-size:13px;font-weight:700;color:#5A6B7B;background:#F1F5F9;border:1px dashed #C9D6E2;border-radius:10px;cursor:pointer}
+.oth-tg:hover{background:#EAF1F8}
 .dd{font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;flex-shrink:0}
 .dd-red{background:#FDECEC;color:#C0392B}
 .dd-amb{background:#FBF1DE;color:#9A6B14}
@@ -122,6 +124,11 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 
   <div class="search"><input type="text" id="q" placeholder="공고 제목·내용 검색 (예: 물류비, 스마트공장, 수출바우처)"></div>
 
+  <!-- 📂 저장된 고객기업 — 상단 배치 (2026-06-12) -->
+  <div class="cond saved" id="saved-row" style="display:none;margin-bottom:14px">
+    <span class="saved-label">📂 저장된 고객기업 <span style="font-weight:400;color:#A0AEBB">— 클릭하면 아래 조건이 채워집니다</span></span><span id="saved-chips"></span>
+  </div>
+
   <div class="cond">
     <div class="cond-hd">
       <span class="cond-title">⚙️ 고객기업 조건 — 입력할 때마다 리스트가 좁혀집니다</span>
@@ -159,9 +166,6 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
         <button class="btn btn-reset" id="btn-savenew" style="display:none">＋ 새로 저장</button>
         <button class="btn btn-save" id="btn-save">💾 고객기업으로 저장</button>
       </div>
-    </div>
-    <div class="saved" id="saved-row" style="display:none">
-      <span class="saved-label">저장된 고객기업:</span><span id="saved-chips"></span>
     </div>
   </div>
 
@@ -264,6 +268,38 @@ let shown=PAGE_SIZE;
 const todayStr=(()=>{const d=new Date(Date.now()+9*3600*1000);return d.toISOString().slice(0,10).replace(/-/g,'');})();
 const freshCut=(()=>{const d=new Date(Date.now()+9*3600*1000-7*86400000);return d.toISOString().slice(0,10);})(); // 최근 7일 = NEW
 
+/* ═══ ★ 서버 정밀 매칭 (2026-06-12) ═══
+   조건 입력 시 0.5초 디바운스 후 기업마당 서버의 검증된 필터(getJarviaPrograms?조건)를 호출,
+   적합 공고만 점수순으로 수신. signal=핵심 일치(지역·업종 정확 일치 근거 보유).
+   서버 실패 시 기존 클라이언트 엔진으로 폴백. */
+let SERVER=null, matching=false, matchTimer=null, othOpen=false;
+function condActive(){ return !!(state.region||state.size||state.ksic||state.year||state.emp||state.certs.length); }
+function condQS(){
+  const p=new URLSearchParams();
+  if(state.region)p.set('region',state.region);
+  if(state.size)p.set('size',state.size);
+  if(state.ksic)p.set('ksic',state.ksic);
+  if(state.year&&/^\d{4}$/.test(state.year))p.set('year',state.year);
+  if(state.emp&&/^\d+$/.test(state.emp))p.set('emp',state.emp);
+  if(state.certs.length)p.set('certs',state.certs.join(','));
+  return p.toString();
+}
+function scheduleMatch(){
+  clearTimeout(matchTimer);
+  if(!condActive()){ SERVER=null; matching=false; return; }
+  matching=true;
+  matchTimer=setTimeout(runMatch,500);
+}
+async function runMatch(){
+  const qs=condQS();
+  try{
+    const r=await fetch(ENDPOINT+'?'+qs); const j=await r.json();
+    if(j&&j.success&&Array.isArray(j.programs)) SERVER={qs,total:j.totalCount||PROGRAMS.length,list:j.programs};
+    else SERVER={qs,error:true};
+  }catch(e){ SERVER={qs,error:true}; }
+  matching=false; shown=PAGE_SIZE; othOpen=false; render();
+}
+
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const stripHtml=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim();
@@ -323,13 +359,13 @@ async function init(){
 
   // 입력 바인딩
   $('q').addEventListener('input',e=>{state.q=e.target.value.trim().toLowerCase();shown=PAGE_SIZE;render();});
-  [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;render();}));
-  [['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;render();}));
+  [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;scheduleMatch();render();}));
+  [['f-year','year'],['f-emp','emp']].forEach(([id,k])=>$(id).addEventListener('input',e=>{state[k]=e.target.value.trim();shown=PAGE_SIZE;scheduleMatch();render();}));
   // ★ 보유 인증 체크칩 (2026-06-12)
   $('certs').innerHTML=CERT_DEFS.map(c=>`<label class="ck"><input type="checkbox" value="${c.v}">${c.label}</label>`).join('');
   $('certs').addEventListener('change',()=>{
     state.certs=[...document.querySelectorAll('#certs input:checked')].map(x=>x.value);
-    shown=PAGE_SIZE; render();
+    shown=PAGE_SIZE; scheduleMatch(); render();
   });
 
   // ★ KSIC 계단식 선택 (중분류→소분류→세분류→세세분류) — 2026-06-12
@@ -430,7 +466,7 @@ function applyFilters(){
   s2.forEach(p=>{ p._boost = boostWords.length && boostWords.some(w=>p.txt.includes(w.toLowerCase())) ? 1 : 0; });
   s2.sort((a,b)=> b._boost-a._boost || (a.endDate||'99999999').localeCompare(b.endDate||'99999999'));
   return {total, c1:s1.length, c2:s2.length, list:s2,
-          condUsed: !!(state.region||state.size||state.ind||state.ksic||state.year||state.emp),
+          condUsed: !!(state.region||state.size||state.ind||state.ksic||state.year||state.emp||state.certs.length),
           boosted: boostWords.length>0};
 }
 
@@ -442,18 +478,38 @@ function getKsicName(code){
 
 /* ════════ 렌더 ════════ */
 function render(){
-  const r=applyFilters();
-  // 좁혀짐 표시
-  let nh='';
-  if(r.condUsed||state.chip||state.q){
-    nh=`<s>${r.total.toLocaleString()}건</s>`;
-    if((state.chip||state.q) && r.condUsed) nh+=` → <s>${r.c1.toLocaleString()}건</s>`;
-    nh+=` → <span class="now">${r.c2.toLocaleString()}건 일치</span>`;
+  const serverMode=condActive();
+  let view;
+  if(serverMode && SERVER && !SERVER.error && SERVER.qs===condQS()){
+    // ── 서버 정밀 결과 + 분야칩·검색은 클라에서 ──
+    let list=SERVER.list.filter(p=>{
+      if(state.chip && p.category!==state.chip) return false;
+      if(state.q){ const t=((p.name||'')+' '+(p.target||'')+' '+(p.summary||'')).toLowerCase(); if(!t.includes(state.q)) return false; }
+      return true;
+    });
+    view={mode:'server',total:SERVER.total,main:list.filter(p=>p.signal),oth:list.filter(p=>!p.signal)};
   }else{
-    nh=`<span class="now">${r.total.toLocaleString()}건</span><span>전체 공고</span>`;
+    const r=applyFilters();
+    view={mode:serverMode?(matching?'loading':'fallback'):'all',total:r.total,c1:r.c1,c2:r.c2,main:r.list,oth:[],boosted:r.boosted,condUsed:r.condUsed};
+  }
+  // ── 좁혀짐 표시 ──
+  let nh='';
+  if(view.mode==='server'){
+    const fit=view.main.length+view.oth.length;
+    nh=`<s>${view.total.toLocaleString()}건</s> → <s>${fit.toLocaleString()}건 자격충족</s> → <span class="now">핵심 일치 ${view.main.length.toLocaleString()}건</span>`;
+  }else if(view.mode==='loading'){
+    nh=`<span class="now">🔄 서버 정밀 매칭 중…</span>`;
+  }else if(view.mode==='fallback'){
+    nh=`<s>${view.total.toLocaleString()}건</s> → <span class="now">${view.c2.toLocaleString()}건 일치</span> <span style="color:#C0392B;font-size:12px">⚠ 서버 연결 실패 — 간이 매칭 결과</span>`;
+  }else if(view.condUsed||state.chip||state.q){
+    nh=`<s>${view.total.toLocaleString()}건</s>`;
+    if((state.chip||state.q)&&view.condUsed) nh+=` → <s>${view.c1.toLocaleString()}건</s>`;
+    nh+=` → <span class="now">${view.c2.toLocaleString()}건 일치</span>`;
+  }else{
+    nh=`<span class="now">${view.total.toLocaleString()}건</span><span>전체 공고</span>`;
   }
   $('narrow').innerHTML=nh;
-  // 자동 추론 칩
+  // ── 자동 추론 칩 ──
   const inf=[];
   if(state.year&&/^\d{4}$/.test(state.year)){
     const age=new Date().getFullYear()-parseInt(state.year,10);
@@ -467,18 +523,18 @@ function render(){
     if(state.certs.includes(cd.v)) inf.push(cd.exclusive?`✓ ${cd.label} — 전용 공고 포함·우선`:`✓ ${cd.label} — 관련 공고 우선`);
   }
   $('infer').innerHTML=inf.map(t=>`<span>${esc(t)}</span>`).join('');
-  $('sort-label').textContent = r.boosted ? '업종 관련 우선 · 마감 임박순' : '마감 임박순';
-  // 리스트
-  const items=r.list.slice(0,shown);
-  if(!items.length){ $('list').innerHTML='<div class="empty">조건에 맞는 공고가 없습니다.<br>조건을 일부 비우거나 검색어를 바꿔보세요.</div>'; return; }
-  $('list').innerHTML=items.map(p=>{
+  $('sort-label').textContent = view.mode==='server' ? '적합도 점수순 · 서버 정밀 매칭'
+    : (view.boosted ? '업종 관련 우선 · 마감 임박순' : '마감 임박순');
+  // ── 행 생성기 ──
+  const rowHtml=p=>{
     let ddCls='dd-gray',ddTxt='상시';
     if(p.endDate){
       const d=Math.floor((toDate(p.endDate)-toDate(todayStr))/86400000);
       ddTxt=d<0?'마감':(d===0?'오늘 마감':`D-${d}`);
       ddCls=d<0?'dd-gray':(d<=7?'dd-red':(d<=30?'dd-amb':'dd-gray'));
     }
-    const star=p._boost?'<span class="star">★</span>':'';
+    const indHit = view.mode==='server' ? (p.matchReasons||[]).some(r=>r.startsWith('업종')) : !!p._boost;
+    const star=indHit?'<span class="star">★</span>':'';
     const newb=(p.registeredDate||'').slice(0,10)>=freshCut?'<span class="newb">NEW</span>':'';
     return `<div class="row" data-url="${esc(p.url)}">
       <span class="cat">${esc(p.category||'기타')}</span>
@@ -488,9 +544,27 @@ function render(){
       </div>
       <span class="dd ${ddCls}">${ddTxt}</span>
     </div>`;
-  }).join('') + (r.list.length>shown?`<button class="more" id="btn-more">더 보기 (${(r.list.length-shown).toLocaleString()}건 남음)</button>`:'');
+  };
+  // ── 리스트 ──
+  if(view.mode==='loading'){ $('list').innerHTML='<div class="empty">🔄 고객기업 조건으로 서버에서 정밀 매칭 중입니다…</div>'; return; }
+  const items=view.main.slice(0,shown);
+  let html='';
+  if(!items.length){
+    html += view.mode==='server'
+      ? '<div class="empty">핵심 일치 공고가 없습니다.<br>아래 기타 지원가능 공고를 펼쳐보거나 조건을 일부 비워보세요.</div>'
+      : '<div class="empty">조건에 맞는 공고가 없습니다.<br>조건을 일부 비우거나 검색어를 바꿔보세요.</div>';
+  }else{
+    html += items.map(rowHtml).join('');
+    if(view.main.length>shown) html+=`<button class="more" id="btn-more">더 보기 (${(view.main.length-shown).toLocaleString()}건 남음)</button>`;
+  }
+  if(view.mode==='server' && view.oth.length){
+    html+=`<div class="oth-tg" id="oth-tg">기타 지원가능 공고 ${view.oth.length.toLocaleString()}건 — 지역·업종 무관 전국 사업 ${othOpen?'접기 ▴':'펼치기 ▾'}</div>`;
+    if(othOpen) html+=view.oth.map(rowHtml).join('');
+  }
+  $('list').innerHTML=html;
   document.querySelectorAll('.row').forEach(el=>el.addEventListener('click',()=>{ const u=el.dataset.url||''; if(/^https?:\/\//.test(u)) window.open(u,'_blank','noopener'); }));
   const mb=$('btn-more'); if(mb) mb.addEventListener('click',()=>{shown+=PAGE_SIZE;render();});
+  const ot=document.getElementById('oth-tg'); if(ot) ot.addEventListener('click',()=>{othOpen=!othOpen;render();});
 }
 function toDate(ymd){return new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8));}
 
@@ -630,7 +704,7 @@ function updateKsicState(){
   const code=$('k5').value||$('k4').value||$('k3').value||$('k2').value||'';
   state.ksic=code;
   $('ksic-sel').textContent=code?`${code} ${getKsicName(code)}`:'미선택';
-  shown=PAGE_SIZE; render();
+  shown=PAGE_SIZE; scheduleMatch(); render();
 }
 function setKsicCascade(code){
   code=String(code||'');
@@ -641,6 +715,7 @@ function setKsicCascade(code){
   if(code.length>=5){ $('k5').value=code; }
   state.ksic=code;
   $('ksic-sel').textContent=code?`${code} ${getKsicName(code)}`:'미선택';
+  scheduleMatch();
 }
 async function openKsic(){
   $('kmodal').style.display='flex';

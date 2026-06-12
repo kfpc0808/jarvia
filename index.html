@@ -9452,35 +9452,20 @@ window.goBizinfo = async function() {
   }
 };
 
-/* ═══ 🏢 기업 맞춤 신규 공고 알림 (2026-06-12) ═══
-   저장된 고객기업(biz_companies/{uid})이 있는 회원만, 페이지 안정 후 백그라운드로
-   기업마당 공고를 받아 "최근 7일 신규 × 기업 조건" 매칭 건수를 알림 스트립에 표시. */
+/* ═══ 🏢 기업 맞춤 신규 공고 알림 (2026-06-12, 서버 정밀 매칭판) ═══
+   저장 고객기업 최근 사용 5곳을 기업마당 서버 필터(getJarviaPrograms?조건&fresh=7)로 조회해
+   '최근 7일 신규 × 핵심 일치(signal)' 건수를 표시 — 페이지와 같은 서버 두뇌라 건수 불일치 불가. */
 const BIZ_ALERT_EP='https://asia-northeast3-corpmadang-cce36.cloudfunctions.net/getJarviaPrograms';
-const BIZ_REGIONS=['서울','부산','대구','인천','광주','대전','울산','세종','경기','강원','충북','충남','전북','전남','경북','경남','제주'];
-const BIZ_RALIAS={'충북':'충청북도','충남':'충청남도','전북':'전라북도','전남':'전라남도','경북':'경상북도','경남':'경상남도'};
-const bizRegionOf=t=>BIZ_REGIONS.find(r=>t.includes(r)||(BIZ_RALIAS[r]&&t.includes(BIZ_RALIAS[r])))||'';
-const BIZ_SIZEW={'소상공인':['소상공인'],'중소기업':['중소기업'],'중견기업':['중견기업','중견']};
-const BIZ_ALLSIZE=['소상공인','중소기업','중견기업','중견'];
-const BIZ_CERTX=[{v:'woman',words:['여성기업']},{v:'social',words:['사회적기업','사회적 기업']},{v:'disabled',words:['장애인기업','장애인 기업']}];
-const BIZ_GENT=/중소기업|소상공인|중견|제한\s*없음|누구나/;
-function bizMatch(p,cond,age,emp){
-  const rh=bizRegionOf((p.organization||'')+' '+(p.name||''));
-  if(cond.region&&rh&&rh!==cond.region) return false;
-  if(cond.size){
-    const tt=(p.target||'')+' '+(p.name||'');
-    const mine=BIZ_SIZEW[cond.size].some(w=>tt.includes(w));
-    if(!mine){const oth=BIZ_ALLSIZE.filter(w=>!BIZ_SIZEW[cond.size].includes(w));if(oth.some(w=>tt.includes(w)))return false;}
-  }
-  const txt=((p.name||'')+' '+(p.target||'')+' '+(p.summary||'')).toLowerCase();
-  if(age!==null&&age>=8&&/(예비\s*창업|창업\s*[1-7]\s*년|창업\s*초기|창업기업)/.test(txt)) return false;
-  if(emp!==null){const m=txt.match(/(\d+)\s*인\s*이상/);if(m&&emp<parseInt(m[1],10))return false;}
-  const certs=Array.isArray(cond.certs)?cond.certs:[];
-  for(const cd of BIZ_CERTX){
-    if(certs.includes(cd.v)) continue;
-    const tgt=p.target||'';
-    if(cd.words.some(w=>tgt.includes(w)) && !BIZ_GENT.test(tgt)) return false;
-  }
-  return true;
+function bizCondQS(cond){
+  const p=new URLSearchParams();
+  if(cond.region)p.set('region',cond.region);
+  if(cond.size)p.set('size',cond.size);
+  if(cond.ksic)p.set('ksic',cond.ksic);
+  if(cond.year&&/^\d{4}$/.test(String(cond.year)))p.set('year',cond.year);
+  if(cond.emp&&/^\d+$/.test(String(cond.emp)))p.set('emp',cond.emp);
+  if(Array.isArray(cond.certs)&&cond.certs.length)p.set('certs',cond.certs.join(','));
+  p.set('fresh','7');
+  return p.toString();
 }
 async function loadBizAlert(){
   try{
@@ -9490,24 +9475,19 @@ async function loadBizAlert(){
     if(!list.length) return;
     setTimeout(async ()=>{
       try{
-        const res=await fetch(BIZ_ALERT_EP); const data=await res.json();
-        if(!data||!data.success||!Array.isArray(data.programs)) return;
-        const cut=new Date(Date.now()+9*3600*1000-7*86400000).toISOString().slice(0,10);
-        const fresh=data.programs.filter(p=>(p.registeredDate||'').slice(0,10)>=cut);
-        if(!fresh.length) return;
-        const Y=new Date().getFullYear();
-        const hits=[];
-        for(const c of list){
-          const cond=c.cond||{};
-          const age=cond.year&&/^\d{4}$/.test(cond.year)?Y-parseInt(cond.year,10):null;
-          const emp=cond.emp&&/^\d+$/.test(cond.emp)?parseInt(cond.emp,10):null;
-          const n=fresh.filter(p=>bizMatch(p,cond,age,emp)).length;
-          if(n>0) hits.push({name:c.name,n});
-        }
+        const top=list.slice(0,5); // 최근 사용 5곳만 — 메인 부하 최소화
+        const counts=await Promise.all(top.map(async c=>{
+          try{
+            const r=await fetch(BIZ_ALERT_EP+'?'+bizCondQS(c.cond||{}));
+            const j=await r.json();
+            return (j&&j.success&&Array.isArray(j.programs))?j.programs.filter(p=>p.signal).length:0;
+          }catch(e){ return 0; }
+        }));
+        const hits=top.map((c,i)=>({name:c.name,n:counts[i]})).filter(h=>h.n>0);
         if(!hits.length) return;
         const tot=hits.reduce((t,h)=>t+h.n,0);
         document.getElementById('biz-alert-badge').textContent='신규 '+tot+'건';
-        document.getElementById('biz-alert-text').textContent=hits.slice(0,3).map(h=>h.name+' '+h.n+'건').join(' · ')+(hits.length>3?' 외':'')+' — 최근 7일 등록';
+        document.getElementById('biz-alert-text').textContent=hits.slice(0,3).map(h=>h.name+' '+h.n+'건').join(' · ')+(hits.length>3?' 외':'')+' — 최근 7일 핵심 일치';
         window._bizAlertFirst=hits[0].name;
         document.getElementById('biz-alert').classList.remove('hidden');
       }catch(e){}
