@@ -318,6 +318,14 @@
       </div><!-- /fcc-board-body -->
     </div>
     <!-- ═══ /🔔 FC 고객 알림 보드 ═══ -->
+    <!-- ═══ 🏢 기업 맞춤 신규 공고 알림 (2026-06-12) — 저장된 고객기업 보유 회원에게만 표시 ═══ -->
+    <div id="biz-alert" class="hidden" onclick="bizAlertOpen()" style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:11px 16px;margin:4px 0 18px;display:flex;align-items:center;gap:10px;cursor:pointer">
+      <span style="font-size:14px;font-weight:700;color:#1B3A5C;white-space:nowrap">🏢 기업 맞춤 공고</span>
+      <span id="biz-alert-badge" style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#FDECEC;color:#C0392B;white-space:nowrap"></span>
+      <span id="biz-alert-text" style="flex:1;min-width:0;font-size:13px;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <span style="font-size:12px;font-weight:700;color:#5A6484;background:#EEF2F7;border:1px solid #DDE4EC;border-radius:14px;padding:4px 12px;flex-shrink:0;white-space:nowrap">보러가기 →</span>
+    </div>
+    <!-- ═══ /🏢 기업 맞춤 신규 공고 알림 ═══ -->
     <!-- ★ TCW 홍보 배너 -->
     <div class="tcw-promo" id="tcw-promo-banner">
       <a href="https://jarvia.co.kr/tax-weekly-archive.html">
@@ -4061,6 +4069,7 @@ onAuthStateChanged(auth,async u=>{
       showLoginPopups();
       checkConsultRequests();
       loadFcAlertBoard();   // 🔔 FC 고객 알림 보드 (2026-06-11)
+      loadBizAlert();       // 🏢 기업 맞춤 신규 공고 알림 (2026-06-12)
       setupPlatformPWA();
     }else{
       // ★ 인증은 됐지만 users에 없는 경우 (익명인증 등) → 로그아웃 후 로그인 페이지
@@ -9443,6 +9452,64 @@ window.goBizinfo = async function() {
   }
 };
 
+/* ═══ 🏢 기업 맞춤 신규 공고 알림 (2026-06-12) ═══
+   저장된 고객기업(biz_companies/{uid})이 있는 회원만, 페이지 안정 후 백그라운드로
+   기업마당 공고를 받아 "최근 7일 신규 × 기업 조건" 매칭 건수를 알림 스트립에 표시. */
+const BIZ_ALERT_EP='https://asia-northeast3-corpmadang-cce36.cloudfunctions.net/getJarviaPrograms';
+const BIZ_REGIONS=['서울','부산','대구','인천','광주','대전','울산','세종','경기','강원','충북','충남','전북','전남','경북','경남','제주'];
+const BIZ_RALIAS={'충북':'충청북도','충남':'충청남도','전북':'전라북도','전남':'전라남도','경북':'경상북도','경남':'경상남도'};
+const bizRegionOf=t=>BIZ_REGIONS.find(r=>t.includes(r)||(BIZ_RALIAS[r]&&t.includes(BIZ_RALIAS[r])))||'';
+const BIZ_SIZEW={'소상공인':['소상공인'],'중소기업':['중소기업'],'중견기업':['중견기업','중견']};
+const BIZ_ALLSIZE=['소상공인','중소기업','중견기업','중견'];
+function bizMatch(p,cond,age,emp){
+  const rh=bizRegionOf((p.organization||'')+' '+(p.name||''));
+  if(cond.region&&rh&&rh!==cond.region) return false;
+  if(cond.size){
+    const tt=(p.target||'')+' '+(p.name||'');
+    const mine=BIZ_SIZEW[cond.size].some(w=>tt.includes(w));
+    if(!mine){const oth=BIZ_ALLSIZE.filter(w=>!BIZ_SIZEW[cond.size].includes(w));if(oth.some(w=>tt.includes(w)))return false;}
+  }
+  const txt=((p.name||'')+' '+(p.target||'')+' '+(p.summary||'')).toLowerCase();
+  if(age!==null&&age>=8&&/(예비\s*창업|창업\s*[1-7]\s*년|창업\s*초기|창업기업)/.test(txt)) return false;
+  if(emp!==null){const m=txt.match(/(\d+)\s*인\s*이상/);if(m&&emp<parseInt(m[1],10))return false;}
+  return true;
+}
+async function loadBizAlert(){
+  try{
+    if(!me) return;
+    const d=await getDoc(doc(db,'biz_companies',me.uid));
+    const list=d.exists()?(d.data().list||[]):[];
+    if(!list.length) return;
+    setTimeout(async ()=>{
+      try{
+        const res=await fetch(BIZ_ALERT_EP); const data=await res.json();
+        if(!data||!data.success||!Array.isArray(data.programs)) return;
+        const cut=new Date(Date.now()+9*3600*1000-7*86400000).toISOString().slice(0,10);
+        const fresh=data.programs.filter(p=>(p.registeredDate||'').slice(0,10)>=cut);
+        if(!fresh.length) return;
+        const Y=new Date().getFullYear();
+        const hits=[];
+        for(const c of list){
+          const cond=c.cond||{};
+          const age=cond.year&&/^\d{4}$/.test(cond.year)?Y-parseInt(cond.year,10):null;
+          const emp=cond.emp&&/^\d+$/.test(cond.emp)?parseInt(cond.emp,10):null;
+          const n=fresh.filter(p=>bizMatch(p,cond,age,emp)).length;
+          if(n>0) hits.push({name:c.name,n});
+        }
+        if(!hits.length) return;
+        const tot=hits.reduce((t,h)=>t+h.n,0);
+        document.getElementById('biz-alert-badge').textContent='신규 '+tot+'건';
+        document.getElementById('biz-alert-text').textContent=hits.slice(0,3).map(h=>h.name+' '+h.n+'건').join(' · ')+(hits.length>3?' 외':'')+' — 최근 7일 등록';
+        window._bizAlertFirst=hits[0].name;
+        document.getElementById('biz-alert').classList.remove('hidden');
+      }catch(e){}
+    },1200);
+  }catch(e){}
+}
+window.bizAlertOpen=function(){
+  location.href='./biz-support.html'+(window._bizAlertFirst?('?company='+encodeURIComponent(window._bizAlertFirst)):'');
+};
+
 // ── 연구노트 연동 ──
 const RESEARCHNOTE_URL = 'https://researchnote.co.kr';
 const RESEARCHNOTE_API = 'https://asia-northeast3-researchnote-14509.cloudfunctions.net/jarviaAuth';
@@ -10144,7 +10211,7 @@ setTimeout(() => { try{ clearInterval(_fcrAutoCheck); }catch(e){} }, 30000);
 <!-- ═══ 하단 바로가기 버튼 ═══ -->
 <div id="calc-banner" class="hidden" style="max-width:1200px;margin:0 auto;padding:0 24px">
   <div class="quick-actions">
-    <a onclick="goBizinfo()" style="background:linear-gradient(135deg,#1a1a2e,#2d1b69)"><span style="font-size:16px">🏢</span><span style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap">기업마당조회</span></a>
+    <a href="./biz-support.html" style="background:linear-gradient(135deg,#1a1a2e,#2d1b69)"><span style="font-size:16px">🏢</span><span style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap">정부지원자금조회</span></a>
     <a onclick="goResearchNote()" style="background:linear-gradient(135deg,#0c2233,#134e5e)"><span style="font-size:16px">📝</span><span style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap">연구노트생성</span></a>
     <a onclick="openTaxNaviPopup()" style="background:linear-gradient(135deg,#0D1B2A,#1B3A5C)"><span style="font-size:16px">⚖️</span><span style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap">예규/판례 통합검색</span><span class="js-member-only-badge" style="display:inline-block;font-size:9px;font-weight:700;background:#DC2626;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">회원전용</span></a>
     <a onclick="goSnapshot()" style="background:linear-gradient(135deg,#1B3A5C,#2E5A88)"><span style="font-size:16px">📈</span><span style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap">금융경제통계</span><span class="js-member-only-badge" style="display:inline-block;font-size:9px;font-weight:700;background:#DC2626;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">회원전용</span></a>
