@@ -6008,12 +6008,15 @@ async function loadFcClientViews(){
       where('date','>=',toDate(fromYmd)),
       where('date','<=',toDate(toYmd))
     ));
-    // 고객별 합산
-    const agg={};  // cid -> {ch,dl,total,last}
+    // 고객별 합산 (Level 2 상세 — bySec/byCard/byDate 누적 추가 2026-06-13)
+    const agg={};  // cid -> {ch,dl,total,last,bySec,byCard,byDate}
     snap.forEach(d=>{
       const v=d.data();const cid=v.clientId;if(!cid)return;
-      const a=agg[cid]||(agg[cid]={ch:0,dl:0,total:0,last:0});
+      const a=agg[cid]||(agg[cid]={ch:0,dl:0,total:0,last:0,bySec:{},byCard:{},byDate:{}});
       a.ch+=v.channelVisit||0;a.dl+=v.dailyVisit||0;a.total+=v.total||0;
+      Object.entries(v.bySection||{}).forEach(([k,n])=>a.bySec[k]=(a.bySec[k]||0)+n);
+      Object.entries(v.byCard||{}).forEach(([k,n])=>a.byCard[k]=(a.byCard[k]||0)+n);
+      if(v.date)a.byDate[v.date]={ch:v.channelVisit||0,dl:v.dailyVisit||0,total:v.total||0,bySec:v.bySection||{},byCard:v.byCard||{}};
       const ts=v.lastViewedAt&&v.lastViewedAt.toMillis?v.lastViewedAt.toMillis():(v.date?Date.parse(v.date):0);
       if(ts>a.last)a.last=ts;
     });
@@ -6023,13 +6026,42 @@ async function loadFcClientViews(){
       return;
     }
     const fmtLast=(ms)=>{if(!ms)return '-';const k=new Date(ms+9*3600000);return (k.getUTCMonth()+1)+'/'+k.getUTCDate();};
+    const fmtMD=(ds)=>{const p=String(ds||'').split('-');return p.length===3?(parseInt(p[1])+'/'+parseInt(p[2])):ds;};
+    const secLbl=(k)=>String(k||'').replace(/_/g,' ');
+    // 콘텐츠 칩: 섹션 + 카드(FCV_CARD_LABELS) 합쳐 많이 본 순
+    const chips=(bySec,byCard)=>{
+      const arr=[];
+      Object.entries(bySec||{}).forEach(([k,n])=>arr.push([secLbl(k),n]));
+      Object.entries(byCard||{}).forEach(([k,n])=>arr.push([(FCV_CARD_LABELS[k]||k),n]));
+      arr.sort((x,z)=>z[1]-x[1]);
+      if(!arr.length)return '<span style="font-size:11px;color:#C5CAD6">열람한 콘텐츠 없음</span>';
+      return arr.map(([nm,n])=>'<span style="display:inline-block;font-size:11px;color:#374151;background:#F1F5F9;border-radius:10px;padding:2px 8px;margin:2px 4px 2px 0">'+fccEsc(nm)+' '+n+'</span>').join('');
+    };
     box.innerHTML=rows.map(([cid,a])=>{
       const nm=nameMap[cid]||'삭제된 고객';
       const gone=!nameMap[cid];
-      return '<div style="display:flex;align-items:center;gap:10px;border:0.5px solid #E1E8EE;border-radius:8px;padding:8px 12px">'
-        +'<span style="flex:0 0 auto;font-size:13px;font-weight:700;color:'+(gone?'#9CA3AF':'#1F2937')+';min-width:64px">'+fccEsc(nm)+'</span>'
-        +'<span style="flex:1;min-width:0;font-size:11px;color:#6B7280">데일리 '+a.dl+' · 채널 '+a.ch+'</span>'
-        +'<span style="flex:0 0 auto;font-size:11px;font-weight:700;color:#0F6E56">최근 '+fmtLast(a.last)+'</span>'
+      const days=Object.keys(a.byDate).length;
+      const dayRows=Object.keys(a.byDate).sort().reverse().map(ds=>{
+        const dd=a.byDate[ds];
+        return '<div style="padding:6px 0;border-top:0.5px solid #EEF2F6">'
+          +'<div style="font-size:11px;font-weight:700;color:#1B3A6B;margin-bottom:3px">'+fmtMD(ds)+' <span style="font-weight:400;color:#9CA3AF">· 총 '+(dd.total||0)+'회</span></div>'
+          +'<div>'+chips(dd.bySec,dd.byCard)+'</div>'
+          +'</div>';
+      }).join('');
+      return '<div style="border:0.5px solid #E1E8EE;border-radius:8px;margin-bottom:6px;overflow:hidden">'
+        +'<div onclick="fcvToggleClient(this)" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer">'
+          +'<span style="flex:0 0 auto;font-size:11px;color:#9CA3AF;transition:transform .15s" data-arrow>▸</span>'
+          +'<span style="flex:0 0 auto;font-size:13px;font-weight:700;color:'+(gone?'#9CA3AF':'#1F2937')+';min-width:64px">'+fccEsc(nm)+'</span>'
+          +'<span style="flex:1;min-width:0;font-size:11px;color:#6B7280">총 '+a.total+'회 · '+days+'일 방문</span>'
+          +'<span style="flex:0 0 auto;font-size:11px;font-weight:700;color:#0F6E56">최근 '+fmtLast(a.last)+'</span>'
+        +'</div>'
+        +'<div data-detail style="display:none;padding:8px 12px 10px;background:#FBFCFE;border-top:0.5px solid #E1E8EE">'
+          +'<div style="font-size:11px;color:#6B7280;margin-bottom:6px">데일리 '+a.dl+' · 채널 '+a.ch+' <span style="color:#C5CAD6">(같은 기기 30분 내 재방문은 합산 제외)</span></div>'
+          +'<div style="font-size:11px;font-weight:700;color:#8B93AE;margin-bottom:3px">많이 본 콘텐츠</div>'
+          +'<div style="margin-bottom:8px">'+chips(a.bySec,a.byCard)+'</div>'
+          +'<div style="font-size:11px;font-weight:700;color:#8B93AE;margin-bottom:2px">날짜별 열람</div>'
+          +(dayRows||'<span style="font-size:11px;color:#C5CAD6">기록 없음</span>')
+        +'</div>'
         +'</div>';
     }).join('');
   }catch(e){
@@ -6037,6 +6069,18 @@ async function loadFcClientViews(){
     box.innerHTML='<div style="font-size:12px;color:#DC2626">고객별 열람을 불러오지 못했습니다.</div>';
   }
 }
+/* 고객별 열람 행 클릭 → 상세 아코디언 토글 (2026-06-13) */
+window.fcvToggleClient=function(head){
+  try{
+    const wrap=head.parentElement;if(!wrap)return;
+    const det=wrap.querySelector('[data-detail]');
+    const arr=head.querySelector('[data-arrow]');
+    if(!det)return;
+    const open=det.style.display!=='none';
+    det.style.display=open?'none':'block';
+    if(arr)arr.style.transform=open?'rotate(0deg)':'rotate(90deg)';
+  }catch(e){}
+};
 window.fcvSetMode=function(mode){
   fcvMode=mode;
   document.querySelectorAll('#fcv-seg [data-fcv]').forEach(b=>{
