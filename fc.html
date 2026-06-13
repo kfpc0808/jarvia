@@ -1321,45 +1321,126 @@ function opNavM(dir){
   if(opM<1){opM=12;opY--;}
   renderOpMonth();
 }
-function renderOpMonth(){
-  const t=opTodayKst();
-  const mm=String(opM).padStart(2,'0');
-  $('opYmLabel').textContent=opY+'.'+mm;
+function opCollectEvents(Y,M){
+  const mm=String(M).padStart(2,'0');
   const ev=[];
   (opClientsCache||[]).forEach(c=>{
     if(!c.birthDate||c.birthDate.length!==10)return;
     const bm=(c.birthMmdd&&c.birthMmdd.length===4)?c.birthMmdd:(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));
-    if(bm.slice(0,2)===mm)ev.push({d:parseInt(bm.slice(2,4),10),k:'생일',bg:'#E1F5EE',fg:'#085041',n:c.name,sub:''});
+    if(bm.slice(0,2)===mm)ev.push({d:parseInt(bm.slice(2,4),10),k:'생일',bg:'#E1F5EE',fg:'#085041',n:c.name,sub:'',prod:''});
     const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd(c.birthDate);
-    if(sg.slice(0,2)===mm)ev.push({d:parseInt(sg.slice(2,4),10),k:'상령일',bg:'#FAEEDA',fg:'#633806',n:c.name,sub:'보험나이 +1'});
+    if(sg.slice(0,2)===mm)ev.push({d:parseInt(sg.slice(2,4),10),k:'상령일',bg:'#FAEEDA',fg:'#633806',n:c.name,sub:'보험나이 +1',prod:''});
     (c.contracts||[]).forEach(ct=>{
       if(!ct||!ct.maturityDate||String(ct.maturityDate).length!==10)return;
-      if(ct.maturityDate.slice(0,7)===opY+'-'+mm)ev.push({d:parseInt(ct.maturityDate.slice(8,10),10),k:'만기',bg:'#FAECE7',fg:'#712B13',n:c.name,sub:ct.productName||''});
+      const hit=ct.yearly?ct.maturityDate.slice(5,7)===mm:ct.maturityDate.slice(0,7)===Y+'-'+mm;
+      if(hit){
+        const _it=ct.insType||'';
+        const _tlabel={silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금'}[_it]||'';
+        const _k=_it?('만기_'+_it):'만기';
+        const _sub=(_tlabel?('['+_tlabel+'] '):'')+(ct.productName||'');
+        ev.push({d:parseInt(ct.maturityDate.slice(8,10),10),k:_k,bg:'#FAECE7',fg:'#712B13',n:c.name,sub:_sub,prod:ct.productName||''});
+      }
     });
   });
   ev.sort((a,b)=>a.d-b.d);
-  $('opMonthSummary').textContent='이벤트 '+ev.length+'건 · 등록 고객 '+(opClientsCache?opClientsCache.length:0)+'명';
-  if(!ev.length){
-    $('opAlertList').innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">'+opM+'월에 예정된 이벤트가 없습니다.</div>';
-    return;
-  }
-  const isThisM=(opY===t.y&&opM===t.m);
-  $('opAlertList').innerHTML=ev.map(e=>{
+  return ev;
+}
+function opRenderRows(ev,Y,M,t){
+  const isThisM=(Y===t.y&&M===t.m);
+  return ev.map(e=>{
     const isToday=isThisM&&e.d===t.d;
-    return '<div class="op-al-row" data-mk="'+e.k+'" data-mn="'+opEsc(e.n)+'" data-mm="'+opM+'" data-md="'+e.d+'" data-mp="'+opEsc(e.k==='만기'?e.sub:'')+'" style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#E5E7EB')+';border-radius:8px;padding:7px 10px'+(isToday?';background:#F0F4F8':'')+';cursor:pointer">'
-      +'<span style="font-size:12px;font-weight:800;color:#1F2937;min-width:36px">'+opM+'/'+e.d+'</span>'
-      +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+e.k+(isToday?' 오늘':'')+'</span>'
+    const _isMat=e.k.indexOf('만기')===0;
+    const _matLabel={'만기':'만기','만기_silson':'실손 만기','만기_auto':'자동차 만기','만기_protect':'보장성 만기','만기_saving':'저축성 만기','만기_pension':'연금 만기'}[e.k]||e.k;
+    const _badge=_isMat?_matLabel:e.k;
+    return '<div class="op-al-row" data-mk="'+e.k+'" data-mn="'+opEsc(e.n)+'" data-mm="'+M+'" data-md="'+e.d+'" data-mp="'+opEsc(_isMat?(e.prod||''):'')+'" style="display:flex;align-items:center;gap:8px;border:1px solid '+(isToday?'#1B3A5C':'#E5E7EB')+';border-radius:8px;padding:7px 10px'+(isToday?';background:#F0F4F8':'')+';cursor:pointer">'
+      +'<span style="font-size:12px;font-weight:800;color:#1F2937;min-width:36px">'+M+'/'+e.d+'</span>'
+      +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+_badge+(isToday?' 오늘':'')+'</span>'
       +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+opEsc(e.n)+'</span>'
       +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(e.sub)+'</span>'
       +'<span style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬</span>'
       +'</div>';
   }).join('');
 }
+function renderOpMonth(){
+  const t=opTodayKst();
+  let y2=opY,m2=opM+1;if(m2>12){m2=1;y2++;}
+  $('opYmLabel').textContent=opY+'.'+String(opM).padStart(2,'0')+'~'+String(m2).padStart(2,'0');
+  const ev1=opCollectEvents(opY,opM);
+  const ev2=opCollectEvents(y2,m2);
+  $('opMonthSummary').textContent='이벤트 '+(ev1.length+ev2.length)+'건 (당월·익월) · 등록 고객 '+(opClientsCache?opClientsCache.length:0)+'명';
+  const _lbl=(Y,M)=>'<div style="font-size:11px;font-weight:700;color:#9CA3AF;margin:2px 0 4px">'+M+'월'+((Y===t.y&&M===t.m)?' (당월)':'')+'</div>';
+  const _empty='<div style="font-size:12px;color:#C7CDD6;padding:4px 0 6px">예정된 이벤트 없음</div>';
+  $('opAlertList').innerHTML=
+    _lbl(opY,opM)+(ev1.length?opRenderRows(ev1,opY,opM,t):_empty)
+    +_lbl(y2,m2)+(ev2.length?opRenderRows(ev2,y2,m2,t):_empty);
+}
 /* ── 💬 알림 행 멘트 (수정·복사·카톡 공유) — 2026-06-11 ── */
-function opMsgTpl(k,n,m,d,p){
-  if(k==='생일')return n+'님, 생신 축하드립니다! 🎂 늘 건강하시고, 올해도 좋은 일만 가득하시길 바랍니다. 조만간 안부 인사 겸 찾아뵙겠습니다.';
-  if(k==='상령일')return n+'님, 안부 인사드립니다. '+m+'월 '+d+'일이면 보험나이가 한 살 올라가 같은 보장도 보험료가 달라지는 시점이에요. 그 전에 보장 점검 한번 받아보시면 어떨까요?';
-  return n+'님, 가입하신 '+(p||'보험')+' 상품이 '+m+'월 '+d+'일 만기 예정입니다. 환급금 안내와 함께 이후 플랜을 정리해드리고 싶은데, 이번 주 중 잠깐 통화 가능하실까요?';
+function opMsgTpl(k,n,m,d,p,tone){
+  const t=Math.max(0,Math.min(4,tone|0));
+  const _nm=(fcData&&fcData.name)||(consultantData&&consultantData.name)||'';
+  const _tl=(consultantData&&consultantData.title)||(fcData&&fcData.title)||'';
+  const fc=_nm+(_tl?' '+_tl:'');
+  const P=p||'가입하신 상품';
+  const M={
+    '생일':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n오늘 '+n+'님의 생신을 진심으로 축하드립니다. 한 해 동안 건강과 좋은 일이 가득하시길 바랍니다. 늘 마음 써주셔서 감사한 마음에 안부 인사 드립니다.\n편하실 때 한번 찾아뵙고 인사드리고 싶습니다. 답주시면 일정 맞춰 찾아뵙겠습니다.',
+      n+'님, '+fc+'입니다.\n오늘은 '+n+'님의 생신이라 가장 먼저 축하 인사 드리고 싶었습니다! 🎂 생신을 맞아 한 해 더 건강하시고, 늘 평안하시길 진심으로 바랍니다.\n좋은 날 겸 그동안의 보장도 잘 유지되고 있는지 한번 챙겨드리고 싶어요. 편하실 때 답주세요.',
+      n+'님, 생신 축하드려요! 🎉 '+fc+'입니다 😊\n한 살 더 드신 만큼 더 건강하고 좋은 일만 가득하시길 바랄게요. 늘 응원하고 있어요!\n조만간 안부 겸 연락드릴게요. 편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+n+'님의 생신을 진심으로 축하드립니다. 새로운 한 해도 건강과 행복이 함께하시길 기원합니다. 늘 신뢰해 주심에 깊이 감사드립니다.\n생신을 계기로 현재 가입 상태도 한번 점검해 드리고 싶습니다. 필요하실 때 말씀 주시면 성심껏 안내드리겠습니다.',
+      n+'님, 생신 진심으로 축하드립니다! 🎂 '+fc+'입니다.\n건강하시고 좋은 일만 가득하시길 바랍니다.\n조만간 안부 인사 드리겠습니다. 편하실 때 답주세요.'
+    ],
+    '상령일':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n다름이 아니라 '+m+'월 '+d+'일이면 보험나이가 한 살 올라가는 시점이라 미리 안내드립니다. 보험나이가 오르면 동일한 보장이라도 보험료가 달라질 수 있어, 새로 준비하실 계획이 있으시면 그 전이 유리합니다.\n혹시 점검이 필요하시면 편하게 말씀 주세요. 부담 없이 도와드리겠습니다.',
+      n+'님, '+fc+'입니다.\n한 가지 꼭 알려드릴 게 있어 연락드려요. '+m+'월 '+d+'일이 지나면 보험나이가 한 살 올라, 지금 가입하시는 것과 이후 가입하시는 것의 보험료 차이가 평생 이어집니다. 같은 보장을 더 비싸게 드는 셈이라, 계획이 있으시다면 이번 달을 넘기지 않는 게 좋습니다.\n늦지 않게 챙겨드리고 싶어 미리 말씀드립니다. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n다름이 아니라 '+m+'월 '+d+'일에 보험나이가 한 살 오르셔서요. 혹시 보장 새로 준비할 생각 있으셨다면 그 전에 하시는 게 보험료 면에서 이득이라 살짝 귀띔드려요.\n급한 건 아니지만 놓치면 아까우니까요. 궁금하시면 편하게 답주세요!',
+      n+'님, '+fc+'입니다.\n보험나이가 '+m+'월 '+d+'일자로 한 살 상향됩니다. 보험은 가입 시점의 나이로 보험료가 산정되어, 이 시점을 기준으로 동일 보장의 비용이 달라집니다. 새로운 가입이나 보장 보완을 고려 중이시라면 상향 전 검토를 권해드립니다.\n필요하신 부분 있으시면 언제든 말씀 주세요. 성심껏 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+m+'월 '+d+'일이면 보험나이가 오릅니다. 같은 보장도 이후엔 보험료가 더 들어요. 준비하실 게 있으면 이번 달이 마지막 적기입니다.\n도움 필요하시면 편하게 답주세요.'
+    ],
+    '만기_silson':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n가입하신 '+P+'이 '+m+'월 '+d+'일에 만기를 맞습니다. 실손은 의료비 보장의 기본이 되는 만큼, 만기 후 보장 공백이 생기지 않도록 미리 챙겨드리고 싶습니다. 갱신·전환 조건을 함께 살펴보면 좋겠습니다.\n편하실 때 답주시면 일정 맞춰 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기인데, 이 시점을 놓치면 무보험 기간이 생겨 그 사이 발생하는 의료비는 보장받지 못합니다. 실손은 한 번 끊기면 재가입 시 조건이 까다로워질 수 있어, 만기 전 정리가 꼭 필요합니다.\n늦지 않게 챙기시도록 미리 연락드려요. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n다름이 아니라 '+P+' 만기가 '+m+'월 '+d+'일로 다가와서요. 실손은 공백 없이 이어가는 게 중요해서, 미리 한번 봐드리려고 연락드렸어요.\n부담 갖지 마시고 편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 만기일이 '+m+'월 '+d+'일입니다. 실손의료비는 만기 후 보장이 종료되며, 재가입 시점의 건강 상태와 약관에 따라 조건이 달라질 수 있습니다. 현 보장을 유지·전환하는 방안을 만기 전에 검토하시길 권해드립니다.\n필요하신 부분 말씀 주시면 성심껏 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 끊기면 의료비 보장 공백이 생기고 재가입도 까다로워져요. 만기 전에 꼭 점검하셔야 합니다.\n편하실 때 답주세요.'
+    ],
+    '만기_auto':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일에 만기됩니다. 자동차보험은 하루라도 공백이 생기면 사고 시 큰 부담이 되고 법적 문제도 따르는 만큼, 만기 전에 갱신을 챙겨드리고 싶습니다.\n편하실 때 답주시면 조건 비교해 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+' 만기가 '+m+'월 '+d+'일입니다. 자동차보험은 만기일 0시부터 효력이 끊겨, 단 하루 공백에도 사고가 나면 수천만 원을 직접 부담하실 수 있고 무보험 운전은 과태료 대상입니다. 절대 놓치시면 안 됩니다.\n늦지 않게 챙기시도록 미리 연락드려요. 편하실 때 답주세요.',
+      n+'님, 안녕하세요! '+fc+'입니다 😊\n'+P+' 만기가 '+m+'월 '+d+'일로 다가왔어요. 자동차보험은 끊기면 안 되니까 미리 알려드리려고요. 갱신 조건도 더 좋은 게 있는지 같이 봐드릴게요.\n편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 만기일이 '+m+'월 '+d+'일입니다. 자동차보험은 만기와 동시에 보장이 종료되며, 갱신 시 운전 경력·할인할증 등급에 따라 보험료가 조정됩니다. 만기 전 갱신으로 보장 공백 없이 최적 조건을 적용받으시길 권합니다.\n필요하신 부분 말씀 주시면 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 하루만 끊겨도 사고 시 전액 본인 부담에 과태료까지 물 수 있어요. 만기 전 꼭 갱신하셔야 합니다.\n편하실 때 답주세요.'
+    ],
+    '만기_protect':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n가입하신 '+P+'이 '+m+'월 '+d+'일에 만기됩니다. 보장성보험은 만기 후 질병·상해 보장이 종료되어, 그 이후를 어떻게 준비하실지 미리 정리해드리고 싶습니다.\n편하실 때 답주시면 이후 플랜을 함께 살펴보겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기인데, 만기 후엔 그동안 받으시던 질병·상해 보장이 사라집니다. 나이가 든 뒤 새로 가입하면 보험료가 크게 오르거나 가입 자체가 어려울 수 있어, 만기 전에 대비하시는 게 안전합니다.\n늦지 않게 챙기시도록 미리 연락드려요. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n'+P+' 만기가 '+m+'월 '+d+'일로 다가와서 연락드려요. 만기 후 보장 공백이 안 생기게 미리 한번 봐드리려고요. 더 나은 조건도 있는지 같이 살펴봐요.\n편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 만기일이 '+m+'월 '+d+'일입니다. 보장성보험 만기 시 해당 보장이 종료되며, 재가입은 연령 증가와 건강 상태에 따라 보험료 상승 또는 인수 거절이 발생할 수 있습니다. 만기 전 보장 연속성을 검토하시길 권합니다.\n필요하신 부분 말씀 주시면 성심껏 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 만기 후엔 질병·상해 보장이 사라지고, 나중에 새로 들면 훨씬 비싸져요. 만기 전 점검이 필요합니다.\n편하실 때 답주세요.'
+    ],
+    '만기_saving':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n가입하신 '+P+'이 '+m+'월 '+d+'일에 만기됩니다. 만기 환급금 수령 방법과 이후 자금 운용을 함께 정리해드리고 싶어 미리 연락드립니다.\n편하실 때 답주시면 일정 맞춰 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기를 맞습니다. 만기 환급금은 수령 시점과 방식에 따라 세금이나 추가 운용 수익이 달라질 수 있어, 그냥 두기보다 한 번 점검받으시는 게 유리합니다.\n더 나은 방향을 함께 찾아드리고 싶어 연락드려요. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n'+P+' 만기가 '+m+'월 '+d+'일이에요. 환급금 어떻게 받으실지, 또 어떻게 굴리면 좋을지 같이 정리해드리려고 미리 연락드렸어요.\n편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 만기일이 '+m+'월 '+d+'일입니다. 만기 환급금은 일시 수령·연금 전환·재예치 등 선택에 따라 세제와 수익이 달라집니다. 고객님 상황에 맞는 최적의 활용 방안을 만기 전에 설계해드리고자 합니다.\n필요하신 부분 말씀 주시면 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 환급금을 어떻게 받고 운용하느냐에 따라 결과가 꽤 달라져요. 만기 전에 한번 정리해드릴게요.\n편하실 때 답주세요.'
+    ],
+    '만기_pension':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n가입하신 '+P+'이 '+m+'월 '+d+'일에 만기(연금 개시)를 앞두고 있습니다. 연금 수령 방식과 시점에 따라 받으시는 금액이 달라질 수 있어, 미리 함께 정리해드리고 싶습니다.\n편하실 때 답주시면 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 연금 개시 시점을 맞습니다. 연금은 수령 기간·방식·개시 시점에 따라 총 수령액과 세금이 크게 달라져, 결정 전에 비교해보시는 게 노후 자금에 직접적으로 도움이 됩니다.\n더 유리한 방향을 함께 찾아드리고 싶어 연락드려요. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n'+P+'이 '+m+'월 '+d+'일에 연금 개시 시점을 맞아서요. 어떻게 받으시는 게 가장 좋을지 같이 정리해드리려고 미리 연락드렸어요. 노후 자금이라 더 꼼꼼히 봐드릴게요.\n편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 연금 개시일이 '+m+'월 '+d+'일입니다. 연금은 종신형·확정기간형 등 수령 방식과 개시 시점에 따라 총 수령액·세제 혜택이 달라집니다. 고객님께 가장 유리한 수령 설계를 미리 준비해드리고자 합니다.\n필요하신 부분 말씀 주시면 성심껏 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 연금 개시입니다. 어떻게 받느냐에 따라 평생 받는 금액이 달라져요. 결정 전에 꼭 한번 같이 보시죠.\n편하실 때 답주세요.'
+    ],
+    '만기':[
+      n+'님, 안녕하세요. '+fc+'입니다.\n가입하신 '+P+'이 '+m+'월 '+d+'일에 만기 예정입니다. 만기 이후 보장이나 자금 운용을 어떻게 이어가실지 함께 정리해드리고 싶습니다.\n편하실 때 답주시면 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 만기 시점을 놓치면 보장 공백이나 불필요한 손실이 생길 수 있어, 미리 점검하시는 게 좋습니다.\n늦지 않게 챙기시도록 연락드려요. 편하실 때 답주세요.',
+      n+'님, 잘 지내시죠? '+fc+'입니다 😊\n'+P+' 만기가 '+m+'월 '+d+'일로 다가와서요. 이후 어떻게 하면 좋을지 같이 정리해드리려고 미리 연락드렸어요.\n편하실 때 답주세요!',
+      n+'님, '+fc+'입니다.\n'+P+'의 만기일이 '+m+'월 '+d+'일입니다. 만기 후 보장 종료 및 자금 처리 방안을 사전에 검토하시길 권합니다. 상황에 맞는 최적의 방향을 안내해드리겠습니다.\n필요하신 부분 말씀 주시면 성심껏 안내드리겠습니다.',
+      n+'님, '+fc+'입니다.\n'+P+'이 '+m+'월 '+d+'일 만기입니다. 이후 플랜을 미리 정리해드릴게요.\n편하실 때 답주세요.'
+    ]
+  };
+  const arr=M[k]||M['만기'];
+  return arr[t]||arr[0];
 }
 function opCopyText(t){
   if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -1394,6 +1475,18 @@ function opMsgRowClick(e){
     else opMsgShareKakao(ta.value);
     return;
   }
+  const chip=e.target&&e.target.closest?e.target.closest('.op-tone-chip'):null;
+  if(chip){
+    const ed=chip.closest('.op-msg-ed');if(!ed)return;
+    const tone=parseInt(chip.getAttribute('data-tone'),10)||0;
+    ed.querySelectorAll('.op-tone-chip').forEach(c=>{
+      const on=c===chip;
+      c.style.background=on?'#1B3A5C':'#fff';c.style.color=on?'#fff':'#475569';
+      c.style.borderColor=on?'#1B3A5C':'#CBD5E1';c.style.fontWeight=on?'700':'600';
+    });
+    ed.querySelector('.op-msg-ta').value=opMsgTpl(ed.getAttribute('data-mk'),ed.getAttribute('data-mn'),ed.getAttribute('data-mm'),ed.getAttribute('data-md'),ed.getAttribute('data-mp'),tone);
+    return;
+  }
   if(e.target&&e.target.closest&&e.target.closest('.op-msg-ed'))return;   // 입력칸 클릭은 무시
   const row=e.target&&e.target.closest?e.target.closest('.op-al-row'):null;
   if(!row)return;
@@ -1401,22 +1494,31 @@ function opMsgRowClick(e){
   const wasOpen=next&&next.classList&&next.classList.contains('op-msg-ed');
   $('opAlertList').querySelectorAll('.op-msg-ed').forEach(x=>x.remove());   // 하나만 열림
   if(wasOpen)return;   // 재탭 = 닫기
-  const msg=opMsgTpl(row.getAttribute('data-mk'),row.getAttribute('data-mn'),row.getAttribute('data-mm'),row.getAttribute('data-md'),row.getAttribute('data-mp'));
+  const mk=row.getAttribute('data-mk'),mn=row.getAttribute('data-mn'),mm=row.getAttribute('data-mm'),md=row.getAttribute('data-md'),mp=row.getAttribute('data-mp');
+  const msg=opMsgTpl(mk,mn,mm,md,mp,0);
+  const _tones=['정중','강조','친근','전문','간결'];
+  const _chips=_tones.map((nm,i)=>'<span class="op-tone-chip" data-tone="'+i+'" style="font-size:12px;font-weight:'+(i===0?'700':'600')+';color:'+(i===0?'#fff':'#475569')+';background:'+(i===0?'#1B3A5C':'#fff')+';border:1px solid '+(i===0?'#1B3A5C':'#CBD5E1')+';border-radius:18px;padding:5px 12px;cursor:pointer;user-select:none">'+nm+'</span>').join('');
   row.insertAdjacentHTML('afterend',
-    '<div class="op-msg-ed" style="border:1px solid #D4A03C;background:#FFFDF5;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px">'
-    +'<textarea class="op-msg-ta" rows="4" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;border:1px solid #E5E7EB;border-radius:6px;padding:8px;resize:vertical;font-family:inherit">'+opEsc(msg)+'</textarea>'
+    '<div class="op-msg-ed" data-mk="'+opEsc(mk||'')+'" data-mn="'+opEsc(mn||'')+'" data-mm="'+opEsc(mm||'')+'" data-md="'+opEsc(md||'')+'" data-mp="'+opEsc(mp||'')+'" style="border:1px solid #D4A03C;background:#FFFDF5;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px">'
+    +'<div style="font-size:11px;font-weight:700;color:#A16207">메시지 톤 선택 <span style="font-weight:400;color:#B0A48A">— 골라서 복사 후 수정해 보내세요</span></div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+_chips+'</div>'
+    +'<textarea class="op-msg-ta" rows="5" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;border:1px solid #E5E7EB;border-radius:6px;padding:8px;resize:vertical;font-family:inherit">'+opEsc(msg)+'</textarea>'
     +'<div style="display:flex;gap:6px;justify-content:flex-end">'
     +'<button type="button" data-act="copy" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:8px;padding:7px 14px;cursor:pointer">📋 복사</button>'
     +'<button type="button" data-act="kakao" style="font-size:12px;font-weight:700;color:#3C1E1E;background:#FEE500;border:none;border-radius:8px;padding:7px 14px;cursor:pointer">카톡 공유</button>'
     +'</div></div>');
 }
 let opEditTarget=null;   // 보험 추가 모드 대상 고객 (null = 신규 등록 모드)
-function opAddCtRow(p,m){
+function opAddCtRow(p,m,y,t){
   const row=document.createElement('div');
   row.className='op-ct-row';
   row.style.cssText='display:flex;gap:6px;align-items:center';
+  const _types=[['','종류'],['silson','실손'],['auto','자동차'],['protect','보장성'],['saving','저축성'],['pension','연금']];
+  const _topts=_types.map(o=>'<option value="'+o[0]+'"'+(t===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
   row.innerHTML='<input class="op-ct-p" maxlength="40" placeholder="보험상품명" value="'+opEsc(p||'')+'" style="flex:1;min-width:0;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px">'
+    +'<select class="op-ct-t" title="보험 종류 — 만기 알림 멘트가 종류에 맞게 제공됩니다" style="flex-shrink:0;width:70px;padding:7px 4px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff;cursor:pointer">'+_topts+'</select>'
     +'<input class="op-ct-m" type="date" value="'+opEsc(m||'')+'" style="flex:1;min-width:0;padding:7px 8px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff">'
+    +'<label title="실손·자동차처럼 매년 갱신되는 상품 — 만기 알림이 매년 반복 표시됩니다" style="display:flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#374151;white-space:nowrap;cursor:pointer;flex-shrink:0;user-select:none"><input type="checkbox" class="op-ct-y"'+(y?' checked':'')+' style="width:14px;height:14px;accent-color:#1B3A5C;cursor:pointer;margin:0">매년</label>'
     +'<button type="button" class="op-ct-x" style="font-size:14px;color:#9CA3AF;background:none;border:none;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0">×</button>';
   $('opCtRows').appendChild(row);
 }
@@ -1425,7 +1527,9 @@ function opReadCtRows(){
   $('opCtRows').querySelectorAll('.op-ct-row').forEach(r=>{
     const p=r.querySelector('.op-ct-p').value.trim();
     const m=r.querySelector('.op-ct-m').value;
-    if(p||m)out.push({productName:p,maturityDate:m||null});
+    const yEl=r.querySelector('.op-ct-y');
+    const tEl=r.querySelector('.op-ct-t');
+    if(p||m)out.push({productName:p,maturityDate:m||null,yearly:!!(yEl&&yEl.checked),insType:(tEl&&tEl.value)||''});
   });
   return out;
 }
@@ -3204,7 +3308,7 @@ init();
       <div style="flex:1;min-width:0"><label for="opName" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">이름 <span style="color:#DC2626">필수</span></label><input id="opName" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px"></div>
       <div style="flex:1;min-width:0"><label for="opBirth" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#DC2626">필수</span></label><input id="opBirth" type="date" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff"></div>
     </div>
-    <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">계약 (상품명 · 만기일) <span style="color:#9CA3AF">선택 · 여러 개 가능</span></label>
+    <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">계약 (상품명 · 종류 · 만기일 · 매년) <span style="color:#9CA3AF">선택 · 여러 개 가능</span></label>
     <div id="opCtRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
     <button type="button" id="opCtAddBtn" style="width:100%;padding:7px;font-size:12px;font-weight:700;color:#64748B;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;cursor:pointer;margin-bottom:8px">＋ 상품 추가</button>
     <div style="font-size:11px;color:#9CA3AF;margin-bottom:10px">생일 → 상령일 자동계산 · 만기일 입력 시 D-60/30/7 알림 · 저장하면 바로 등록되고 이어서 입력할 수 있습니다</div>
