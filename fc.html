@@ -1289,11 +1289,30 @@ let opClientsCache=null;  // fc_clients 캐시 (패널 내 월 이동 시 재조
 let opY=0,opM=0;          // 조회 중인 연·월
 function opEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function opSangMmdd(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 익월 1일)
+  if(!birth||birth.length!==10)return '';
   let m=parseInt(birth.slice(5,7),10),d=parseInt(birth.slice(8,10),10);
   m+=6;if(m>12)m-=12;
   const dim=[31,28,31,30,31,30,31,31,30,31,30,31];
   if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}
   return String(m).padStart(2,'0')+String(d).padStart(2,'0');
+}
+// ── 동명이인 감지 & 식별자 제안 (D) ──
+function opEscRe(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function opSuggestName(base){
+  const used=new Set();
+  (opClientsCache||[]).forEach(c=>{const m=(c.name||'').match(new RegExp('^'+opEscRe(base)+'([A-Z])$'));if(m)used.add(m[1]);});
+  for(let i=0;i<26;i++){const L=String.fromCharCode(65+i);if(!used.has(L))return base+L;}
+  return base+'_'+Date.now();
+}
+function opDupResolve(name){
+  const dups=(opClientsCache||[]).filter(c=>c.name===name);
+  if(!dups.length)return name;
+  const sug=opSuggestName(name);
+  const v=prompt('\''+name+'\' 이름의 고객이 이미 '+dups.length+'명 있습니다.\n동일 이름은 누가 열람했는지 구분되지 않으니, 이름 뒤에 식별자(A·B·C)를 붙여주세요.',sug);
+  if(v===null)return null;
+  const nv=v.trim();
+  if(!nv||nv.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
+  return nv;
 }
 function opTodayKst(){const k=new Date(Date.now()+9*3600000);return{y:k.getUTCFullYear(),m:k.getUTCMonth()+1,d:k.getUTCDate()};}
 async function openOwnerPanel(){
@@ -1557,7 +1576,7 @@ function opReadForm(){
   const name=$('opName').value.trim();
   const birth=$('opBirth').value;
   if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
-  if(!birth||birth.length!==10){toast('생일을 선택해주세요');return null;}
+  if(birth&&birth.length!==10){toast('생일 형식을 확인해주세요');return null;}
   return{name,birthDate:birth,contracts:opReadCtRows().slice(0,20)};
 }
 function opClearForm(){$('opName').value='';$('opBirth').value='';$('opFind').value='';$('opFindRes').style.display='none';opResetCtRows();}
@@ -1613,15 +1632,16 @@ async function opSaveAll(){
   }
   // ── 신규 등록 모드: 단건 저장 → 폼 비움 → 이어서 입력 ──
   const s=opReadForm();if(!s)return;
+  const _rn=opDupResolve(s.name);if(_rn===null){toast('등록이 취소되었습니다');return;}s.name=_rn;
   btn.disabled=true;btn.textContent='저장 중...';
   try{
     const ref=doc(collection(db,'fc_clients'));
     const data={
       fcAuthUid:currentUser.uid,
       fcLoginId:loginId,
-      name:s.name,birthDate:s.birthDate,contracts:s.contracts,
-      birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),
-      sangryeongMmdd:opSangMmdd(s.birthDate),
+      name:s.name,birthDate:s.birthDate||'',contracts:s.contracts,
+      birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',
+      sangryeongMmdd:s.birthDate?opSangMmdd(s.birthDate):'',
       createdAt:serverTimestamp(),updatedAt:serverTimestamp()
     };
     await setDoc(ref,data);
@@ -3325,7 +3345,7 @@ init();
     </div>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       <div style="flex:1;min-width:0"><label for="opName" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">이름 <span style="color:#DC2626">필수</span></label><input id="opName" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px"></div>
-      <div style="flex:1;min-width:0"><label for="opBirth" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#DC2626">필수</span></label><input id="opBirth" type="date" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff"></div>
+      <div style="flex:1;min-width:0"><label for="opBirth" style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#9CA3AF">선택</span></label><input id="opBirth" type="date" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;color:#374151;background:#fff"></div>
     </div>
     <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">계약 (상품명 · 종류 · 만기일 · 매년) <span style="color:#9CA3AF">선택 · 여러 개 가능</span></label>
     <div id="opCtRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>

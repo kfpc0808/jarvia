@@ -1805,7 +1805,7 @@
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:8px">
           <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">이름 <span style="color:#DC2626">필수</span></label><input id="fcc-name" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box;padding:10px 14px;font-size:15px;border:1px solid #D1D5DB;border-radius:8px;background:#fff"></div>
-          <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#DC2626">필수</span></label><input id="fcc-birth" type="date" style="width:100%;box-sizing:border-box;padding:10px 14px;font-size:15px;border:1px solid #D1D5DB;border-radius:8px;background:#fff;color:#374151;height:44px"></div>
+          <div><label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">생일(주민등록상) <span style="color:#9CA3AF">선택</span></label><input id="fcc-birth" type="date" style="width:100%;box-sizing:border-box;padding:10px 14px;font-size:15px;border:1px solid #D1D5DB;border-radius:8px;background:#fff;color:#374151;height:44px"></div>
         </div>
         <div id="fcc-exist-wrap" style="display:none;margin-bottom:8px">
           <label style="display:block;font-size:11px;font-weight:600;color:#6B7280;margin-bottom:3px">기존 계약 <span style="color:#9CA3AF">×로 삭제 가능</span></label>
@@ -5408,11 +5408,30 @@ let fccCache=null,fccBoardY=0,fccBoardM=0;
 function fccEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function fccD2(n){return String(n).padStart(2,'0');}
 function fccSang(birth){ // 상령일 = 생일 + 6개월 (월말 초과 시 익월 1일)
+  if(!birth||birth.length!==10)return '';
   let m=parseInt(birth.slice(5,7),10),d=parseInt(birth.slice(8,10),10);
   m+=6;if(m>12)m-=12;
   const dim=[31,28,31,30,31,30,31,31,30,31,30,31];
   if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}
   return fccD2(m)+fccD2(d);
+}
+// ── 동명이인 감지 & 식별자 제안 (D) ──
+function fccEscRe(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function fccSuggestName(base){
+  const used=new Set();
+  (fccCache||[]).forEach(c=>{const m=(c.name||'').match(new RegExp('^'+fccEscRe(base)+'([A-Z])$'));if(m)used.add(m[1]);});
+  for(let i=0;i<26;i++){const L=String.fromCharCode(65+i);if(!used.has(L))return base+L;}
+  return base+'_'+Date.now();
+}
+function fccDupResolve(name){
+  const dups=(fccCache||[]).filter(c=>c.name===name);
+  if(!dups.length)return name;
+  const sug=fccSuggestName(name);
+  const v=prompt('\''+name+'\' 이름의 고객이 이미 '+dups.length+'명 있습니다.\n동일 이름은 누가 열람했는지 구분되지 않으니, 이름 뒤에 식별자(A·B·C)를 붙여주세요.',sug);
+  if(v===null)return null;
+  const nv=v.trim();
+  if(!nv||nv.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
+  return nv;
 }
 function fccToday(){const k=new Date(Date.now()+9*3600000);return{y:k.getUTCFullYear(),m:k.getUTCMonth()+1,d:k.getUTCDate()};}
 async function fccFetch(force){
@@ -5731,9 +5750,10 @@ window.fccRenderTable=function(){
   $('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(list.length!==fccCache.length?' · 조건 일치 '+list.length+'명':'');
   if(!list.length){$('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">'+(fccCache.length?'조건에 맞는 고객이 없습니다.':'등록된 고객이 없습니다. 위에서 등록해보세요.')+'</td></tr>';return;}
   $('fcc-tbody').innerHTML=list.map(c=>{
-    const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:fccSang(c.birthDate||'0000-01-01');
-    const sgTxt=parseInt(sg.slice(0,2),10)+'/'+parseInt(sg.slice(2,4),10);
-    const sgNow=sg.slice(0,2)===mm;
+    const hasB=!!(c.birthDate&&c.birthDate.length===10);
+    const sg=hasB?((c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:fccSang(c.birthDate)):'';
+    const sgTxt=hasB?(parseInt(sg.slice(0,2),10)+'/'+parseInt(sg.slice(2,4),10)):'—';
+    const sgNow=hasB&&sg.slice(0,2)===mm;
     const ctHtml=(c.contracts&&c.contracts.length)
       ? c.contracts.map(ct=>{const _tl={silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금'}[ct.insType||'']||'';const _tb=_tl?'<span style="font-size:10px;font-weight:700;color:#633806;background:#FAEEDA;border-radius:8px;padding:1px 6px;white-space:nowrap;margin-right:4px">'+_tl+'</span>':'';return _tb+fccEsc(ct.productName||'(상품명 미입력)')+(ct.maturityDate?' <span style="color:#9CA3AF">· '+ct.maturityDate+'</span>':'')+(ct.yearly?' <span style="font-size:10px;font-weight:700;color:#085041;background:#E1F5EE;border-radius:8px;padding:1px 6px;white-space:nowrap">매년</span>':'');}).join('<br>')
       : '<span style="color:#C5CAD6">-</span>';
@@ -5799,7 +5819,7 @@ function fccReadForm(){
   const name=$('fcc-name').value.trim();
   const birth=$('fcc-birth').value;
   if(!name||name.length>20){toast('이름을 확인해주세요 (1~20자)');return null;}
-  if(!birth||birth.length!==10){toast('생일을 선택해주세요');return null;}
+  if(birth&&birth.length!==10){toast('생일 형식을 확인해주세요');return null;}
   return{name,birthDate:birth,contracts:fccCtRead().slice(0,20)};
 }
 function fccClearForm(){$('fcc-name').value='';$('fcc-birth').value='';fccCtReset();}
@@ -5855,9 +5875,9 @@ async function fccSaveEntries(list){
       const data={
         fcAuthUid:me.uid,
         fcLoginId:(meData&&meData.loginId)||'',
-        name:s.name,birthDate:s.birthDate,contracts:s.contracts,
-        birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),
-        sangryeongMmdd:fccSang(s.birthDate),
+        name:s.name,birthDate:s.birthDate||'',contracts:s.contracts,
+        birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',
+        sangryeongMmdd:s.birthDate?fccSang(s.birthDate):'',
         createdAt:serverTimestamp(),updatedAt:serverTimestamp()
       };
       await setDoc(ref,data);
@@ -5907,7 +5927,7 @@ window.fccCsvLoad=function(ev){
       if(!cells[0])return;
       if(idx===0&&(cells[0]==='이름'||cells[0].toLowerCase()==='name'))return;
       const name=cells[0],birth=fccNormDate(cells[1]);
-      if(!name||name.length>20||!birth){skip++;return;}
+      if(!name||name.length>20){skip++;return;}
       const contracts=[];
       // 3번째 칸부터 (상품명·만기일·매년) 3칸 세트 반복 — 한 고객 한 행, 계약은 오른쪽으로 확장
       for(let i=2;i<cells.length;i+=3){
@@ -5916,7 +5936,7 @@ window.fccCsvLoad=function(ev){
         const yearly=/^(y|yes|매년|o|1|true)$/i.test((cells[i+2]||'').trim());
         if(product||maturity)contracts.push({productName:product,maturityDate:maturity,yearly});
       }
-      const ex=entries.find(s=>s.name===name&&s.birthDate===birth);   // 같은 이름+생일 → 계약 병합
+      const ex=birth?entries.find(s=>s.name===name&&s.birthDate===birth):null;   // 같은 이름+생일 → 계약 병합 (생일 없으면 각각 별도)
       if(ex)ex.contracts=ex.contracts.concat(contracts).slice(0,20);
       else entries.push({name,birthDate:birth,contracts:contracts.slice(0,20)});
     });
@@ -5943,14 +5963,14 @@ window.fccSaveAll=async function(){
     btn.disabled=true;btn.textContent='저장 중...';
     try{
       await updateDoc(doc(db,'fc_clients',fccEdit.id),{
-        name:e.name,birthDate:e.birthDate,contracts:merged,
-        birthMmdd:e.birthDate.slice(5,7)+e.birthDate.slice(8,10),
-        sangryeongMmdd:fccSang(e.birthDate),
+        name:e.name,birthDate:e.birthDate||'',contracts:merged,
+        birthMmdd:e.birthDate?(e.birthDate.slice(5,7)+e.birthDate.slice(8,10)):'',
+        sangryeongMmdd:e.birthDate?fccSang(e.birthDate):'',
         updatedAt:serverTimestamp()
       });
       const idx=fccCache.findIndex(x=>x.id===fccEdit.id);
-      if(idx>-1)fccCache[idx]={...fccCache[idx],name:e.name,birthDate:e.birthDate,contracts:merged,
-        birthMmdd:e.birthDate.slice(5,7)+e.birthDate.slice(8,10),sangryeongMmdd:fccSang(e.birthDate)};
+      if(idx>-1)fccCache[idx]={...fccCache[idx],name:e.name,birthDate:e.birthDate||'',contracts:merged,
+        birthMmdd:e.birthDate?(e.birthDate.slice(5,7)+e.birthDate.slice(8,10)):'',sangryeongMmdd:e.birthDate?fccSang(e.birthDate):''};
       toast('\''+e.name+'\' 고객 정보가 수정되었습니다','success');
       window.fccCancelEdit();
       window.fccRenderTable();
@@ -5961,6 +5981,7 @@ window.fccSaveAll=async function(){
   }
   // ── 신규 등록 모드: 단건 저장 → 폼 비움 → 이어서 입력 ──
   const s=fccReadForm();if(!s)return;
+  const _rn=fccDupResolve(s.name);if(_rn===null){toast('등록이 취소되었습니다');return;}s.name=_rn;
   btn.disabled=true;btn.textContent='저장 중...';
   const r=await fccSaveEntries([s]);
   btn.disabled=false;btn.textContent='💾 저장';
