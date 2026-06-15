@@ -3941,7 +3941,7 @@ async function doChangePw(){
     else toast('변경 실패: '+err.message,'error');
   }
 }
-async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{localStorage.removeItem('jarvia_session');}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
+async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
@@ -4133,16 +4133,21 @@ onAuthStateChanged(auth,async u=>{
     if(d.exists()){
       meData=d.data();window.meData=meData;
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
-      // ── 단일 세션(중복 로그인 차단): 같은 브라우저 여러 탭 허용, 다른 기기 차단 ──
+      // ── 단일 세션(중복 로그인 차단): 로그인 확인 + 같은 브라우저 탭 허용 ──
       try{
         let _sid=localStorage.getItem('jarvia_session');
         if(!_sid){_sid=gid();localStorage.setItem('jarvia_session',_sid);}
+        if(meData.activeSessionId && meData.activeSessionId!==_sid){
+          if(!confirm('다른 기기에서 로그인되어 사용 중입니다.\n\n계속 로그인하면 그 기기는 자동으로 로그아웃됩니다.\n로그인하시겠습니까?')){
+            await doLogout();nav('login');return;
+          }
+        }
         await setDoc(doc(db,'users',u.uid),{activeSessionId:_sid,sessionUpdatedAt:serverTimestamp()},{merge:true});
         if(sessionUnsub){try{sessionUnsub();}catch(_e){}}
         sessionUnsub=onSnapshot(doc(db,'users',u.uid),s=>{
           if(!s.exists())return;
-          const srv=s.data().activeSessionId;
-          if(srv&&srv!==localStorage.getItem('jarvia_session')){
+          const cur=s.data().activeSessionId;
+          if(cur&&cur!==localStorage.getItem('jarvia_session')){
             if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}
             alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
             doLogout().then(()=>nav('login'));
