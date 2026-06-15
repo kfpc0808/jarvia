@@ -3680,7 +3680,7 @@ let _tt;
 function toast(msg,type=''){const t=$('toast');t.textContent=msg;t.className='toast'+(type?' toast-'+type:'');t.classList.remove('hidden');clearTimeout(_tt);_tt=setTimeout(()=>t.classList.add('hidden'),3000);}
 
 // ── Globals ──
-let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set(),thumbSettings=null;
+let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set(),thumbSettings=null;let sessionUnsub=null;
 const _origHeaderNav=$('header-nav').innerHTML;
 const _origMobMenu=$('mob-menu')?$('mob-menu').innerHTML:'';
 
@@ -3941,7 +3941,7 @@ async function doChangePw(){
     else toast('변경 실패: '+err.message,'error');
   }
 }
-async function doLogout(){await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
+async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{localStorage.removeItem('jarvia_session');}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
@@ -4133,6 +4133,22 @@ onAuthStateChanged(auth,async u=>{
     if(d.exists()){
       meData=d.data();window.meData=meData;
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
+      // ── 단일 세션(중복 로그인 차단): 같은 브라우저 여러 탭 허용, 다른 기기 차단 ──
+      try{
+        let _sid=localStorage.getItem('jarvia_session');
+        if(!_sid){_sid=gid();localStorage.setItem('jarvia_session',_sid);}
+        await setDoc(doc(db,'users',u.uid),{activeSessionId:_sid,sessionUpdatedAt:serverTimestamp()},{merge:true});
+        if(sessionUnsub){try{sessionUnsub();}catch(_e){}}
+        sessionUnsub=onSnapshot(doc(db,'users',u.uid),s=>{
+          if(!s.exists())return;
+          const srv=s.data().activeSessionId;
+          if(srv&&srv!==localStorage.getItem('jarvia_session')){
+            if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}
+            alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
+            doLogout().then(()=>nav('login'));
+          }
+        });
+      }catch(_se){console.warn('세션 설정 실패:',_se);}
       // 멤버십/리포트회원 만료 자동 복원
       if((meData.role==='jarvia_member'||meData.role==='jarvia_report')&&meData.membershipExpiresAt&&meData.membershipExpiresAt!=='unlimited'){
         const _mExp=meData.membershipExpiresAt.toDate?meData.membershipExpiresAt.toDate():new Date(meData.membershipExpiresAt);
