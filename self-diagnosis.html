@@ -712,27 +712,26 @@ h2{font-size:27px}
      같은 경로의 self-diagnosis-1.mp3 ~ -6.mp3 를 장면 순서대로 재생.
      파일이 없거나 재생 실패 시 → 브라우저 TTS 폴백 → 그것도 불가 시 무음 진행 */
   const AUDIO_BASE='self-diagnosis-';   // 파일명 규칙: self-diagnosis-1.mp3 …
-  const narrAudio=new Audio();
-  narrAudio.preload='auto';
   let mp3Broken=false;                  // 전 파일 누락 등 환경 단위 실패 시
+  let curAudio=null;                    // 카카오톡 등 인앱 WebView 호환: 장면마다 새 Audio 생성
+
+  function stopAudio(){try{if(curAudio){curAudio.onended=curAudio.onerror=null;curAudio.pause();curAudio.src='';curAudio=null;}}catch(e){}}
 
   function playNarration(idx,text,onDone){
     if(muted){onDone&&onDone(false);return;}
     if(mp3Broken){speak(text,onDone);return;}
-    let settled=false;
-    const done=ok=>{if(settled)return;settled=true;
-      narrAudio.onended=narrAudio.onerror=null;
-      onDone&&onDone(ok);};
-    const fallback=()=>{if(settled)return;settled=true;
-      narrAudio.onended=narrAudio.onerror=null;
-      speak(text,onDone);};
-    narrAudio.onended=()=>done(true);
-    narrAudio.onerror=fallback;
-    try{
-      narrAudio.src=AUDIO_BASE+(idx+1)+'.mp3';
-      const p=narrAudio.play();
-      if(p&&p.catch)p.catch(fallback);
-    }catch(e){fallback();}
+    let settled=false, played=false;
+    const done=ok=>{if(settled)return;settled=true;onDone&&onDone(ok);};
+    const fallback=()=>{if(settled||played)return;settled=true;curAudio=null;speak(text,onDone);};
+    stopAudio();
+    if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}
+    const a=new Audio(AUDIO_BASE+(idx+1)+'.mp3');
+    curAudio=a;
+    a.onended=()=>done(true);
+    a.onplaying=()=>{played=true;if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}};
+    a.onerror=fallback;
+    const p=a.play();
+    if(p&&p.catch)p.catch(fallback);
   }
 
   /* ── 시크바 갱신 ── */
@@ -774,8 +773,7 @@ h2{font-size:27px}
     gen++; const myGen=gen;
     clearTimeout(timer); clearTimeout(safetyTimer);
     if('speechSynthesis' in window)speechSynthesis.cancel();
-    narrAudio.onended=narrAudio.onerror=null;
-    try{narrAudio.pause();}catch(e){}
+    stopAudio();
 
     if(cur>=0){scenes[cur].classList.remove('active');resetRings(scenes[cur]);}
     cur=i;
@@ -792,23 +790,24 @@ h2{font-size:27px}
     const isLast=cur===scenes.length-1;
 
     let minDone=false;
-    let speechDone=muted||ttsBroken||!narr||!('speechSynthesis' in window);
+    // 나레이션 종료 여부(없음/음소거면 처음부터 완료). mp3 재생은 TTS 존재와 무관하게 항상 시도.
+    let narrDone=muted||!narr;
 
     const tryNext=()=>{
       if(myGen!==gen||paused||dragging)return;   // 수동 이동·일시정지·드래그 중 차단
-      if(minDone&&speechDone&&!isLast)go(cur+1);
+      if(minDone&&narrDone&&!isLast)go(cur+1);
     };
 
     timer=setTimeout(()=>{minDone=true;tryNext();},dur);
 
-    if(!speechDone){
+    if(!narrDone){
       playNarration(cur,narr,()=>{
         if(myGen!==gen)return;
-        speechDone=true;
-        setTimeout(tryNext,900);       // 음성 종료 후 잠깐의 여백
+        narrDone=true;
+        setTimeout(tryNext,800);       // 음성 종료 후 잠깐의 여백
       });
-      // 안전장치: 음성 이벤트가 영영 안 오는 환경 대비
-      safetyTimer=setTimeout(()=>{speechDone=true;tryNext();},dur+15000);
+      // 안전장치: 콜백이 영영 안 오는 환경 대비
+      safetyTimer=setTimeout(()=>{narrDone=true;tryNext();},dur+15000);
     }
   }
 
@@ -831,7 +830,7 @@ h2{font-size:27px}
     if(paused){
       clearTimeout(timer); clearTimeout(safetyTimer);
       if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}
-      try{narrAudio.pause();}catch(e){}
+      try{if(curAudio)curAudio.pause();}catch(e){}
     }else{
       go(cur);   // 현재 장면부터 재개(타이머·나레이션 재시작)
     }
@@ -841,7 +840,7 @@ h2{font-size:27px}
     muted=!muted;
     muteBtn.textContent=muted?'🔇':'🔊';
     if('speechSynthesis' in window)speechSynthesis.cancel();
-    try{narrAudio.pause();}catch(e){}
+    stopAudio();
     if(started&&cur>=0)go(cur);
   };
 
