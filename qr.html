@@ -46,7 +46,7 @@
 </div>
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,doc,getDoc}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,collection,query,where,limit,getDocs,serverTimestamp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
 const app=initializeApp(FC);
 const db=getFirestore(app,'javia-db');
@@ -55,6 +55,11 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const ul=a=>(a||[]).map(x=>`<li>${esc(x)}</li>`).join('');
 const band=s=>s>=80?'튼튼해요':s>=60?'보통이에요':s>=40?'허술해요':'위험해요';
 const id=new URLSearchParams(location.search).get('id');
+// ── 문의 폼(B): fc.html의 검증된 fc_consultation_requests write를 그대로 복제 ──
+const QZ_AGE={'20대':'under_30','30대':'30s','40대':'40s','50대':'50s','60대 이상':'60s'};
+const QZ_FIELD={coverage:'insurance',retirement:'retirement'};
+const gid=()=>'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+let CUR=null; // 현재 결과 데이터(quiz_logs) 보관 — 문의 제출 시 사용
 
 function ai1Html(x){return `
   ${x.type_line?`<div class="qzAIType">${esc(x.type_line)}</div>`:''}
@@ -73,14 +78,67 @@ function ai2Html(x){return `
 
 function err(msg){$('content').innerHTML=`<div class="err">${esc(msg)}</div>`;}
 
+// ── 문의 폼 ── 리다이렉트 없이 이 화면에서 바로 문의 접수
+function inqBlock(cn){return `<button type="button" class="goldBtn" id="inqBtn">${esc(cn)}에게 상담 문의하기</button><div id="inqBox"></div>`;}
+function wireInq(cn){const b=$('inqBtn');if(b)b.onclick=()=>showInq(cn);}
+function showInq(cn){
+  const box=$('inqBox');if(!box)return;
+  const ist='width:100%;padding:11px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#fff;font-size:14px;outline:none';
+  box.innerHTML=`<div class="qzBlock" style="margin-top:12px;text-align:left">
+    <div class="bh" style="margin-bottom:10px">${esc(cn)}에게 문의 남기기</div>
+    <div style="margin-bottom:9px"><input id="inqName" maxlength="20" placeholder="이름 (예: 홍길동)" style="${ist}"></div>
+    <div style="margin-bottom:9px"><input id="inqPhone" inputmode="tel" maxlength="13" placeholder="휴대폰 (010-0000-0000)" style="${ist}"></div>
+    <div style="margin-bottom:9px"><textarea id="inqMsg" maxlength="500" rows="3" style="${ist};resize:vertical">안녕하세요, 진단 결과 점검 부탁드려요.</textarea></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:rgba(255,255,255,.75);margin-bottom:12px;cursor:pointer"><input type="checkbox" id="inqConsent" style="width:16px;height:16px;flex:none"> 개인정보 수집·이용에 동의합니다 (필수)</label>
+    <button type="button" class="goldBtn" id="inqSend" style="margin-top:0">문의 보내기</button>
+    <div id="inqMsgBox" style="font-size:12.5px;color:#f0c4b4;margin-top:9px;text-align:center;min-height:1px"></div>
+  </div>`;
+  const ib=$('inqBtn');if(ib)ib.style.display='none';
+  $('inqSend').onclick=()=>submitInq(cn);
+}
+function inqWarn(m){const b=$('inqMsgBox');if(b)b.textContent=m;}
+async function submitInq(cn){
+  const r=CUR;if(!r)return;
+  const name=($('inqName').value||'').trim();
+  const phone=($('inqPhone').value||'').replace(/\D/g,'');
+  const msg=($('inqMsg').value||'').trim().slice(0,500);
+  if(name.length<1||name.length>20){inqWarn('이름을 1~20자로 입력해주세요');return;}
+  if(!/^010\d{8}$/.test(phone)){inqWarn('휴대폰 번호를 정확히 입력해주세요');return;}
+  if(!$('inqConsent').checked){inqWarn('필수 동의에 체크해주세요');return;}
+  inqWarn('');
+  const btn=$('inqSend');btn.disabled=true;btn.textContent='전송 중...';
+  try{
+    // 컨설턴트 uid 해석 (fc.html과 동일: users where loginId==fcLoginId)
+    let fcUid=null;
+    try{const us=await getDocs(query(collection(db,'users'),where('loginId','==',r.fcLoginId),limit(1)));if(!us.empty)fcUid=us.docs[0].id;}catch(_e){}
+    const reqId=gid();
+    await setDoc(doc(db,'fc_consultation_requests',reqId),{
+      reqId,fcAuthUid:fcUid,fcLoginId:r.fcLoginId,
+      name,phone,email:null,
+      ageGroup:(r.quizAnswers&&QZ_AGE[r.quizAnswers.q1])||null,assetGroup:null,
+      fields:[QZ_FIELD[r.quizType]||'insurance'],fieldOther:null,
+      message:msg||null,
+      consentRequired:true,consentMarketing:false,
+      status:'new',memo:'',lastResponseAt:null,
+      createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
+      source:'quiz',quizType:r.quizType,quizScore:Number(r.quizScore)||0,
+      quizAnswers:r.quizAnswers||{},quizSignals:r.quizSignals||[],
+      quizLogId:id,
+      notifiedAt:null,notifyError:null
+    });
+    $('inqBox').innerHTML=`<div class="qzBlock praise" style="margin-top:12px;text-align:center"><div class="bh" style="color:#b9dcc6">✓ ${esc(cn)}에게 전달되었습니다</div><div style="margin-top:4px">24시간 내 연락드리겠습니다.</div></div>`;
+  }catch(e){btn.disabled=false;btn.textContent='문의 보내기';inqWarn('전송에 실패했어요. 잠시 후 다시 시도해 주세요.');}
+}
+
 function render(r){
   const cn=r.consultantName||'담당 컨설턴트';
   const sc=Number(r.quizScore)||0;
   const ai1=r.ai1,ai2=r.ai2;
-  const channel=r.fcLoginId?('https://jarvia.co.kr/channel?fc='+encodeURIComponent(r.fcLoginId)):'';
+  CUR=r;const hasFc=!!r.fcLoginId;
   if(!ai1){ // 진단문이 아직 없는(또는 미지원) 결과
     $('content').innerHTML=`<div class="cap" id="cap"><div class="head"><div class="brand">PRIVATE REPORT</div><div class="who">${esc(cn)}의 보장진단 결과</div><div class="score">${sc}<small> 점</small></div><div class="band">보장이 ${band(sc)}</div></div></div>
-      ${channel?`<a class="goldBtn" href="${channel}">${esc(cn)}에게 상담 문의하기</a>`:''}`;
+      ${hasFc?inqBlock(cn):''}`;
+    wireInq(cn);
     return;
   }
   $('content').innerHTML=`
@@ -96,8 +154,9 @@ function render(r){
       ${ai2?`<div class="sect">— 상세 가이드 —</div>${ai2Html(ai2)}`:''}
       ${ai1.lock_line&&!ai2?`<div class="qzAILock">🔒 ${esc(ai1.lock_line)}</div>`:''}
     </div>
-    ${channel?`<a class="goldBtn" href="${channel}">${esc(cn)}에게 상담 문의하기</a>`:''}
+    ${hasFc?inqBlock(cn):''}
     <button type="button" class="ghostBtn" id="saveBtn">📷 이미지로 저장</button>`;
+  wireInq(cn);
   const sb=$('saveBtn');if(sb)sb.onclick=saveImg;
 }
 
