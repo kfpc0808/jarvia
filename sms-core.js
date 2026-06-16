@@ -136,11 +136,26 @@
     });
   }
 
+  // ── 주소록에서 번호 선택 (Contact Picker API: 안드로이드 Chrome·삼성인터넷 등 / iOS·PC 미지원) ──
+  function contactPickerSupported() {
+    return !!(navigator.contacts && typeof navigator.contacts.select === 'function' && window.ContactsManager);
+  }
+  function pickContact() {
+    if (!contactPickerSupported()) return Promise.resolve(null);
+    return navigator.contacts.select(['tel', 'name'], { multiple: false }).then(function (sel) {
+      if (!sel || !sel.length) return null;
+      var tels = sel[0].tel || [];
+      if (!tels.length) return null;
+      return normalizePhone(tels[0]);
+    }).catch(function () { return null; });
+  }
+
   window.SmsCore = {
     LIMITS: LIMITS,
     normalizePhone: normalizePhone,
     getNumber: getNumber, setNumber: setNumber, bulkSetNumbers: bulkSetNumbers, exportNumbers: exportNumbers,
     getToday: getToday, canSend: canSend, addSent: addSent, addSession: addSession, sessionGate: sessionGate,
-    buildSmsUrl: buildSmsUrl, sendOne: sendOne, isIOS: isIOS, todayStr: todayStr
+    buildSmsUrl: buildSmsUrl, sendOne: sendOne, isIOS: isIOS, todayStr: todayStr,
+    contactPickerSupported: contactPickerSupported, pickContact: pickContact
   };
 })();
