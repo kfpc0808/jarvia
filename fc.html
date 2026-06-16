@@ -874,6 +874,7 @@ a{color:inherit;text-decoration:none}
         <div class="simOpen" id="sim-ih">
           <div class="simOpenH">🏛️ 상속세 30초 시뮬레이션</div>
           <div class="simOpenSub">자산·가족구성으로 예상 상속세 + 납부재원 점검</div>
+          <div style="font-size:11px;color:#C0392B;font-weight:600;margin:-2px 0 8px">⚠️ 약식 추정계산입니다 (정확한 값이 아닙니다 · 정확한 계산은 상담에서)</div>
           <div class="simTip"><span>💡</span><span>슬라이더 아래 입력창에 정확한 금액을 직접 입력할 수 있습니다.</span></div>
           <div class="simSection"><span>STEP 1 — 예상 상속세 계산</span><span class="step">1/2</span></div>
           <div class="simRow">
@@ -890,7 +891,7 @@ a{color:inherit;text-decoration:none}
           <div class="simRow">
             <div class="simLabel">👨‍👩‍👧 자녀 수</div>
             <input type="range" class="simSlider" min="0" max="5" value="2" step="1" id="s_ih_kids">
-            <div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="text" inputmode="numeric" id="s_ih_kids_in" value="2" min="0" max="5" step="1"><span class="u">명</span></span></div>
+            <div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="text" inputmode="numeric" id="s_ih_kids_in" value="2" min="0" max="5" step="1" data-max="20"><span class="u">명</span></span></div>
           </div>
           <div class="simResult"><div class="lbl">예상 상속세</div><div class="val" id="s_ih_result">—</div><div class="sub" id="s_ih_sub">—</div></div>
           <div class="simDivider"><div class="q">💭 이 세금, 자녀들이 어떻게 낼 수 있나요?</div><div class="s">현금이 부족하면 부동산을 급매해야 할 수 있습니다</div></div>
@@ -2009,27 +2010,22 @@ function cSV(){
   $('s_sv_result').textContent=_simFmtMan(fv);
   $('s_sv_desc').textContent='월 '+amt+'만원씩 '+yr+'년 적립 시 명목 '+Math.round(fv).toLocaleString()+'만원, 실질가치 약 '+Math.round(fvReal).toLocaleString()+'만원';
 }
+function simInhTaxEok(amt,sp,kids){
+  amt=Math.max(0,Number(amt)||0);kids=Math.max(0,Number(kids)||0);
+  var base=Math.max(5,2+kids*0.5),sd=0;
+  if(sp){if(kids===0)sd=Math.min(amt,30);else sd=Math.min(amt*1.5/(1.5+kids),30);sd=Math.max(sd,5);}
+  var tb=Math.max(0,amt-(base+sd)),tax;
+  if(tb<=1)tax=tb*0.1;else if(tb<=5)tax=tb*0.2-0.1;else if(tb<=10)tax=tb*0.3-0.6;else if(tb<=30)tax=tb*0.4-1.6;else tax=tb*0.5-4.6;
+  return Math.max(0,tax*0.97);
+}
 function cIH(){
-  var amt=+$('s_ih_amt').value;
-  var kids=+$('s_ih_kids').value;
+  var amt=_simParseNum($('s_ih_amt_in').value);
+  var kids=_simParseNum($('s_ih_kids_in').value);
   var spBtn=document.querySelector('#s_ih_sp button.on');
   var sp=spBtn && spBtn.dataset.sp==='1';
-  var cash=+$('s_ih_cash').value;
-  var ins=+$('s_ih_ins').value;
-  var base=5,sd=0;
-  if(sp){
-    if(kids===0)sd=Math.min(amt,30);
-    else sd=Math.min(amt*1.5/(1.5+kids),30);
-    sd=Math.max(sd,5);
-  }
-  var tb=Math.max(0,amt-(base+sd));
-  var tax=0;
-  if(tb<=1)tax=tb*0.1;
-  else if(tb<=5)tax=tb*0.2-0.1;
-  else if(tb<=10)tax=tb*0.3-0.6;
-  else if(tb<=30)tax=tb*0.4-1.6;
-  else tax=tb*0.5-4.6;
-  tax=tax*0.97;
+  var cash=_simParseNum($('s_ih_cash_in').value);
+  var ins=_simParseNum($('s_ih_ins_in').value);
+  var tax=simInhTaxEok(amt,sp,kids);
   $('s_ih_result').textContent=tax<=0?'0원 (공제로 해결)':_simFmtEok(tax);
   $('s_ih_sub').textContent='총자산 '+amt+'억 · 배우자 '+(sp?'있음':'없음')+' · 자녀 '+kids+'명';
   var sh=tax-cash-ins;
@@ -3361,39 +3357,36 @@ function qzMultiToggle(q,btn){const v=q.o[+btn.dataset.i];const box=$('qzOpts');
 function qzSave(q,val){qzS.ans[q.id]=val;qzS.qi++;const d=QZ_DEF[qzS.type];
  if(qzS.qi<d.qs.length)qzRenderQ();else qzResult();}
 function qzPrev(){qzStopTimer();if(qzS.qi>0){qzS.qi--;qzRenderQ();}}
-/* ── 간이 상속세 계산기 (약식 추정 · 총자산+배우자, 2026 현행 세율·공제) ── */
-function inhTaxCompute(asset,hasSpouse){
- const a=Math.max(0,Number(asset)||0),ded=5+(hasSpouse?5:0),base=Math.max(0,a-ded);
- let tax;
- if(base<=0)tax=0;else if(base<=1)tax=base*0.10;else if(base<=5)tax=base*0.20-0.1;else if(base<=10)tax=base*0.30-0.6;else if(base<=30)tax=base*0.40-1.6;else tax=base*0.50-4.6;
- tax=Math.max(0,tax);
- const band=tax<1?'1억 미만':tax<3?'1~3억':tax<10?'3~10억':'10억+';
- const label=tax<=0?'예상 세금 없음':tax<1?'약 '+Math.round(tax*10000).toLocaleString()+'만원':'약 '+(Math.round(tax*10)/10)+'억원';
- return {asset:a,spouse:!!hasSpouse,taxEok:Math.round(tax*100)/100,band,label};
-}
-function inhResultHtml(res){
- return `<div style="background:rgba(201,169,110,.12);border:1px solid rgba(201,169,110,.4);border-radius:10px;padding:12px;text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.6)">예상 상속세 <b>(약식 추정)</b></div><div style="font-size:22px;font-weight:900;color:var(--gold);font-family:'Noto Serif KR',Georgia,serif;margin:3px 0">${esc(res.label)}</div>${res.taxEok>0?`<div style="font-size:11px;color:rgba(255,255,255,.7)">해당 구간 <b>${esc(res.band)}</b></div>`:`<div style="font-size:11px;color:rgba(255,255,255,.7)">공제 한도 이내</div>`}</div><div style="font-size:10px;color:rgba(255,255,255,.45);margin-top:8px;line-height:1.55">일괄공제 5억${res.spouse?' + 배우자공제 5억':''}만 반영한 <b>약식 추정</b>입니다. 동거주택·금융재산·사전증여 등에 따라 실제 세액은 달라지며, 정확한 계산은 상담에서 도와드립니다.</div>`;
-}
+/* ── 간이 상속세 계산기 (메인 시뮬과 동일 공식 simInhTaxEok 공유 · 자산+배우자+자녀) ── */
+function inhBand(t){return t<1?'1억 미만':t<3?'1~3억':t<10?'3~10억':'10억+';}
 function inhCalcHtml(pfx){
- return `<div style="background:rgba(255,255,255,.05);border:1px solid rgba(201,169,110,.3);border-radius:12px;padding:14px;text-align:left">`
- +`<div style="font-size:13px;font-weight:800;color:var(--gold)">💰 간이 상속세 계산기</div>`
- +`<div style="font-size:10.5px;color:#FFC9A8;margin:2px 0 11px">⚠️ 약식 추정계산입니다 (정확한 값이 아닙니다)</div>`
- +`<label style="font-size:12px;color:rgba(255,255,255,.8);display:block;margin-bottom:4px">총 상속재산 — 부동산+금융, 부채 뺀 순자산</label>`
- +`<div style="display:flex;align-items:center;gap:6px;margin-bottom:11px"><input type="number" inputmode="decimal" id="${pfx}Asset" placeholder="예: 25" min="0" step="1" style="flex:1;padding:10px;border-radius:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:15px"><span style="font-size:13px;color:rgba(255,255,255,.7)">억원</span></div>`
- +`<label style="font-size:12px;color:rgba(255,255,255,.8);display:block;margin-bottom:4px">배우자가 계신가요?</label>`
- +`<div style="display:flex;gap:8px;margin-bottom:12px"><button type="button" id="${pfx}Sp1" style="flex:1;padding:9px;border-radius:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:13px;cursor:pointer">있음</button><button type="button" id="${pfx}Sp0" style="flex:1;padding:9px;border-radius:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:13px;cursor:pointer">없음</button></div>`
- +`<button type="button" class="qzGoldBtn" id="${pfx}Calc" style="width:100%">계산하기</button>`
- +`<div id="${pfx}Res" style="display:none;margin-top:12px"></div></div>`;
+ return `<div style="background:#fff;border-radius:12px;padding:14px 13px;color:var(--text)">`
+ +`<div style="font-size:13px;font-weight:800;color:var(--navy)">🏛️ 간이 상속세 계산기</div>`
+ +`<div style="font-size:11px;color:#C0392B;font-weight:600;margin:2px 0 11px">⚠️ 약식 추정계산입니다 (정확한 값이 아닙니다)</div>`
+ +`<div class="simRow"><div class="simLabel">💰 상속재산 총액 (부채 뺀 순자산)</div><input type="range" class="simSlider" min="5" max="100" step="0.5" value="20" id="${pfx}_amt"><div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="text" inputmode="decimal" id="${pfx}_amt_in" value="20"><span class="u">억원</span></span></div></div>`
+ +`<div class="simRow"><div class="simTogRow"><div class="simLabel" style="margin-bottom:0">👰 배우자 유무</div><div class="simTog" id="${pfx}_sp"><button type="button" class="on" data-sp="1">있음</button><button type="button" data-sp="0">없음</button></div></div></div>`
+ +`<div class="simRow"><div class="simLabel">👨‍👩‍👧 자녀 수</div><input type="range" class="simSlider" min="0" max="5" step="1" value="2" id="${pfx}_kids"><div class="simInBot"><span class="hint">직접 입력</span><span class="simInSm"><input type="text" inputmode="numeric" id="${pfx}_kids_in" value="2" data-max="20"><span class="u">명</span></span></div></div>`
+ +`<div class="simResult"><div class="lbl">예상 상속세 <b>(약식 추정)</b></div><div class="val" id="${pfx}_result">—</div><div class="sub" id="${pfx}_sub">—</div></div>`
+ +`<div style="font-size:10px;color:var(--text-mute);margin-top:8px;line-height:1.55">일괄공제·배우자공제(법정상속분)·신고세액공제 3%만 반영한 <b>약식 추정</b>입니다. 동거주택·금융재산·사전증여 등에 따라 실제와 달라지며, 정확한 계산은 상담에서 도와드립니다.</div></div>`;
 }
 function inhCalcWire(pfx,onResult,prefill){
- let sp=null;const sp1=$(pfx+'Sp1'),sp0=$(pfx+'Sp0');
- const setSp=v=>{sp=v;sp1.style.background=v===1?'rgba(201,169,110,.4)':'rgba(255,255,255,.08)';sp0.style.background=v===0?'rgba(201,169,110,.4)':'rgba(255,255,255,.08)';};
- if(sp1)sp1.onclick=()=>setSp(1);if(sp0)sp0.onclick=()=>setSp(0);
- const run=()=>{const asset=parseFloat($(pfx+'Asset').value);const res=$(pfx+'Res');
-  if(!(asset>=0)||sp===null){res.style.display='block';res.innerHTML='<div style="font-size:12px;color:#FFB4A8;text-align:center">재산 금액과 배우자 여부를 모두 입력해주세요.</div>';return;}
-  const r=inhTaxCompute(asset,sp===1);res.style.display='block';res.innerHTML=inhResultHtml(r);if(onResult)onResult(r);};
- const cb=$(pfx+'Calc');if(cb)cb.onclick=run;
- if(prefill){if(prefill.asset!=null)$(pfx+'Asset').value=prefill.asset;if(prefill.spouse!=null)setSp(prefill.spouse?1:0);if(prefill.asset!=null&&prefill.spouse!=null)run();}
+ const calc=()=>{
+  const amt=_simParseNum($(pfx+'_amt_in').value),kids=_simParseNum($(pfx+'_kids_in').value);
+  const spBtn=document.querySelector('#'+pfx+'_sp button.on');const sp=!!(spBtn&&spBtn.dataset.sp==='1');
+  const tax=simInhTaxEok(amt,sp,kids),band=inhBand(tax);
+  $(pfx+'_result').textContent=tax<=0?'0원 (공제로 해결)':_simFmtEok(tax);
+  $(pfx+'_sub').textContent='총자산 '+amt+'억 · 배우자 '+(sp?'있음':'없음')+' · 자녀 '+kids+'명';
+  if(onResult)onResult({asset:amt,spouse:sp,kids:kids,taxEok:tax,band:band,label:(tax<=0?'예상 세금 없음':_simFmtEok(tax))});
+ };
+ _simSyncPair(pfx+'_amt',pfx+'_amt_in',calc);
+ _simSyncPair(pfx+'_kids',pfx+'_kids_in',calc);
+ document.querySelectorAll('#'+pfx+'_sp button').forEach(function(b){b.onclick=function(){document.querySelectorAll('#'+pfx+'_sp button').forEach(function(x){x.classList.remove('on');});b.classList.add('on');calc();};});
+ if(prefill){
+  if(prefill.asset!=null){$(pfx+'_amt_in').value=prefill.asset;$(pfx+'_amt').value=Math.min(Math.max(prefill.asset,5),100);}
+  if(prefill.kids!=null){$(pfx+'_kids_in').value=prefill.kids;$(pfx+'_kids').value=Math.min(Math.max(prefill.kids,0),5);}
+  if(prefill.spouse!=null)document.querySelectorAll('#'+pfx+'_sp button').forEach(function(x){x.classList.toggle('on',(x.dataset.sp==='1')===!!prefill.spouse);});
+ }
+ calc();
 }
 function qzRenderInhTax13(q,d){qzStopTimer();const pre=qzS.inhTax;
  $('qzStage').innerHTML=`
@@ -3403,6 +3396,7 @@ function qzRenderInhTax13(q,d){qzStopTimer();const pre=qzS.inhTax;
   <div class="qzQText">${q.t}</div>
   ${pre?`<div style="font-size:11px;color:var(--gold);text-align:center;margin:6px 0 0">인트로에서 계산한 값을 불러왔어요 ✓</div>`:''}
   <div id="qz13Box" style="margin-top:10px"></div>
+  <div id="qz13Proceed"></div>
   <div style="font-size:11px;color:rgba(255,255,255,.5);text-align:center;margin:14px 0 8px">— 또는 예상 금액을 직접 선택 —</div>
   <div class="qzOpts" id="qzOpts" style="display:flex"></div>`;
  requestAnimationFrame(()=>{const f=$('qzProgFill');if(f)f.style.width=((qzS.qi+1)/d.qs.length*100)+'%';});
@@ -3413,7 +3407,7 @@ function qzRenderInhTax13(q,d){qzStopTimer();const pre=qzS.inhTax;
  const optBtns=[...opts.querySelectorAll('.qzOpt')];
  optBtns.forEach(b=>b.onclick=()=>qzPickSingle(q,b));
  const hi=band=>optBtns.forEach(b=>{b.style.boxShadow=(q.o[+b.dataset.i]===band)?'0 0 0 2px var(--gold)':'none';});
- inhCalcWire('qz13',res=>{qzS.inhTax=res;hi(res.band);const rb=$('qz13Res');if(rb&&!$('qz13Go'))rb.innerHTML+=`<button type="button" class="qzGoldBtn" id="qz13Go" style="width:100%;margin-top:10px">이 값(${esc(res.band)})으로 진행 →</button>`;const go=$('qz13Go');if(go)go.onclick=()=>qzSave(q,res.band);},pre?{asset:pre.asset,spouse:pre.spouse}:null);
+ inhCalcWire('qz13',res=>{qzS.inhTax=res;hi(res.band);const pc=$('qz13Proceed');if(pc)pc.innerHTML=`<button type="button" class="qzGoldBtn" id="qz13Go" style="width:100%;margin-top:12px">이 값(${esc(res.band)})으로 진행 →</button>`;const go=$('qz13Go');if(go)go.onclick=()=>qzSave(q,res.band);},pre?{asset:pre.asset,spouse:pre.spouse,kids:pre.kids}:null);
 }
 function qzCalcScore(){const d=QZ_DEF[qzS.type];let s=20;Object.keys(d.sc).forEach(qid=>{const v=qzS.ans[qid];const m=d.sc[qid];if(v!=null&&m[v]!=null)s+=m[v];});return Math.min(100,s);}
 function qzResult(){qzStopTimer();const d=QZ_DEF[qzS.type],a=qzS.ans,cn=qzConsultName();
