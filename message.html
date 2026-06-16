@@ -226,12 +226,24 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
       </div>
     </div>
 
-    <!-- ===== 정기 안부 (Phase 4) ===== -->
+    <!-- ===== 정기 안부 ===== -->
     <div id="panel-regular" class="hidden">
-      <div class="card" style="text-align:center;padding:28px 18px">
-        <div style="font-size:34px">🗓</div>
-        <h2 style="font-size:16px;font-weight:800;margin:10px 0 6px">정기 안부</h2>
-        <p style="font-size:13px;color:var(--sec);margin:0">월별 안부를 호칭·관계톤에 맞춰 자동 추천하는 기능을 준비하고 있어요.</p>
+      <div class="selbar">
+        <span class="n" id="rg-title">정기 안부</span>
+        <button class="mini" id="rg-mode-btn" onclick="toggleRgMode()">⚙ 명단·호칭 설정</button>
+      </div>
+      <!-- 이번 달 -->
+      <div id="rg-month">
+        <div class="card" id="rg-summary" style="padding:13px 15px"></div>
+        <div id="rg-moment" class="banner green hidden"></div>
+        <div class="lbl">오늘 보낼 안부 <span style="color:var(--ter);font-weight:500">— 하루 10~20명씩 나눠 보내면 안전해요</span></div>
+        <div id="rg-list"></div>
+      </div>
+      <!-- 설정 -->
+      <div id="rg-setup" class="hidden">
+        <div style="font-size:12px;color:var(--ter);margin-bottom:10px">정기 안부를 보낼 고객을 켜고, 호칭과 말투를 정해주세요. 말투에 맞는 문구가 자동 추천됩니다.</div>
+        <div class="tools"><input type="text" id="rg-search" placeholder="이름으로 검색…" oninput="renderRgSetup()"></div>
+        <div id="rg-setup-list"></div>
       </div>
     </div>
 
@@ -279,6 +291,7 @@ window.showTab=function(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.getAttribute('data-tab')===t));
   ['free','group','event','regular'].forEach(p=>$('panel-'+p).classList.toggle('hidden',p!==t));
   if(t==='group')renderGroups();
+  if(t==='regular')renderRegular();
 };
 
 /* ── 안전 발송 상태바 ── */
@@ -499,6 +512,109 @@ window.toggleGroupMember=async function(id){
   try{ await updateDoc(doc(db,'fc_clients',c.id),{groups:groups}); c.groups=groups; }
   catch(e){ toast('저장에 실패했습니다','error'); return; }
   renderGroupAssign();
+};
+
+/* ── 정기 안부 ── */
+let rgPool=null, rgPoolLoaded=false, rgMode='month';
+const RG_TONES=[['formal','공식'],['friendly','친근'],['casual','막역']];
+const RG_FALLBACK={
+  formal:['{호칭}, 안녕하세요. 환절기에 건강 잘 챙기시길 바랍니다. 늘 평안하고 좋은 일 가득하시길 바랍니다.'],
+  friendly:['{호칭}, 잘 지내고 계시죠? 날씨 변화가 큰 요즘, 건강 잘 챙기세요. 좋은 하루 보내세요!'],
+  casual:['{호칭}, 잘 지내지? 요즘 일교차 큰데 감기 조심하고. 조만간 얼굴 한번 보자!']
+};
+function monthKey(){ const k=new Date(Date.now()+9*3600000); return k.toISOString().slice(0,7); }
+function monthLabel(){ const k=new Date(Date.now()+9*3600000); return k.getUTCFullYear()+'년 '+(k.getUTCMonth()+1)+'월'; }
+async function loadGreetingPool(){
+  try{ const d=await getDoc(doc(db,'greeting_pool',monthKey())); rgPool=d.exists()?d.data():null; }
+  catch(e){ rgPool=null; }
+  rgPoolLoaded=true;
+}
+function poolArr(tone){
+  if(rgPool&&Array.isArray(rgPool[tone])&&rgPool[tone].length)return rgPool[tone];
+  return RG_FALLBACK[tone]||RG_FALLBACK.formal;
+}
+function honor(c){ return (c.mgTitle&&c.mgTitle.trim())||((c.name||'고객')+'님'); }
+function pickMsg(c){
+  const tone=c.mgTone||'friendly', arr=poolArr(tone);
+  let h=0; const id=c.id||''; for(let i=0;i<id.length;i++)h=(h*31+id.charCodeAt(i))>>>0;
+  return String(arr[h%arr.length]).replace(/\{호칭\}/g,honor(c));
+}
+window.toggleRgMode=function(){
+  rgMode=(rgMode==='month')?'setup':'month';
+  $('rg-month').classList.toggle('hidden',rgMode!=='month');
+  $('rg-setup').classList.toggle('hidden',rgMode!=='setup');
+  $('rg-mode-btn').textContent=(rgMode==='month')?'⚙ 명단·호칭 설정':'← 이번 달 안부';
+  if(rgMode==='setup')renderRgSetup(); else renderRegular();
+};
+window.renderRegular=async function(){
+  if(!rgPoolLoaded)await loadGreetingPool();
+  $('rg-title').textContent=monthLabel()+' 정기 안부';
+  const targets=clients.filter(c=>c.mg), mk=monthKey();
+  const done=targets.filter(c=>c.mgLastSent===mk), todo=targets.filter(c=>c.mgLastSent!==mk);
+  $('rg-summary').innerHTML='<div style="display:flex;gap:14px;align-items:center">'
+    +'<div><div style="font-size:20px;font-weight:800;color:var(--navy2)">'+targets.length+'명</div><div style="font-size:11px;color:var(--ter)">정기 안부 대상</div></div>'
+    +'<div style="flex:1;height:8px;background:var(--line2);border-radius:8px;overflow:hidden"><i style="display:block;height:100%;background:var(--green);width:'+(targets.length?Math.round(done.length/targets.length*100):0)+'%"></i></div>'
+    +'<div style="text-align:right"><div style="font-size:13px;font-weight:800;color:var(--green)">완료 '+done.length+'</div><div style="font-size:11px;color:var(--ter)">남음 '+todo.length+'</div></div></div>';
+  const moment=rgPool&&rgPool.moment, mb=$('rg-moment');
+  if(moment){ mb.classList.remove('hidden'); mb.innerHTML='<span>🗓</span><span>이번 달 키워드: <b>'+esc(moment)+'</b></span>'; }
+  else mb.classList.add('hidden');
+  if(!targets.length){ $('rg-list').innerHTML='<div class="empty">정기 안부 대상이 없습니다. 위 ⚙ 설정에서 고객을 추가하세요.</div>'; return; }
+  if(!todo.length){ $('rg-list').innerHTML='<div class="banner green"><span>🎉</span><span>이번 달 정기 안부를 모두 보냈어요. 수고하셨습니다!</span></div>'; return; }
+  $('rg-list').innerHTML=todo.map(c=>{
+    const msg=pickMsg(c), toneLbl=(RG_TONES.find(t=>t[0]===(c.mgTone||'friendly'))||['','친근'])[1];
+    return '<div class="card" style="padding:12px">'
+      +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span class="nm" style="font-size:14px;font-weight:700">'+esc(c.name||'고객')+'</span>'
+      +'<span class="tag">'+esc(honor(c))+'</span><span class="tag">'+toneLbl+'</span>'
+      +(c.num?'':'<span class="nonum">번호 없음</span>')+'</div>'
+      +'<div style="font-size:12.5px;color:#374554;background:var(--paper);border-radius:9px;padding:9px;margin:8px 0;white-space:pre-line">'+esc(msg)+'</div>'
+      +'<button class="btn st-send" style="width:100%;padding:9px" onclick="sendRegular(\''+c.id+'\')">📱 전송</button>'
+      +'</div>';
+  }).join('');
+};
+window.sendRegular=async function(id){
+  const c=clients.find(x=>x.id===id); if(!c)return;
+  const msg=pickMsg(c);
+  let phone=c.num;
+  if(!phone){
+    const inp=prompt((c.name||'고객')+'님의 휴대폰 번호를 입력하세요\n(이 기기에만 저장되며 서버에 올라가지 않습니다)');
+    if(!inp)return; phone=SmsCore.normalizePhone(inp);
+    if(phone.length<9){toast('번호 형식을 확인해 주세요','error');return;}
+    try{ await SmsCore.setNumber(c.id,phone); c.num=phone; }catch(e){}
+  }
+  const r=await SmsCore.sendOne(phone,msg);
+  if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
+  try{ await updateDoc(doc(db,'fc_clients',c.id),{mgLastSent:monthKey()}); c.mgLastSent=monthKey(); }catch(e){}
+  renderRegular(); refreshSafeBar();
+};
+window.renderRgSetup=function(){
+  const kw=($('rg-search').value||'').trim();
+  const list=clients.filter(c=>!kw||(c.name||'').indexOf(kw)>=0);
+  $('rg-setup-list').innerHTML=list.map(c=>{
+    const on=!!c.mg, tone=c.mgTone||'friendly';
+    const toneOpts=RG_TONES.map(t=>'<option value="'+t[0]+'"'+(t[0]===tone?' selected':'')+'>'+t[1]+'</option>').join('');
+    return '<div class="card" style="padding:11px 12px">'
+      +'<div style="display:flex;align-items:center;gap:10px">'
+      +'<div onclick="toggleMg(\''+c.id+'\')" style="width:22px;height:22px;border-radius:7px;border:2px solid '+(on?'var(--gold)':'#CBD5E1')+';background:'+(on?'var(--gold)':'#fff')+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;flex-shrink:0">'+(on?'✓':'')+'</div>'
+      +'<span class="nm" style="font-size:14px;font-weight:700;flex:1">'+esc(c.name||'고객')+'</span></div>'
+      +(on?('<div style="display:flex;gap:8px;margin-top:9px">'
+        +'<input type="text" placeholder="호칭 (예: '+esc((c.name||'')+'님')+', 사장님, 형)" value="'+esc(c.mgTitle||'')+'" onchange="saveMgTitle(\''+c.id+'\',this.value)" style="flex:1">'
+        +'<select class="grpsel" onchange="saveMgTone(\''+c.id+'\',this.value)" style="flex:0 0 90px;height:42px">'+toneOpts+'</select></div>'):'')
+      +'</div>';
+  }).join('')||'<div class="empty">고객이 없습니다.</div>';
+};
+window.toggleMg=async function(id){
+  const c=clients.find(x=>x.id===id); if(!c)return;
+  const nv=!c.mg;
+  try{ await updateDoc(doc(db,'fc_clients',id),{mg:nv}); c.mg=nv; }catch(e){ toast('저장에 실패했습니다','error'); }
+  renderRgSetup();
+};
+window.saveMgTitle=async function(id,v){
+  const c=clients.find(x=>x.id===id); if(!c)return; c.mgTitle=(v||'').trim();
+  try{ await updateDoc(doc(db,'fc_clients',id),{mgTitle:c.mgTitle}); }catch(e){}
+};
+window.saveMgTone=async function(id,v){
+  const c=clients.find(x=>x.id===id); if(!c)return; c.mgTone=v;
+  try{ await updateDoc(doc(db,'fc_clients',id),{mgTone:v}); }catch(e){}
 };
 
 /* ── 진입 ── */
