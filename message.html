@@ -278,7 +278,7 @@ const db=getFirestore(app,'javia-db');
 
 const ALLOW=['admin','jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager','free_user'];
 
-let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false;
+let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false;
 
 const $=id=>document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -392,11 +392,10 @@ window.startSend=async function(){
   const can=await SmsCore.canSend(n);
   if(!can.ok){ toast(can.msg,'warning'); return; }
   // 대형 세션(21~50) → 간격/횟수 게이트
-  isLargeSession=(n>L.smallSession);
+  isLargeSession=(n>L.smallSession); sessionCounted=false;
   if(isLargeSession){
     const gate=await SmsCore.sessionGate();
     if(!gate.ok){ toast(gate.msg,'warning'); return; }
-    try{ await SmsCore.addSession(); }catch(e){}
   }
   // 큐 구성
   queue=clients.filter(c=>sel.has(c.id));
@@ -446,6 +445,7 @@ window.sendOne=async function(i){
   }
   const r=await SmsCore.sendOne(phone,body);
   if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
+  if(isLargeSession&&!sessionCounted){ sessionCounted=true; try{ await SmsCore.addSession(); }catch(e){} }
   if(i>=qIdx)qIdx=i+1;
   renderQueue();
   refreshSafeBar();
@@ -485,11 +485,13 @@ window.createGroup=function(){
 window.deleteGroup=async function(g){
   if(!confirm('\''+g+'\' 그룹을 삭제할까요?\n(고객 정보는 유지되고 그룹 태그만 제거됩니다)'))return;
   const targets=clients.filter(c=>(c.groups||[]).indexOf(g)>=0);
+  let gErr=0;
   for(const c of targets){
     const ng=(c.groups||[]).filter(x=>x!==g);
-    try{ await updateDoc(doc(db,'fc_clients',c.id),{groups:ng}); c.groups=ng; }catch(e){}
+    try{ await updateDoc(doc(db,'fc_clients',c.id),{groups:ng}); c.groups=ng; }catch(e){ gErr++; }
   }
-  toast('\''+g+'\' 그룹을 삭제했습니다','success');
+  if(gErr) toast(gErr+'명은 저장에 실패했어요. 다시 시도해 주세요','warning');
+  else toast('\''+g+'\' 그룹을 삭제했습니다','success');
   renderGroups();
 };
 window.renderGroupAssign=function(){
@@ -583,7 +585,7 @@ window.sendRegular=async function(id){
   }
   const r=await SmsCore.sendOne(phone,msg);
   if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
-  try{ await updateDoc(doc(db,'fc_clients',c.id),{mgLastSent:monthKey()}); c.mgLastSent=monthKey(); }catch(e){}
+  try{ await updateDoc(doc(db,'fc_clients',c.id),{mgLastSent:monthKey()}); c.mgLastSent=monthKey(); }catch(e){ toast('발송 기록 저장에 실패했어요. 새로고침 시 이 고객이 다시 보일 수 있어요','warning'); }
   renderRegular(); refreshSafeBar();
 };
 window.renderRgSetup=function(){
@@ -610,11 +612,11 @@ window.toggleMg=async function(id){
 };
 window.saveMgTitle=async function(id,v){
   const c=clients.find(x=>x.id===id); if(!c)return; c.mgTitle=(v||'').trim();
-  try{ await updateDoc(doc(db,'fc_clients',id),{mgTitle:c.mgTitle}); }catch(e){}
+  try{ await updateDoc(doc(db,'fc_clients',id),{mgTitle:c.mgTitle}); }catch(e){ toast('호칭 저장에 실패했어요','warning'); }
 };
 window.saveMgTone=async function(id,v){
   const c=clients.find(x=>x.id===id); if(!c)return; c.mgTone=v;
-  try{ await updateDoc(doc(db,'fc_clients',id),{mgTone:v}); }catch(e){}
+  try{ await updateDoc(doc(db,'fc_clients',id),{mgTone:v}); }catch(e){ toast('톤 저장에 실패했어요','warning'); }
 };
 
 /* ── 진입 ── */
