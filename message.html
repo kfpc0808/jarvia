@@ -430,6 +430,21 @@ function renderQueue(){
   $('q-num').textContent=qIdx+' / '+queue.length+' 전송';
   $('q-pg').style.width=(queue.length?Math.round(qIdx/queue.length*100):0)+'%';
 }
+// ── 번호 입력: 주소록 지원 시 선택, 아니면 직접 입력 (둘 다 로컬 저장·서버 미전송) ──
+async function askPhone(name){
+  var label=(name||'고객')+'님의 휴대폰 번호';
+  if(window.SmsCore&&SmsCore.contactPickerSupported()){
+    if(confirm(label+'를\n주소록에서 선택할까요?\n(취소를 누르면 직접 입력합니다)')){
+      var picked=null; try{ picked=await SmsCore.pickContact(); }catch(e){}
+      if(picked){ var p=SmsCore.normalizePhone(picked); if(p.length>=9)return p; toast('번호 형식을 확인해 주세요','error'); return null; }
+    }
+  }
+  var inp=prompt(label+'를 입력하세요\n(이 기기에만 저장되며 서버에 올라가지 않습니다)');
+  if(!inp)return null;
+  var p2=SmsCore.normalizePhone(inp);
+  if(p2.length<9){toast('번호 형식을 확인해 주세요','error');return null;}
+  return p2;
+}
 window.sendOne=async function(i){
   const c=queue[i]; if(!c)return;
   const txt=$('msg-text').value.trim(), withLink=$('msg-link').checked;
@@ -437,10 +452,8 @@ window.sendOne=async function(i){
   if(withLink){ const lk=buildLink(c.id); if(lk)body+='\n\n▶ 오늘의 인사이트 보기: '+lk; }
   let phone=c.num;
   if(!phone){
-    const inp=prompt((c.name||'고객')+'님의 휴대폰 번호를 입력하세요\n(이 기기에만 저장되며 서버에 올라가지 않습니다)');
-    if(!inp)return;
-    phone=SmsCore.normalizePhone(inp);
-    if(phone.length<9){toast('번호 형식을 확인해 주세요','error');return;}
+    phone=await askPhone(c.name);
+    if(!phone)return;
     try{ await SmsCore.setNumber(c.id,phone); c.num=phone; }catch(e){}
   }
   const r=await SmsCore.sendOne(phone,body);
@@ -578,9 +591,8 @@ window.sendRegular=async function(id){
   const msg=pickMsg(c);
   let phone=c.num;
   if(!phone){
-    const inp=prompt((c.name||'고객')+'님의 휴대폰 번호를 입력하세요\n(이 기기에만 저장되며 서버에 올라가지 않습니다)');
-    if(!inp)return; phone=SmsCore.normalizePhone(inp);
-    if(phone.length<9){toast('번호 형식을 확인해 주세요','error');return;}
+    phone=await askPhone(c.name);
+    if(!phone)return;
     try{ await SmsCore.setNumber(c.id,phone); c.num=phone; }catch(e){}
   }
   const r=await SmsCore.sendOne(phone,msg);
