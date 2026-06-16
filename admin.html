@@ -1548,6 +1548,26 @@
           <tbody id="tb-sms-logs"></tbody>
         </table>
       </div>
+
+      <!-- ═══ 발송 상세 / 재발송 모달 (A안) ═══ -->
+      <div id="sms-detail-modal" class="modal hidden" style="z-index:9000">
+        <div class="modal-content" style="max-width:760px">
+          <div class="modal-header">
+            <h3>📋 발송 상세 — 성공·실패 명단</h3>
+            <button class="modal-close" onclick="closeSmsLogDetail()">×</button>
+          </div>
+          <div class="modal-body">
+            <div id="sms-detail-meta" style="font-size:13px;color:var(--text-lt);margin-bottom:14px"></div>
+            <div id="sms-detail-reasons" style="margin-bottom:16px"></div>
+            <div id="sms-detail-fail-wrap" style="margin-bottom:18px"></div>
+            <div id="sms-detail-ok-wrap"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-sec" onclick="closeSmsLogDetail()">닫기</button>
+            <button class="btn" id="sms-resend-btn" onclick="resendSmsFails()">🔁 실패자 재발송</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ═══ 시스템 활동 로그 ═══ -->
@@ -8735,27 +8755,128 @@ async function doSendAdminSMS(){
   }
 }
 
+let _smsLogsCache=[];      // 발송 이력 캐시 (행 클릭 시 상세/재발송에 사용)
+let _smsLogDetailIdx=-1;
 async function loadSmsLogs(){
   const tb=$('tb-sms-logs');
   tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt)">로딩 중...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'sms_logs'),orderBy('sentAt','desc'),limit(50)));
-    if(snap.empty){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt)">발송 이력이 없습니다</td></tr>';return;}
-    tb.innerHTML=snap.docs.map(d=>{
-      const l=d.data();
+    if(snap.empty){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt)">발송 이력이 없습니다</td></tr>';_smsLogsCache=[];return;}
+    _smsLogsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+    tb.innerHTML=_smsLogsCache.map((l,idx)=>{
       const dt=l.sentAt?.toDate?l.sentAt.toDate():new Date();
       const dateStr=dt.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
       const unitCost=l.type==='LMS'?50:20;
       const cost=(l.successCount||0)*unitCost;
       const msgPreview=(l.message||'').substring(0,30)+(l.message?.length>30?'...':'');
-      return `<tr><td>${dateStr}</td><td>${l.sentBy||''}</td><td>${l.type||'SMS'}</td><td>${l.totalCount||0}명</td><td style="color:#238636;font-weight:600">${l.successCount||0}</td><td style="color:#DA3633;font-weight:600">${l.failCount||0}</td><td>${cost.toLocaleString()}원</td><td title="${(l.message||'').replace(/"/g,'&quot;')}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${msgPreview}</td></tr>`;
+      const hasDetail=Array.isArray(l.recipients)&&l.recipients.length>0;
+      return `<tr style="cursor:pointer" onclick="showSmsLogDetail(${idx})" title="${hasDetail?'클릭 시 성공·실패 상세 보기':'상세 명단 없음(구버전 이력)'}"><td>${dateStr}</td><td>${l.sentBy||''}</td><td>${l.type||'SMS'}</td><td>${l.totalCount||0}명</td><td style="color:#238636;font-weight:600">${l.successCount||0}</td><td style="color:#DA3633;font-weight:600">${l.failCount||0}</td><td>${cost.toLocaleString()}원</td><td title="${(l.message||'').replace(/"/g,'&quot;')}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${msgPreview}</td></tr>`;
     }).join('');
   }catch(e){
     tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--danger)">이력 로드 실패</td></tr>';
   }
 }
 
-window.loadSmsMembers=loadSmsMembers;window.renderSmsMembers=renderSmsMembers;window.toggleSmsAll=toggleSmsAll;window.updateSmsCount=updateSmsCount;window.updateSmsCost=updateSmsCost;window.doSendAdminSMS=doSendAdminSMS;window.loadSmsLogs=loadSmsLogs;
+// ── 발송 상세 모달: 성공/실패 명단 + 실패 사유 집계 + 실패자 재발송 ──
+function _smsEsc(s){return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function showSmsLogDetail(idx){
+  const log=_smsLogsCache[idx];
+  if(!log)return;
+  _smsLogDetailIdx=idx;
+  const recips=Array.isArray(log.recipients)?log.recipients:[];
+  const ok=recips.filter(r=>r.status==='success');
+  const ng=recips.filter(r=>r.status!=='success');
+  const dt=log.sentAt?.toDate?log.sentAt.toDate():new Date();
+  const dateStr=dt.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+
+  $('sms-detail-meta').innerHTML=
+    `<b>발송일시</b> ${dateStr} &nbsp;|&nbsp; <b>발송자</b> ${_smsEsc(log.sentBy)} &nbsp;|&nbsp; <b>유형</b> ${log.type||'SMS'}<br>`+
+    `<b>대상</b> ${log.totalCount||recips.length}명 · 성공 <span style="color:#238636;font-weight:700">${ok.length}</span> · 실패 <span style="color:#DA3633;font-weight:700">${ng.length}</span>`+
+    `<div style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border-radius:6px;white-space:pre-wrap;color:#333">${_smsEsc(log.message)}</div>`;
+
+  // 실패 사유 집계 (구버전 이력은 recipients 없음)
+  if(recips.length===0){
+    $('sms-detail-reasons').innerHTML='<div style="padding:10px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:13px;color:#8d6e63">이 이력에는 수신자별 상세 데이터가 없습니다(이전 버전 발송분). 이후 발송분부터 상세·재발송이 가능합니다.</div>';
+    $('sms-detail-fail-wrap').innerHTML='';
+    $('sms-detail-ok-wrap').innerHTML='';
+    $('sms-resend-btn').style.display='none';
+    $('sms-detail-modal').classList.remove('hidden');
+    return;
+  }
+  if(ng.length){
+    const reasonMap={};
+    ng.forEach(r=>{const k=r.error||'사유 미상';reasonMap[k]=(reasonMap[k]||0)+1;});
+    const rows=Object.entries(reasonMap).sort((a,b)=>b[1]-a[1])
+      .map(([k,v])=>`<tr><td>${_smsEsc(k)}</td><td style="text-align:right;font-weight:600;color:#DA3633">${v}건</td></tr>`).join('');
+    $('sms-detail-reasons').innerHTML=
+      `<div style="font-size:13px;font-weight:600;margin-bottom:6px">⚠️ 실패 사유 집계</div>`+
+      `<table class="tbl" style="font-size:13px"><thead><tr><th>사유</th><th style="text-align:right">건수</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }else{
+    $('sms-detail-reasons').innerHTML='';
+  }
+
+  // 실패자 명단
+  if(ng.length){
+    const rows=ng.map(r=>`<tr><td>${_smsEsc(r.name)}</td><td>${_smsEsc(r.loginId)}</td><td>${_smsEsc(r.phone)}</td><td style="color:#DA3633">${_smsEsc(r.error||'')}</td></tr>`).join('');
+    $('sms-detail-fail-wrap').innerHTML=
+      `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#DA3633">❌ 실패자 (${ng.length}명)</div>`+
+      `<div class="tbl-wrap" style="max-height:240px;overflow:auto"><table class="tbl" style="font-size:13px"><thead><tr><th>이름</th><th>로그인ID</th><th>번호</th><th>사유</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }else{
+    $('sms-detail-fail-wrap').innerHTML='<div style="color:#238636;font-weight:600;font-size:14px">✅ 실패 건이 없습니다.</div>';
+  }
+
+  // 성공자 명단 (접기)
+  if(ok.length){
+    const rows=ok.map(r=>`<tr><td>${_smsEsc(r.name)}</td><td>${_smsEsc(r.loginId)}</td><td>${_smsEsc(r.phone)}</td></tr>`).join('');
+    $('sms-detail-ok-wrap').innerHTML=
+      `<details><summary style="cursor:pointer;font-size:13px;font-weight:600;color:#238636">✅ 성공자 (${ok.length}명) — 펼치기</summary>`+
+      `<div class="tbl-wrap mt" style="max-height:240px;overflow:auto"><table class="tbl" style="font-size:13px"><thead><tr><th>이름</th><th>로그인ID</th><th>번호</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  }else{
+    $('sms-detail-ok-wrap').innerHTML='';
+  }
+
+  // 재발송 버튼 상태
+  const btn=$('sms-resend-btn');
+  if(ng.length){btn.style.display='';btn.disabled=false;btn.textContent=`🔁 실패자 ${ng.length}명 재발송`;}
+  else{btn.style.display='none';}
+
+  $('sms-detail-modal').classList.remove('hidden');
+}
+
+function closeSmsLogDetail(){
+  $('sms-detail-modal').classList.add('hidden');
+}
+
+async function resendSmsFails(){
+  const log=_smsLogsCache[_smsLogDetailIdx];
+  if(!log){toast('대상 이력을 찾을 수 없습니다.','error');return;}
+  const ng=(Array.isArray(log.recipients)?log.recipients:[]).filter(r=>r.status!=='success');
+  if(ng.length===0){toast('재발송할 실패 건이 없습니다.','error');return;}
+  const invalid=ng.filter(r=>(r.error||'').includes('유효하지 않은 번호')).length;
+  let warn='';
+  if(invalid>0)warn=`\n\n※ 이 중 ${invalid}건은 '유효하지 않은 번호'입니다. 번호를 수정하지 않으면 다시 실패합니다.`;
+  if(!confirm(`실패자 ${ng.length}명에게 동일 메시지를 재발송합니다.${warn}\n\n진행하시겠습니까?`))return;
+
+  const recipients=ng.map(r=>({name:r.name||'',phone:r.phone||'',loginId:r.loginId||''}));
+  const btn=$('sms-resend-btn');
+  btn.disabled=true;btn.textContent='재발송 중...';
+  try{
+    const fn=httpsCallable(functions,'sendAdminSMS');
+    const res=await fn({recipients,message:log.message||''});
+    const d=res.data;
+    toast(`재발송 완료 — 성공 ${d.successCount}건 / 실패 ${d.failCount}건`, d.failCount>0?'warning':'success');
+    closeSmsLogDetail();
+    await loadSmsLogs();
+  }catch(e){
+    toast('재발송 실패: '+(e.message||'오류'),'error');
+    btn.disabled=false;
+    btn.textContent=`🔁 실패자 ${ng.length}명 재발송`;
+  }
+}
+
+window.loadSmsMembers=loadSmsMembers;window.renderSmsMembers=renderSmsMembers;window.toggleSmsAll=toggleSmsAll;window.updateSmsCount=updateSmsCount;window.updateSmsCost=updateSmsCost;window.doSendAdminSMS=doSendAdminSMS;window.loadSmsLogs=loadSmsLogs;window.showSmsLogDetail=showSmsLogDetail;window.closeSmsLogDetail=closeSmsLogDetail;window.resendSmsFails=resendSmsFails;
 
 // ═══════════════════════════════════════════════════
 //  📋 시스템 활동 로그
