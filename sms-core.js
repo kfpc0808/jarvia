@@ -149,6 +149,62 @@
       return normalizePhone(tels[0]);
     }).catch(function () { return null; });
   }
+  // 여러 명 한 번에 선택 → [{name, tel}]
+  function pickContactsMulti() {
+    if (!contactPickerSupported()) return Promise.resolve([]);
+    return navigator.contacts.select(['tel', 'name'], { multiple: true }).then(function (sels) {
+      return (sels || []).map(function (c) {
+        var nm = (c.name && c.name.length) ? String(c.name[0] || '') : '';
+        var tl = (c.tel && c.tel.length) ? normalizePhone(c.tel[0]) : '';
+        return { name: nm, tel: tl };
+      }).filter(function (x) { return x.tel; });
+    }).catch(function () { return []; });
+  }
+
+  // ── vCard(.vcf) 파싱 → [{name, tel}] (한글 Quoted-Printable 디코딩 포함) ──
+  function _qpDecode(s) {
+    s = String(s || '').replace(/=\r?\n/g, '');            // QP soft line break
+    var bytes = [], i = 0;
+    while (i < s.length) {
+      if (s[i] === '=' && /^[0-9A-Fa-f]{2}/.test(s.substr(i + 1, 2))) { bytes.push(parseInt(s.substr(i + 1, 2), 16)); i += 3; }
+      else { bytes.push(s.charCodeAt(i) & 0xff); i++; }
+    }
+    try { return new TextDecoder('utf-8').decode(new Uint8Array(bytes)); } catch (e) { return s; }
+  }
+  function _vLine(line) {
+    var c = line.indexOf(':'); if (c < 0) return null;
+    var head = line.slice(0, c), value = line.slice(c + 1);
+    var parts = head.split(';'); var key = (parts.shift() || '').toUpperCase();
+    if (parts.join(';').toUpperCase().indexOf('QUOTED-PRINTABLE') >= 0) value = _qpDecode(value);
+    return { key: key, value: value.trim() };
+  }
+  function parseVCard(text) {
+    var out = [];
+    // RFC 2425 line folding(이어쓰기) 해제 후 카드 분리
+    var unfolded = String(text || '').replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '');
+    unfolded.split(/BEGIN:VCARD/i).forEach(function (b) {
+      if (!/END:VCARD/i.test(b)) return;
+      var fn = '', n = '', tel = '';
+      b.split('\n').forEach(function (ln) {
+        if (!ln) return;
+        var p = _vLine(ln); if (!p) return;
+        if (p.key === 'FN') { if (!fn) fn = p.value; }
+        else if (p.key === 'N') { if (!n) n = p.value.split(';').filter(Boolean).join(' ').trim(); }
+        else if (p.key === 'TEL') { if (!tel) tel = normalizePhone(p.value); }
+      });
+      var nm = fn || n;
+      if (tel) out.push({ name: nm, tel: tel });
+    });
+    return out;
+  }
+
+  // ── 스마트 이름 매칭: 폰 이름이 고객명으로 시작하거나 포함하면 일치 ──
+  function _normName(s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); }
+  function smartMatchName(customerName, contactName) {
+    var a = _normName(customerName), b = _normName(contactName);
+    if (!a || !b) return false;
+    return b.indexOf(a) === 0 || (a.length >= 2 && b.indexOf(a) >= 0);
+  }
 
   window.SmsCore = {
     LIMITS: LIMITS,
@@ -156,6 +212,7 @@
     getNumber: getNumber, setNumber: setNumber, bulkSetNumbers: bulkSetNumbers, exportNumbers: exportNumbers,
     getToday: getToday, canSend: canSend, addSent: addSent, addSession: addSession, sessionGate: sessionGate,
     buildSmsUrl: buildSmsUrl, sendOne: sendOne, isIOS: isIOS, todayStr: todayStr,
-    contactPickerSupported: contactPickerSupported, pickContact: pickContact
+    contactPickerSupported: contactPickerSupported, pickContact: pickContact,
+    pickContactsMulti: pickContactsMulti, parseVCard: parseVCard, smartMatchName: smartMatchName
   };
 })();
