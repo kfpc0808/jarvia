@@ -86,6 +86,13 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
 .preview{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:12px;min-height:38px}
 .preview .lk{color:#0F6E56;font-size:12px}
 .preview .ph{color:var(--ter)}
+.mbox-hd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.mbox-hd .lbl{flex:1;margin:0}
+.mrow{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px}
+.mrow .mtxt{flex:1;min-width:0;font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.mrow .mload{font-size:11.5px;font-weight:700;color:#0F6E56;background:#E6F4EF;border:none;border-radius:7px;padding:6px 10px;cursor:pointer;flex-shrink:0}
+.mrow .mdel{font-size:13px;color:var(--ter);background:none;border:none;cursor:pointer;line-height:1;flex-shrink:0}
+.mbox-empty{font-size:12px;color:var(--ter);padding:4px 2px;line-height:1.6}
 .clist{display:flex;flex-direction:column;gap:7px}
 .crow{display:flex;align-items:center;gap:11px;background:var(--white);border:1px solid var(--line);border-radius:11px;padding:11px 12px}
 .crow.sel{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold)}
@@ -181,6 +188,13 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
           <label class="linktog"><input type="checkbox" id="msg-link" onchange="updateCompose()"> 📊 고객용 데일리 리포트 링크 첨부 <span style="color:var(--ter);font-weight:500">(고객별 추적 링크)</span></label>
           <div class="lbl" style="margin-top:13px">미리보기 <span style="color:var(--ter);font-weight:500">— 고객에게 이렇게 전송됩니다</span></div>
           <div class="preview" id="msg-preview"><span class="ph">내용을 입력하면 여기에 표시됩니다.</span></div>
+        </div>
+        <div class="card">
+          <div class="mbox-hd">
+            <div class="lbl">내 멘트함 <span style="color:var(--ter);font-weight:500">— 자주 쓰는 문구 저장·재사용</span></div>
+            <button style="margin:0;flex-shrink:0;font-size:11.5px;font-weight:700;color:var(--navy2);background:var(--white);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer" onclick="saveMsgBox()">💾 현재 내용 저장</button>
+          </div>
+          <div id="mbox-list"></div>
         </div>
         <button class="btn btn-navy" onclick="goPick()">받는 사람 선택 →</button>
       </div>
@@ -333,6 +347,7 @@ window.showTab=function(t){
   ['free','group','event','regular'].forEach(p=>$('panel-'+p).classList.toggle('hidden',p!==t));
   if(t==='group')renderGroups();
   if(t==='regular')renderRegular();
+  if(t==='free')renderMsgBox();
 };
 
 /* ── 안전 발송 상태바 ── */
@@ -374,6 +389,40 @@ window.updateCompose=function(){
   const chars=Array.from(full).length, bytes=smsBytes(full);
   const cEl=$('msg-count'); if(cEl)cEl.textContent=chars+'자 · '+bytes+'바이트';
   const tEl=$('msg-type'); if(tEl){const lms=bytes>90;tEl.textContent=lms?'LMS 장문':'SMS 단문';tEl.className='ctype '+(lms?'lms':'sms');}
+};
+
+/* ── 내 멘트함 (기기 로컬 저장 · 서버 미전송) ── */
+function msgBoxKey(){ return 'jv_msgbox:'+((meData&&meData.loginId)||'_'); }
+function msgBoxGet(){ try{ const a=JSON.parse(localStorage.getItem(msgBoxKey())||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function msgBoxSet(a){ try{ localStorage.setItem(msgBoxKey(), JSON.stringify(a)); }catch(e){} }
+window.renderMsgBox=function(){
+  const el=$('mbox-list'); if(!el)return;
+  const arr=msgBoxGet();
+  if(!arr.length){ el.innerHTML='<div class="mbox-empty">아직 저장된 문구가 없어요. 위에 내용을 적고 "💾 현재 내용 저장"을 누르면 다음에 바로 불러올 수 있어요.</div>'; return; }
+  el.innerHTML=arr.map((m,i)=>'<div class="mrow">'
+    +'<div class="mtxt" onclick="loadMsg('+i+')" title="불러오기">'+esc(String(m&&m.text||'').replace(/\n/g,' '))+'</div>'
+    +'<button class="mload" onclick="loadMsg('+i+')">불러오기</button>'
+    +'<button class="mdel" onclick="delMsg('+i+')" aria-label="삭제">✕</button>'
+    +'</div>').join('');
+};
+window.saveMsgBox=function(){
+  const t=$('msg-text'); const txt=t?t.value.trim():'';
+  if(!txt){ toast('저장할 내용을 먼저 적어주세요','warning'); return; }
+  const arr=msgBoxGet();
+  if(arr.some(m=>m&&m.text===txt)){ toast('이미 저장된 문구예요','warning'); return; }
+  arr.unshift({ text:txt, at:Date.now() });
+  if(arr.length>30)arr.length=30;
+  msgBoxSet(arr); renderMsgBox();
+  toast('내 멘트함에 저장했어요','success');
+};
+window.loadMsg=function(i){
+  const arr=msgBoxGet(); const m=arr[i]; if(!m)return;
+  const t=$('msg-text'); if(t){ t.value=m.text; if(window.updateCompose)updateCompose(); t.focus(); }
+  toast('불러왔어요 — 필요하면 수정해서 보내세요','success');
+};
+window.delMsg=function(i){
+  const arr=msgBoxGet(); if(i<0||i>=arr.length)return;
+  arr.splice(i,1); msgBoxSet(arr); renderMsgBox();
 };
 
 /* ── 고객 로드 ── */
@@ -766,6 +815,7 @@ onAuthStateChanged(auth, async u=>{
   $('body').classList.remove('hidden');
   try{ await loadClients(); }catch(e){ toast('고객을 불러오지 못했습니다','error'); }
   renderClients();
+  renderMsgBox();
   refreshSafeBar();
 });
 </script>
