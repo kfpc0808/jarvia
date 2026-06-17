@@ -181,6 +181,7 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
     <button class="tab" data-tab="group" onclick="showTab('group')">그룹 관리</button>
     <button class="tab" data-tab="event" onclick="showTab('event')">오늘의 안부</button>
     <button class="tab" data-tab="regular" onclick="showTab('regular')">정기 안부</button>
+    <button class="tab" data-tab="log" onclick="showTab('log')">📜 이력</button>
   </div>
 
   <div class="body hidden" id="body">
@@ -305,8 +306,33 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
           <div style="font-size:11.5px;color:var(--ter);margin-top:6px;line-height:1.55">미리 정해두면 그 달엔 자동 추천 대신 이 문구로 발송됩니다. <b>{호칭}</b>은 고객 호칭으로 바뀝니다. 비워두면 자동 추천을 사용합니다. <span style="color:var(--ter)">(이 기기에 저장)</span></div>
           <div id="rg-monthly" style="display:none;margin-top:10px"></div>
         </div>
+        <div class="card" style="padding:12px;margin-bottom:12px">
+          <div class="lbl" style="margin:0 0 6px">🔔 매월 리마인드</div>
+          <div style="font-size:11.5px;color:var(--ter);margin-bottom:8px;line-height:1.55">매월 며칠에 정기 안부를 보낼지 정해두면, 그날 이후 <b>메인 화면</b>에서 "정기 안부 보낼 시간입니다" 알림이 떠요. <span>(이 기기에 저장)</span></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:13px;color:var(--sec)">매월</span>
+            <input type="number" id="rg-sendday" min="1" max="28" placeholder="일" style="width:84px" onchange="rgSaveSendday()">
+            <span style="font-size:13px;color:var(--sec)">일</span>
+            <button type="button" class="mini" onclick="rgClearSendday()" style="margin-left:auto">끄기</button>
+          </div>
+        </div>
         <div class="tools"><input type="text" id="rg-search" placeholder="이름으로 검색…" oninput="renderRgSetup()"></div>
         <div id="rg-setup-list"></div>
+      </div>
+    </div>
+
+    <!-- ===== 발송 이력 ===== -->
+    <div id="panel-log" class="hidden">
+      <div class="card">
+        <div class="lbl">발송 이력 <span style="color:var(--ter);font-weight:500">— 언제 · 누구에게 · 무엇을 보냈는지</span></div>
+        <div style="font-size:11.5px;color:var(--ter);margin-bottom:10px">이 기기에서 보낸 기록입니다. 이름이나 내용으로 검색하세요.</div>
+        <div id="log-range" style="display:flex;gap:6px;margin-bottom:10px">
+          <button type="button" class="ckind on" data-r="all" onclick="logRangeSel('all')">전체</button>
+          <button type="button" class="ckind" data-r="thismonth" onclick="logRangeSel('thismonth')">이번 달</button>
+          <button type="button" class="ckind" data-r="lastmonth" onclick="logRangeSel('lastmonth')">지난 달</button>
+        </div>
+        <div class="tools"><input type="text" id="log-search" placeholder="이름·내용으로 검색…" oninput="renderSendLog()"></div>
+        <div id="log-list"></div>
       </div>
     </div>
 
@@ -371,6 +397,7 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
     <input type="text" id="reg-search" placeholder="🔎 이미 등록된 고객 찾아 수정 (이름 검색)" oninput="regSearch()" autocomplete="off" style="margin-bottom:8px">
     <div id="reg-search-res" style="display:none;border:1px solid var(--line);border-radius:8px;max-height:190px;overflow-y:auto;margin-bottom:8px"></div>
     <div id="reg-edit-banner" style="display:none;align-items:center;gap:8px;background:#EAF1F8;border:1px solid #C7D9EC;border-radius:8px;padding:8px 11px;margin-bottom:8px;font-size:12px;color:var(--navy2);font-weight:700">✏️ <span id="reg-edit-name"></span> 수정 중<button type="button" onclick="regNewMode()" style="margin-left:auto;font-size:11px;font-weight:700;color:var(--sec);background:#fff;border:1px solid var(--line);border-radius:7px;padding:5px 9px;cursor:pointer">＋ 새 고객 입력</button></div>
+    <div id="reg-history" style="display:none;margin-bottom:8px"></div>
     <input type="text" id="reg-name" maxlength="20" placeholder="이름 *" style="margin-bottom:8px">
     <input type="tel" id="reg-num" inputmode="numeric" maxlength="11" placeholder="휴대폰 번호 (선택)" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="margin-bottom:8px">
     <input type="text" id="reg-title" maxlength="20" placeholder="호칭 (예: 회장님, 홍길동 과장 · 선택)" style="margin-bottom:5px">
@@ -430,12 +457,34 @@ window.closeSheet=function(){$('sheet').classList.add('hidden');};
 
 window.showTab=function(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.getAttribute('data-tab')===t));
-  ['free','group','event','regular'].forEach(p=>$('panel-'+p).classList.toggle('hidden',p!==t));
+  ['free','group','event','regular','log'].forEach(p=>$('panel-'+p).classList.toggle('hidden',p!==t));
   if(t==='group')renderGroups();
   if(t==='event')renderEventBoard();
   if(t==='regular')renderRegular();
   if(t==='free')renderMsgBox();
+  if(t==='log')renderSendLog();
 };
+/* ── 발송 이력 렌더 ── */
+window.renderSendLog=function(){
+  const box=$('log-list'); if(!box)return;
+  const kw=($('log-search').value||'').trim().toLowerCase();
+  let arr=loadSendLog();
+  if(window._logRange&&window._logRange!=='all'){
+    const now=new Date(); let y=now.getFullYear(), m=now.getMonth();
+    if(window._logRange==='lastmonth'){ m--; if(m<0){ m=11; y--; } }
+    arr=arr.filter(e=>{ const d=new Date(e.t); return d.getFullYear()===y&&d.getMonth()===m; });
+  }
+  if(kw)arr=arr.filter(e=>(((e.name||'')+' '+(e.text||'')+' '+(e.kind||'')).toLowerCase().indexOf(kw)>=0));
+  if(!arr.length){ box.innerHTML='<div class="empty" style="padding:14px 0;color:var(--ter)">'+(kw?'검색 결과가 없어요':'이 기간에는 발송 기록이 없어요')+'</div>'; return; }
+  box.innerHTML='<div style="font-size:11.5px;color:var(--ter);margin-bottom:8px">총 '+arr.length+'건'+(arr.length>300?' (최근 300건 표시)':'')+'</div>'+arr.slice(0,300).map(e=>{
+    const d=new Date(e.t); const dt=(d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+    return '<div style="border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:7px">'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:13px;font-weight:700;color:var(--ink)">'+esc(e.name||'고객')+'</span><span class="tag">'+esc(e.kind||'문자')+'</span><span style="margin-left:auto;font-size:11px;color:var(--ter)">'+dt+'</span></div>'
+      +'<div style="font-size:12px;color:#475569;white-space:pre-line;word-break:break-word">'+esc(e.text||'')+'</div>'
+      +'</div>';
+  }).join('');
+};
+window.logRangeSel=function(r){ window._logRange=r; document.querySelectorAll('#log-range .ckind').forEach(b=>b.classList.toggle('on',b.getAttribute('data-r')===r)); renderSendLog(); };
 
 /* ── 안전 발송 상태바 ── */
 async function refreshSafeBar(){
@@ -683,6 +732,7 @@ window.regNewMode=function(){
   const s=$('reg-search'); if(s)s.value='';
   const r=$('reg-search-res'); if(r){ r.style.display='none'; r.innerHTML=''; }
   const b=$('reg-edit-banner'); if(b)b.style.display='none';
+  const h=$('reg-history'); if(h){ h.style.display='none'; h.innerHTML=''; }
   regCtReset(); regSetSaveLabel();
 };
 window.regSearch=function(){
@@ -711,8 +761,20 @@ window.regLoad=function(id){
   const r=$('reg-search-res'); if(r){ r.style.display='none'; r.innerHTML=''; }
   $('reg-edit-name').textContent=c.name||'';
   $('reg-edit-banner').style.display='flex';
+  renderRegHistory(id,c.name);
   regSetSaveLabel();
 };
+function renderRegHistory(cid,name){
+  const h=$('reg-history'); if(!h)return;
+  let arr=loadSendLog().filter(e=>e.cid===cid);
+  if(!arr.length){ h.style.display='block'; h.innerHTML='<div style="background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11.5px;color:var(--ter)">📜 '+esc(name||'이 고객')+'님에게 보낸 기록이 아직 없어요</div>'; return; }
+  h.style.display='block';
+  const rows=arr.slice(0,5).map(e=>{
+    const d=new Date(e.t), dt=(d.getMonth()+1)+'/'+d.getDate();
+    return '<div style="display:flex;gap:7px;padding:5px 0;border-top:1px solid var(--line)"><span style="font-size:11px;color:var(--ter);flex-shrink:0;width:34px">'+dt+'</span><span class="tag" style="flex-shrink:0">'+esc(e.kind||'문자')+'</span><span style="font-size:11.5px;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.text||'')+'</span></div>';
+  }).join('');
+  h.innerHTML='<div style="background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:8px 11px"><div style="font-size:11.5px;font-weight:700;color:var(--navy2)">📜 최근 발송 '+arr.length+'건'+(arr.length>5?' (최근 5건)':'')+'</div>'+rows+'</div>';
+}
 window.closeRegister=function(){ var m=$('register-modal'); if(m)m.classList.add('hidden'); };
 window.goMyPage=function(){ location.href='/index.html?action=clients'; };
 function regFmtNum(n){ n=String(n||''); if(n.length===11)return n.slice(0,3)+'-'+n.slice(3,7)+'-'+n.slice(7); if(n.length===10)return n.slice(0,3)+'-'+n.slice(3,6)+'-'+n.slice(6); return n; }
@@ -912,6 +974,18 @@ async function askPhone(name){
   if(p2.length<9){toast('번호 형식을 확인해 주세요','error');return null;}
   return p2;
 }
+/* ── 📜 발송 이력 (기기 로컬 저장 · 번호 미저장 원칙과 동일) ── */
+function logKey(){ return 'jv_sendlog:'+((meData&&meData.loginId)||'_'); }
+function loadSendLog(){ try{ return JSON.parse(localStorage.getItem(logKey())||'[]')||[]; }catch(e){ return []; } }
+function logSend(cid,name,kind,text){
+  try{
+    const arr=loadSendLog();
+    arr.unshift({t:Date.now(),cid:cid||'',name:name||'',kind:kind||'문자',text:(text||'').slice(0,500)});
+    if(arr.length>1500)arr.length=1500;
+    localStorage.setItem(logKey(),JSON.stringify(arr));
+  }catch(e){}
+}
+function curKindLabel(){ const el=document.querySelector('#compose-kinds .ckind.on'); const k=el?el.getAttribute('data-k'):'free'; return ({free:'문자',birth:'생일',sang:'상령일',mat:'만기',anniv:'기념일'})[k]||'문자'; }
 window.sendOne=async function(i){
   const c=queue[i]; if(!c)return;
   const txt=$('msg-text').value.trim();
@@ -924,6 +998,7 @@ window.sendOne=async function(i){
   }
   const r=await SmsCore.sendOne(phone,body);
   if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
+  logSend(c.id,c.name,curKindLabel(),body);
   if(isLargeSession&&!sessionCounted){ sessionCounted=true; try{ await SmsCore.addSession(); }catch(e){} }
   if(i>=qIdx)qIdx=i+1;
   renderQueue();
@@ -994,12 +1069,13 @@ window.toggleGroupMember=async function(id){
   if(idx>=0)groups.splice(idx,1); else groups.push(g);
   try{ await updateDoc(doc(db,'fc_clients',c.id),{groups:groups}); c.groups=groups; }
   catch(e){ toast('저장에 실패했습니다','error'); return; }
+  toast('"'+(c.name||'고객')+'"님을 \''+g+'\' 그룹에 '+(idx>=0?'뺐어요':'넣었어요')+' — 저장됐어요','success');
   renderGroupAssign();
 };
 
 /* ── 정기 안부 ── */
 let rgPool=null, rgPoolLoaded=false, rgMode='month';
-let rgQ=[], rgQi=0, rgActive=false, rgMonthly=null, rgMonthlyTone='friendly';
+let rgQ=[], rgQi=0, rgActive=false, rgMonthly=null, rgMonthlyTone='friendly', rgShowDone=false;
 const RG_TONES=[['formal','공식'],['friendly','친근'],['casual','막역']];
 const RG_FALLBACK={
   formal:['{호칭}, 안녕하세요. 환절기에 건강 잘 챙기시길 바랍니다. 늘 평안하고 좋은 일 가득하시길 바랍니다.'],
@@ -1079,11 +1155,13 @@ function pickMsg(c){
   if(rgMonthly===null)loadRgMonthly();
   const mi=parseInt(monthKey().slice(5,7),10);
   const tone=c.mgTone||'friendly';
+  const nm=(c.name||'고객');
+  const sub=(s)=>String(s).replace(/\{호칭\}/g,honor(c)).replace(/\{이름\}/g,nm);
   const custom=rgMonthly&&rgMonthly[tone+'_m'+mi];
-  if(custom&&custom.trim())return custom.replace(/\{호칭\}/g,honor(c));
+  if(custom&&custom.trim())return sub(custom);
   const arr=poolArr(tone);
   let h=0; const id=c.id||''; for(let i=0;i<id.length;i++)h=(h*31+id.charCodeAt(i))>>>0;
-  return String(arr[h%arr.length]).replace(/\{호칭\}/g,honor(c));
+  return sub(arr[h%arr.length]);
 }
 /* 월별 와꾸(1~12월) — 기기 로컬 저장(내 멘트함과 동일 방식) */
 function rgMonthlyKey(){ return 'jv_rgmonthly:'+((meData&&meData.loginId)||'_'); }
@@ -1116,12 +1194,16 @@ function renderRgMonthly(){
 window.rgMonthlyToneSel=function(t){ rgMonthlyTone=t; renderRgMonthly(); };
 window.rgMonthlyEdit=function(m,v){ if(rgMonthly===null)rgMonthly={}; rgMonthly[rgMonthlyTone+'_m'+m]=v; };
 window.rgMonthlySave=function(){ saveRgMonthly(); toast('월별 안부 문구를 저장했어요','success'); if(rgMode==='month')renderRegular(); };
+function rgSenddayKey(){ return 'jv_rgsendday:'+((meData&&meData.loginId)||'_'); }
+window.rgSaveSendday=function(){ const v=parseInt(($('rg-sendday').value||''),10); if(v>=1&&v<=28){ try{ localStorage.setItem(rgSenddayKey(),String(v)); }catch(e){} toast('매월 '+v+'일 리마인드를 설정했어요','success'); } else { toast('1~28 사이로 입력해주세요','warning'); } };
+window.rgClearSendday=function(){ try{ localStorage.removeItem(rgSenddayKey()); }catch(e){} const el=$('rg-sendday'); if(el)el.value=''; toast('리마인드를 껐어요','success'); };
+function rgLoadSenddayInput(){ const el=$('rg-sendday'); if(!el)return; try{ const v=localStorage.getItem(rgSenddayKey()); if(v)el.value=v; }catch(e){} }
 window.toggleRgMode=function(){
   rgMode=(rgMode==='month')?'setup':'month';
   $('rg-month').classList.toggle('hidden',rgMode!=='month');
   $('rg-setup').classList.toggle('hidden',rgMode!=='setup');
   $('rg-mode-btn').textContent=(rgMode==='month')?'⚙ 명단·호칭 설정':'← 이번 달 안부';
-  if(rgMode==='setup')renderRgSetup(); else renderRegular();
+  if(rgMode==='setup'){ renderRgSetup(); rgLoadSenddayInput(); } else renderRegular();
 };
 window.renderRegular=async function(){
   if(!rgPoolLoaded)await loadGreetingPool();
@@ -1150,12 +1232,18 @@ window.renderRegular=async function(){
       +'<div style="font-size:12.5px;color:#374554;background:var(--paper);border-radius:9px;padding:9px;margin:8px 0;white-space:pre-line">'+esc(msg)+'</div>'
       +'<button class="btn st-send" style="width:100%;padding:9px" onclick="sendRegular(\''+c.id+'\')">📱 전송</button>'
       +'</div>';
-  }).join('');
+  }).join('')
+    +(done.length?(
+      '<button type="button" onclick="rgToggleDone()" style="width:100%;margin-top:6px;font-size:12px;font-weight:700;color:var(--sec);background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px;cursor:pointer">✅ 이번 달 완료 '+done.length+'명 '+(rgShowDone?'숨기기 ▴':'보기 ▾')+'</button>'
+      +(rgShowDone?('<div style="margin-top:8px">'+done.map(c=>'<div style="display:flex;align-items:center;gap:7px;background:var(--green-bg);border:1px solid #BFE6D6;border-radius:9px;padding:8px 11px;margin-bottom:6px"><span style="font-size:13px">✅</span><span style="font-size:13px;font-weight:700;color:var(--ink);flex:1">'+esc(c.name||'고객')+'</span><span class="tag">'+esc(honor(c))+'</span></div>').join('')+'</div>'):'')
+    ):'');
 };
+window.rgToggleDone=function(){ rgShowDone=!rgShowDone; renderRegular(); };
 /* ── 원탭 순차 발송 스텝퍼 ── */
-window.rgStart=function(){
+window.rgStart=async function(){
   const todo=clients.filter(c=>c.mg&&c.mgLastSent!==monthKey());
   if(!todo.length)return;
+  if(window.SmsCore&&SmsCore.canSend){ try{ const can=await SmsCore.canSend(todo.length); if(can&&can.msg) toast(can.msg, can.ok?'success':'warning'); }catch(e){} }
   rgQ=todo.map(c=>c.id); rgQi=0; rgActive=true; renderRegular();
 };
 window.rgStop=function(){ rgActive=false; renderRegular(); };
@@ -1180,6 +1268,7 @@ window.rgSendCurrent=async function(){
   if(!phone){ phone=await askPhone(c.name); if(!phone)return; try{ await SmsCore.setNumber(c.id,phone); c.num=phone; }catch(e){} }
   const r=await SmsCore.sendOne(phone,msg);
   if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
+  logSend(c.id,c.name,'정기',msg);
   try{ await updateDoc(doc(db,'fc_clients',c.id),{mgLastSent:monthKey()}); c.mgLastSent=monthKey(); }catch(e){}
   refreshSafeBar();
   rgQi++; renderRgStep();
@@ -1195,6 +1284,7 @@ window.sendRegular=async function(id){
   }
   const r=await SmsCore.sendOne(phone,msg);
   if(!r.sent){ toast(r.msg||'발송할 수 없습니다','warning'); return; }
+  logSend(c.id,c.name,'정기',msg);
   try{ await updateDoc(doc(db,'fc_clients',c.id),{mgLastSent:monthKey()}); c.mgLastSent=monthKey(); }catch(e){ toast('발송 기록 저장에 실패했어요. 새로고침 시 이 고객이 다시 보일 수 있어요','warning'); }
   renderRegular(); refreshSafeBar();
 };
@@ -1243,6 +1333,7 @@ onAuthStateChanged(auth, async u=>{
   renderClients();
   renderMsgBox();
   refreshSafeBar();
+  try{ const _t=new URLSearchParams(location.search).get('tab'); if(_t==='log')showTab('log'); }catch(e){}
 });
 </script>
 </body>
