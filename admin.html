@@ -2242,7 +2242,15 @@ async function showMember(uid){
     <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>연락처</label><input id="ed-phone-${uid}" value="${esc(m.phone||'')}" placeholder="010-0000-0000"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}" onchange="(function(sel){var jArea=document.getElementById('jarvia-area-${uid}');if(jArea)jArea.style.display=(sel.value==='jarvia_member'||sel.value==='jarvia_inner')?'':'none';var rArea=document.getElementById('report-area-${uid}');if(rArea)rArea.style.display=(sel.value==='jarvia_report')?'':'none';var icArea=document.getElementById('inner-area-${uid}');if(icArea)icArea.style.display=(sel.value==='inner_circle')?'':'none';var expArea=document.getElementById('exp-section-${uid}');if(expArea)expArea.style.display=(sel.value==='user'||sel.value==='jarvia_member'||sel.value==='jarvia_inner'||sel.value==='jarvia_report'||sel.value==='inner_circle'||sel.value==='con_homepage'||sel.value==='branch_manager')?'none':'';})(this)"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>자비아(기간제)</option>${m.role==='jarvia_member'?'<option value="jarvia_member" selected disabled>JARVIA멤버십 (하단에서 관리)</option>':''}${m.role==='jarvia_report'?'<option value="jarvia_report" selected disabled>리포트회원 (하단에서 관리)</option>':''}<option value="jarvia_inner" ${m.role==='jarvia_inner'?'selected':''}>자비아멤버십(이너서클)</option><option value="inner_circle" ${m.role==='inner_circle'?'selected':''}>이너서클멤버십</option><option value="con_homepage" ${m.role==='con_homepage'?'selected':''}>컨홈페이지</option><option value="branch_manager" ${m.role==='branch_manager'?'selected':''}>지사장</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
     <h3>추천인 등록</h3>
     ${m.referredBy
-      ? `<div style="margin:12px 0 16px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;font-size:13px;color:#2E7D32">✅ 이미 추천인이 등록되어 있습니다: <strong>${esc(refByName)}</strong> (코드: ${esc(m.referredBy)}) — 추천 보상은 가입 시 지급되었습니다. 변경이 필요하면 별도 요청 바랍니다.</div>`
+      ? `<div style="margin:12px 0 16px;padding:14px;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px">
+        <div style="font-size:13px;color:#5D4037;margin-bottom:10px">현재 추천인: <strong>${refByName==='-'?'⚠️ 계정 없음(삭제 추정)':esc(refByName)}</strong> (코드: ${esc(m.referredBy)}) — 추천 보상 5,000P 지급 완료 상태입니다.</div>
+        <div class="fr"><div class="fg" style="flex:1"><label>새 추천인 검색 (이름 또는 아이디)</label><input id="ref-search-${uid}" placeholder="이름 또는 아이디 입력 후 검색" onkeydown="if(event.key==='Enter'){event.preventDefault();searchReferrer('${uid}');}"></div><button class="btn btn-sm" style="align-self:end" onclick="searchReferrer('${uid}')">검색</button></div>
+        <div id="ref-results-${uid}" style="margin-top:8px"></div>
+        <input type="hidden" id="ref-picked-code-${uid}" value="">
+        <div id="ref-selected-${uid}" style="display:none;margin-top:10px;padding:10px 12px;background:#E3F2FD;border:1px solid #BBDEFB;border-radius:6px;font-size:14px;color:#1565C0"></div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm btn-success" id="ref-register-btn-${uid}" onclick="changeReferrer('${uid}')" disabled style="opacity:.5">추천인 변경 (기존 5,000P 회수 · 신규 5,000P 지급)</button><button class="btn btn-sm btn-danger" onclick="clearReferrer('${uid}')">추천인 해제 (보상 회수 · 원복)</button></div>
+        <p style="margin:8px 0 0;font-size:12px;color:#999">⚠️ 변경·해제 시 기존 추천인에게 지급된 5,000P가 회수되어 이전 상태로 복원됩니다. 기존 추천인 계정이 삭제된 경우 회수는 자동 생략됩니다.</p>
+      </div>`
       : `<div style="margin:12px 0 16px;padding:14px;background:#F8F9FA;border:1px solid var(--border-lt);border-radius:8px">
         <div class="fr"><div class="fg" style="flex:1"><label>추천인 검색 (이름 또는 아이디)</label><input id="ref-search-${uid}" placeholder="이름 또는 아이디 입력 후 검색" onkeydown="if(event.key==='Enter'){event.preventDefault();searchReferrer('${uid}');}"></div><button class="btn btn-sm" style="align-self:end" onclick="searchReferrer('${uid}')">검색</button></div>
         <div id="ref-results-${uid}" style="margin-top:8px"></div>
@@ -3215,7 +3223,80 @@ async function registerReferrer(uid){
     closeM('mdl-member');loadMembers();
   }catch(e){toast('추천인 등록 실패: '+e.message,'error');}
 }
-window.searchReferrer=searchReferrer;window.selectReferrer=selectReferrer;window.registerReferrer=registerReferrer;
+// ═══ 추천인 해제 (관리자) — 기존 추천인 보상 5,000P 회수 후 관계 해제 / 이전상태 원복 ═══
+async function clearReferrer(uid){
+  let oldCode='',oldRefUid='',oldRefName='',isGrpRef=false;
+  try{const ms=await getDoc(doc(db,'users',uid));if(!ms.exists()){toast('회원 정보를 찾을 수 없습니다.','error');return;}const _md=ms.data();oldCode=(_md.referredBy||'').trim();isGrpRef=!!_md.groupMasterId;}catch(e){toast('조회 오류: '+e.message,'error');return;}
+  if(!oldCode){toast('등록된 추천인이 없습니다.','warning');return;}
+  try{const rq=await getDocs(query(collection(db,'users'),where('referralCode','==',oldCode),limit(1)));if(!rq.empty){oldRefUid=rq.docs[0].id;oldRefName=rq.docs[0].data().name||oldCode;}}catch(e){}
+  const willRecover=oldRefUid&&!isGrpRef;
+  const msg=willRecover
+    ?'기존 추천인 「'+oldRefName+'」의 보상 5,000P를 회수하고 추천 관계를 해제합니다.\n이전 상태로 복원됩니다. 진행할까요?'
+    :(isGrpRef
+      ?'단체추천 가입 회원으로 추천 보상이 지급되지 않았습니다. 포인트 회수 없이 추천 관계만 해제합니다.\n진행할까요?'
+      :'기존 추천인 계정을 찾을 수 없습니다(삭제 추정). 포인트 회수 없이 추천 관계만 해제합니다.\n진행할까요?');
+  if(!confirm(msg))return;
+  try{
+    const txId='refrm_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+    await runTransaction(db,async tx=>{
+      const ms=await tx.get(doc(db,'users',uid));
+      if(!ms.exists())throw new Error('회원 정보를 찾을 수 없습니다.');
+      const md=ms.data();
+      if(!md.referredBy)throw new Error('이미 추천인이 해제되었습니다.');
+      let oSnap=null;
+      if(oldRefUid)oSnap=await tx.get(doc(db,'users',oldRefUid));
+      if(oSnap&&oSnap.exists()&&!md.groupMasterId){
+        const od=oSnap.data();const onp=(od.point||0)-5000;
+        tx.update(doc(db,'users',oldRefUid),{referralPoints:increment(-5000),point:increment(-5000),updatedAt:serverTimestamp()});
+        tx.set(doc(db,'transactions',txId),{txId,userId:oldRefUid,type:'referral_reward',amount:-5000,pointAfter:onp,memo:(md.name||'')+'님 추천 해제 — 보상 회수(관리자)',createdAt:serverTimestamp()});
+      }
+      tx.update(doc(db,'users',uid),{referredBy:'',updatedAt:serverTimestamp()});
+    });
+    toast('추천 관계 해제'+(willRecover?' 및 5,000P 회수':'')+' 완료','success');
+    closeM('mdl-member');loadMembers();
+  }catch(e){toast('추천인 해제 실패: '+e.message,'error');}
+}
+// ═══ 추천인 변경 (관리자) — 기존 추천인 5,000P 회수 + 신규 추천인 5,000P 지급 (원자적) ═══
+async function changeReferrer(uid){
+  const newCode=($('ref-picked-code-'+uid)?.value||'').trim();
+  if(!newCode){toast('새 추천인을 먼저 검색·선택하세요.','warning');return;}
+  let oldCode='',oldRefUid='',oldRefName='',newRefUid='',newRefName='',isGrpRef=false;
+  try{const ms=await getDoc(doc(db,'users',uid));if(!ms.exists()){toast('회원 정보를 찾을 수 없습니다.','error');return;}const _md=ms.data();oldCode=(_md.referredBy||'').trim();isGrpRef=!!_md.groupMasterId;}catch(e){toast('조회 오류: '+e.message,'error');return;}
+  if(newCode===oldCode){toast('현재 추천인과 동일한 코드입니다.','warning');return;}
+  try{const nq=await getDocs(query(collection(db,'users'),where('referralCode','==',newCode),limit(1)));if(nq.empty){toast('새 추천인 코드를 찾을 수 없습니다.','error');return;}newRefUid=nq.docs[0].id;newRefName=nq.docs[0].data().name||newCode;}catch(e){toast('새 추천인 조회 오류: '+e.message,'error');return;}
+  if(newRefUid===uid){toast('자기 자신은 추천인으로 등록할 수 없습니다.','error');return;}
+  try{const oq=await getDocs(query(collection(db,'users'),where('referralCode','==',oldCode),limit(1)));if(!oq.empty){oldRefUid=oq.docs[0].id;oldRefName=oq.docs[0].data().name||oldCode;}}catch(e){}
+  const willRecover=oldRefUid&&!isGrpRef;
+  const msg='추천인을 「'+(oldRefName||oldCode||'-')+'」 → 「'+newRefName+'」(으)로 변경합니다.\n'
+    +(willRecover?'· 기존 추천인 5,000P 회수\n':(isGrpRef?'· 기존 단체추천(보상 미지급) → 회수 생략\n':'· 기존 추천인 계정 없음 → 회수 생략\n'))
+    +'· 새 추천인 5,000P 지급\n진행할까요?';
+  if(!confirm(msg))return;
+  try{
+    const addId='refadd_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+    const rmId='refrm_'+Date.now().toString(36)+Math.random().toString(36).substr(2,6);
+    await runTransaction(db,async tx=>{
+      const ms=await tx.get(doc(db,'users',uid));
+      if(!ms.exists())throw new Error('회원 정보를 찾을 수 없습니다.');
+      const md=ms.data();
+      let oSnap=null;
+      if(oldRefUid)oSnap=await tx.get(doc(db,'users',oldRefUid));
+      const nSnap=await tx.get(doc(db,'users',newRefUid));
+      if(!nSnap.exists())throw new Error('새 추천인 정보를 찾을 수 없습니다.');
+      if(oSnap&&oSnap.exists()&&!md.groupMasterId){
+        const od=oSnap.data();const onp=(od.point||0)-5000;
+        tx.update(doc(db,'users',oldRefUid),{referralPoints:increment(-5000),point:increment(-5000),updatedAt:serverTimestamp()});
+        tx.set(doc(db,'transactions',rmId),{txId:rmId,userId:oldRefUid,type:'referral_reward',amount:-5000,pointAfter:onp,memo:(md.name||'')+'님 추천 변경 — 기존 보상 회수(관리자)',createdAt:serverTimestamp()});
+      }
+      const nd=nSnap.data();const nnp=(nd.point||0)+5000;
+      tx.update(doc(db,'users',newRefUid),{referralPoints:increment(5000),point:increment(5000),updatedAt:serverTimestamp()});
+      tx.set(doc(db,'transactions',addId),{txId:addId,userId:newRefUid,type:'referral_reward',amount:5000,pointAfter:nnp,memo:(md.name||'')+'님 추천 변경 — 보상 지급(관리자)',createdAt:serverTimestamp()});
+      tx.update(doc(db,'users',uid),{referredBy:newCode,updatedAt:serverTimestamp()});
+    });
+    toast('추천인 변경 완료 ('+(willRecover?'기존 5,000P 회수 / ':'회수 생략 / ')+'신규 5,000P 지급)','success');
+    closeM('mdl-member');loadMembers();
+  }catch(e){toast('추천인 변경 실패: '+e.message,'error');}
+}
+window.searchReferrer=searchReferrer;window.selectReferrer=selectReferrer;window.registerReferrer=registerReferrer;window.changeReferrer=changeReferrer;window.clearReferrer=clearReferrer;
 window.loadMembers=loadMembers;window.showMember=showMember;window.toggleStatus=toggleStatus;window.toggleDistributor=toggleDistributor;window.doAdjust=doAdjust;window.doAdjustPoint=doAdjustPoint;window.updateMemberInfo=updateMemberInfo;window.changeMemberPw=changeMemberPw;window.changeMemberEmail=changeMemberEmail;window.updateJarviaMember=updateJarviaMember;
 
 // ═══ 멤버십 부여 관리 ═══
