@@ -76,6 +76,9 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
 .selbar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
 .selbar .n{font-size:13px;font-weight:800;color:var(--navy2)}
 .selbar .mini{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--sec);background:var(--white);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.qfilt{display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.fchip{font-size:11.5px;font-weight:700;color:var(--sec);background:var(--white);border:1px solid var(--line);border-radius:16px;padding:6px 12px;cursor:pointer}
+.fchip.on{background:var(--navy2);color:#fff;border-color:var(--navy2)}
 .clist{display:flex;flex-direction:column;gap:7px}
 .crow{display:flex;align-items:center;gap:11px;background:var(--white);border:1px solid var(--line);border-radius:11px;padding:11px 12px}
 .crow.sel{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold)}
@@ -178,10 +181,26 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
           <input type="text" id="cli-search" placeholder="이름으로 검색…" oninput="renderClients()">
           <select class="grpsel" id="cli-group" onchange="renderClients()"><option value="">전체 그룹</option></select>
         </div>
+        <div class="qfilt">
+          <button class="fchip on" data-f="all" onclick="setQFilter('all')">전체</button>
+          <button class="fchip" data-f="has" onclick="setQFilter('has')">번호 있음</button>
+          <button class="fchip" data-f="no" onclick="setQFilter('no')">번호 없음</button>
+          <select class="grpsel" id="cli-limit" onchange="renderClients()" style="margin-left:auto" aria-label="표시 갯수">
+            <option value="30">30명씩</option><option value="10">10명씩</option><option value="20">20명씩</option><option value="50">50명씩</option><option value="100">100명씩</option><option value="0">전체</option>
+          </select>
+        </div>
         <div class="selbar">
           <span class="n" id="sel-n">0명 선택</span>
           <button class="mini" onclick="selectAllVisible()">보이는 전체 선택</button>
           <button class="mini" onclick="clearSel()">해제</button>
+        </div>
+        <div id="nonum-box" class="hidden" style="margin-bottom:11px">
+          <div class="banner amber" style="margin-bottom:8px"><span>📭</span><span><b id="nonum-cnt">0명</b>이 아직 번호가 없어요. 주소록·연락처 파일에서 한꺼번에 채워보세요.</span></div>
+          <div style="display:flex;gap:8px">
+            <button style="margin:0;flex:1;font-size:12px;font-weight:700;color:var(--navy2);background:var(--white);border:1px solid var(--line);border-radius:9px;padding:9px 8px;cursor:pointer" onclick="fillFromContacts()">📇 주소록에서 채우기</button>
+            <button style="margin:0;flex:1;font-size:12px;font-weight:700;color:var(--navy2);background:var(--white);border:1px solid var(--line);border-radius:9px;padding:9px 8px;cursor:pointer" onclick="document.getElementById('vcf-input').click()">📁 연락처 파일(vcf)</button>
+          </div>
+          <input type="file" id="vcf-input" accept=".vcf,text/vcard" style="display:none" onchange="fillFromVcf(event)">
         </div>
         <div class="clist" id="cli-list"></div>
         <div class="btn-row">
@@ -290,7 +309,7 @@ const db=getFirestore(app,'javia-db');
 
 const ALLOW=['admin','jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager','free_user'];
 
-let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false;
+let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false, qFilter='all';
 
 const $=id=>document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -372,11 +391,19 @@ function visibleClients(){
   return clients.filter(c=>{
     if(kw&&(c.name||'').indexOf(kw)<0)return false;
     if(g&&(c.groups||[]).indexOf(g)<0)return false;
+    if(qFilter==='has'&&!c.num)return false;
+    if(qFilter==='no'&&c.num)return false;
     return true;
   });
 }
+function displayedClients(){
+  const f=visibleClients();
+  const el=$('cli-limit'); const lim=el?(parseInt(el.value,10)||0):0;
+  return lim>0?f.slice(0,lim):f;
+}
 window.renderClients=function(){
-  const list=visibleClients();
+  const full=visibleClients();
+  const list=displayedClients();
   const html=list.map(c=>{
     const on=sel.has(c.id);
     const tags=(c.groups||[]).map(g=>'<span class="tag">'+esc(g)+'</span>').join('');
@@ -387,11 +414,52 @@ window.renderClients=function(){
       +(c.num?'':'<span class="nonum">번호 없음</span>')
       +'</div>';
   }).join('');
-  $('cli-list').innerHTML=html||'<div class="empty">고객이 없습니다. 메인 고객 관리에서 먼저 등록해 주세요.</div>';
+  let extra='';
+  if(full.length>list.length)extra='<div class="empty" style="padding:9px">+'+(full.length-list.length)+'명 더 있어요 — 검색·필터·표시 갯수로 좁혀보세요.</div>';
+  $('cli-list').innerHTML=(html||'<div class="empty">조건에 맞는 고객이 없습니다.</div>')+extra;
   $('sel-n').textContent=sel.size+'명 선택';
+  updateNonumBox();
+};
+function updateNonumBox(){
+  const box=$('nonum-box'); if(!box)return;
+  const miss=clients.filter(c=>!c.num).length;
+  if(miss>0){ const cnt=$('nonum-cnt'); if(cnt)cnt.textContent=miss+'명'; box.classList.remove('hidden'); }
+  else box.classList.add('hidden');
+}
+window.setQFilter=function(f){
+  qFilter=f;
+  document.querySelectorAll('#panel-free .fchip').forEach(b=>b.classList.toggle('on',b.getAttribute('data-f')===f));
+  renderClients();
+};
+/* ── 일괄 번호 채우기 (주소록·vcf · sms-core 재사용 · 이름 매칭 · 번호 없는 고객만) ── */
+function _applyFill(pairs){
+  if(!window.SmsCore){toast('문자 모듈을 불러오지 못했습니다','error');return;}
+  let matched=0; const toStore=[];
+  (pairs||[]).forEach(p=>{
+    if(!p||!p.tel)return;
+    const c=clients.find(x=>!x.num&&SmsCore.smartMatchName(x.name,p.name));
+    if(c){ c.num=SmsCore.normalizePhone(p.tel); toStore.push({cid:c.id,phone:c.num}); matched++; }
+  });
+  if(toStore.length){ try{ SmsCore.bulkSetNumbers(toStore); }catch(e){} }
+  renderClients();
+  toast(matched>0?(matched+'명 번호를 채웠어요'):'이름이 일치하는 연락처를 찾지 못했어요',matched>0?'success':'warning');
+}
+window.fillFromContacts=async function(){
+  if(!window.SmsCore){toast('문자 모듈을 불러오지 못했습니다','error');return;}
+  if(!SmsCore.contactPickerSupported()){ toast('이 브라우저는 주소록 선택을 지원하지 않아요. 연락처 파일(vcf)을 이용해 주세요','warning'); return; }
+  let picked=[]; try{ picked=await SmsCore.pickContactsMulti(); }catch(e){}
+  if(!picked||!picked.length)return;
+  _applyFill(picked);
+};
+window.fillFromVcf=function(ev){
+  const f=ev&&ev.target&&ev.target.files&&ev.target.files[0]; if(!f){return;}
+  const rd=new FileReader();
+  rd.onload=function(){ try{ _applyFill(SmsCore.parseVCard(String(rd.result||''))); }catch(e){ toast('연락처 파일을 읽지 못했어요','error'); } if(ev.target)ev.target.value=''; };
+  rd.onerror=function(){ toast('파일을 읽지 못했어요','error'); if(ev.target)ev.target.value=''; };
+  rd.readAsText(f,'utf-8');
 };
 window.toggleSel=function(id){ if(sel.has(id))sel.delete(id); else sel.add(id); renderClients(); };
-window.selectAllVisible=function(){ visibleClients().forEach(c=>sel.add(c.id)); renderClients(); };
+window.selectAllVisible=function(){ displayedClients().forEach(c=>sel.add(c.id)); renderClients(); };
 window.clearSel=function(){ sel.clear(); renderClients(); };
 
 /* ── 발송 시작 (안전 발송 판정) ── */
