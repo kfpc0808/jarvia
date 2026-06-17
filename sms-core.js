@@ -90,7 +90,7 @@
     n = n || 1;
     return getToday().then(function (d) {
       if (d.count + n > LIMITS.hardMax) return { ok: false, reason: 'hard', msg: '안전을 위해 하루 ' + LIMITS.hardMax + '건까지만 보낼 수 있어요.', today: d };
-      if (d.count + n > LIMITS.dailyMax) return { ok: false, reason: 'daily', msg: '오늘은 여기까지가 안전해요. 내일 이어서 보내면 가장 안전합니다.', today: d };
+      // 100건(dailyMax)은 '권장' — 넘어가도 발송 허용(상단 진행률 바가 권장선 표시). 500건(hardMax)만 절대 차단.
       return { ok: true, today: d };
     });
   }
