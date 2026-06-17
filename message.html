@@ -352,13 +352,15 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
     <div class="reg-sec-lbl">✏️ 한 명 자세히 등록</div>
     <input type="text" id="reg-name" maxlength="20" placeholder="이름 *" style="margin-bottom:8px">
     <input type="tel" id="reg-num" inputmode="numeric" maxlength="11" placeholder="휴대폰 번호 (선택)" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="margin-bottom:8px">
-    <input type="text" id="reg-title" maxlength="20" placeholder="호칭 (예: 회장님, 형 · 선택)" style="margin-bottom:8px">
+    <input type="text" id="reg-title" maxlength="20" placeholder="호칭 (예: 회장님, 홍길동 과장 · 선택)" style="margin-bottom:5px">
+    <div style="font-size:11.5px;color:var(--gold-d);background:var(--gold-bg);border:1px solid #EAD9B0;border-radius:8px;padding:8px 10px;margin-bottom:9px;line-height:1.6">💬 적으신 호칭이 <b>그대로</b> 안부 문자에 나갑니다.<br>· <b>과장님</b> 입력 → "과장님"으로 발송<br>· <b>홍길동 과장님</b> 입력 → "홍길동 과장님"으로 발송<br>비워두면 <b>"이름+님"</b>(예: 홍길동님)으로 나갑니다.</div>
     <div style="font-size:11.5px;color:var(--ter);margin:4px 0 6px;font-weight:600">생일 <span style="font-weight:500">(선택 · 넣으면 생일·상령일 알림 활성화)</span></div>
     <input type="date" id="reg-birth" style="margin-bottom:11px">
     <div style="font-size:11.5px;color:var(--ter);margin:4px 0 7px;font-weight:600">보험 계약 <span style="font-weight:500">(선택 · 만기일 넣으면 만기 알림)</span></div>
     <div id="reg-ct-rows"></div>
     <button type="button" class="btn btn-ghost" style="margin-top:6px;font-size:12.5px" onclick="regCtAdd()">＋ 계약 추가</button>
     <button class="btn btn-gold" style="margin-top:11px" onclick="regSaveOne()">이 고객 저장</button>
+    <div id="reg-recent"></div>
 
     <div class="reg-div"></div>
 
@@ -396,7 +398,7 @@ const db=getFirestore(app,'javia-db');
 
 const ALLOW=['admin','jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager','free_user'];
 
-let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false, qFilter='all';
+let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false, qFilter='all', regRecent=[];
 
 const $=id=>document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -576,14 +578,14 @@ async function _applyFill(pairs){
   if(!window.SmsCore){toast('문자 모듈을 불러오지 못했습니다','error');return;}
   const picked=(pairs||[]).filter(p=>p&&p.tel&&String(p.name||'').trim());
   if(!picked.length){ toast('이름·번호가 있는 연락처를 찾지 못했어요','warning'); return; }
-  let filled=0, added=0, dup=0; const toStore=[];
+  let filled=0, added=0, dup=0; const toStore=[], recList=[];
   for(const p of picked){
     const ph=SmsCore.normalizePhone(p.tel), nm=String(p.name).trim();
     // 1) 이미 등록된 고객과 이름 매칭(끝 '님' 무시)
     const exist=clients.find(x=>SmsCore.smartMatchName(_cliBase(x.name),nm));
     if(exist){
       if(exist.num){ dup++; }                                  // 이미 번호 있음 → 건너뜀
-      else { exist.num=ph; toStore.push({cid:exist.id,phone:ph}); filled++; }
+      else { exist.num=ph; toStore.push({cid:exist.id,phone:ph}); filled++; recList.push({name:exist.name||nm,num:ph,title:exist.mgTitle||'',birth:exist.birthDate||'',ct:(exist.contracts||[]).length}); }
       continue;
     }
     // 2) 없으면 새 고객으로 등록 (이름+번호) — 고객관리와 동일 스키마
@@ -593,12 +595,13 @@ async function _applyFill(pairs){
       await setDoc(ref,data);
       clients.push({id:ref.id, ...data, num:ph});             // 같은 이름 재선택 시 이 고객에 매칭 → 중복 자동 거름
       toStore.push({cid:ref.id,phone:ph});
-      added++;
+      added++; recList.push({name:nm,num:ph,title:'',birth:'',ct:0});
     }catch(e){ /* 등록 실패는 건너뜀 */ }
   }
   if(toStore.length){ try{ SmsCore.bulkSetNumbers(toStore); }catch(e){} }
   clients.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ko'));
   fillGroupSelects(); renderClients();
+  if(recList.length){ regRecent=recList.concat(regRecent); if(regRecent.length>30)regRecent.length=30; if(typeof renderRegRecent==='function')renderRegRecent(); }
   const parts=[];
   if(added)parts.push('새 고객 '+added+'명');
   if(filled)parts.push('번호 채움 '+filled+'명');
@@ -623,9 +626,26 @@ window.fillFromVcf=function(ev){
 };
 
 /* ── 고객 등록 모달 (텍스트 붙여넣기 + 건별 · 스키마는 고객관리와 동일) ── */
-window.openRegister=function(){ regCtReset(); var m=$('register-modal'); if(m)m.classList.remove('hidden'); };
+window.openRegister=function(){ regCtReset(); renderRegRecent(); var m=$('register-modal'); if(m)m.classList.remove('hidden'); };
 window.closeRegister=function(){ var m=$('register-modal'); if(m)m.classList.add('hidden'); };
 window.goMyPage=function(){ location.href='/index.html?action=clients'; };
+function regFmtNum(n){ n=String(n||''); if(n.length===11)return n.slice(0,3)+'-'+n.slice(3,7)+'-'+n.slice(7); if(n.length===10)return n.slice(0,3)+'-'+n.slice(3,6)+'-'+n.slice(6); return n; }
+function renderRegRecent(){
+  const el=$('reg-recent'); if(!el)return;
+  if(!regRecent.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div style="font-size:11.5px;font-weight:800;color:var(--green);margin:13px 0 7px">✅ 방금 등록·보강한 고객 '+regRecent.length+'명 <span style="font-weight:500;color:var(--ter)">— 바로 확인하세요</span></div>'
+    +regRecent.map(r=>{
+      const bits=[];
+      if(r.num)bits.push(esc(regFmtNum(r.num)));
+      if(r.birth)bits.push(esc(r.birth));
+      if(r.ct)bits.push('계약 '+r.ct+'건');
+      return '<div style="display:flex;align-items:center;gap:7px;background:var(--green-bg);border:1px solid #BFE6D6;border-radius:9px;padding:8px 11px;margin-bottom:6px">'
+        +'<span style="font-size:13px;font-weight:700;color:var(--ink);flex-shrink:0">'+esc(r.name||'고객')+'</span>'
+        +(r.title?'<span class="tag">'+esc(r.title)+'</span>':'')
+        +(bits.length?'<span style="font-size:11px;color:var(--sec);margin-left:auto;text-align:right">'+bits.join(' · ')+'</span>':'')
+        +'</div>';
+    }).join('');
+}
 function regParsePaste(text){
   const out=[];
   String(text||'').split(/\r?\n/).forEach(line=>{
@@ -658,12 +678,12 @@ function regSang(birth){  // 상령일 = 생일 + 6개월 (고객관리 fccSang�
 function regCtAddRow(p,mt,y,t){
   const row=document.createElement('div');
   row.className='reg-ct-row';
-  row.style.cssText='display:flex;gap:6px;align-items:center;margin-bottom:7px';
+  row.style.cssText='display:flex;gap:6px;align-items:center;margin-bottom:7px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:3px';
   const types=[['','종류'],['silson','실손'],['auto','자동차'],['protect','보장성'],['saving','저축성'],['pension','연금']];
   const topts=types.map(o=>'<option value="'+o[0]+'"'+(t===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
-  row.innerHTML='<input class="reg-ct-p" maxlength="40" placeholder="상품명" value="'+esc(p||'')+'" style="flex:1;min-width:0">'
+  row.innerHTML='<input class="reg-ct-p" maxlength="40" placeholder="상품명" value="'+esc(p||'')+'" style="flex:0 0 108px;min-width:0">'
     +'<select class="reg-ct-t grpsel" style="flex:0 0 68px;height:44px">'+topts+'</select>'
-    +'<input class="reg-ct-m" type="date" value="'+esc(mt||'')+'" style="flex:1;min-width:0;height:44px">'
+    +'<input class="reg-ct-m" type="date" value="'+esc(mt||'')+'" style="flex:0 0 150px;min-width:150px;height:44px">'
     +'<label style="display:flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--sec);white-space:nowrap;flex-shrink:0;cursor:pointer"><input type="checkbox" class="reg-ct-y"'+(y?' checked':'')+' style="width:15px;height:15px;margin:0;accent-color:var(--navy2)">매년</label>'
     +'<button type="button" onclick="regCtDel(event)" style="font-size:15px;color:var(--ter);background:none;border:none;cursor:pointer;padding:0 3px;flex-shrink:0;line-height:1">×</button>';
   $('reg-ct-rows').appendChild(row);
@@ -713,6 +733,7 @@ window.regSaveOne=async function(){
   fillGroupSelects();
   if(typeof renderClients==='function')renderClients();
   $('reg-name').value=''; $('reg-num').value=''; $('reg-title').value=''; $('reg-birth').value=''; regCtReset();
+  regRecent.unshift({name:name, num:phone||'', title:title||'', birth:birth||'', ct:contracts.length}); if(regRecent.length>30)regRecent.length=30; renderRegRecent();
   toast('"'+name+'" 고객을 등록했어요','success');
 };
 window.toggleSel=function(id){ if(sel.has(id))sel.delete(id); else sel.add(id); renderClients(); };
