@@ -165,6 +165,7 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
     <button class="bk" onclick="goMain()" title="메인으로">메인</button>
     <span class="tt">문자발송</span>
     <span class="free">💰 문자비 0원</span>
+    <button class="bk" onclick="showTab('regular');setRgMode('setup')" title="정기 안부 설정" aria-label="정기 안부 설정" style="margin-left:8px;padding:6px 10px">⚙ 설정</button>
   </div>
 
   <!-- 안전 발송 상태바 -->
@@ -475,6 +476,7 @@ const db=getFirestore(app,'javia-db');
 const ALLOW=['admin','jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager','free_user'];
 
 let me=null, meData=null, clients=[], sel=new Set(), queue=[], qIdx=0, isLargeSession=false, sessionCounted=false, qFilter='all', regRecent=[];
+let qMsg={}; /* 발송 큐 고객별 개별 문구 (cid → 본문). 비어있으면 작성 화면 기본 문구 사용 */
 
 const $=id=>document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -548,6 +550,44 @@ function linkSuffix(cid){
   if($('msg-link')&&$('msg-link').checked){ const lk=buildLink(cid); if(lk)s+='\n\n▶ 오늘의 인사이트 보기: '+lk; }
   if($('msg-link-ch')&&$('msg-link-ch').checked){ const ck=buildChannel(cid); if(ck)s+='\n\n🔗 내 채널: '+ck; }
   return s;
+}
+
+/* ── 만기 요약(날짜·종류·상품) 공통 헬퍼 ── */
+const INS_LABEL={silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금'};
+function matNextDate(ct){
+  const d=ct&&ct.maturityDate?String(ct.maturityDate):''; if(d.length<10)return null;
+  const today=new Date(); today.setHours(0,0,0,0);
+  if(ct.yearly){
+    const mm=parseInt(d.slice(5,7),10), dd=parseInt(d.slice(8,10),10);
+    const y=today.getFullYear(); let nd=new Date(y,mm-1,dd);
+    if(nd<today)nd=new Date(y+1,mm-1,dd);
+    return nd;
+  }
+  return new Date(parseInt(d.slice(0,4),10),parseInt(d.slice(5,7),10)-1,parseInt(d.slice(8,10),10));
+}
+function matSummary(c){
+  const cts=(c&&c.contracts)||[];
+  const today=new Date(); today.setHours(0,0,0,0);
+  const fut=[],past=[];
+  cts.forEach(ct=>{ const nd=matNextDate(ct); if(!nd)return; (nd>=today?fut:past).push({nd:nd,ct:ct}); });
+  let pick;
+  if(fut.length){ fut.sort((a,b)=>a.nd-b.nd); pick=fut[0]; }
+  else if(past.length){ past.sort((a,b)=>b.nd-a.nd); pick=past[0]; }
+  else return null;
+  const total=fut.length+past.length;
+  const m=pick.nd.getMonth()+1, d=pick.nd.getDate();
+  const ty=INS_LABEL[pick.ct.insType]||'';
+  const prod=(pick.ct.productName||'').trim();
+  return { label:'⏰ '+m+'/'+d+(ty?(' · '+ty):'')+(prod?(' · '+prod):''), more:total-1, insType:pick.ct.insType||'', prod:prod };
+}
+/* 만기 종류별 문구: 적립형(저축성·연금)은 수령·재설계 톤, 보장형은 점검·갱신 톤 */
+function matMsg(h,prod,insType){
+  const p=(prod||'').trim();
+  if(insType==='pension')
+    return h+', 가입하신 '+(p||'연금')+'의 만기(연금 개시)가 다가옵니다. 수령 방법과 개시 시점을 함께 점검해 드리고 싶어 미리 연락드립니다.';
+  if(insType==='saving')
+    return h+', 가입하신 '+(p||'저축성 상품')+'의 만기가 다가옵니다. 만기 환급금 수령과 재설계 방안을 함께 살펴보시면 좋겠습니다. 편하게 말씀해 주세요.';
+  return h+', 가입하신 '+(p||'보험')+' 만기가 다가옵니다. 점검이 필요하시면 편하게 말씀해 주세요.';
 }
 
 /* ── 작성 미리보기 · 글자수(SMS/LMS) ── */
@@ -742,9 +782,11 @@ window.renderClients=function(){
   const html=list.map(c=>{
     const on=sel.has(c.id);
     const tags=(c.groups||[]).map(g=>'<span class="tag">'+esc(g)+'</span>').join('');
+    const ms=matSummary(c);
     return '<div class="crow'+(on?' sel':'')+'" onclick="toggleSel(\''+c.id+'\')">'
       +'<div class="ck">'+(on?'✓':'')+'</div>'
       +'<div style="flex:1;min-width:0"><div class="nm">'+esc(c.name||'고객')+'</div>'
+      +(ms?'<div class="mt" style="color:#9A3412;font-weight:600">'+esc(ms.label)+(ms.more>0?(' 외 '+ms.more+'건'):'')+'</div>':'')
       +(tags?'<div class="tags">'+tags+'</div>':'')+'</div>'
       +(c.num?'':'<span class="nonum">번호 없음</span>')
       +'<button type="button" onclick="regEditFromList(event,\''+c.id+'\')" aria-label="고객 정보 수정" style="flex-shrink:0;margin-left:8px;font-size:12px;font-weight:700;color:var(--navy2);background:#fff;border:1px solid #C7D2DE;border-radius:7px;padding:5px 9px;cursor:pointer;line-height:1">✏️</button>'
@@ -984,6 +1026,7 @@ window.regSaveOne=async function(){
     if(c){ Object.assign(c, base, {mgTitle:title}); if(phone){ c.num=phone; try{ if(window.SmsCore)SmsCore.setNumber(regEditId,phone); }catch(e){} } else if(c.num){ c.num=''; try{ if(window.SmsCore)SmsCore.setNumber(regEditId,''); }catch(e){} } }
     clients.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ko'));
     fillGroupSelects(); if(typeof renderClients==='function')renderClients();
+    if(rgMode==='setup'&&typeof renderRgSetup==='function')renderRgSetup();
     regRecent.unshift({name:name, num:phone||(c&&c.num)||'', title:title||'', birth:birth||'', ct:contracts.length}); if(regRecent.length>30)regRecent.length=30; renderRegRecent();
     regNewMode();
     closeRegister();
@@ -1034,6 +1077,13 @@ window.startSend=async function(){
   // 큐 구성
   queue=clients.filter(c=>sel.has(c.id));
   qIdx=0;
+  // 고객별 개별 문구 초기화 — 만기 발송이고 기본 문구를 안 고쳤다면 종류별로 자동 채움
+  qMsg={};
+  const _cur=($('msg-text').value||'').trim();
+  const _untouched=(_cur===String(window._lastAuto||'').trim());
+  if(window._mvKind==='mat' && _untouched){
+    queue.forEach(c=>{ const ms=matSummary(c); if(ms)qMsg[c.id]=matMsg(honor(c),ms.prod,ms.insType); });
+  }
   $('free-pick').classList.add('hidden');
   $('free-queue').classList.remove('hidden');
   setStep(3);
@@ -1049,18 +1099,33 @@ window.startSend=async function(){
   renderQueue();
   refreshSafeBar();
 };
+/* 발송 큐 고객별 본문: 개별 문구(qMsg) 있으면 그것, 없으면 작성 화면 기본 문구 */
+function qBaseText(i){ const c=queue[i]; if(!c)return ''; return (qMsg[c.id]!=null?qMsg[c.id]:($('msg-text').value||'')); }
+function qBody(i){ const c=queue[i]; if(!c)return ''; return qBaseText(i).trim()+linkSuffix(c.id); }
 function renderQueue(){
   const html=queue.map((c,i)=>{
     const done=i<qIdx, cur=i===qIdx;
     let st;
     if(done)st='<span class="st st-done">✓ 완료</span>';
     else st='<button class="st st-send" onclick="sendOne('+i+')">📱 전송</button>';
+    const ms=matSummary(c);
+    const own=(qMsg[c.id]!=null);
     return '<div style="margin-bottom:8px">'
       +'<div class="qrow'+(done?' done':'')+(cur?' cur':'')+'" style="margin-bottom:0">'
-      +'<div style="flex:1;min-width:0"><div class="nm">'+esc(c.name||'고객')+'</div>'
+      +'<div style="flex:1;min-width:0"><div class="nm">'+esc(c.name||'고객')
+      +'<span id="qbadge-'+i+'" style="margin-left:6px;font-size:10px;font-weight:700;color:#0F6E56;background:#E3F3EC;border-radius:5px;padding:1px 5px;display:'+(own?'inline-block':'none')+'">📝 개별</span></div>'
+      +(ms?'<div class="mt" style="color:#9A3412;font-weight:600">'+esc(ms.label)+(ms.more>0?(' 외 '+ms.more+'건'):'')+'</div>':'')
       +(c.num?'':'<div class="mt" style="color:var(--red)">번호 없음 — 전송 시 입력</div>')+'</div>'
+      +'<button type="button" onclick="qEdit('+i+')" style="font-size:11px;font-weight:700;color:#9A3412;background:#fff;border:1px solid #F0C9A8;border-radius:8px;padding:6px 9px;cursor:pointer;flex-shrink:0;margin-right:6px">✏️ 수정</button>'
       +'<button type="button" onclick="qPreview('+i+')" style="font-size:11px;font-weight:700;color:var(--navy2);background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;flex-shrink:0">미리보기</button>'
       +st+'</div>'
+      +'<div id="qedit-'+i+'" style="display:none;margin-top:6px">'
+        +'<textarea id="qta-'+i+'" oninput="qMsgInput('+i+')" rows="3" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.6;color:var(--ink);background:var(--white);border:1px solid var(--line);border-radius:10px;padding:10px;resize:vertical">'+esc(qBaseText(i))+'</textarea>'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px;font-size:11px;color:var(--ter)">'
+          +'<span>이 고객에게만 적용됩니다 (추적 링크는 전송 시 자동 추가).</span>'
+          +'<button type="button" onclick="qResetMsg('+i+')" style="font-size:11px;font-weight:700;color:var(--navy2);background:#fff;border:1px solid var(--line);border-radius:7px;padding:4px 9px;cursor:pointer">기본 문구로</button>'
+        +'</div>'
+      +'</div>'
       +'<div id="qprev-'+i+'" style="display:none;font-size:12px;color:#374554;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:11px;margin-top:6px;white-space:pre-line"></div>'
       +'</div>';
   }).join('');
@@ -1068,13 +1133,32 @@ function renderQueue(){
   $('q-num').textContent=qIdx+' / '+queue.length+' 전송';
   $('q-pg').style.width=(queue.length?Math.round(qIdx/queue.length*100):0)+'%';
 }
+/* 발송 큐: 고객별 문구 수정 토글 */
+window.qEdit=function(i){
+  const box=document.getElementById('qedit-'+i); if(!box)return;
+  if(box.style.display!=='block'){ const ta=document.getElementById('qta-'+i); if(ta)ta.value=qBaseText(i); box.style.display='block'; }
+  else box.style.display='none';
+};
+/* 입력 시 개별 문구 저장 + 배지·열린 미리보기 즉시 반영 */
+window.qMsgInput=function(i){
+  const c=queue[i]; if(!c)return;
+  const ta=document.getElementById('qta-'+i); if(!ta)return;
+  qMsg[c.id]=ta.value;
+  const b=document.getElementById('qbadge-'+i); if(b)b.style.display='inline-block';
+  const pv=document.getElementById('qprev-'+i); if(pv&&pv.style.display==='block')pv.textContent=qBody(i);
+};
+/* 개별 문구 해제 → 작성 화면 기본 문구로 복귀 */
+window.qResetMsg=function(i){
+  const c=queue[i]; if(!c)return;
+  delete qMsg[c.id];
+  renderQueue();
+};
 /* 발송 큐: 각 고객에게 실제 갈 내용 미리보기 (sendOne 본문과 동일 = 고객별 추적링크 포함) */
 window.qPreview=function(i){
   const c=queue[i]; if(!c)return;
   const box=document.getElementById('qprev-'+i); if(!box)return;
   if(box.style.display!=='block'){
-    const txt=($('msg-text').value||'').trim();
-    box.textContent=txt+linkSuffix(c.id);
+    box.textContent=qBody(i);
     box.style.display='block';
   } else { box.style.display='none'; }
 };
@@ -1121,8 +1205,8 @@ function logSend(cid,name,kind,text){
 function curKindLabel(){ const el=document.querySelector('#compose-kinds .ckind.on'); const k=el?el.getAttribute('data-k'):'free'; return ({free:'문자',birth:'생일',sang:'상령일',mat:'만기',anniv:'기념일'})[k]||'문자'; }
 window.sendOne=async function(i){
   const c=queue[i]; if(!c)return;
-  const txt=$('msg-text').value.trim();
-  let body=txt+linkSuffix(c.id);
+  if(!qBaseText(i).trim()){ toast((c.name||'고객')+'님 문구가 비어 있어요. ✏️ 수정에서 채워주세요','warning'); return; }
+  let body=qBody(i);
   let phone=c.num;
   if(!phone){
     phone=await askPhone(c.name);
@@ -1139,7 +1223,7 @@ window.sendOne=async function(i){
   if(qIdx>=queue.length)toast('마지막까지 보냈어요. 오늘도 수고하셨습니다 👍','success');
 };
 window.resetFree=function(){
-  sel.clear(); queue=[]; qIdx=0;
+  sel.clear(); queue=[]; qIdx=0; qMsg={};
   $('free-queue').classList.add('hidden');
   $('free-compose').classList.remove('hidden');
   $('msg-text').value=''; $('msg-link').checked=false; { const _c=$('msg-link-ch'); if(_c)_c.checked=false; }
@@ -1296,7 +1380,7 @@ window.evSend=function(cid,kind,prod){
   let msg='';
   if(kind==='birth')msg=h+', 생신을 진심으로 축하드립니다. 늘 건강하시고 좋은 일 가득하시길 바랍니다.';
   else if(kind==='sang')msg=h+', 곧 보험 나이가 한 살 오르는 상령일이 다가옵니다. 갱신이나 신규 가입을 검토 중이시면 미리 챙겨 안내드리고 싶어 연락드립니다.';
-  else msg=h+', 가입하신 '+(prod||'보험')+' 만기가 다가옵니다. 점검이 필요하시면 편하게 말씀해 주세요.';
+  else { let it=''; const m=(c.contracts||[]).find(x=>(x.productName||'')===prod && x.maturityDate); if(m)it=m.insType||''; else { const f=(c.contracts||[]).find(x=>x.maturityDate); if(f)it=f.insType||''; } msg=matMsg(h,prod,it); }
   const t=$('msg-text'); if(t){ t.value=msg; if(window.updateCompose)updateCompose(); }
   window._lastAuto=msg; if(window.updateSelCount)updateSelCount();
   toast('"'+(c.name||'고객')+'" 안부 문구를 채웠어요. 내용 확인 후 보내기 하세요','success');
@@ -1486,7 +1570,8 @@ window.renderRgSetup=function(){
     return '<div class="card" style="padding:11px 12px">'
       +'<div style="display:flex;align-items:center;gap:10px">'
       +'<div onclick="toggleMg(\''+c.id+'\')" style="width:22px;height:22px;border-radius:7px;border:2px solid '+(on?'var(--gold)':'#CBD5E1')+';background:'+(on?'var(--gold)':'#fff')+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;flex-shrink:0">'+(on?'✓':'')+'</div>'
-      +'<span class="nm" style="font-size:14px;font-weight:700;flex:1">'+esc(c.name||'고객')+'</span></div>'
+      +'<span class="nm" style="font-size:14px;font-weight:700;flex:1">'+esc(c.name||'고객')+'</span>'
+      +'<button type="button" onclick="regEditFromList(event,\''+c.id+'\')" title="이 고객 전체 정보 수정" style="flex-shrink:0;font-size:11px;font-weight:700;color:var(--navy2);background:#fff;border:1px solid #C7D2DE;border-radius:7px;padding:5px 9px;cursor:pointer;line-height:1">✏️ 전체 수정</button></div>'
       +(on?('<div style="display:flex;gap:8px;margin-top:9px">'
         +'<input type="text" placeholder="호칭 (예: '+esc((c.name||'')+'님')+', 사장님, 형)" value="'+esc(c.mgTitle||'')+'" onchange="saveMgTitle(\''+c.id+'\',this.value)" style="flex:1">'
         +'<select class="grpsel" onchange="saveMgTone(\''+c.id+'\',this.value)" style="flex:0 0 90px;height:42px">'+toneOpts+'</select></div>'):'')
