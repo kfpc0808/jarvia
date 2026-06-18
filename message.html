@@ -305,7 +305,10 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
     <div id="panel-regular" class="hidden">
       <div class="selbar">
         <span class="n" id="rg-title">정기 안부</span>
-        <button class="mini" id="rg-mode-btn" onclick="toggleRgMode()">⚙ 명단·호칭 설정</button>
+      </div>
+      <div style="display:flex;gap:7px;margin-bottom:12px">
+        <button type="button" id="rg-seg-month" onclick="setRgMode('month')" style="flex:1;font-size:13px;font-weight:800;color:#fff;background:var(--navy2);border:1px solid var(--navy2);border-radius:10px;padding:10px;cursor:pointer">📮 이번 달 발송</button>
+        <button type="button" id="rg-seg-setup" onclick="setRgMode('setup')" style="flex:1;font-size:13px;font-weight:700;color:var(--sec);background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer">⚙ 설정</button>
       </div>
       <!-- 이번 달 -->
       <div id="rg-month">
@@ -319,10 +322,10 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
         <div style="font-size:12px;color:var(--ter);margin-bottom:10px">정기 안부를 보낼 고객을 켜고, 호칭과 말투를 정해주세요. 말투에 맞는 문구가 자동 추천됩니다.</div>
         <div class="card" style="padding:12px;margin-bottom:12px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-            <div class="lbl" style="margin:0">📅 월별 안부 문구 (1~12월)</div>
+            <div class="lbl" style="margin:0">📅 이번 달 안부 문구 고르기</div>
             <button class="mini" id="rg-monthly-btn" onclick="rgMonthlyToggle()">열기</button>
           </div>
-          <div style="font-size:11.5px;color:var(--ter);margin-top:6px;line-height:1.55">미리 정해두면 그 달엔 자동 추천 대신 이 문구로 발송됩니다. <b>{호칭}</b>은 고객 호칭으로 바뀝니다. 비워두면 자동 추천을 사용합니다. <span style="color:var(--ter)">(이 기기에 저장)</span></div>
+          <div style="font-size:11.5px;color:var(--ter);margin-top:6px;line-height:1.55">말투를 고르면 이번 달 추천 문구가 여러 개 나옵니다. 하나를 <b>골라 이번 달 기본으로</b> 정하거나 직접 작성하세요. <b>{호칭}</b>은 고객 호칭으로 바뀝니다. 비워두면 자동 추천을 사용합니다. <span style="color:var(--ter)">(이 기기에 저장)</span></div>
           <div id="rg-monthly" style="display:none;margin-top:10px"></div>
         </div>
         <div class="card" style="padding:12px;margin-bottom:12px">
@@ -1266,12 +1269,14 @@ window.evSend=function(cid,kind,prod){
   toast('"'+(c.name||'고객')+'" 안부 문구를 채웠어요. 내용 확인 후 보내기 하세요','success');
   try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(e){}
 };
+let rgOverride={};
 function pickMsg(c){
   if(rgMonthly===null)loadRgMonthly();
   const mi=parseInt(monthKey().slice(5,7),10);
   const tone=c.mgTone||'friendly';
   const nm=(c.name||'고객');
   const sub=(s)=>String(s).replace(/\{호칭\}/g,honor(c)).replace(/\{이름\}/g,nm);
+  if(rgOverride&&rgOverride[c.id]!=null)return sub(rgOverride[c.id]);
   const custom=rgMonthly&&rgMonthly[tone+'_m'+mi];
   if(custom&&custom.trim())return sub(custom);
   const arr=poolArr(tone);
@@ -1282,11 +1287,11 @@ function pickMsg(c){
 function rgMonthlyKey(){ return 'jv_rgmonthly:'+((meData&&meData.loginId)||'_'); }
 function loadRgMonthly(){ try{ rgMonthly=JSON.parse(localStorage.getItem(rgMonthlyKey())||'null')||{}; }catch(e){ rgMonthly={}; } }
 function saveRgMonthly(){ try{ localStorage.setItem(rgMonthlyKey(),JSON.stringify(rgMonthly||{})); }catch(e){} }
-window.rgMonthlyToggle=function(){
+window.rgMonthlyToggle=async function(){
   const box=$('rg-monthly'); if(!box)return;
   const open=box.style.display==='none';
   const btn=$('rg-monthly-btn'); if(btn)btn.textContent=open?'닫기':'열기';
-  if(open){ if(rgMonthly===null)loadRgMonthly(); renderRgMonthly(); box.style.display='block'; }
+  if(open){ if(rgMonthly===null)loadRgMonthly(); if(!rgPoolLoaded)await loadGreetingPool(); renderRgMonthly(); box.style.display='block'; }
   else box.style.display='none';
 };
 function renderRgMonthly(){
@@ -1298,28 +1303,60 @@ function renderRgMonthly(){
   }).join('');
   let h='<div style="font-size:11.5px;font-weight:700;color:var(--navy2);margin-bottom:6px">말투 선택 <span style="font-weight:500;color:var(--ter)">— 고객별 말투에 맞는 문구로 발송됩니다</span></div>'
     +'<div style="display:flex;gap:6px;margin-bottom:12px">'+chips+'</div>';
-  for(let m=1;m<=12;m++){
-    const v=(rgMonthly&&rgMonthly[rgMonthlyTone+'_m'+m])||'';
-    h+='<div style="margin-bottom:8px"><div style="font-size:11.5px;font-weight:700;color:var(--navy2);margin-bottom:3px">'+m+'월'+(m===cur?' <span style="color:var(--gold-d)">· 이번 달</span>':'')+'</div>'
-      +'<textarea rows="2" placeholder="자동 추천 사용 (비워두면 됨)" style="width:100%;box-sizing:border-box" oninput="rgMonthlyEdit('+m+',this.value)">'+esc(v)+'</textarea></div>';
-  }
-  h+='<button class="btn btn-navy" style="margin-top:4px" onclick="rgMonthlySave()">월별 문구 저장</button>';
+  const arr=poolArr(rgMonthlyTone)||[];
+  const selected=(rgMonthly&&rgMonthly[rgMonthlyTone+'_m'+cur])||'';
+  h+='<div style="font-size:11.5px;font-weight:700;color:var(--navy2);margin-bottom:6px">'+cur+'월 안부 문구 후보 <span style="font-weight:500;color:var(--ter)">— 하나를 골라 이번 달 기본으로 정하세요</span></div>';
+  if(arr.length){
+    h+=arr.map((msg,i)=>{ const on=(selected.trim()&&selected.trim()===String(msg).trim());
+      return '<div onclick="rgMonthlyPick('+i+')" style="border:1.5px solid '+(on?'var(--gold)':'var(--line)')+';background:'+(on?'var(--gold-bg)':'#fff')+';border-radius:10px;padding:10px 11px;margin-bottom:7px;cursor:pointer;font-size:13px;line-height:1.55;color:var(--ink);white-space:pre-line">'+(on?'<b style="color:var(--gold-d)">✓ 이번 달 선택</b><br>':'')+esc(msg)+'</div>';
+    }).join('');
+  } else { h+='<div style="font-size:12px;color:var(--ter);padding:8px 0">이번 달 추천 문구를 불러오지 못했어요. 아래에 직접 작성해 주세요.</div>'; }
+  h+='<div style="margin-top:6px"><div style="font-size:11.5px;font-weight:700;color:var(--navy2);margin-bottom:3px">또는 직접 작성 <span style="font-weight:500;color:var(--ter)">({호칭}·{이름} 사용 가능 · 비우면 자동 추천)</span></div>'
+    +'<textarea rows="2" placeholder="비워두면 위 후보·자동 추천 사용" style="width:100%;box-sizing:border-box" oninput="rgMonthlyEdit('+cur+',this.value)">'+esc(selected)+'</textarea></div>';
+  h+='<button class="btn btn-navy" style="margin-top:8px" onclick="rgMonthlySave()">이번 달 문구 저장</button>';
   box.innerHTML=h;
 }
 window.rgMonthlyToneSel=function(t){ rgMonthlyTone=t; renderRgMonthly(); };
+window.rgMonthlyPick=function(i){ const arr=poolArr(rgMonthlyTone)||[]; if(!arr[i])return; const cur=parseInt(monthKey().slice(5,7),10); if(rgMonthly===null)rgMonthly={}; rgMonthly[rgMonthlyTone+'_m'+cur]=arr[i]; renderRgMonthly(); };
+/* 회원별 — 다른 문구로 순환 / 직접 수정 (이 기기 세션, 발송 직전 적용) */
+window.rgCycleMsg=function(cid){
+  const c=clients.find(x=>x.id===cid); if(!c)return;
+  const arr=poolArr(c.mgTone||'friendly')||[];
+  if(arr.length<2){ toast('이번 달 후보가 하나뿐이에요','warning'); return; }
+  let idx;
+  const cur=(rgOverride[cid]!=null)?rgOverride[cid]:null;
+  if(cur!=null){ const f=arr.findIndex(m=>m===cur); idx=(f>=0?f+1:0)%arr.length; }
+  else { let h=0; for(let i=0;i<cid.length;i++)h=(h*31+cid.charCodeAt(i))>>>0; idx=(h%arr.length+1)%arr.length; }
+  rgOverride[cid]=arr[idx];
+  if(rgActive)renderRgStep(); else renderRegular();
+};
+window.rgEditMsg=function(cid){
+  const c=clients.find(x=>x.id===cid); if(!c)return;
+  const base=(rgOverride[cid]!=null)?rgOverride[cid]:pickMsg(c);
+  const v=prompt('이 고객에게 보낼 문구를 수정하세요 ({호칭}·{이름} 사용 가능):', base);
+  if(v===null)return;
+  const t=v.trim();
+  if(!t){ delete rgOverride[cid]; toast('자동 추천 문구로 되돌렸어요','success'); }
+  else { rgOverride[cid]=t; }
+  if(rgActive)renderRgStep(); else renderRegular();
+};
 window.rgMonthlyEdit=function(m,v){ if(rgMonthly===null)rgMonthly={}; rgMonthly[rgMonthlyTone+'_m'+m]=v; };
 window.rgMonthlySave=function(){ saveRgMonthly(); toast('월별 안부 문구를 저장했어요','success'); if(rgMode==='month')renderRegular(); };
 function rgSenddayKey(){ return 'jv_rgsendday:'+((meData&&meData.loginId)||'_'); }
 window.rgSaveSendday=function(){ const v=parseInt(($('rg-sendday').value||''),10); if(v>=1&&v<=28){ try{ localStorage.setItem(rgSenddayKey(),String(v)); }catch(e){} toast('매월 '+v+'일 리마인드를 설정했어요','success'); } else { toast('1~28 사이로 입력해주세요','warning'); } };
 window.rgClearSendday=function(){ try{ localStorage.removeItem(rgSenddayKey()); }catch(e){} const el=$('rg-sendday'); if(el)el.value=''; toast('리마인드를 껐어요','success'); };
 function rgLoadSenddayInput(){ const el=$('rg-sendday'); if(!el)return; try{ const v=localStorage.getItem(rgSenddayKey()); if(v)el.value=v; }catch(e){} }
-window.toggleRgMode=function(){
-  rgMode=(rgMode==='month')?'setup':'month';
-  $('rg-month').classList.toggle('hidden',rgMode!=='month');
-  $('rg-setup').classList.toggle('hidden',rgMode!=='setup');
-  $('rg-mode-btn').textContent=(rgMode==='month')?'⚙ 명단·호칭 설정':'← 이번 달 안부';
-  if(rgMode==='setup'){ renderRgSetup(); rgLoadSenddayInput(); } else renderRegular();
+function _rgSegStyle(on){ return 'flex:1;font-size:13px;font-weight:'+(on?'800':'700')+';color:'+(on?'#fff':'var(--sec)')+';background:'+(on?'var(--navy2)':'#fff')+';border:1px solid '+(on?'var(--navy2)':'var(--line)')+';border-radius:10px;padding:10px;cursor:pointer'; }
+window.setRgMode=function(m){
+  rgMode=m;
+  $('rg-month').classList.toggle('hidden',m!=='month');
+  $('rg-setup').classList.toggle('hidden',m!=='setup');
+  var bm=$('rg-seg-month'),bs=$('rg-seg-setup');
+  if(bm)bm.style.cssText=_rgSegStyle(m==='month');
+  if(bs)bs.style.cssText=_rgSegStyle(m==='setup');
+  if(m==='setup'){ renderRgSetup(); rgLoadSenddayInput(); } else renderRegular();
 };
+window.toggleRgMode=function(){ setRgMode(rgMode==='month'?'setup':'month'); };
 window.renderRegular=async function(){
   if(!rgPoolLoaded)await loadGreetingPool();
   $('rg-title').textContent=monthLabel()+' 정기 안부';
@@ -1345,6 +1382,7 @@ window.renderRegular=async function(){
       +'<span class="tag">'+esc(honor(c))+'</span><span class="tag">'+toneLbl+'</span>'
       +(c.num?'':'<span class="nonum">번호 없음</span>')+'</div>'
       +'<div style="font-size:12.5px;color:#374554;background:var(--paper);border-radius:9px;padding:9px;margin:8px 0;white-space:pre-line">'+esc(msg)+'</div>'
+      +'<div style="display:flex;gap:6px;margin-bottom:7px"><button class="btn btn-ghost" style="flex:1;margin:0;font-size:12px;padding:8px" onclick="rgCycleMsg(\''+c.id+'\')">↻ 다른 문구</button><button class="btn btn-ghost" style="flex:1;margin:0;font-size:12px;padding:8px" onclick="rgEditMsg(\''+c.id+'\')">✎ 수정</button></div>'
       +'<button class="btn st-send" style="width:100%;padding:9px" onclick="sendRegular(\''+c.id+'\')">📱 전송</button>'
       +'</div>';
   }).join('')
@@ -1373,6 +1411,7 @@ function renderRgStep(){
     +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-size:15px;font-weight:800">'+esc(c.name||'고객')+'</span><span class="tag">'+esc(honor(c))+'</span>'+(c.num?'':'<span class="nonum">번호 없음</span>')+'</div>'
     +'<div style="font-size:12.5px;color:#374554;background:var(--paper);border-radius:9px;padding:10px;margin:9px 0;white-space:pre-line">'+esc(msg)+'</div>'
     +'<button class="btn st-send" style="width:100%;padding:11px;margin-bottom:7px" onclick="rgSendCurrent()">📱 이 고객에게 전송</button>'
+    +'<div style="display:flex;gap:6px;margin-bottom:7px"><button class="btn btn-ghost" style="flex:1;margin:0;font-size:12px;padding:8px" onclick="rgCycleMsg(\''+c.id+'\')">↻ 다른 문구</button><button class="btn btn-ghost" style="flex:1;margin:0;font-size:12px;padding:8px" onclick="rgEditMsg(\''+c.id+'\')">✎ 수정</button></div>'
     +'<div style="display:flex;gap:7px"><button class="btn btn-ghost" style="flex:1;margin:0" onclick="rgSkip()">건너뛰기</button><button class="btn btn-ghost" style="flex:1;margin:0" onclick="rgStop()">중단</button></div>'
     +'</div>';
 }
