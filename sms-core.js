@@ -126,12 +126,24 @@
     // iOS는 구분자로 &, 안드로이드 등은 ?body=
     return isIOS() ? ('sms:' + ph + '&body=' + b) : ('sms:' + ph + '?body=' + b);
   }
-  // 단건 발송: 한도 확인 → 문자앱 열기 → 카운트 +1
+  // 문자앱 열기: 안드로이드는 숨은 iframe으로 열어 현재 화면(발송 리스트)을 유지 / iOS는 location.href
+  function _openSms(url) {
+    if (isIOS()) { window.location.href = url; return; }
+    var f = document.createElement('iframe');
+    f.style.display = 'none';
+    document.body.appendChild(f);
+    f.src = url;
+    setTimeout(function () { try { document.body.removeChild(f); } catch (e) {} }, 2000);
+  }
+  // 단건 발송: 한도 확인 → 문자앱 열기(화면 유지) → 카운트 +1
   function sendOne(phone, body) {
     return canSend(1).then(function (c) {
       if (!c.ok) return { sent: false, reason: c.reason, msg: c.msg };
-      try { window.location.href = buildSmsUrl(phone, body); }
-      catch (e) { return { sent: false, reason: 'open', msg: '문자앱을 열 수 없습니다.' }; }
+      try { _openSms(buildSmsUrl(phone, body)); }
+      catch (e) {
+        try { window.location.href = buildSmsUrl(phone, body); }
+        catch (_e) { return { sent: false, reason: 'open', msg: '문자앱을 열 수 없습니다.' }; }
+      }
       return addSent(1).then(function () { return { sent: true }; });
     });
   }
