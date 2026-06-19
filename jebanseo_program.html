@@ -321,29 +321,56 @@ async function callAdd(instruction){
   if(data.error||!data.slide) throw new Error(data.error||'추가 실패');
   return data.slide;
 }
+async function callRoute(message){
+  const slides=deck.slides.map((s,i)=>({n:i+1,title:s.title||''}));
+  const recent=MSGS.slice(-6).map(m=>(m.who==='me'?'사용자: ':'진행자: ')+(m.html||'').replace(/<[^>]+>/g,'')).join('\n');
+  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interpret',message,slides,topic,clientName,recent})});
+  const data=await r.json();
+  if(data.error||!data.route) throw new Error(data.error||'해석 실패');
+  return data.route;
+}
+function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.classList.add('flash');}
 async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
-  if(!deck.slides.length){return;}
-  MSGS.push({who:'me',html:t});paint();inp.value='';const n=nums(t);
-  if(/((슬라이드|장|페이지).*(추가|만들|넣)|(추가|새).*(슬라이드|장|페이지))/.test(t)){
+  MSGS.push({who:'me',html:t});paint();inp.value='';
+  if(!deck.slides.length){return aiReply('먼저 시작 화면에서 자료를 생성하거나, 저장한 자료를 열어 주세요.');}
+  let route;
+  try{ route=await callRoute(t); }
+  catch(e){ return aiReply('이해하는 데 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')'); }
+  const op=route.op||'edit';
+  let idx=route.index?route.index-1:selectedIdx;
+
+  if(op==='reply'){ return aiReply(route.reply||'어느 슬라이드를 말씀하시는 걸까요? 번호로 알려주시거나 슬라이드를 클릭해 주세요.'); }
+
+  if(op==='add'){
     aiReply('새 슬라이드를 작성자가 만드는 중이에요…');
-    try{const ns=await callAdd(t);let pos=deck.slides.length;if(n.length){pos=/(앞|위|이전)/.test(t)?n[0]:n[0]+1;}pos=Math.max(0,Math.min(deck.slides.length,pos));if(!ns.slideNum)ns.slideNum=String(pos+1).padStart(2,'0');deck.slides.splice(pos,0,ns);renderDeck();scrollToSlide(pos);const nn=document.getElementById('deck').children[pos];if(nn)nn.classList.add('flash');return aiReply(`새 슬라이드를 ${pos+1}번 위치에 추가했습니다. ✓`);}
-    catch(e){return aiReply('슬라이드 추가에 실패했어요. ('+(e.message||e)+')');}
+    try{
+      const ns=await callAdd(route.instruction||t);
+      let pos=route.position?Math.max(0,Math.min(deck.slides.length,route.position-1)):deck.slides.length;
+      if(!ns.slideNum)ns.slideNum=String(pos+1).padStart(2,'0');
+      deck.slides.splice(pos,0,ns);renderDeck();scrollToSlide(pos);flash(pos);
+      return aiReply(`새 슬라이드를 ${pos+1}번 위치에 추가했습니다. ✓`);
+    }catch(e){return aiReply('슬라이드 추가에 실패했어요. ('+(e.message||e)+')');}
   }
-  if(/(삭제|지워|빼)/.test(t)&&n.length){const i=n[0];if(deck.slides[i]){const ttl=deck.slides[i].title;deck.slides.splice(i,1);selectedIdx=null;renderDeck();return aiReply(`${i+1}번 "${ttl}"을 지웠습니다. ✓`);}}
-  if(/(순서|바꿔)/.test(t)&&n.length>=2){const[i,j]=n;if(deck.slides[i]&&deck.slides[j]){[deck.slides[i],deck.slides[j]]=[deck.slides[j],deck.slides[i]];renderDeck();scrollToSlide(j);return aiReply(`${i+1}번과 ${j+1}번 순서를 바꿨습니다. ✓`);}}
-  if(/(강조|핵심)/.test(t)&&n.length&&!/(영어|번역|쉽게|강하게|다시)/.test(t)){const i=n[0];if(deck.slides[i]){deck.slides[i].emphasis='peak';renderDeck();scrollToSlide(i);return aiReply(`${i+1}번을 핵심으로 강조했습니다. ✓`);}}
-  const idx=n.length?n[0]:selectedIdx;
-  if(idx==null||!deck.slides[idx]){return aiReply('어느 슬라이드를 수정할까요? 번호로 알려주시거나 슬라이드를 클릭해 선택하세요.');}
-  if(/(중앙|가운데|center)/.test(t)&&/(정렬|배치|맞|가운데|중앙|center)/.test(t)){deck.slides[idx].align='center';renderDeck();scrollToSlide(idx);return aiReply(`${idx+1}번을 가운데 정렬했습니다. ✓`);}
-  if(/(왼쪽|좌측|left)/.test(t)&&/(정렬|배치|맞|left)/.test(t)){deck.slides[idx].align='left';renderDeck();scrollToSlide(idx);return aiReply(`${idx+1}번을 왼쪽 정렬했습니다. ✓`);}
-  if(/(오른쪽|우측|위로|아래로|위치|색깔|색상|컬러|폰트|글씨체|글자\s*크기|여백|간격|디자인|레이아웃)/.test(t)){
-    return aiReply('색상·폰트·자유 위치 같은 변경은 아직 지원하지 않아요. 정렬은 "가운데/왼쪽 정렬"로 가능하고, 그 외는 "내용" 편집·보강만 가능합니다 — 예: "2번 내용 보강", "2번 제목만 영어로".');
-  }
+
+  if(op==='delete'){ if(deck.slides[idx]){const ttl=deck.slides[idx].title;deck.slides.splice(idx,1);selectedIdx=null;renderDeck();return aiReply(`${idx+1}번 "${ttl}"을 지웠습니다. ✓`);} return aiReply('어느 슬라이드를 지울까요?'); }
+  if(op==='reorder'){ const j=route.index2?route.index2-1:null; if(deck.slides[idx]&&j!=null&&deck.slides[j]){[deck.slides[idx],deck.slides[j]]=[deck.slides[j],deck.slides[idx]];renderDeck();scrollToSlide(j);return aiReply(`${idx+1}번과 ${j+1}번 순서를 바꿨습니다. ✓`);} return aiReply('바꿀 두 슬라이드 번호를 알려주세요.'); }
+  if(op==='align'){ if(deck.slides[idx]){deck.slides[idx].align=route.align||'center';renderDeck();scrollToSlide(idx);return aiReply(`${idx+1}번을 ${route.align==='left'?'왼쪽':'가운데'} 정렬했습니다. ✓`);} return aiReply('어느 슬라이드를 정렬할까요?'); }
+  if(op==='emphasis'){ if(deck.slides[idx]){deck.slides[idx].emphasis='peak';renderDeck();scrollToSlide(idx);return aiReply(`${idx+1}번을 핵심으로 강조했습니다. ✓`);} return aiReply('어느 슬라이드를 강조할까요?'); }
+
+  // edit
+  if(idx==null||!deck.slides[idx]){ return aiReply(route.reply||'어느 슬라이드를 수정할까요? 번호로 알려주시거나 슬라이드를 클릭해 주세요.'); }
   selectedIdx=idx;renderDeck();scrollToSlide(idx);const node=document.getElementById('deck').children[idx];if(node)node.classList.add('working');
   aiReply(`${idx+1}번 슬라이드를 작성자가 다시 쓰는 중이에요…`);
-  try{const u=await callWriter(deck.slides[idx],t);u.slideNum=deck.slides[idx].slideNum;if(deck.slides[idx].region&&!u.region)u.region=deck.slides[idx].region;if(deck.slides[idx].emphasis&&!u.emphasis)u.emphasis=deck.slides[idx].emphasis;deck.slides[idx]=u;renderDeck();scrollToSlide(idx);const nn=document.getElementById('deck').children[idx];if(nn)nn.classList.add('flash');aiReply(`${idx+1}번 슬라이드를 다듬었습니다. ✓`);}
-  catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')');}
+  const sig=s=>(s.title||'')+'|'+(s.subtitle||'')+'|'+(s.conclusion||'')+'|'+JSON.stringify(s.content||[]);
+  const before=sig(deck.slides[idx]);
+  try{
+    const u=await callWriter(deck.slides[idx],route.instruction||t);
+    u.slideNum=deck.slides[idx].slideNum;if(deck.slides[idx].region&&!u.region)u.region=deck.slides[idx].region;if(deck.slides[idx].emphasis&&!u.emphasis)u.emphasis=deck.slides[idx].emphasis;if(deck.slides[idx].align&&!u.align)u.align=deck.slides[idx].align;
+    deck.slides[idx]=u;renderDeck();scrollToSlide(idx);flash(idx);
+    if(sig(u)===before) aiReply('요청을 반영하려 했지만 바뀐 부분을 찾지 못했어요. 어디를 어떻게 바꿀지 조금 더 구체적으로 말씀해 주시겠어요?');
+    else aiReply(`${idx+1}번 슬라이드를 수정했습니다. ✓`);
+  }catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')');}
 }
 
 /* ===== 시작 ===== */
