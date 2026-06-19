@@ -334,6 +334,14 @@ textarea:focus,input:focus{outline:none;border-color:var(--gold)}
           <div id="rg-monthly" style="display:none;margin-top:10px"></div>
         </div>
         <div class="card" style="padding:12px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div class="lbl" style="margin:0">⏰ 만기 문구 (종류별)</div>
+            <button class="mini" id="mat-tpl-btn" onclick="matTplToggle()">열기</button>
+          </div>
+          <div style="font-size:11.5px;color:var(--ter);margin-top:6px;line-height:1.55">만기 종류에 따라 <b>다른 문구</b>가 자동으로 나갑니다. 여기서 미리 보고 직접 고칠 수 있어요. <b>{호칭}</b>·<b>{상품명}</b>은 고객 정보로 바뀝니다. <span style="color:var(--ter)">(이 기기에 저장)</span></div>
+          <div id="mat-tpl-body" style="display:none;margin-top:10px"></div>
+        </div>
+        <div class="card" style="padding:12px;margin-bottom:12px">
           <div class="lbl" style="margin:0 0 6px">🔔 매월 리마인드</div>
           <div style="font-size:11.5px;color:var(--ter);margin-bottom:8px;line-height:1.55">매월 며칠에 정기 안부를 보낼지 정해두면, 그날 이후 <b>메인 화면</b>에서 "정기 안부 보낼 시간입니다" 알림이 떠요. <span>(이 기기에 저장)</span></div>
           <div style="display:flex;align-items:center;gap:8px">
@@ -581,14 +589,68 @@ function matSummary(c){
   return { label:'⏰ '+m+'/'+d+(ty?(' · '+ty):'')+(prod?(' · '+prod):''), more:total-1, insType:pick.ct.insType||'', prod:prod };
 }
 /* 만기 종류별 문구: 적립형(저축성·연금)은 수령·재설계 톤, 보장형은 점검·갱신 톤 */
+/* 만기 종류별 문구 템플릿 — 기본값(아래)과 동일하나, 설정에서 미리보기·편집 시 localStorage 우선 사용 */
+const MAT_TPL_DEFAULT={
+  protect:'{호칭}, 가입하신 {상품명} 만기가 다가옵니다. 점검이 필요하시면 편하게 말씀해 주세요.',
+  saving:'{호칭}, 가입하신 {상품명}의 만기가 다가옵니다. 만기 환급금 수령과 재설계 방안을 함께 살펴보시면 좋겠습니다. 편하게 말씀해 주세요.',
+  pension:'{호칭}, 가입하신 {상품명}의 만기(연금 개시)가 다가옵니다. 수령 방법과 개시 시점을 함께 점검해 드리고 싶어 미리 연락드립니다.'
+};
+const MAT_TPL_META=[
+  ['protect','🛡 보장형','실손·자동차·보장성·기타','◯◯보험'],
+  ['saving','💰 저축성','저축성','◯◯저축보험'],
+  ['pension','📈 연금','연금','◯◯연금']
+];
+const MAT_SAMPLE_HONOR='홍길동 고객님';
+function matTplKey(){ return 'jv_mattpl:'+((meData&&meData.loginId)||'_'); }
+function loadMatTpl(){ try{ const o=JSON.parse(localStorage.getItem(matTplKey())||'null'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
+function saveMatTpl(o){ try{ localStorage.setItem(matTplKey(),JSON.stringify(o||{})); }catch(e){} }
+function matGroup(insType){ return insType==='pension'?'pension':(insType==='saving'?'saving':'protect'); }
+function matDefaultProd(insType){ return insType==='pension'?'연금':(insType==='saving'?'저축성 상품':'보험'); }
+function matTplText(group){ const o=loadMatTpl(); const v=o[group]; return (v!=null&&String(v).trim())?String(v):MAT_TPL_DEFAULT[group]; }
+function matFill(tpl,h,prod){ return String(tpl).split('{호칭}').join(h).split('{상품명}').join(prod); }
 function matMsg(h,prod,insType){
-  const p=(prod||'').trim();
-  if(insType==='pension')
-    return h+', 가입하신 '+(p||'연금')+'의 만기(연금 개시)가 다가옵니다. 수령 방법과 개시 시점을 함께 점검해 드리고 싶어 미리 연락드립니다.';
-  if(insType==='saving')
-    return h+', 가입하신 '+(p||'저축성 상품')+'의 만기가 다가옵니다. 만기 환급금 수령과 재설계 방안을 함께 살펴보시면 좋겠습니다. 편하게 말씀해 주세요.';
-  return h+', 가입하신 '+(p||'보험')+' 만기가 다가옵니다. 점검이 필요하시면 편하게 말씀해 주세요.';
+  const g=matGroup(insType);
+  const p=(prod||'').trim()||matDefaultProd(insType);
+  return matFill(matTplText(g),h,p);
 }
+/* 설정: 만기 문구 종류별 미리보기·편집 */
+window.matTplToggle=function(){
+  const b=$('mat-tpl-body'), btn=$('mat-tpl-btn'); if(!b)return;
+  if(b.style.display!=='block'){ matTplBuild(); b.style.display='block'; if(btn)btn.textContent='닫기'; }
+  else { b.style.display='none'; if(btn)btn.textContent='열기'; }
+};
+function matTplBuild(){
+  const o=loadMatTpl();
+  const rows=MAT_TPL_META.map(function(m){
+    const k=m[0],lab=m[1],sub=m[2],sp=m[3];
+    const val=(o[k]!=null)?o[k]:MAT_TPL_DEFAULT[k];
+    const eff=(String(val).trim()==='')?MAT_TPL_DEFAULT[k]:val;
+    return '<div style="margin-bottom:13px">'
+      +'<div style="font-size:12px;font-weight:700;color:var(--navy2);margin-bottom:5px">'+lab+' <span style="font-weight:500;color:var(--ter)">'+sub+'</span></div>'
+      +'<textarea id="mat-ta-'+k+'" oninput="matTplInput(\''+k+'\')" rows="3" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.6;color:var(--ink);background:var(--white);border:1px solid var(--line);border-radius:9px;padding:9px;resize:vertical">'+esc(val)+'</textarea>'
+      +'<div style="display:flex;align-items:flex-start;gap:8px;margin-top:5px">'
+        +'<div id="mat-prev-'+k+'" style="flex:1;font-size:11.5px;color:#0F6E56;background:#E8F6EF;border-radius:8px;padding:7px 9px;line-height:1.5;white-space:pre-line">'+esc(matFill(eff,MAT_SAMPLE_HONOR,sp))+'</div>'
+        +'<button type="button" class="mini" onclick="matTplReset(\''+k+'\')" style="flex-shrink:0">기본값</button>'
+      +'</div></div>';
+  }).join('');
+  $('mat-tpl-body').innerHTML='<div style="font-size:11px;color:var(--ter);margin-bottom:9px;line-height:1.5">초록 줄은 <b>'+esc(MAT_SAMPLE_HONOR)+'</b>·예시 상품명으로 채운 <b>실제 발송 모습</b>입니다. 고치면 자동 저장됩니다.</div>'+rows;
+}
+window.matTplInput=function(k){
+  const ta=$('mat-ta-'+k); if(!ta)return;
+  const o=loadMatTpl();
+  if(ta.value.trim()===''){ delete o[k]; } else { o[k]=ta.value; }
+  saveMatTpl(o);
+  const meta=MAT_TPL_META.find(function(m){return m[0]===k;}); const sp=meta?meta[3]:'◯◯상품';
+  const eff=(ta.value.trim()==='')?MAT_TPL_DEFAULT[k]:ta.value;
+  const pv=$('mat-prev-'+k); if(pv)pv.textContent=matFill(eff,MAT_SAMPLE_HONOR,sp);
+};
+window.matTplReset=function(k){
+  const o=loadMatTpl(); delete o[k]; saveMatTpl(o);
+  const ta=$('mat-ta-'+k); if(ta)ta.value=MAT_TPL_DEFAULT[k];
+  const meta=MAT_TPL_META.find(function(m){return m[0]===k;}); const sp=meta?meta[3]:'◯◯상품';
+  const pv=$('mat-prev-'+k); if(pv)pv.textContent=matFill(MAT_TPL_DEFAULT[k],MAT_SAMPLE_HONOR,sp);
+  toast('기본 문구로 되돌렸어요','success');
+};
 
 /* ── 작성 미리보기 · 글자수(SMS/LMS) ── */
 function smsBytes(s){let b=0;const a=String(s||'');for(let i=0;i<a.length;i++){b+=a.charCodeAt(i)>127?2:1;}return b;}
