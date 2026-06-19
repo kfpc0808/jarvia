@@ -502,31 +502,34 @@ function exportPDF(){
     el.querySelectorAll('.stag').forEach(x=>x.remove());
     el.querySelectorAll('.notes').forEach(x=>x.remove());
   });
-  // 2) A4 세로 본문 기준(190mm×277mm = CSS px 약 716×1047)으로 각 슬라이드 실제 높이 측정
-  const MW=716, PAGEH=1047, HALF=523, SAFE=980, GAP=30;
-  const meas=document.createElement('div');meas.style.cssText='position:absolute;left:-99999px;top:0;width:'+MW+'px;';
+  // 2) A4 본문 폭(190mm=716px) 기준으로 각 슬라이드 실제 높이 측정
+  const W=716, PAGEH=1040, GAP=30, SLOT=500, SOLO=700;
+  const meas=document.createElement('div');meas.style.cssText='position:absolute;left:-99999px;top:0;width:'+W+'px;';
   nodes.forEach(n=>meas.appendChild(n));document.body.appendChild(meas);
   meas.querySelectorAll('.canvas').forEach(c=>{c.style.minHeight='auto';});
   const H=nodes.map(n=>n.offsetHeight);
   document.body.removeChild(meas);
-  // 3) 페이지 묶기 — 한 장이 반 페이지(HALF) 초과면 단독, 아니면 최대 2개씩
-  const pages=[];let cur=[],curH=0;
-  nodes.forEach((n,i)=>{
-    const h=H[i];
-    if(h>HALF){ if(cur.length){pages.push(cur);cur=[];curH=0;} pages.push([n]); return; }
-    const add=(cur.length?GAP:0)+h;
-    if(cur.length>=2 || curH+add>SAFE){ if(cur.length)pages.push(cur); cur=[n]; curH=h; }
-    else { cur.push(n); curH+=add; }
-  });
-  if(cur.length)pages.push(cur);
-  // 4) 인쇄용 HTML 생성 후 새 창에서 인쇄(=PDF 저장)
-  const body=pages.map(g=>'<div class="page">'+g.map(n=>n.outerHTML).join('')+'</div>').join('');
+  // 3) 페이지 묶기 — 기본 2개씩(반 슬롯에 맞춰 축소), 아주 큰 장(>SOLO)만 단독 전체페이지
+  const pages=[];let gi=0;
+  while(gi<nodes.length){
+    if(H[gi]>SOLO){pages.push([gi]);gi++;}
+    else if(gi+1<nodes.length&&H[gi+1]<=SOLO){pages.push([gi,gi+1]);gi+=2;}
+    else{pages.push([gi]);gi++;}
+  }
+  // 4) 슬롯 높이에 맞춰 축소 배치
+  const body=pages.map(g=>{
+    const full=(g.length===1&&H[g[0]]>SOLO);const slotH=full?PAGEH:SLOT;
+    const slots=g.map(idx=>{const sc=Math.min(1,slotH/(H[idx]||1));return '<div class="slot" style="height:'+slotH+'px"><div class="sc" style="transform:scale('+sc.toFixed(4)+')">'+nodes[idx].outerHTML+'</div></div>';}).join('');
+    return '<div class="page">'+slots+'</div>';
+  }).join('');
   const css=document.querySelector('style').innerHTML;
-  const a4css='@page{size:A4 portrait;margin:10mm;}body{margin:0;background:#fff;}'+
-    '.page{box-sizing:border-box;page-break-after:always;break-after:page;display:flex;flex-direction:column;gap:8mm;}'+
+  const a4css='@page{size:A4 portrait;margin:0;}body{margin:0;background:#fff;}'+
+    '.page{width:210mm;height:297mm;box-sizing:border-box;padding:11mm 10mm;page-break-after:always;break-after:page;display:flex;flex-direction:column;gap:'+GAP+'px;overflow:hidden;}'+
     '.page:last-child{page-break-after:auto;break-after:auto;}'+
+    '.slot{width:'+W+'px;overflow:hidden;}'+
+    '.sc{width:'+W+'px;transform-origin:top center;}'+
     '.canvas{min-height:auto!important;}'+
-    '.slide{width:100%!important;max-width:none!important;margin:0!important;page-break-after:auto!important;break-after:auto!important;break-inside:avoid;page-break-inside:avoid;border:1px solid #e6e8ee!important;border-radius:10px!important;box-shadow:none!important;overflow:hidden!important;cursor:default!important;}'+
+    '.slide{width:'+W+'px!important;max-width:none!important;margin:0!important;border:1px solid #e6e8ee!important;border-radius:10px!important;box-shadow:none!important;overflow:hidden!important;break-inside:avoid;cursor:default!important;}'+
     '.notes{display:none!important;}';
   const title=escHtml((clientName?clientName+' ':'')+topic+' 제안서');
   const w=window.open('','_blank');
@@ -536,7 +539,7 @@ function exportPDF(){
     '<style>'+css+a4css+'</style></head><body>'+body+
     '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},500);};</scr'+'ipt></body></html>');
   w.document.close();
-  aiReply('A4 세로 출력본을 새 창에 열었습니다 — 한 페이지에 슬라이드 2개씩, 반 페이지를 넘는 슬라이드는 한 페이지로 배치됩니다. 인쇄 대화상자에서 "대상 → PDF로 저장"을 고르면 됩니다. ✓');
+  aiReply('A4 세로 출력본을 새 창에 열었습니다 — 한 페이지에 슬라이드 2개씩(꽉 차도록 자동 축소), 아주 큰 슬라이드만 한 페이지로 배치됩니다. 인쇄 대화상자에서 "대상 → PDF로 저장"을 고르면 됩니다. ✓');
 }
 /* ===== 내 컴퓨터에 파일로 저장(HTML) / 열기 ===== */
 function escHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -556,19 +559,18 @@ const VIEWER_JS=`(function(){
   document.addEventListener('keydown',function(e){if(!present.classList.contains('on'))return;if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(1);}else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(-1);}else if(e.key==='Escape'){window.__pend();}});
   window.__printA4=function(){
     var S=slides();if(!S.length){alert('인쇄할 슬라이드가 없습니다.');return;}
-    var MW=716,HALF=523,SAFE=980,GAP=30;
+    var W=716,PAGEH=1040,GAP=30,SLOT=500,SOLO=700;
     var clones=S.map(function(s){var c=s.cloneNode(true);var nn=c.querySelector('.notes');if(nn)nn.parentNode.removeChild(nn);return c;});
-    var meas=document.createElement('div');meas.style.cssText='position:absolute;left:-99999px;top:0;width:'+MW+'px;';
+    var meas=document.createElement('div');meas.style.cssText='position:absolute;left:-99999px;top:0;width:'+W+'px;';
     clones.forEach(function(c){meas.appendChild(c);});document.body.appendChild(meas);
     Array.prototype.forEach.call(meas.querySelectorAll('.canvas'),function(cv){cv.style.minHeight='auto';});
     var Hs=clones.map(function(c){return c.offsetHeight;});
     document.body.removeChild(meas);
-    var pages=[],cur=[],curH=0;
-    clones.forEach(function(c,i){var h=Hs[i];if(h>HALF){if(cur.length){pages.push(cur);cur=[];curH=0;}pages.push([c]);return;}var add=(cur.length?GAP:0)+h;if(cur.length>=2||curH+add>SAFE){if(cur.length)pages.push(cur);cur=[c];curH=h;}else{cur.push(c);curH+=add;}});
-    if(cur.length)pages.push(cur);
-    var bodyHtml=pages.map(function(g){return '<div class="page">'+g.map(function(c){return c.outerHTML;}).join('')+'</div>';}).join('');
+    var pages=[],gi=0;
+    while(gi<clones.length){if(Hs[gi]>SOLO){pages.push([gi]);gi++;}else if(gi+1<clones.length&&Hs[gi+1]<=SOLO){pages.push([gi,gi+1]);gi+=2;}else{pages.push([gi]);gi++;}}
+    var bodyHtml=pages.map(function(g){var full=(g.length===1&&Hs[g[0]]>SOLO);var slotH=full?PAGEH:SLOT;var slots=g.map(function(idx){var sc=Math.min(1,slotH/(Hs[idx]||1));return '<div class="slot" style="height:'+slotH+'px"><div class="sc" style="transform:scale('+sc.toFixed(4)+')">'+clones[idx].outerHTML+'</div></div>';}).join('');return '<div class="page">'+slots+'</div>';}).join('');
     var css=document.querySelector('style').innerHTML;
-    var a4='@page{size:A4 portrait;margin:10mm;}body{margin:0;background:#fff;}.page{box-sizing:border-box;page-break-after:always;break-after:page;display:flex;flex-direction:column;gap:8mm;}.page:last-child{page-break-after:auto;break-after:auto;}.canvas{min-height:auto!important;}.slide{width:100%!important;max-width:none!important;margin:0!important;page-break-after:auto!important;break-after:auto!important;break-inside:avoid;page-break-inside:avoid;border:1px solid #e6e8ee!important;border-radius:10px!important;box-shadow:none!important;overflow:hidden!important;}.notes{display:none!important;}.viewerbar,#present{display:none!important;}';
+    var a4='@page{size:A4 portrait;margin:0;}body{margin:0;background:#fff;}.page{width:210mm;height:297mm;box-sizing:border-box;padding:11mm 10mm;page-break-after:always;break-after:page;display:flex;flex-direction:column;gap:'+GAP+'px;overflow:hidden;}.page:last-child{page-break-after:auto;break-after:auto;}.slot{width:'+W+'px;overflow:hidden;}.sc{width:'+W+'px;transform-origin:top center;}.canvas{min-height:auto!important;}.slide{width:'+W+'px!important;max-width:none!important;margin:0!important;border:1px solid #e6e8ee!important;border-radius:10px!important;box-shadow:none!important;overflow:hidden!important;break-inside:avoid;}.notes{display:none!important;}.viewerbar,#present{display:none!important;}';
     var w=window.open('','_blank');if(!w){alert('팝업이 차단되었어요. 팝업 허용 후 다시 시도해 주세요.');return;}
     w.document.write('<!doctype html><html lang="ko"><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700;800&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet"><style>'+css+a4+'</style></head><body>'+bodyHtml+'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},500);};</scr'+'ipt></body></html>');
     w.document.close();
