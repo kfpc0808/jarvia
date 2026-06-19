@@ -11,7 +11,7 @@
   body{font-family:'Noto Sans KR',system-ui,sans-serif;color:var(--ink);overflow:hidden;}
   .app{display:flex;height:100vh;}
   .left{width:340px;min-width:340px;background:var(--panel);color:#E8EBF0;display:flex;flex-direction:column;transition:margin-left .25s;}
-  .left.collapsed{margin-left:-340px;}
+  .left.collapsed{margin-left:calc(-1 * var(--leftw, 340px));}
   .lhead{padding:14px 16px 12px;border-bottom:1px solid rgba(255,255,255,.08);}
   .brand{font-size:13px;font-weight:700;color:#fff;display:flex;align-items:center;gap:7px;}.brand .dot{width:7px;height:7px;border-radius:50%;background:var(--gold);}
   .topic{font-size:12px;color:#9DA8B8;margin-top:3px;}
@@ -28,7 +28,13 @@
   .linput input{flex:1;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);border-radius:9px;padding:10px 12px;color:#fff;font-size:14px;font-family:inherit;}
   .linput input::placeholder{color:#8896A8;}.linput input:focus{outline:none;border-color:var(--gold);}
   .linput button{background:var(--gold);border:none;border-radius:9px;width:42px;color:#231a06;font-size:16px;cursor:pointer;}
+  .linbtns{display:flex;flex-direction:column;gap:6px;flex:none;}
+  .linbtns>button,.linbtns>.mic{width:44px;height:34px;min-height:34px;padding:0;margin:0;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;}
+  .linput textarea{min-height:74px;}
   .right{flex:1;background:var(--paper);overflow-y:auto;position:relative;}
+.split{width:6px;flex:none;cursor:col-resize;background:var(--panel);position:relative;z-index:6;border-left:1px solid rgba(255,255,255,.06);}
+.split:hover,.split.drag{background:var(--gold);}
+.split::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:30px;border-radius:2px;background:rgba(255,255,255,.4);}
   .rtop{position:sticky;top:0;z-index:5;background:rgba(243,241,236,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 22px;display:flex;justify-content:space-between;align-items:center;}
   .rt{display:flex;gap:8px;align-items:center;}
   .tbtn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer;color:var(--slate);font-family:inherit;white-space:nowrap;}.tbtn:hover{border-color:var(--navy);color:var(--navy);}
@@ -43,7 +49,7 @@
   .libempty{text-align:center;color:var(--mute);font-size:13px;padding:30px 10px;}
   @media print{
     html,body{height:auto;overflow:visible;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .left,.rtop,#start,.modal{display:none!important;}
+    .left,.rtop,#start,.modal,.split{display:none!important;}
     .app{display:block;height:auto;}
     .right{flex:none;overflow:visible;height:auto;background:#fff;}
     .deck{padding:0!important;}
@@ -184,6 +190,7 @@
   .guidebox .gtip{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.13);color:#aab4c4;font-size:12px;}
 
   @media (max-width:700px){
+    .split{display:none;}
     /* 홈(시작) 화면 */
     #start{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:60px 16px 36px;}
     .startmain{top:12px;left:12px;padding:6px 12px;font-size:12px;border-radius:16px;}
@@ -283,8 +290,9 @@
     </div>
     <div class="chips" id="pchips"></div>
     <div class="msgs" id="msgs"></div>
-    <div class="linput"><textarea id="cmd" rows="1" placeholder="지시 입력 — 예) 3번 삭제 / 2번 결론 영어로"></textarea><button type="button" class="mic micsm" id="miccmd" title="음성 입력">🎤</button><button onclick="send()">↑</button></div>
+    <div class="linput"><textarea id="cmd" rows="1" placeholder="지시내용을 입력하세요!"></textarea><div class="linbtns"><button type="button" class="mic micsm" id="miccmd" title="음성 입력">🎤</button><button onclick="send()">↑</button></div></div>
   </aside>
+  <div class="split" id="split" title="좌우 폭 조절 (드래그 · 더블클릭=기본폭)"></div>
   <main class="right" id="right">
     <div class="rtop"><div class="lt"><button class="collapse" onclick="goMain()" title="메인으로">🏠</button><button class="collapse" onclick="toggleLeft()">⟨</button><span id="count">—</span></div>
       <div class="rt">
@@ -758,6 +766,29 @@ setupMic('startin','micstart');setupMic('cmd','miccmd');
 offerResume();
 renderDeck();paintEx();
 if(window.matchMedia&&window.matchMedia('(max-width:700px)').matches){var _l0=document.getElementById('left');if(_l0)_l0.classList.add('collapsed');}
+</script>
+<script>
+(function(){
+  var split=document.getElementById('split'), left=document.getElementById('left'), app=document.querySelector('.app');
+  if(!split||!left||!app) return;
+  var KEY='jeb_leftw';
+  function clamp(w){ var min=240, max=Math.max(min, window.innerWidth-340); return Math.max(min, Math.min(max, w)); }
+  function applyW(w){ w=clamp(w); left.style.width=w+'px'; left.style.minWidth=w+'px'; left.style.setProperty('--leftw', w+'px'); }
+  function reset(){ left.style.width=''; left.style.minWidth=''; left.style.removeProperty('--leftw'); try{localStorage.removeItem(KEY);}catch(_){} }
+  try{ var s=localStorage.getItem(KEY); if(s) applyW(+s); }catch(_){}
+  var dragging=false;
+  function start(e){ dragging=true; split.classList.add('drag'); document.body.style.cursor='col-resize'; document.body.style.userSelect='none'; if(e.cancelable)e.preventDefault(); }
+  function move(e){ if(!dragging)return; var x=(e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX); applyW(x - app.getBoundingClientRect().left); if(e.cancelable)e.preventDefault(); }
+  function end(){ if(!dragging)return; dragging=false; split.classList.remove('drag'); document.body.style.cursor=''; document.body.style.userSelect=''; try{localStorage.setItem(KEY, parseInt(left.style.width,10)||340);}catch(_){} }
+  split.addEventListener('mousedown',start);
+  split.addEventListener('touchstart',start,{passive:false});
+  window.addEventListener('mousemove',move);
+  window.addEventListener('touchmove',move,{passive:false});
+  window.addEventListener('mouseup',end);
+  window.addEventListener('touchend',end);
+  split.addEventListener('dblclick',reset);
+  window.addEventListener('resize',function(){ if(left.style.width) applyW(parseInt(left.style.width,10)); });
+})();
 </script>
 </body>
 </html>
