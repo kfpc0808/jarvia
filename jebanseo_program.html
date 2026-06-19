@@ -30,6 +30,27 @@
   .linput button{background:var(--gold);border:none;border-radius:9px;width:42px;color:#231a06;font-size:16px;cursor:pointer;}
   .right{flex:1;background:var(--paper);overflow-y:auto;position:relative;}
   .rtop{position:sticky;top:0;z-index:5;background:rgba(243,241,236,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 22px;display:flex;justify-content:space-between;align-items:center;}
+  .rt{display:flex;gap:8px;align-items:center;}
+  .tbtn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer;color:var(--slate);font-family:inherit;white-space:nowrap;}.tbtn:hover{border-color:var(--navy);color:var(--navy);}
+  .modal{display:none;position:fixed;inset:0;background:rgba(23,38,58,.5);z-index:50;align-items:center;justify-content:center;}.modal.on{display:flex;}
+  .mbox{background:#fff;border-radius:14px;width:min(440px,90vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);}
+  .mhead{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line);font-size:15px;}
+  .mx{border:none;background:none;font-size:16px;cursor:pointer;color:var(--mute);}
+  .mlist{overflow-y:auto;padding:10px;}
+  .litem{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;}
+  .litem .li-main{flex:1;min-width:0;cursor:pointer;}.litem .li-t{font-size:14px;font-weight:600;color:var(--ink);}.litem .li-s{font-size:12px;color:var(--mute);margin-top:2px;}
+  .litem .li-del{border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;}
+  .libempty{text-align:center;color:var(--mute);font-size:13px;padding:30px 10px;}
+  @media print{
+    html,body{height:auto;overflow:visible;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .left,.rtop,#start,.modal{display:none!important;}
+    .app{display:block;height:auto;}
+    .right{flex:none;overflow:visible;height:auto;background:#fff;}
+    .deck{padding:0!important;}
+    .slide{break-inside:avoid;page-break-inside:avoid;page-break-after:always;margin:0!important;border:none!important;border-radius:0!important;box-shadow:none!important;}
+    .canvas{min-height:auto;}
+    body:not(.notes-on) .notes{display:none!important;}
+  }
   .rtop .lt{display:flex;align-items:center;gap:11px;font-size:13px;color:var(--slate);}
   .collapse{border:1px solid var(--line);background:var(--card);border-radius:8px;width:30px;height:30px;cursor:pointer;color:var(--slate);font-size:15px;}
   .toggle{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px;}.toggle button{border:none;background:var(--card);padding:6px 13px;cursor:pointer;color:var(--slate);font-family:inherit;font-size:13px;}.toggle button.on{background:var(--ink);color:#fff;}
@@ -124,6 +145,7 @@
     <div class="ex" id="startex"></div>
   </div>
   <div class="loading" id="startloading">작성자가 자료를 만드는 중입니다…</div>
+  <button id="resumebtn" class="tbtn" style="display:none;margin-top:14px;" onclick="restore('__last')">⟲ 이전 작업 이어하기</button>
   <div class="warn">※ 이 프로그램은 자비아 Cloud Function을 통해 작성자(AI)를 호출합니다. 함수가 배포되고 상단 FUNCTION_URL이 설정돼야 자료가 생성됩니다.</div>
 </div>
 
@@ -140,9 +162,21 @@
   </aside>
   <main class="right" id="right">
     <div class="rtop"><div class="lt"><button class="collapse" onclick="goMain()" title="메인으로">🏠</button><button class="collapse" onclick="toggleLeft()">⟨</button><span id="count">—</span></div>
-      <div class="toggle"><button id="b-c" class="on" onclick="setNotes(false)">고객용</button><button id="b-n" onclick="setNotes(true)">발표노트</button></div></div>
+      <div class="rt">
+        <button class="tbtn" onclick="saveDeck()" title="이 자료 저장">💾 저장</button>
+        <button class="tbtn" onclick="openLib()" title="저장한 자료 불러오기">📂 불러오기</button>
+        <button class="tbtn" onclick="exportPDF()" title="PDF로 저장 / 인쇄">📄 PDF</button>
+        <div class="toggle"><button id="b-c" class="on" onclick="setNotes(false)">고객용</button><button id="b-n" onclick="setNotes(true)">발표노트</button></div>
+      </div></div>
     <div class="deck" id="deck"><div class="ph">시작 화면에서 고객 정보를 입력하면 여기에 자료가 생성됩니다.</div></div>
   </main>
+</div>
+
+<div class="modal" id="libmodal">
+  <div class="mbox">
+    <div class="mhead"><b>저장한 자료</b><button class="mx" onclick="closeLib()">✕</button></div>
+    <div class="mlist" id="liblist"></div>
+  </div>
 </div>
 
 <script>
@@ -194,7 +228,7 @@ function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak
   sl.appendChild(cv);
   if(s.notes){const n=elt('div','notes');const l=elt('div','lab');l.textContent='🎤 발표노트';n.appendChild(l);const p=document.createElement('div');p.textContent=s.notes;n.appendChild(p);sl.appendChild(n);}
   return sl;}
-function renderDeck(){const r=document.getElementById('deck');r.innerHTML='';if(!deck.slides.length){r.innerHTML='<div class="ph">시작 화면에서 고객 정보를 입력하면 여기에 자료가 생성됩니다.</div>';}else deck.slides.forEach((s,i)=>r.appendChild(makeSlide(s,i)));document.getElementById('count').textContent=deck.slides.length?('슬라이드 '+deck.slides.length+'장'):'—';}
+function renderDeck(){const r=document.getElementById('deck');r.innerHTML='';if(!deck.slides.length){r.innerHTML='<div class="ph">시작 화면에서 고객 정보를 입력하면 여기에 자료가 생성됩니다.</div>';}else deck.slides.forEach((s,i)=>r.appendChild(makeSlide(s,i)));document.getElementById('count').textContent=deck.slides.length?('슬라이드 '+deck.slides.length+'장'):'—';autoSave();}
 function renderGenLoading(){const r=document.getElementById('deck');r.innerHTML=`<div class="genload"><div class="genspin"></div><div class="genmsg">작성자가 ${topic} 자료를 만들고 있습니다<span class="gendots"></span></div><div class="gensub">고객 정보를 분석하고 슬라이드를 구성 중입니다 · 약 30초~1분</div></div>`;document.getElementById('count').textContent='생성 중…';}
 function scrollToSlide(idx){const node=document.getElementById('deck').children[idx];if(node)node.scrollIntoView({behavior:'smooth',block:'center'});}
 
@@ -325,6 +359,43 @@ const SEX={"연금설계":["40세 남성, 월 500만, 외벌이, 65세 은퇴, �
 function paintEx(){document.getElementById('startex').innerHTML=(SEX[startTopic]||[]).map(s=>`<span onclick="document.getElementById('startin').value='${s}'">${s}</span>`).join('');}
 function setNotes(on){document.body.classList.toggle('notes-on',on);document.getElementById('b-n').classList.toggle('on',on);document.getElementById('b-c').classList.toggle('on',!on);}
 function toggleLeft(){document.getElementById('left').classList.toggle('collapsed');}
+/* ===== 저장 / 불러오기 / 내보내기 ===== */
+const LS='jebanseo_decks_v1';
+function loadStore(){try{return JSON.parse(localStorage.getItem(LS)||'{}');}catch(_){return {};}}
+function saveStore(o){try{localStorage.setItem(LS,JSON.stringify(o));}catch(_){}}
+function snapshot(){return {topic,params,calc,clientName,deck,ts:Date.now()};}
+function autoSave(){if(!deck.slides.length)return;const o=loadStore();o.__last=snapshot();saveStore(o);}
+function saveDeck(){
+  if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
+  const def=(clientName?clientName+' · ':'')+topic;const name=prompt('저장할 이름을 입력하세요',def);if(!name)return;
+  const o=loadStore();o['d'+Date.now()]={name,...snapshot()};saveStore(o);
+  aiReply(`"${name}" 자료를 저장했습니다. ✓ (📂 불러오기에서 다시 열 수 있어요)`);
+}
+function openLib(){renderLib();document.getElementById('libmodal').classList.add('on');}
+function closeLib(){document.getElementById('libmodal').classList.remove('on');}
+function renderLib(){
+  const o=loadStore();const items=Object.entries(o).filter(([k])=>k!=='__last').sort((a,b)=>b[1].ts-a[1].ts);
+  const el=document.getElementById('liblist');
+  if(!items.length){el.innerHTML='<div class="libempty">저장된 자료가 없습니다.</div>';return;}
+  el.innerHTML='';
+  items.forEach(([id,d])=>{const row=elt('div','litem');const main=elt('div','li-main');
+    const t=elt('div','li-t');t.textContent=d.name;const s=elt('div','li-s');
+    s.textContent=`${d.topic} · 슬라이드 ${(d.deck&&d.deck.slides?d.deck.slides.length:0)}장 · ${new Date(d.ts).toLocaleDateString('ko-KR')}`;
+    main.appendChild(t);main.appendChild(s);main.onclick=()=>restore(id);
+    const del=elt('button','li-del');del.textContent='삭제';del.onclick=(e)=>{e.stopPropagation();if(confirm('이 자료를 삭제할까요?')){const oo=loadStore();delete oo[id];saveStore(oo);renderLib();}};
+    row.appendChild(main);row.appendChild(del);el.appendChild(row);});
+}
+function restore(id){
+  const o=loadStore();const d=id==='__last'?o.__last:o[id];if(!d)return;
+  topic=d.topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';deck={slides:(d.deck&&d.deck.slides)||[]};
+  document.getElementById('start').style.display='none';
+  document.getElementById('topic').textContent=topic+' · 고객';
+  document.getElementById('pct').textContent='저장됨';document.getElementById('gfill').style.width='100%';
+  fillChips(params);MSGS.length=0;aiReply(`"${d.name||'이전 작업'}"을 불러왔습니다. 이어서 편집하실 수 있어요. ✓`);renderDeck();closeLib();
+}
+function offerResume(){const o=loadStore();const b=document.getElementById('resumebtn');
+  if(b&&o.__last&&o.__last.deck&&o.__last.deck.slides&&o.__last.deck.slides.length){b.style.display='inline-block';}}
+function exportPDF(){if(!deck.slides.length){return aiReply('내보낼 자료가 없습니다. 먼저 자료를 생성해 주세요.');}window.print();}
 document.getElementById('cmd').addEventListener('keydown',e=>{if(e.key==='Enter')send();});
 /* ===== 음성 입력 (브라우저 내장 한국어 STT) ===== */
 function setupMic(targetId,btnId){
@@ -345,6 +416,7 @@ function setupMic(targetId,btnId){
   });
 }
 setupMic('startin','micstart');setupMic('cmd','miccmd');
+offerResume();
 renderDeck();paintEx();
 </script>
 </body>
