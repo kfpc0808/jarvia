@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIA 신기능 — 스마트 문자발송</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@600;800;900&family=IBM+Plex+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --navy-deep:#0a1228;
+  --navy:#10204a;
+  --navy-soft:#1a2f63;
+  --gold:#e8c160;
+  --gold-bright:#f7dd8f;
+  --gold-dim:#9a7c35;
+  --ink:#f4f1e8;
+  --ink-mute:#a9b3cc;
+  --good:#5fd49a;
+  --serif:'Noto Serif KR',serif;
+  --sans:'IBM Plex Sans KR',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  background:radial-gradient(900px 700px at 70% -10%, rgba(43,72,148,.55) 0%, transparent 60%),
+             radial-gradient(700px 600px at 10% 110%, rgba(232,193,96,.10) 0%, transparent 55%),
+             var(--navy-deep);
+  color:var(--ink);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+/* 미세 노이즈 텍스처 */
+body::after{
+  content:'';position:fixed;inset:0;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ───── 무대 ───── */
+.stage{
+  position:relative;
+  width:min(480px,94vw);
+  height:min(760px,92vh);
+  border:1px solid rgba(232,193,96,.22);
+  border-radius:24px;
+  background:linear-gradient(165deg, rgba(26,47,99,.55), rgba(10,18,40,.85));
+  box-shadow:0 40px 90px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+}
+.stage::before{ /* 상단 골드 헤어라인 */
+  content:'';position:absolute;top:0;left:10%;right:10%;height:1px;
+  background:linear-gradient(90deg,transparent,var(--gold),transparent);
+  opacity:.8;
+}
+
+/* ───── 장면 공통 ───── */
+.scene{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:44px 34px 106px;
+  opacity:0;visibility:hidden;transform:translateY(14px);
+  transition:opacity .7s ease, transform .7s ease, visibility 0s linear .7s;
+}
+.scene.active{opacity:1;visibility:visible;transform:none;transition:opacity .7s ease,transform .7s ease}
+.scene .rise{opacity:0;transform:translateY(18px);transition:opacity .8s ease,transform .8s ease}
+.scene.active .rise{opacity:1;transform:none}
+.scene.active .d1{transition-delay:.15s}
+.scene.active .d2{transition-delay:.5s}
+.scene.active .d3{transition-delay:.9s}
+.scene.active .d4{transition-delay:1.3s}
+.scene.active .d5{transition-delay:1.7s}
+
+.kicker{
+  font-size:12px;letter-spacing:.42em;color:var(--gold);
+  text-transform:uppercase;font-weight:500;margin-bottom:18px;
+}
+.kicker::before,.kicker::after{content:'—';margin:0 10px;color:var(--gold-dim)}
+h1,h2{font-family:var(--serif);font-weight:800;line-height:1.32}
+h1{font-size:34px}
+h2{font-size:27px}
+.gold{color:var(--gold-bright)}
+.lede{font-size:15px;color:var(--ink-mute);line-height:1.85;font-weight:300;margin-top:18px}
+.lede b{color:var(--ink);font-weight:500}
+
+/* ───── S1 타이틀 ───── */
+.logo-mark{
+  font-family:var(--serif);font-weight:900;font-size:15px;letter-spacing:.34em;
+  color:var(--gold);margin-bottom:34px;
+}
+.new-badge{
+  display:inline-block;margin-top:30px;padding:9px 22px;border-radius:999px;
+  border:1px solid rgba(232,193,96,.5);color:var(--gold-bright);
+  font-size:13px;letter-spacing:.18em;font-weight:500;
+  background:rgba(232,193,96,.07);
+  animation:pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(232,193,96,.30)}50%{box-shadow:0 0 0 14px rgba(232,193,96,0)}}
+
+/* ───── S2 골드 링 점수 ───── */
+.rings{display:flex;gap:34px;margin:30px 0 6px}
+.ring-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.ring{position:relative;width:128px;height:128px}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring .track{fill:none;stroke:rgba(255,255,255,.09);stroke-width:9}
+.ring .bar{
+  fill:none;stroke:url(#gold-grad);stroke-width:9;stroke-linecap:round;
+  stroke-dasharray:339.3;stroke-dashoffset:339.3;
+  filter:drop-shadow(0 0 6px rgba(232,193,96,.55));
+}
+.scene.active .ring .bar{transition:stroke-dashoffset 2.2s cubic-bezier(.22,.8,.3,1) .8s}
+.ring .num{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:var(--serif);
+}
+.ring .num strong{font-size:34px;font-weight:900;color:var(--gold-bright)}
+.ring .num span{font-size:11px;color:var(--ink-mute);letter-spacing:.1em;margin-top:2px}
+.ring-label{font-size:14px;font-weight:500}
+.ring-label em{font-style:normal;margin-right:4px}
+
+/* ───── S3 흐름 ───── */
+.flow{display:flex;flex-direction:column;gap:0;margin-top:26px;width:100%;max-width:330px}
+.flow-step{
+  display:flex;align-items:center;gap:16px;text-align:left;
+  padding:15px 18px;border-radius:14px;
+  background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);
+}
+.flow-num{
+  flex:0 0 34px;height:34px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-weight:800;font-size:15px;
+  color:var(--navy-deep);background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim));
+}
+.flow-step .t{font-size:14.5px;font-weight:500}
+.flow-step .s{font-size:12px;color:var(--ink-mute);margin-top:3px;font-weight:300}
+.flow-arrow{align-self:center;color:var(--gold);font-size:15px;line-height:1;padding:5px 0}
+
+/* ───── S4 알림 ───── */
+.phone{
+  margin-top:28px;width:262px;border-radius:22px;padding:18px 16px 20px;
+  background:linear-gradient(170deg,#16264f,#0c1733);
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 24px 50px rgba(0,0,0,.5);
+}
+.phone .bar{width:54px;height:5px;border-radius:3px;background:rgba(255,255,255,.18);margin:0 auto 16px}
+.sms{
+  text-align:left;border-radius:14px;padding:13px 14px;
+  background:rgba(232,193,96,.10);border:1px solid rgba(232,193,96,.35);
+}
+.sms .from{font-size:11px;color:var(--gold);letter-spacing:.08em;font-weight:500;margin-bottom:6px}
+.sms .body{font-size:13px;line-height:1.7;color:var(--ink)}
+.sms .body b{color:var(--gold-bright)}
+.scene.active .sms{animation:smsIn .7s cubic-bezier(.2,1.4,.4,1) 1.1s backwards}
+@keyframes smsIn{from{opacity:0;transform:translateY(-16px) scale(.94)}to{opacity:1;transform:none}}
+
+/* ───── S5 CTA ───── */
+.cta-btn{
+  display:inline-block;margin-top:32px;padding:16px 40px;border-radius:999px;
+  font-family:var(--serif);font-weight:800;font-size:17px;letter-spacing:.06em;
+  color:var(--navy-deep);
+  background:linear-gradient(135deg,var(--gold-bright),var(--gold) 55%,var(--gold-dim));
+  box-shadow:0 14px 34px rgba(232,193,96,.32);
+  animation:pulse 2.4s ease-in-out infinite;
+}
+.cta-url{margin-top:20px;font-size:13px;letter-spacing:.22em;color:var(--ink-mute)}
+.cta-url b{color:var(--gold-bright);font-weight:500}
+
+/* ───── S2 3종 링 (소형) ───── */
+.rings.tri{gap:13px;margin:26px 0 4px}
+.rings.tri .ring{width:90px;height:90px}
+.rings.tri .ring .num strong{font-size:23px}
+.rings.tri .ring-label{font-size:12px}
+
+/* ───── S3 계산기 목업 ───── */
+.calc-mock{margin-top:22px;width:300px;max-width:84%;border-radius:16px;padding:16px 18px;background:rgba(255,255,255,.05);border:1px solid rgba(232,193,96,.28);text-align:left}
+.calc-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--ink-mute);padding:3px 0}
+.calc-row b{color:var(--ink);font-weight:500}
+.calc-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.1);margin:5px 0 11px;position:relative;overflow:hidden}
+.calc-bar i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--gold-dim),var(--gold-bright));border-radius:3px}
+.calc-result{margin-top:10px;text-align:center;border-radius:12px;padding:12px;background:rgba(232,193,96,.10);border:1px solid rgba(232,193,96,.35)}
+.calc-result .l{font-size:11px;color:var(--ink-mute)}
+.calc-result .v{font-family:var(--serif);font-size:25px;font-weight:900;color:var(--gold-bright);margin:3px 0;letter-spacing:-.3px}
+.calc-result .n{font-size:11px;color:var(--good)}
+
+/* ───── S8 고객 화면 목업 ───── */
+.screen-mock{margin-top:22px;width:236px;border-radius:20px;overflow:hidden;background:#0c1733;border:1px solid rgba(255,255,255,.12);box-shadow:0 24px 50px rgba(0,0,0,.5)}
+.screen-mock .top{padding:18px 16px;text-align:center;border-bottom:1px solid rgba(255,255,255,.08)}
+.screen-mock .avatar{width:48px;height:48px;border-radius:50%;margin:0 auto 9px;background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim))}
+.screen-mock .nm{font-size:15px;font-weight:700;color:var(--ink)}
+.screen-mock .role{font-size:11px;color:var(--ink-mute);margin-top:3px}
+.screen-mock .no-brand{font-size:12px;color:var(--gold);padding:13px;text-align:center;background:rgba(232,193,96,.06)}
+
+/* ═════ 실제 화면 목업 ═════ */
+/* 폰 프레임 */
+.pscreen{width:236px;border-radius:30px;padding:9px;background:#060b1a;border:1px solid rgba(255,255,255,.14);box-shadow:0 26px 54px rgba(0,0,0,.55);margin-top:8px}
+.pscreen .notch{width:56px;height:5px;border-radius:3px;background:rgba(255,255,255,.22);margin:3px auto 9px}
+.pbody{border-radius:22px;background:linear-gradient(168deg,#13234e,#0a1330);padding:15px 13px;text-align:left}
+.pcap{font-size:11px;color:var(--gold);letter-spacing:.05em;margin:12px 0 0}
+
+/* 진단 선택 (S3) */
+.qz-entry{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);margin-bottom:8px}
+.qz-entry .ic{font-size:19px}
+.qz-entry .nm{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.3}
+.qz-entry .nm small{display:block;font-size:10px;color:var(--ink-mute);font-weight:300;margin-top:2px}
+.qz-entry .chv{margin-left:auto;color:var(--gold);font-size:15px}
+
+/* 문항 (S4) */
+.qz-prog{display:flex;align-items:center;gap:8px;margin-bottom:13px}
+.qz-progbar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden}
+.qz-progbar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold-bright));border-radius:3px}
+.qz-prog span{font-size:10px;color:var(--ink-mute);white-space:nowrap}
+.qz-qno{font-family:var(--serif);font-size:15px;color:var(--gold);font-weight:800;margin-bottom:5px}
+.qz-qtext{font-size:13.5px;font-weight:500;line-height:1.45;margin-bottom:12px}
+.qz-opt{font-size:12px;padding:10px 12px;border-radius:11px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);margin-bottom:7px;display:flex;align-items:center;gap:9px}
+.qz-opt .mk{flex:0 0 16px;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,.25);font-size:9px;display:flex;align-items:center;justify-content:center;color:transparent}
+.qz-opt.sel{border-color:var(--gold);background:rgba(232,193,96,.12)}
+.qz-opt.sel .mk{background:var(--gold);border-color:var(--gold);color:var(--navy-deep)}
+
+/* 계산기 (S5) — 실제 앱처럼 흰 카드 */
+.calc2{border-radius:14px;background:#fff;padding:13px;color:#141B2D}
+.calc2 .h{font-size:12px;font-weight:800;color:#1B3A6B}
+.calc2 .warn{font-size:9.5px;color:#C0392B;font-weight:600;margin:2px 0 10px}
+.calc2 .lbl{font-size:10.5px;color:#5A6484;margin-bottom:2px}
+.calc2 .sld{height:5px;border-radius:3px;background:#E5E9F0;position:relative;margin:5px 0 11px}
+.calc2 .sld i{position:absolute;top:50%;width:15px;height:15px;border-radius:50%;background:#C9A96E;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.calc2 .tog{display:inline-flex;border:1px solid #E5E9F0;border-radius:7px;overflow:hidden;font-size:10.5px;margin-bottom:11px}
+.calc2 .tog b{padding:5px 13px;background:#1B3A6B;color:#fff;font-weight:600}
+.calc2 .tog span{padding:5px 13px;color:#8B93AE}
+.calc2 .res{background:#F0F4F9;border-radius:10px;padding:10px;text-align:center}
+.calc2 .res .l{font-size:9.5px;color:#5A6484}
+.calc2 .res .v{font-family:var(--serif);font-size:19px;font-weight:900;color:#1B3A6B;margin-top:1px}
+
+/* 결과 3종 미니카드 (S6) */
+.mini-cards{display:flex;flex-direction:column;gap:9px;width:100%;max-width:308px;margin-top:24px}
+.mcard{display:flex;align-items:center;gap:13px;padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);text-align:left}
+.mcard .ic{font-size:20px}
+.mcard .sc{font-family:var(--serif);font-size:25px;font-weight:900;color:var(--gold-bright);min-width:46px}
+.mcard .sc small{font-size:11px;color:var(--ink-mute);font-weight:400}
+.mcard .nm{font-size:13px;font-weight:600}
+.mcard .ty{font-size:11px;color:var(--ink-mute);margin-top:2px}
+
+/* 결과 상세 + 연락처 (S7) */
+.rs-type{display:inline-block;font-size:11.5px;padding:5px 13px;border-radius:999px;background:rgba(232,193,96,.12);border:1px solid rgba(232,193,96,.42);color:var(--gold-bright);margin-bottom:9px}
+.rs-line{font-size:11px;color:var(--ink-mute);line-height:1.55;margin-bottom:6px}
+.rs-line b{color:var(--ink);font-weight:500}
+.rs-sum{font-size:11.5px;color:var(--ink);line-height:1.5;margin:1px 0 11px}
+.rs-sum b{color:var(--gold-bright);font-weight:600}
+.rs-sec{display:flex;gap:9px;margin-bottom:8px}
+.rs-k{flex:0 0 74px;font-size:11px;color:var(--gold);font-weight:600}
+.rs-v{flex:1;font-size:11.5px;color:var(--ink-mute);line-height:1.45}
+.rs-lock-sm{margin-top:10px;font-size:10.5px;color:var(--gold);text-align:center;border-top:1px dashed rgba(232,193,96,.32);padding-top:10px}
+.rs-lock{margin-top:10px;border-radius:11px;background:rgba(255,255,255,.04);border:1px dashed rgba(232,193,96,.42);padding:11px}
+.rs-lock .t{font-size:11px;color:var(--gold);margin-bottom:8px;text-align:center}
+.req-field{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 10px;font-size:10.5px;color:var(--ink-mute);margin-bottom:6px}
+.req-btn{background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);font-weight:700;font-size:11.5px;border-radius:8px;padding:9px;text-align:center}
+
+/* 대시보드 (S10) */
+.dash{width:100%;max-width:308px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);overflow:hidden;text-align:left;margin-top:24px}
+.dash .dh{font-size:11px;color:var(--ink-mute);padding:11px 15px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:500}
+.dash .drow{display:flex;align-items:center;gap:11px;padding:11px 15px;border-bottom:1px solid rgba(255,255,255,.05)}
+.dash .drow:last-child{border-bottom:none}
+.dash .dav{flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim))}
+.dash .dnm{font-size:12.5px;font-weight:500}
+.dash .dsc{font-size:10.5px;color:var(--ink-mute);margin-top:2px}
+.dash .dbadge{margin-left:auto;font-size:10px;color:var(--good);white-space:nowrap}
+
+@media (max-height:720px){
+  .pscreen{transform:scale(.9);margin-top:0}
+  .mini-cards,.dash{margin-top:16px}
+}
+
+/* 결과 화면 헤더/점수 */
+.rs-head{display:flex;align-items:center;gap:11px;margin-bottom:9px}
+.rs-ic{font-size:24px}
+.rs-score{font-family:var(--serif);font-size:30px;font-weight:900;color:var(--gold-bright);line-height:1}
+.rs-score small{font-size:13px;color:var(--ink-mute);font-weight:400;margin-left:1px}
+
+/* 설계사 전용 AI 분석 패널 */
+.ai-panel{width:100%;max-width:316px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(232,193,96,.25);padding:15px 16px;text-align:left;margin-top:22px}
+.ai-panel .ah{font-size:11px;color:var(--gold);letter-spacing:.04em;margin-bottom:12px;font-weight:600}
+.ai-row{display:flex;gap:10px;font-size:11.5px;margin-bottom:8px;line-height:1.5}
+.ai-row .k{flex:0 0 56px;color:var(--ink-mute)}
+.ai-row .v{color:var(--ink);font-weight:500}
+.ai-quote{margin-top:9px;border-left:2px solid var(--gold);padding:7px 0 7px 11px;font-size:11.5px;color:var(--gold-bright);line-height:1.5}
+
+
+/* ───── 시작 오버레이 ───── */
+.gate{
+  position:absolute;inset:0;z-index:30;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;
+  background:rgba(7,12,28,.82);backdrop-filter:blur(7px);
+  transition:opacity .6s ease,visibility .6s;
+}
+.gate.hide{opacity:0;visibility:hidden}
+.gate .g-title{font-family:var(--serif);font-size:21px;font-weight:800;letter-spacing:.04em}
+.gate .g-sub{font-size:13px;color:var(--ink-mute);font-weight:300;line-height:1.8;text-align:center}
+.play{
+  width:92px;height:92px;border-radius:50%;border:none;cursor:pointer;
+  background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim));
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 16px 40px rgba(232,193,96,.4);
+  animation:pulse 2s ease-in-out infinite;
+  transition:transform .2s;
+}
+.play:hover{transform:scale(1.07)}
+.play svg{width:34px;height:34px;fill:var(--navy-deep);margin-left:5px}
+
+/* ───── 하단 컨트롤 (시크바 + 재생/일시정지) ───── */
+.controls{position:absolute;left:0;right:0;bottom:0;z-index:20;padding:13px 20px 15px;background:linear-gradient(transparent,rgba(7,12,28,.92))}
+.seek{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.seekTrack{position:relative;flex:1;height:20px;display:flex;align-items:center;cursor:pointer;touch-action:none}
+.seekTrack::before{content:'';position:absolute;left:0;right:0;height:4px;border-radius:3px;background:rgba(255,255,255,.15)}
+.seekFill{position:absolute;left:0;height:4px;border-radius:3px;background:var(--gold);width:0;transition:width .25s linear}
+.seekHandle{position:absolute;width:13px;height:13px;border-radius:50%;background:var(--gold-bright);box-shadow:0 0 8px rgba(232,193,96,.8);transform:translateX(-50%);left:0;transition:left .25s linear}
+.seekLabel{font-size:10.5px;color:var(--ink-mute);font-variant-numeric:tabular-nums;min-width:46px;text-align:right;font-family:var(--serif)}
+.ctl-row{display:flex;align-items:center;justify-content:center;gap:11px}
+.ctl{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.05);color:var(--ink);font-size:15px;cursor:pointer;transition:.25s;padding:0;font-family:var(--sans)}
+.ctl:hover{border-color:var(--gold);color:var(--gold-bright)}
+.ctl.big{width:46px;height:46px;font-size:18px;background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);border:none}
+.ctl.big:hover{color:var(--navy-deep);filter:brightness(1.06)}
+
+@media (max-height:680px){
+  h1{font-size:28px}h2{font-size:23px}
+  .scene{padding:30px 26px 98px}
+  .ring{width:106px;height:106px}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7dd8f"/>
+      <stop offset="100%" stop-color="#c89a3e"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div class="stage">
+
+  <!-- 시작 게이트 -->
+  <div class="gate" id="gate">
+    <div class="logo-mark">J A R V I A</div>
+    <button class="play" id="playBtn" aria-label="재생">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <div class="g-title">100% 무료 문자발송 시스템</div>
+    <div class="g-sub">버튼을 누르면 음성과 함께<br>약 1분 30초 분량의 안내가 재생됩니다</div>
+  </div>
+
+  <!-- S1 -->
+  <section class="scene" data-dur="9000"
+    data-narr="자비아에 또 하나의 기능이 더해졌습니다. 컨설턴트님을 위한 스마트 문자발송입니다. 고객의 결정적 순간을, 이제 시스템이 먼저 챙깁니다.">
+    <div class="logo-mark rise d1">J A R V I A</div>
+    <div class="kicker rise d2">New Feature</div>
+    <h1 class="rise d3">스마트 <span class="gold">문자발송</span></h1>
+    <p class="lede rise d4">고객의 <b>결정적 순간</b>을<br>시스템이 먼저 챙깁니다</p>
+    <div class="new-badge rise d5">2026 NEW</div>
+  </section>
+
+  <!-- S2 -->
+  <section class="scene" data-dur="10500"
+    data-narr="수백 명 고객의 생일과 상령일, 보험 만기일. 모두 관계를 잇고 상담이 시작되는 결정적 순간이지만, 사람의 기억만으로는 반드시 놓치게 됩니다.">
+    <div class="kicker rise d1">Why</div>
+    <h2 class="rise d2">놓치기 쉬운<br><span class="gold">결정적 순간</span></h2>
+    <div class="mini-cards">
+      <div class="mcard rise d3"><span class="ic">🎂</span><div><div class="nm">생일 · 기념일</div><div class="ty">축하 한마디가 관계를 잇는 날</div></div></div>
+      <div class="mcard rise d4"><span class="ic">📈</span><div><div class="nm">상령일</div><div class="ty">보험 나이 오르기 전, 점검의 적기</div></div></div>
+      <div class="mcard rise d5"><span class="ic">⏰</span><div><div class="nm">보험 만기</div><div class="ty">갱신·수령·재설계가 시작되는 순간</div></div></div>
+    </div>
+    <p class="lede rise d5" style="font-size:12.5px">사람의 기억만으론, 반드시 놓치게 됩니다</p>
+  </section>
+
+  <!-- S3 -->
+  <section class="scene" data-dur="9500"
+    data-narr="이제 버튼 하나면 됩니다. 생일, 상령일, 만기, 기념일. 칩을 누르면 이번 달 챙겨야 할 고객이 알아서 목록으로 떠오릅니다.">
+    <div class="kicker rise d1">How · 자동 선별</div>
+    <h2 class="rise d2">버튼 하나면,<br><span class="gold">대상이 떠오릅니다</span></h2>
+    <div class="pscreen rise d3">
+      <div class="notch"></div>
+      <div class="pbody">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">
+          <span style="font-size:10.5px;color:var(--ink-mute);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:5px 9px">🎂 생일</span><span style="font-size:10.5px;font-weight:700;color:var(--navy-deep);background:linear-gradient(135deg,var(--gold-bright),var(--gold-dim));border-radius:8px;padding:5px 9px">⏰ 만기</span><span style="font-size:10.5px;color:var(--ink-mute);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:5px 9px">📈 상령일</span><span style="font-size:10.5px;color:var(--ink-mute);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:5px 9px">🎉 기념일</span>
+        </div>
+        <div class="qz-entry"><span class="ic">✅</span><span class="nm">박○○<small>⏰ 7/15 · 저축성 · ○○연금</small></span><span class="chv">✏️</span></div>
+        <div class="qz-entry" style="margin-bottom:0"><span class="ic">✅</span><span class="nm">이○○<small>⏰ 7/22 · 자동차</small></span><span class="chv">✏️</span></div>
+      </div>
+    </div>
+    <div class="pcap rise d4">이번 달 만기 고객 — 자동으로 선별</div>
+  </section>
+
+  <!-- S4 -->
+  <section class="scene" data-dur="11500"
+    data-narr="게다가 고객마다 다른 문구가 자동으로 채워집니다. 저축성과 연금 만기엔 수령과 재설계 안내가, 보장성엔 점검 안내가. 상황에 꼭 맞는 말이 준비되고, 한 분씩 직접 다듬을 수도 있습니다.">
+    <div class="kicker rise d1">Auto Message</div>
+    <h2 class="rise d2">고객마다 <span class="gold">다른 문구가</span><br>자동으로</h2>
+    <div class="pscreen rise d3" style="width:248px">
+      <div class="pbody">
+        <div class="sms" style="margin-bottom:9px"><div class="from">⏰ 저축성 · 연금 만기</div><div class="body">○○님, 만기 환급금 <b>수령과 재설계</b>를 함께 살펴보시면 좋겠습니다.</div></div>
+        <div class="sms"><div class="from">⏰ 보장성 만기</div><div class="body">○○님, 보장 <b>점검</b>이 필요하시면 편하게 말씀해 주세요.</div></div>
+      </div>
+    </div>
+    <p class="lede rise d4" style="font-size:12.5px">종류에 꼭 맞는 말이 미리 준비됩니다</p>
+  </section>
+
+  <!-- S5 -->
+  <section class="scene" data-dur="9500"
+    data-narr="매월 정기 안부도 자동입니다. 보낼 날짜만 정해두면, 그날 보낼 고객과 문구가 준비되고, 잊지 않도록 알림까지 띄워 줍니다.">
+    <div class="kicker rise d1">Monthly</div>
+    <h2 class="rise d2">매월 <span class="gold">정기 안부</span>도<br>자동으로</h2>
+    <div class="pscreen rise d3" style="width:250px">
+      <div class="notch"></div>
+      <div style="border-radius:22px;overflow:hidden;background:#F4F5F7;text-align:left">
+        <div style="background:#16263C;color:#fff;font-size:11px;font-weight:600;padding:9px 12px">정기 안부</div>
+        <div style="padding:11px 12px">
+          <div style="display:flex;gap:6px;margin-bottom:9px">
+            <span style="flex:1;text-align:center;font-size:9.5px;color:#5B6675;background:#fff;border:1px solid #E6E8EC;border-radius:8px;padding:6px 0">📮 이번 달 발송</span>
+            <span style="flex:1;text-align:center;font-size:9.5px;font-weight:700;color:#fff;background:#1B3A5C;border-radius:8px;padding:6px 0">⚙ 설정</span>
+          </div>
+          <div style="background:#fff;border:1px solid #E6E8EC;border-radius:10px;padding:10px 11px;margin-bottom:8px">
+            <div style="font-size:10.5px;font-weight:700;color:#1A2430;margin-bottom:8px">🔔 매월 리마인드</div>
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="font-size:10.5px;color:#5B6675">매월</span>
+              <span style="font-size:14px;font-weight:800;color:#16263C;background:#FBF3E2;border:1px solid #EAD9B0;border-radius:7px;padding:3px 14px">25</span>
+              <span style="font-size:10.5px;color:#5B6675">일에 보내기</span>
+            </div>
+          </div>
+          <div style="background:#FBF3E2;border:1px solid #EAD9B0;border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:8px">
+            <span style="font-size:15px">🔔</span>
+            <div><div style="font-size:10px;font-weight:800;color:#A9791E">정기 안부 보낼 시간입니다</div><div style="font-size:9px;color:#5B6675;margin-top:1px">이번 달 대상 12명 · 문구 준비 완료</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="pcap rise d4">날짜만 정해두면 — 매월 알아서 준비·알림</div>
+  </section>
+
+  <!-- S6 -->
+  <section class="scene" data-dur="10000"
+    data-narr="발송은 내 폰 문자앱으로 이뤄져, 별도 문자 비용이 들지 않습니다. 고객마다 보낼 내용을 미리 확인하고, 버튼만 누르면 발송이 끝납니다.">
+    <div class="kicker rise d1">Free · Simple</div>
+    <h2 class="rise d2">문자비 <span class="gold">0원</span>,<br>버튼 한 번이면 끝</h2>
+    <div class="phone rise d3">
+      <div class="bar"></div>
+      <div class="sms"><div class="from">📱 내 폰 문자앱으로 발송</div><div class="body">○○님, 가입하신 보험 만기가 다가옵니다. 점검이 필요하시면 편하게 말씀해 주세요.</div></div>
+    </div>
+    <p class="lede rise d4" style="font-size:12.5px">내 폰으로 보내 <b>별도 문자비가 없고</b>,<br>미리 확인 후 버튼만 누르면 발송됩니다</p>
+  </section>
+
+  <!-- S7 -->
+  <section class="scene" data-dur="9500"
+    data-narr="문자에 담기는 링크에는 고객별 코드가 붙습니다. 누가 어떤 내용을 열어봤는지 구분되니, 관심을 보인 고객에게 한발 먼저 다가갈 수 있습니다.">
+    <div class="kicker rise d1">Tracking</div>
+    <h2 class="rise d2">누가 <span class="gold">열어봤는지</span>까지</h2>
+    <div class="calc-mock rise d3" style="text-align:left">
+      <div style="font-size:11px;color:var(--ink-mute);line-height:1.6;word-break:break-all">…/?fc=내채널<b style="color:var(--gold-bright)">&amp;c=박○○</b></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:11px;padding-top:10px;border-top:1px dashed rgba(232,193,96,.3)">
+        <span style="font-size:12px;color:var(--good)">● 박○○ 열람 ✓</span>
+        <span style="font-size:12px;color:var(--ink-mute);margin-left:auto">이○○ 미열람</span>
+      </div>
+    </div>
+    <p class="lede rise d4" style="font-size:12.5px">관심 보인 고객에게 <b>한발 먼저</b></p>
+  </section>
+
+  <!-- S8 -->
+  <section class="scene" data-dur="9500"
+    data-narr="이 모든 문자에 자비아 브랜드는 전혀 보이지 않습니다. 오직 컨설턴트님의 정성만 전해져, 그 신뢰는 온전히 컨설턴트님의 것이 됩니다.">
+    <div class="kicker rise d1">Your Brand</div>
+    <h2 class="rise d2">공(功)은 <span class="gold">컨설턴트님께</span></h2>
+    <div class="pscreen rise d3" style="width:250px">
+      <div class="pbody">
+        <div style="max-width:82%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:13px;border-top-left-radius:4px;padding:9px 11px;font-size:11.5px;color:var(--ink-mute);line-height:1.55;margin-bottom:9px">○○님, 가입하신 연금 만기가 다가옵니다 😊</div>
+        <div style="max-width:84%;margin-left:auto;background:rgba(232,193,96,.14);border:1px solid rgba(232,193,96,.4);border-radius:13px;border-top-right-radius:4px;padding:9px 11px;font-size:11.5px;color:var(--gold-bright);font-weight:500;line-height:1.55">어떻게 아셨어요? 역시 우리 담당자님!</div>
+      </div>
+    </div>
+    <div class="pcap rise d4">화면 어디에도 ‘자비아’는 보이지 않습니다</div>
+  </section>
+
+  <!-- S9 -->
+  <section class="scene" data-dur="9500"
+    data-narr="기억하고, 쓰고, 보내는 일은 이제 시스템이 합니다. 컨설턴트님은 고객에게만 집중하세요. 지금 바로, 첫 안부를 보내 보세요.">
+    <div class="kicker rise d1">Start Now</div>
+    <h2 class="rise d2">기억은 시스템이,<br><span class="gold">관계는 당신이</span></h2>
+    <a class="cta-btn rise d3" href="https://jarvia.co.kr" style="text-decoration:none;cursor:pointer">지금 첫 안부 보내기</a>
+    <div class="cta-url rise d4"><b>jarvia.co.kr</b> · 내 채널</div>
+    <p class="lede rise d5" style="font-size:12px;margin-top:24px">문자발송은 컨설턴트 채널에서 바로 사용할 수 있습니다</p>
+  </section>
+
+  <!-- 컨트롤 -->
+  <div class="controls">
+    <div class="seek">
+      <div class="seekTrack" id="seekTrack"><div class="seekFill" id="seekFill"></div><div class="seekHandle" id="seekHandle"></div></div>
+      <div class="seekLabel" id="seekLabel">1 / 9</div>
+    </div>
+    <div class="ctl-row">
+      <button class="ctl" id="prevBtn" aria-label="이전 장면">⏮</button>
+      <button class="ctl big" id="pauseBtn" aria-label="일시정지">⏸</button>
+      <button class="ctl" id="nextBtn" aria-label="다음 장면">⏭</button>
+      <button class="ctl" id="replayBtn" aria-label="처음부터">↻</button>
+      <button class="ctl" id="muteBtn" aria-label="음소거">🔊</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const scenes=[...document.querySelectorAll('.scene')];
+  const N=scenes.length;
+  const gate=document.getElementById('gate');
+  const playBtn=document.getElementById('playBtn');
+  const muteBtn=document.getElementById('muteBtn');
+  const replayBtn=document.getElementById('replayBtn');
+  const prevBtn=document.getElementById('prevBtn');
+  const nextBtn=document.getElementById('nextBtn');
+  const pauseBtn=document.getElementById('pauseBtn');
+  const seekTrack=document.getElementById('seekTrack');
+  const seekFill=document.getElementById('seekFill');
+  const seekHandle=document.getElementById('seekHandle');
+  const seekLabel=document.getElementById('seekLabel');
+
+  let cur=-1, timer=null, safetyTimer=null, muted=false, started=false, gen=0;
+  let paused=false, dragging=false, pendingIdx=0;
+  let koVoice=null, ttsBroken=false;
+
+  /* ── 한국어 음성 선택 ── */
+  function pickVoice(){
+    const vs=speechSynthesis.getVoices();
+    koVoice = vs.find(v=>/ko[-_]KR/i.test(v.lang)&&/Heami|SunHi|Google/i.test(v.name))
+           || vs.find(v=>/ko[-_]KR/i.test(v.lang)) || null;
+  }
+  if('speechSynthesis' in window){
+    pickVoice();
+    speechSynthesis.onvoiceschanged=pickVoice;
+  }
+
+  function speak(text,onDone){
+    if(muted||ttsBroken||!('speechSynthesis' in window)){onDone&&onDone(false);return;}
+    speechSynthesis.cancel();
+    // Chrome 계열: cancel 직후 speak 호출 시 발화가 무시되는 현상 회피
+    setTimeout(()=>{
+      const u=new SpeechSynthesisUtterance(text);
+      u.lang='ko-KR'; if(koVoice)u.voice=koVoice;
+      u.rate=0.96; u.pitch=1.0;
+      let started=false;
+      u.onstart=()=>{started=true;};
+      u.onend=()=>{onDone&&onDone(true);};
+      u.onerror=()=>{
+        if(!started)ttsBroken=true; // 시작도 못 하면 이 환경은 TTS 미지원으로 간주
+        onDone&&onDone(false);
+      };
+      try{speechSynthesis.speak(u);}catch(e){ttsBroken=true;onDone&&onDone(false);}
+    },120);
+  }
+
+  /* ── 나레이션 오디오 (mp3 우선) ──
+     같은 경로의 message-promo-1.mp3 ~ -9.mp3 를 장면 순서대로 재생.
+     파일이 없거나 재생 실패 시 → 브라우저 TTS 폴백 → 그것도 불가 시 무음 진행 */
+  const AUDIO_BASE='message-promo-';   // 파일명 규칙: message-promo-1.mp3 …
+  let mp3Broken=false;                  // 전 파일 누락 등 환경 단위 실패 시
+  let curAudio=null;                    // 카카오톡 등 인앱 WebView 호환: 장면마다 새 Audio 생성
+
+  function stopAudio(){try{if(curAudio){curAudio.onended=curAudio.onerror=null;curAudio.pause();curAudio.src='';curAudio=null;}}catch(e){}}
+
+  function playNarration(idx,text,onDone){
+    if(muted){onDone&&onDone(false);return;}
+    if(mp3Broken){speak(text,onDone);return;}
+    let settled=false, played=false;
+    const done=ok=>{if(settled)return;settled=true;onDone&&onDone(ok);};
+    const fallback=()=>{if(settled||played)return;settled=true;curAudio=null;speak(text,onDone);};
+    stopAudio();
+    if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}
+    const a=new Audio(AUDIO_BASE+(idx+1)+'.mp3');
+    curAudio=a;
+    a.onended=()=>done(true);
+    a.onplaying=()=>{played=true;if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}};
+    a.onerror=fallback;
+    const p=a.play();
+    if(p&&p.catch)p.catch(fallback);
+  }
+
+  /* ── 시크바 갱신 ── */
+  function updateSeek(i){
+    const r=N>1?i/(N-1):0;
+    seekFill.style.width=(r*100)+'%';
+    seekHandle.style.left=(r*100)+'%';
+    seekLabel.textContent=(i+1)+' / '+N;
+  }
+
+  /* ── 골드 링 애니메이션 ── */
+  function animateRings(scene){
+    scene.querySelectorAll('.bar[data-score]').forEach(bar=>{
+      const score=+bar.dataset.score;
+      const C=339.3;
+      bar.style.strokeDashoffset=C-(C*score/100);
+    });
+    scene.querySelectorAll('[data-count]').forEach(el=>{
+      const target=+el.dataset.count, t0=performance.now(), dur=2200, delay=800;
+      function step(t){
+        const p=Math.min(1,Math.max(0,(t-t0-delay)/dur));
+        el.textContent=Math.round(target*(1-Math.pow(1-p,3)));
+        if(p<1)requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  function resetRings(scene){
+    scene.querySelectorAll('.bar[data-score]').forEach(b=>b.style.strokeDashoffset=339.3);
+    scene.querySelectorAll('[data-count]').forEach(e=>e.textContent='0');
+  }
+
+  /* ── 장면 전환 ──
+     이중 게이트: ① 최소 표시시간(data-dur) 경과 + ② 나레이션 종료(또는 실패/음소거)
+     두 조건이 모두 충족되어야 다음 장면으로 넘어간다.
+     → TTS가 실패해도 각 장면은 최소 data-dur 만큼 반드시 표시됨 */
+  function go(i,manual){
+    if(i>=scenes.length)i=scenes.length-1;
+    gen++; const myGen=gen;
+    clearTimeout(timer); clearTimeout(safetyTimer);
+    if('speechSynthesis' in window)speechSynthesis.cancel();
+    stopAudio();
+
+    if(cur>=0){scenes[cur].classList.remove('active');resetRings(scenes[cur]);}
+    cur=i;
+    const sc=scenes[cur];
+    // 리플로우로 rise 애니메이션 재트리거
+    void sc.offsetWidth;
+    sc.classList.add('active');
+    animateRings(sc);
+    paused=false; pauseBtn.textContent='⏸';
+    updateSeek(cur);
+
+    const dur=+sc.dataset.dur||8000;
+    const narr=sc.dataset.narr||'';
+    const isLast=cur===scenes.length-1;
+
+    let minDone=false;
+    // 나레이션 종료 여부(없음/음소거면 처음부터 완료). mp3 재생은 TTS 존재와 무관하게 항상 시도.
+    let narrDone=muted||!narr;
+
+    const tryNext=()=>{
+      if(myGen!==gen||paused||dragging)return;   // 수동 이동·일시정지·드래그 중 차단
+      if(minDone&&narrDone&&!isLast)go(cur+1);
+    };
+
+    timer=setTimeout(()=>{minDone=true;tryNext();},dur);
+
+    if(!narrDone){
+      playNarration(cur,narr,()=>{
+        if(myGen!==gen)return;
+        narrDone=true;
+        setTimeout(tryNext,800);       // 음성 종료 후 잠깐의 여백
+      });
+      // 안전장치: 콜백이 영영 안 오는 환경 대비
+      safetyTimer=setTimeout(()=>{narrDone=true;tryNext();},dur+15000);
+    }
+  }
+
+  /* ── 시작 / 컨트롤 ── */
+  playBtn.onclick=()=>{
+    started=true;
+    gate.classList.add('hide');
+    if('speechSynthesis' in window){speechSynthesis.cancel();pickVoice();}
+    go(0);   // 클릭 제스처 안에서 즉시 시작(모바일 오디오 허용)
+  };
+  prevBtn.onclick=()=>{ if(started)go(Math.max(0,cur-1)); };
+  nextBtn.onclick=()=>{ if(started)go(Math.min(N-1,cur+1)); };
+  replayBtn.onclick=()=>{ if(started)go(0); };
+
+  /* 일시정지 / 재개 */
+  pauseBtn.onclick=()=>{
+    if(!started)return;
+    paused=!paused;
+    pauseBtn.textContent=paused?'▶':'⏸';
+    if(paused){
+      clearTimeout(timer); clearTimeout(safetyTimer);
+      if('speechSynthesis' in window){try{speechSynthesis.cancel();}catch(e){}}
+      try{if(curAudio)curAudio.pause();}catch(e){}
+    }else{
+      go(cur);   // 현재 장면부터 재개(타이머·나레이션 재시작)
+    }
+  };
+
+  muteBtn.onclick=()=>{
+    muted=!muted;
+    muteBtn.textContent=muted?'🔇':'🔊';
+    if('speechSynthesis' in window)speechSynthesis.cancel();
+    stopAudio();
+    if(started&&cur>=0)go(cur);
+  };
+
+  /* 시크바 드래그 시킹 */
+  function ratioFromX(x){const r=seekTrack.getBoundingClientRect();return Math.min(1,Math.max(0,(x-r.left)/r.width));}
+  function previewIndex(ratio){
+    const i=Math.round(ratio*(N-1));
+    seekFill.style.width=(ratio*100)+'%';
+    seekHandle.style.left=(ratio*100)+'%';
+    seekLabel.textContent=(i+1)+' / '+N;
+    return i;
+  }
+  seekTrack.addEventListener('pointerdown',e=>{ if(!started)return; dragging=true;
+    try{seekTrack.setPointerCapture(e.pointerId);}catch(_){}
+    pendingIdx=previewIndex(ratioFromX(e.clientX)); });
+  seekTrack.addEventListener('pointermove',e=>{ if(!dragging)return; pendingIdx=previewIndex(ratioFromX(e.clientX)); });
+  seekTrack.addEventListener('pointerup',()=>{ if(!dragging)return; dragging=false; go(pendingIdx); });
+
+  updateSeek(0);
+})();
+</script>
+</body>
+</html>
