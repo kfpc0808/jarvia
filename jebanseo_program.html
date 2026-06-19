@@ -299,22 +299,6 @@
   <div class="ldim" onclick="toggleLeft()"></div>
 </div>
 
-<div id="present">
-  <div class="pstage">
-    <button class="pnav" onclick="presentGo(-1)" title="이전 (←)">‹</button>
-    <div id="pslide"></div>
-    <button class="pnav" onclick="presentGo(1)" title="다음 (→)">›</button>
-  </div>
-  <div class="pnotes" id="pnotes"></div>
-  <div class="pbar">
-    <button onclick="presentGo(-1)">← 이전</button>
-    <span id="pcount">1 / 1</span>
-    <button onclick="presentGo(1)">다음 →</button>
-    <button onclick="togglePnotes()" title="발표노트 살짝 보기 (고객 화면엔 안 보임)">🎤 노트</button>
-    <button onclick="endPresent()">✕ 종료 (Esc)</button>
-  </div>
-</div>
-
 <div class="modal" id="libmodal">
   <div class="mbox">
     <div class="mhead"><b>저장한 자료</b><button class="mx" onclick="closeLib()">✕</button></div>
@@ -397,8 +381,9 @@ function hideEdbar(){const b=edBarEl();if(b)b.classList.remove('on');edTarget=nu
 function edExec(cmd,v){if(!edTarget)return;edTarget.focus();
   try{
     if(cmd==='alL'||cmd==='alC'||cmd==='alR'){const al=cmd==='alL'?'left':cmd==='alR'?'right':'center';
-      let inner=edTarget.innerHTML.replace(/^<div class="al-(?:left|center|right)">([\s\S]*)<\/div>$/i,'$1');
-      edTarget.innerHTML='<div class="al-'+al+'">'+inner+'</div>';
+      const tmp=document.createElement('div');tmp.innerHTML=edTarget.innerHTML;
+      tmp.querySelectorAll('div.al-left,div.al-center,div.al-right').forEach(d=>{while(d.firstChild)d.parentNode.insertBefore(d.firstChild,d);d.parentNode.removeChild(d);});
+      edTarget.innerHTML='<div class="al-'+al+'">'+tmp.innerHTML+'</div>';
       const rg=document.createRange();rg.selectNodeContents(edTarget);rg.collapse(false);const sl=window.getSelection();sl.removeAllRanges();sl.addRange(rg);}
     else if(cmd==='inc'||cmd==='dec'){let cur=parseInt(document.queryCommandValue('fontSize'))||3;cur=Math.max(1,Math.min(7,cur+(cmd==='inc'?1:-1)));document.execCommand('fontSize',false,String(cur));}
     else if(cmd==='fore'){document.execCommand('styleWithCSS',false,true);document.execCommand('foreColor',false,v);}
@@ -441,54 +426,10 @@ function renderGenLoading(){const r=document.getElementById('deck');
 function stopGenTimer(){clearInterval(window._genTimer);}
 function scrollToSlide(idx){const node=document.getElementById('deck').children[idx];if(node)node.scrollIntoView({behavior:'smooth',block:'center'});}
 
-/* ===== 발표 모드 (전체화면 · 한 장씩) ===== */
-let pIdx=0;
-function startPresent(){if(!deck.slides.length){return aiReply('먼저 자료를 생성하거나 저장한 자료를 열어 주세요.');}pIdx=(selectedIdx!=null?selectedIdx:0);document.getElementById('present').classList.add('on');renderPresent();}
-function endPresent(){const p=document.getElementById('present');p.classList.remove('on');p.classList.remove('shownotes');}
-function presentGo(d){pIdx=Math.max(0,Math.min(deck.slides.length-1,pIdx+d));renderPresent();}
-function togglePnotes(){document.getElementById('present').classList.toggle('shownotes');}
-function renderPresent(){const s=deck.slides[pIdx];if(!s)return;const box=document.getElementById('pslide');box.innerHTML='';const node=makeSlide(s,pIdx);node.classList.remove('sel');node.onclick=()=>presentGo(1);box.appendChild(node);document.getElementById('pcount').textContent=(pIdx+1)+' / '+deck.slides.length;document.getElementById('pnotes').textContent=s.notes||'(이 슬라이드엔 발표노트가 없습니다)';}
-document.addEventListener('keydown',function(e){if(!document.getElementById('present').classList.contains('on'))return;if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();presentGo(1);}else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();presentGo(-1);}else if(e.key==='Escape'){endPresent();}else if(e.key==='Home'){pIdx=0;renderPresent();}else if(e.key==='End'){pIdx=deck.slides.length-1;renderPresent();}});
-
 /* ===== 진행자 메시지 ===== */
 const MSGS=[];
 function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who);d.innerHTML=x.html;m.appendChild(d);});m.scrollTop=m.scrollHeight;}
 function aiReply(t){MSGS.push({who:'ai',html:t});paint();}
-
-/* ===== 간이 계산 (계산엔진 대역 — 실제는 택스나비 엔진) ===== */
-function lightCalc(p){
-  const life=90,income=p.monthlySalary||0,retire=p.retire||60,age=p.age||40,asset=p.asset||0;
-  const yIn=Math.max(1,life-retire), yTo=Math.max(1,retire-age);
-  const needMonthly=Math.round(income*0.7);
-  const needTotal=Math.round(needMonthly*12*yIn/10000*10)/10;
-  const prepared=asset;
-  const gap=Math.max(0,Math.round((needTotal-prepared)*10)/10);
-  const mSave=gap>0?Math.round(gap*10000/(yTo*12)):0;
-  return {필요월생활비_만원:needMonthly,은퇴후연수_년:yIn,필요총자금_억:needTotal,현재준비_억:prepared,부족액_억:gap,월적립_지금_만원:mSave,월적립_5년후_만원:Math.round(mSave*1.6),은퇴까지_년:yTo};
-}
-
-/* ===== 작성자(Claude API) — 슬라이드 한 장 생성 ===== */
-async function genSlide(spec){
-  const prompt=`너는 금융 컨설팅 자료의 '작성자'다. 아래 ${topic}의 "${spec.role}" 슬라이드 한 장을 JSON 객체 하나로만 출력하라(설명·코드펜스 없이 JSON만).
-형식: {"slideNum":"${spec.num}"${spec.cover?',"region":"cover"':''},"title":"","subtitle":"","conclusion":"","content":[],"ment":"","bridge":"","notes":"","disclaimer":""}
-content 요소는 문자열(불릿) 또는 {"type":"chart","chartType":"bar"|"line","labels":[],"series":[{"name":"","values":[]}],"unit":""} 또는 {"type":"card","cards":[{"label":"","text":""}]}.
-규칙: ① 숫자는 아래 '계산결과' 값만 사용(새 숫자 생성 절대 금지). ② 공포·강매 표현 금지, 고객 대상 정중한 톤. ③ notes는 [컨설턴트 멘트] 상담 화법 2~3문장. ④ 한국어. ⑤ ${spec.hint}
-고객정보: ${JSON.stringify(params)}
-계산결과(이 수치만 사용): ${JSON.stringify(calc)}`;
-  const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
-  const data=await res.json();
-  let txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').replace(/```json|```/g,'').trim();
-  return JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));
-}
-
-const SPECS=[
-  {num:"01",cover:true,role:"표지",hint:"제목은 고객명+분야, subtitle 한 줄. content는 빈 배열."},
-  {num:"02",role:"오늘의 결론",hint:"conclusion에 핵심 결론 1문장, content에 근거 불릿 2개."},
-  {num:"07",role:"현재와 목표의 차이",hint:"conclusion으로 부족액 강조, content에 bar 차트(필요총자금·현재준비·부족액) 1개 + 불릿 1개."},
-  {num:"08",role:"미루었을 때의 비용",hint:"content에 line 차트(지금/5년 후 월적립 부담) 1개 + 불릿 1개."},
-  {num:"10",role:"다음 단계 안내",hint:"content에 card 2개(A안 안정형/B안 성장형) + 정중한 마무리 불릿."}
-];
 
 const GUIDE_HTML='<div class="guidebox"><div class="gt">✨ 자료가 완성됐어요 — 이렇게 쓰세요</div>'
 +'<div class="gi"><i>1</i><span>아래 입력창에 요청을 적으면 <b>오른쪽에 실시간으로</b> 자료가 만들어집니다.</span></div>'
