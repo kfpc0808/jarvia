@@ -68,6 +68,11 @@
   .concl{font-size:15.5px;font-weight:500;color:var(--navy);margin:12px 0 6px;padding-left:12px;border-left:3px solid var(--gold);line-height:1.5;}
   .cbody{flex:1;margin-top:12px;display:flex;flex-direction:column;gap:11px;}
   ul.bul{margin:0;padding:0;list-style:none;}ul.bul li{font-size:14px;color:var(--slate);margin:6px 0;padding-left:18px;position:relative;line-height:1.55;}ul.bul li::before{content:"";position:absolute;left:2px;top:8px;width:6px;height:6px;border-radius:50%;background:var(--gold);}
+  .edt{cursor:text;border-radius:5px;transition:background .15s,box-shadow .15s;}
+  .edt:hover{background:rgba(176,133,43,.10);box-shadow:0 0 0 3px rgba(176,133,43,.10);}
+  .edt:focus{outline:2px solid var(--gold);outline-offset:2px;background:#fff;}
+  .cover .edt:hover{background:rgba(255,255,255,.08);box-shadow:none;}
+  .cover .edt:focus{background:rgba(255,255,255,.12);}
   table.t{width:100%;border-collapse:collapse;font-size:12.5px;}table.t th,table.t td{border:1px solid var(--line);padding:6px 10px;text-align:left;}table.t th{background:var(--slatebg);font-weight:600;}table.t td{color:var(--slate);}
   .cards{display:flex;gap:12px;}.cd{flex:1;border:1px solid var(--line);border-radius:11px;padding:15px 16px;background:var(--paper);}.cd .l{font-size:12.5px;color:var(--gold);font-weight:800;letter-spacing:.02em;}.cd .x{font-size:13px;color:var(--slate);margin-top:6px;line-height:1.55;}
   .stats{display:flex;gap:12px;margin:4px 0;}
@@ -213,8 +218,14 @@ function renderChart(c){const wrap=elt('div','chart');const W=560,H=185,pl=46,pb
 function renderTable(t){const tb=elt('table','t');t.rows.forEach((row,ri)=>{const tr=elt('tr');row.forEach(cell=>{const c=elt(ri===0?'th':'td');c.textContent=cell;tr.appendChild(c);});tb.appendChild(tr);});return tb;}
 function renderCards(c){const w=elt('div','cards');c.cards.forEach(cd=>{const d=elt('div','cd');const l=elt('div','l');l.textContent=cd.label;const x=elt('div','x');x.textContent=cd.text;d.appendChild(l);d.appendChild(x);w.appendChild(d);});return w;}
 function renderStats(c){const w=elt('div','stats');(c.items||[]).forEach(it=>{const d=elt('div','stat'+(it.tone?(' '+it.tone):''));const v=elt('div','v');v.textContent=it.value;if(it.unit){const u=elt('span','u');u.textContent=it.unit;v.appendChild(u);}const l=elt('div','l');l.textContent=it.label;d.appendChild(v);d.appendChild(l);w.appendChild(d);});return w;}
-function renderContent(items){const f=document.createDocumentFragment();let b=null;const fl=()=>{if(b){f.appendChild(b);b=null;}};
-  (items||[]).forEach(it=>{if(typeof it==='string'){if(!b)b=elt('ul','bul');const li=elt('li');li.textContent=it;b.appendChild(li);}else if(it&&it.type==='table'){fl();f.appendChild(renderTable(it));}else if(it&&it.type==='card'){fl();f.appendChild(renderCards(it));}else if(it&&it.type==='stat'){fl();f.appendChild(renderStats(it));}else if(it&&it.type==='chart'){fl();f.appendChild(renderChart(it));}});fl();return f;}
+function renderContent(items,idx){const f=document.createDocumentFragment();let b=null;const fl=()=>{if(b){f.appendChild(b);b=null;}};
+  (items||[]).forEach((it,k)=>{if(typeof it==='string'){if(!b)b=elt('ul','bul');const li=elt('li');li.textContent=it;if(idx!=null)mkEditable(li,v=>{deck.slides[idx].content[k]=v;});b.appendChild(li);}else if(it&&it.type==='table'){fl();f.appendChild(renderTable(it));}else if(it&&it.type==='card'){fl();f.appendChild(renderCards(it));}else if(it&&it.type==='stat'){fl();f.appendChild(renderStats(it));}else if(it&&it.type==='chart'){fl();f.appendChild(renderChart(it));}});fl();return f;}
+function mkEditable(el,apply){el.setAttribute('contenteditable','true');el.spellcheck=false;el.classList.add('edt');
+  el.addEventListener('mousedown',e=>e.stopPropagation());
+  el.addEventListener('click',e=>e.stopPropagation());
+  el.addEventListener('blur',()=>{apply(el.textContent.trim());autoSave();});
+  el.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();el.blur();}});
+}
 const EYE={"01":["표지","slatebg","slate"],"02":["결론","goldbg","gold"],"07":["진단","redbg","red"],"08":["진단","redbg","red"],"10":["해법","goldbg","gold"]};
 function ebTone(t){if(/핵심|격차|차이|부족|비용/.test(t))return['redbg','red'];if(/제안|플랜|요약|결론/.test(t))return['goldbg','gold'];if(/실행|전략|해법|방향/.test(t))return['greenbg','green'];return['navybg','navy'];}
 function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak':'')+(idx===selectedIdx?' sel':''));sl.onclick=()=>{selectedIdx=idx;renderDeck();};
@@ -222,11 +233,11 @@ function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak
   const cv=elt('div','canvas'+(s.region==='cover'?' cover':'')+(centered?' center':''));const tg=elt('div','stag');tg.textContent=(idx+1)+(s.slideNum?(' · '+s.slideNum):'');cv.appendChild(tg);
   const ebText=s.region==='cover'?null:(s.eyebrow||(EYE[s.slideNum]?EYE[s.slideNum][0]:null));
   if(ebText){const e=elt('div','eyebrow');e.textContent=ebText;const tn=ebTone(ebText);e.style.background=`var(--${tn[0]})`;e.style.color=`var(--${tn[1]})`;cv.appendChild(e);}
-  const tt=elt('div','stitle');tt.textContent=s.title||'';cv.appendChild(tt);
-  if(s.subtitle){const su=elt('div','ssub');su.textContent=s.subtitle;cv.appendChild(su);}
+  const tt=elt('div','stitle');tt.textContent=s.title||'';mkEditable(tt,v=>{deck.slides[idx].title=v;});cv.appendChild(tt);
+  if(s.subtitle){const su=elt('div','ssub');su.textContent=s.subtitle;mkEditable(su,v=>{deck.slides[idx].subtitle=v;});cv.appendChild(su);}
   if(s.region==='cover')cv.appendChild(elt('div','rule'));
-  if(s.conclusion){const c=elt('div','concl');c.textContent=s.conclusion;cv.appendChild(c);}
-  if(s.content&&s.content.length){const bd=elt('div','cbody');bd.appendChild(renderContent(s.content));cv.appendChild(bd);}
+  if(s.conclusion){const c=elt('div','concl');c.textContent=s.conclusion;mkEditable(c,v=>{deck.slides[idx].conclusion=v;});cv.appendChild(c);}
+  if(s.content&&s.content.length){const bd=elt('div','cbody');bd.appendChild(renderContent(s.content,idx));cv.appendChild(bd);}
   sl.appendChild(cv);
   if(s.notes){const n=elt('div','notes');const l=elt('div','lab');l.textContent='🎤 발표노트';n.appendChild(l);const p=document.createElement('div');p.textContent=s.notes;n.appendChild(p);sl.appendChild(n);}
   return sl;}
@@ -284,7 +295,7 @@ async function generate(){
     if(data.params){params=data.params;fillChips(data.params);}
     if(data.calc) calc=data.calc;
     for(const s of data.deck.slides){deck.slides.push(s);renderDeck();const last=document.getElementById('deck').children[deck.slides.length-1];if(last){last.classList.add('flash');last.scrollIntoView({behavior:'smooth',block:'center'});}await new Promise(res=>setTimeout(res,350));}
-    aiReply('자료가 완성됐어요. 오른쪽에서 확인하시고, "3번 삭제"·"2번 결론 영어로" 같은 지시로 바로 편집하실 수 있어요. ✓');
+    aiReply('자료가 완성됐어요. 오른쪽 슬라이드의 <b>제목·문장을 클릭하면 바로 수정</b>할 수 있고, "2번 보강해줘"·"○○ 슬라이드 추가"·"3번 삭제" 같은 지시도 됩니다. ✓');
   }catch(e){
     aiReply('자료 생성에 실패했어요. FUNCTION_URL이 올바른지, Cloud Function이 배포됐는지 확인해 주세요. ('+(e.message||e)+')');
   }
