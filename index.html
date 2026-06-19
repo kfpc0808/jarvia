@@ -408,6 +408,30 @@
 </section>
 
 <!-- 비로그인 콘텐츠 클릭 시 로그인 유도 팝업 -->
+<div id="mdl-ai-proposal-guide" class="modal hidden">
+  <div class="mdl-bg" onclick="closeM('mdl-ai-proposal-guide')"></div>
+  <div class="mdl-box" style="max-width:460px;padding:34px">
+    <button class="mdl-x" onclick="closeM('mdl-ai-proposal-guide')">×</button>
+    <div style="text-align:center;font-size:42px;margin-bottom:12px">📑</div>
+    <h2 style="font-size:20px;font-weight:700;color:var(--primary);text-align:center;margin-bottom:8px">AI 제안서 이용 안내</h2>
+    <p style="color:var(--text-lt);font-size:13px;text-align:center;margin-bottom:20px;line-height:1.6">고객 정보·상담 주제만 입력하면<br>맞춤 상담 제안서를 자동으로 생성합니다.</p>
+    <div style="background:#F7F9FC;border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:18px;font-size:13px;line-height:1.9;color:#374151">
+      <div style="font-weight:700;color:var(--primary);margin-bottom:6px">📌 이용 방법</div>
+      1. 고객 기본정보와 상담 주제를 입력합니다.<br>
+      2. AI가 맞춤 제안서 초안을 생성합니다.<br>
+      3. 내용을 확인·수정한 뒤 출력합니다.
+      <div style="font-weight:700;color:var(--primary);margin:12px 0 6px">💎 이용 안내</div>
+      · 지사장·이너서클·컨홈·자비아멤버십: <b>매월 2건 무료</b><br>
+      · 무료 한도 초과 시 건당 <b>3,000원</b> (포인트 우선 차감)
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-full" id="aip-guide-sample" style="display:none" onclick="if(AI_PROPOSAL_SAMPLE_URL)window.open(AI_PROPOSAL_SAMPLE_URL,'_blank')">📄 샘플 제안서 보기</button>
+      <button class="btn btn-full btn-sec" onclick="closeM('mdl-ai-proposal-guide')">닫기</button>
+    </div>
+    <p style="text-align:center;font-size:12px;color:#9AA3B2;margin-top:14px">정식 오픈 전까지는 일부 계정에서만 이용 가능합니다.</p>
+  </div>
+</div>
+
 <div id="mdl-login-prompt" class="modal hidden">
   <div class="mdl-bg" onclick="closeM('mdl-login-prompt')"></div>
   <div class="mdl-box" style="max-width:400px;text-align:center;padding:40px">
@@ -10994,19 +11018,85 @@ setTimeout(() => { try{ clearInterval(_fcrAutoCheck); }catch(e){} }, 30000);
 /* ════════ AI 제안서 ════════ */
 // ★ 배포 후 호스팅한 프로그램 주소로 교체하세요 (GitHub Pages 또는 자비아 호스팅)
 var AI_PROPOSAL_URL = 'https://kfpc0808.github.io/jarvia/jebanseo_program.html';
+// ★ 일반회원 안내팝업에 넣을 샘플 제안서 HTML 주소 (추후 입력 — 비어있으면 샘플버튼 숨김)
+var AI_PROPOSAL_SAMPLE_URL = '';
+// ★ true로 변경 시 4종 회원(지사장·이너서클·컨홈·자비아멤버십) "월 2건 무료 + 초과 건당 3,000원" 체계 가동.
+//    현재 false → gildong/admin/관리자만 이용 가능, 그 외 전원 안내팝업.
+var AI_PROPOSAL_LIVE = false;
+var AI_PROPOSAL_FREE_ROLES = ['branch_manager','inner_circle','con_homepage','jarvia_member'];
+var AI_PROPOSAL_PRICE = 3000;
+var AI_PROPOSAL_FREE_PER_MONTH = 2;
+// gildong/admin/관리자 = 무제한 무료
 function _aiProposalAllowed(){
   var lid = (window.meData && meData.loginId) || '';
   return lid === 'gildong' || lid === 'admin' || (window.meData && meData.role === 'admin');
 }
+// KST 기준 'YYYY-MM'
+function _aiProposalYM(){
+  return new Date(Date.now()+9*3600*1000).toISOString().slice(0,7);
+}
+// 월 카운터 +1, 무료 한도 초과 시 포인트 우선 차감 (Firestore 트랜잭션)
+async function _consumeAiProposal(uid){
+  var uRef=doc(db,'users',uid);
+  var ym=_aiProposalYM();
+  var fieldKey='aiProposalUsage.'+ym;
+  return runTransaction(db,async function(tx){
+    var uDoc=await tx.get(uRef);
+    if(!uDoc.exists())throw new Error('데이터 오류');
+    var ud=uDoc.data();
+    var used=(ud.aiProposalUsage&&ud.aiProposalUsage[ym])||0;
+    if(used<AI_PROPOSAL_FREE_PER_MONTH){
+      tx.update(uRef,{[fieldKey]:increment(1),updatedAt:serverTimestamp()});
+      return{charged:false,used:used+1};
+    }
+    var price=AI_PROPOSAL_PRICE;
+    var totalAvail=(ud.point||0)+(ud.balance||0);
+    if(totalAvail<price)throw new Error('INSUFFICIENT_BALANCE');
+    var pointUsed=Math.min(ud.point||0,price);
+    var balUsed=price-pointUsed;
+    var np=(ud.point||0)-pointUsed;
+    var nb=(ud.balance||0)-balUsed;
+    var txId=gid();
+    tx.update(uRef,{point:np,balance:nb,[fieldKey]:increment(1),updatedAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
+    return{charged:true,price:price,point:np,balance:nb,used:used+1};
+  });
+}
+async function _runAiProposalPaid(){
+  try{
+    var r=await _consumeAiProposal(me.uid);
+    if(r.point!==undefined)meData.point=r.point;
+    if(r.balance!==undefined)meData.balance=r.balance;
+    if(typeof updateBal==='function')updateBal();
+    if(typeof logSvc==='function')logSvc('ai_proposal');
+    if(r.charged){ if(typeof toast==='function')toast('💰 '+fmt(AI_PROPOSAL_PRICE)+'원 차감 · 이번 달 '+r.used+'번째 이용','success'); }
+    else{ if(typeof toast==='function')toast('이번 달 무료 '+r.used+'/'+AI_PROPOSAL_FREE_PER_MONTH+'건 이용','success'); }
+    window.open(AI_PROPOSAL_URL,'_blank');
+  }catch(err){
+    if(err.message==='INSUFFICIENT_BALANCE'){ if(typeof toast==='function')toast('잔액이 부족합니다. 충전 후 이용해주세요.','warning'); if(typeof openCharge==='function')openCharge(); }
+    else{ if(typeof toast==='function')toast('이용 오류: '+(err.message||err),'error'); }
+  }
+}
+// 일반회원/대상 외 안내팝업 (샘플 URL 있을 때만 샘플버튼 노출)
+function _openAiProposalGuide(){
+  var _sb=document.getElementById('aip-guide-sample');
+  if(_sb)_sb.style.display=AI_PROPOSAL_SAMPLE_URL?'block':'none';
+  if(typeof openM==='function')openM('mdl-ai-proposal-guide');
+}
 function goAiProposal(){
   if(!window.me){ if(typeof openM==='function') openM('mdl-login-prompt'); return; }
+  // gildong/admin/관리자 → 무제한
   if(_aiProposalAllowed()){
     if(typeof logSvc==='function') logSvc('ai_proposal');
     window.open(AI_PROPOSAL_URL, '_blank');
-  } else {
-    if(typeof toast==='function') toast('AI 제안서 기능은 곧 오픈됩니다. 조금만 기다려 주세요! 🚀','success');
-    else alert('AI 제안서 기능은 곧 오픈됩니다. 조금만 기다려 주세요!');
+    return;
   }
+  // 유료체계 미가동 → 그 외 전원 안내팝업
+  if(!AI_PROPOSAL_LIVE){ _openAiProposalGuide(); return; }
+  // 가동 시 → 4종 회원만 무료2건+차감, 나머지는 안내팝업
+  var role=(window.meData&&meData.role)||'';
+  if(AI_PROPOSAL_FREE_ROLES.indexOf(role)>=0){ _runAiProposalPaid(); return; }
+  _openAiProposalGuide();
 }
 </script>
 
