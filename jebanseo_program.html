@@ -485,8 +485,7 @@ function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak
   if(ebText){const e=elt('div','eyebrow');e.textContent=ebText;const tn=ebTone(ebText);e.style.background=`var(--${tn[0]})`;e.style.color=`var(--${tn[1]})`;cv.appendChild(e);}
   const tt=elt('div','stitle');setRich(tt,s.title);mkEditable(tt,v=>{deck.slides[idx].title=v;});cv.appendChild(tt);
   if(s.subtitle){const su=elt('div','ssub');setRich(su,s.subtitle);mkEditable(su,v=>{deck.slides[idx].subtitle=v;});cv.appendChild(su);}
-  if(s.region==='cover')cv.appendChild(elt('div','rule'));
-  if(s.region==='cover'&&s.presenter){const pr=elt('div','cpresenter');setRich(pr,s.presenter);mkEditable(pr,v=>{deck.slides[idx].presenter=v;});cv.appendChild(pr);}
+  /* 표지는 buildCover로 분기되어 위에서 return됨 */
   if(s.conclusion){const c=elt('div','concl');setRich(c,s.conclusion);mkEditable(c,v=>{deck.slides[idx].conclusion=v;});cv.appendChild(c);}
   if(s.content&&s.content.length&&s.region!=='cover'){const bd=elt('div','cbody');bd.appendChild(renderContent(s.content,idx));cv.appendChild(bd);}
   sl.appendChild(cv);
@@ -543,6 +542,7 @@ function renderSim(it){const cfg=SIM_MODES[it.mode]||SIM_MODES.full;const dom=cf
   w.innerHTML='<div class="simh">🎚 '+cfg.t+' — 조건을 바꿔보세요</div><div class="simctl">'+ctl+'</div><div class="simout">'+out+'</div>'+bar+
     '<div class="simfoot">※ 참고용 간이 시뮬레이션 — 조절 시 즉시 재계산됩니다. 정밀 수치는 본문 표를 따릅니다.</div>';
   try{if(window.JEBSIM)JEBSIM.update(w);}catch(_){}
+  ['click','mousedown','pointerdown','touchstart'].forEach(ev=>w.addEventListener(ev,e=>e.stopPropagation()));
   return w;}
 function addSim(){if(!deck.slides.length){return toast('먼저 자료를 생성해 주세요');}if(topic!=='연금설계'){return toast('지금은 연금설계에서만 시뮬레이터를 지원해요');}const p=params||{};const it={type:'sim',domain:'pension',ca:+p.age||40,ra:+p.retire||65,le:90,asset:Math.round((+p.asset||1)*1e8),exp:+p.desiredMonthlyExpense||300,rate:5,infl:2.5};const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:'은퇴 설계 라이브 시뮬레이션',conclusion:'은퇴 나이·생활비·수익률을 바꾸면 은퇴시점 생활비·자산·수령액이 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 은퇴를 늦추거나 수익률을 높이면 수령액이 어떻게 달라지는지 바로 보실 수 있습니다.'};const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('라이브 시뮬레이터를 추가했어요 🎚');}
 function renderDeck(){const r=document.getElementById('deck');r.innerHTML='';if(!deck.slides.length){r.innerHTML='<div class="ph">시작 화면에서 고객 정보를 입력하면 여기에 자료가 생성됩니다.</div>';}else deck.slides.forEach((s,i)=>r.appendChild(makeSlide(s,i)));document.getElementById('count').textContent=deck.slides.length?('슬라이드 '+deck.slides.length+'장'):'—';autoSave();}
@@ -799,12 +799,13 @@ function exportPDF(){
 function escHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 /* ===== 다운로드 HTML에 내장될 자족 뷰어 (발표 + A4 2-up 인쇄) ===== */
 const VIEWER_BAR='<div class="viewerbar"><button onclick="__present()">▶ 발표</button><button onclick="__printA4()">📄 A4 인쇄 (2장/쪽)</button></div>';
-const VIEWER_OVERLAY='<div id="present"><div class="pstage"><button class="pnav" onclick="__pgo(-1)">‹</button><div id="pslide"></div><button class="pnav" onclick="__pgo(1)">›</button></div><div class="pnotes" id="pnotes"></div><div class="pbar"><button onclick="__pgo(-1)">← 이전</button><span id="pcount">1 / 1</span><button onclick="__pgo(1)">다음 →</button><button onclick="__pnotes()">🎤 노트</button><button onclick="__pend()">✕ 종료 (Esc)</button></div></div>';
-const VIEWER_CSS='.viewerbar{position:fixed;top:14px;right:16px;z-index:50;display:flex;gap:8px;}.viewerbar button{background:#1B2A4A;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 2px 8px rgba(0,0,0,.18);}.viewerbar button:hover{background:#24375f;}@media print{.viewerbar,#present{display:none!important;}}';
+const VIEWER_OVERLAY='<div id="present"><div class="pstage"><button class="pnav" onclick="__pgo(-1)">‹</button><div id="pslide"></div><button class="pnav" onclick="__pgo(1)">›</button></div><div class="pnotes" id="pnotes"></div><div class="pbar"><button onclick="__pgo(-1)">← 이전</button><span id="pcount">1 / 1</span><button onclick="__pgo(1)">다음 →</button><button onclick="__pnotes()">🎤 노트</button><button onclick="__pend()">✕ 종료 (Esc)</button></div><div id="ptoclink">목차</div></div>';
+const VIEWER_CSS='.viewerbar{position:fixed;top:14px;right:16px;z-index:50;display:flex;gap:8px;}.viewerbar button{background:#1B2A4A;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 2px 8px rgba(0,0,0,.18);}.viewerbar button:hover{background:#24375f;}#ptoclink{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:51;background:rgba(27,42,74,.92);color:#fff;font-size:12px;letter-spacing:.08em;padding:5px 16px;border-radius:14px;cursor:pointer;border:1px solid rgba(255,255,255,.18);display:none;}#ptoclink:hover{background:#2d4470;}@media print{.viewerbar,#present{display:none!important;}}';
 const VIEWER_JS=`(function(){
   function slides(){return Array.prototype.slice.call(document.querySelectorAll('.deck .slide'));}
   var pIdx=0, present=document.getElementById('present');
-  function rp(){var S=slides();var s=S[pIdx];if(!s)return;var box=document.getElementById('pslide');box.innerHTML='';var c=s.cloneNode(true);c.classList.remove('sel');var nn=c.querySelector('.notes');var t=nn?nn.textContent:'';if(nn)nn.parentNode.removeChild(nn);c.onclick=function(){go(1);};box.appendChild(c);document.getElementById('pcount').textContent=(pIdx+1)+' / '+S.length;document.getElementById('pnotes').textContent=t||'(이 슬라이드엔 발표노트가 없습니다)';}
+  function tocPos(S){for(var i=0;i<S.length;i++){if(S[i].querySelector('.canvas.toc'))return i;}return -1;}
+  function rp(){var S=slides();var s=S[pIdx];if(!s)return;var box=document.getElementById('pslide');box.innerHTML='';var c=s.cloneNode(true);c.classList.remove('sel');var nn=c.querySelector('.notes');var t=nn?nn.textContent:'';if(nn)nn.parentNode.removeChild(nn);var isCover=!!c.querySelector('.canvas.cover'),isToc=!!c.querySelector('.canvas.toc');var T=tocPos(S);if(isToc){var rows=c.querySelectorAll('.trow');Array.prototype.forEach.call(rows,function(row,k){row.style.cursor='pointer';row.onclick=function(e){e.stopPropagation();pIdx=Math.min(S.length-1,(T<0?0:T)+1+k);rp();};});}c.onclick=function(){go(1);};Array.prototype.forEach.call(c.querySelectorAll('.jebsim'),function(j){['click','mousedown','pointerdown','touchstart'].forEach(function(ev){j.addEventListener(ev,function(e){e.stopPropagation();});});});box.appendChild(c);var tl=document.getElementById('ptoclink');if(tl){if(!isCover&&!isToc&&T>=0){tl.style.display='block';tl.onclick=function(e){if(e)e.stopPropagation();pIdx=T;rp();};}else{tl.style.display='none';}}document.getElementById('pcount').textContent=(pIdx+1)+' / '+S.length;document.getElementById('pnotes').textContent=t||'(이 슬라이드엔 발표노트가 없습니다)';}
   function go(d){var S=slides();pIdx=Math.max(0,Math.min(S.length-1,pIdx+d));rp();}
   window.__present=function(){if(!slides().length){alert('표시할 슬라이드가 없습니다.');return;}pIdx=0;present.classList.add('on');rp();};
   window.__pgo=go;
@@ -997,7 +998,9 @@ window.JEBSIM=(function(){
   function applyState(root,st){for(var k in st){if(st[k]==null)continue;root.setAttribute('data-'+k,st[k]);var s=q(root,'[data-k="'+k+'"]');if(s)s.value=st[k];}}
   function sync(root){if(!root)return;var st=readState(root);var g=peers(root);for(var i=0;i<g.length;i++){applyState(g[i],st);update(g[i]);}}
   function initAll(){var ns=document.querySelectorAll('.jebsim'),seen={},i,g;for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&!seen[g])seen[g]=readState(ns[i]);}for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&seen[g])applyState(ns[i],seen[g]);try{update(ns[i]);}catch(e){}}}
-  document.addEventListener('DOMContentLoaded',initAll);
+  // 인라인 oninput에만 의존하지 않도록 document 위임 리스너(발표 복제본·환경 무관 동작)
+  document.addEventListener('input',function(e){var s=e.target;if(s&&s.getAttribute&&s.getAttribute('data-k')&&s.closest){var r=s.closest('.jebsim');if(r)sync(r);}},true);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initAll);else initAll();
   return {calc:calcPension,dom:DOM,update:update,sync:sync,initAll:initAll};
 })();
 </script>
