@@ -300,7 +300,6 @@
         <button class="tbtn" onclick="saveFile()" title="내 컴퓨터에 파일로 저장">💾 저장</button>
         <button class="tbtn" onclick="openFile()" title="저장한 파일 열기">📂 열기</button>
         <button class="tbtn" onclick="exportPDF()" title="A4 세로 2장/쪽 PDF 미리보기">📄 PDF</button>
-        <button class="tbtn" onclick="addSim()" title="연금 라이브 시뮬레이터 추가">🎚 시뮬레이터</button>
         <input type="file" id="fileinput" accept=".html,.json,text/html,application/json" style="display:none" onchange="handleFile(event)">
         <div class="toggle"><button id="b-c" class="on" onclick="setNotes(false)">고객용</button><button id="b-n" onclick="setNotes(true)">발표노트</button></div>
       </div></div>
@@ -428,14 +427,22 @@ function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak
   return sl;}
 function reseq(){deck.slides.forEach((s,i)=>{s.slideNum=String(i+1).padStart(2,'0');});}
 /* ===== 라이브 시뮬레이터 (연금) — 위젯 빌더 ===== */
-function simRow(k,label,val,unit,min,max,step){return '<label class="simrow"><span>'+label+' <b data-v="'+k+'">'+val+unit+'</b></span><input type="range" data-k="'+k+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'" oninput="window.JEBSIM&&JEBSIM.update(this.closest(\'.jebsim\'))"></label>';}
+function simRow(k,label,val,unit,min,max,step){return '<label class="simrow"><span>'+label+' <b data-v="'+k+'">'+val+unit+'</b></span><input type="range" data-k="'+k+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'" oninput="window.JEBSIM&&JEBSIM.sync(this.closest(\'.jebsim\'))"></label>';}
 function simOut(k,label,cls){return '<div class="simcell"><span>'+label+'</span><b data-o="'+k+'"'+(cls?' class="'+cls+'"':'')+'>—</b></div>';}
-function renderSim(it){const ca=it.ca||40,ra=it.ra||65,le=it.le||90,asset=it.asset||100000000,exp=it.exp||300,rate=it.rate||5,infl=it.infl||2.5;const w=elt('div','jebsim');w.setAttribute('data-ca',ca);w.setAttribute('data-le',le);w.setAttribute('data-asset',asset);w.setAttribute('data-infl',infl);w.setAttribute('data-ra',ra);w.setAttribute('data-exp',exp);w.setAttribute('data-rate',rate);
-  w.innerHTML='<div class="simh">🎚 라이브 시뮬레이션 — 조건을 바꿔보세요</div>'+
-    '<div class="simctl">'+simRow('ra','은퇴 나이',ra,'세',50,70,1)+simRow('exp','목표 월생활비(현재가치)',exp,'만원',100,700,10)+simRow('rate','예상 수익률',rate,'%',2,8,0.5)+'</div>'+
-    '<div class="simout">'+simOut('futExp','은퇴시점 월 생활비')+simOut('assetFV','은퇴시점 자산')+simOut('recv','월 예상 수령액')+simOut('gap','월 부족액','warn')+'</div>'+
-    '<div class="simcmp"><div class="simcmprow"><span>필요</span><div class="simtrk"><i data-bar="need"></i></div></div><div class="simcmprow"><span>수령</span><div class="simtrk"><i class="g" data-bar="recv"></i></div></div><div class="simgap" data-o="gapnote"></div></div>'+
-    '<div class="simfoot">※ 참고용 간이 시뮬레이션(물가 '+infl+'% 가정). 정밀 수치는 본문 표를 따릅니다.</div>';
+/* 모드별 시뮬레이터 설정 — 슬라이드 주제에 맞는 컨트롤만 노출 */
+const SIM_SLIDERS={dep:['월 납입액','만원',0,200,5],depy:['납입 기간','년',5,40,1],rate:['예상 수익률','%',2,8,0.5],ra:['연금개시 나이','세',55,75,1],exp:['목표 월생활비','만원',100,700,10]};
+const SIM_OUTS={corpus:['적립 총액(개시시점)'],recv:['월 예상 수령액'],futExp:['은퇴시점 월 생활비'],gap:['월 부족액','warn'],years:['수령 기간']};
+const SIM_MODES={full:{t:'라이브 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','futExp','gap'],bar:true},accum:{t:'적립 시뮬레이션',s:['dep','depy','rate'],o:['corpus','recv'],bar:false},payout:{t:'수령 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','years'],bar:false},gap:{t:'부족액 시뮬레이션',s:['dep','depy','ra','exp'],o:['recv','gap'],bar:true}};
+function renderSim(it){const ca=it.ca||40,ra=it.ra||65,le=it.le||90,asset=it.asset||100000000,exp=it.exp||300,rate=it.rate||5,infl=it.infl||2.5,dep=(it.dep!=null?it.dep:50),depy=(it.depy!=null?it.depy:Math.max(1,ra-ca));
+  const vals={dep:dep,depy:depy,rate:rate,ra:ra,exp:exp};const cfg=SIM_MODES[it.mode]||SIM_MODES.full;
+  const w=elt('div','jebsim');const A={ca:ca,le:le,asset:asset,infl:infl,exp:exp,dep:dep,depy:depy,rate:rate,ra:ra};
+  Object.keys(A).forEach(k=>w.setAttribute('data-'+k,A[k]));
+  if(it.link)w.setAttribute('data-link',it.link);
+  const ctl=cfg.s.map(k=>{const x=SIM_SLIDERS[k];return simRow(k,x[0],vals[k],x[1],x[2],x[3],x[4]);}).join('');
+  const out=cfg.o.map(k=>{const o=SIM_OUTS[k];return simOut(k,o[0],o[1]);}).join('');
+  const bar=cfg.bar?'<div class="simcmp"><div class="simcmprow"><span>필요</span><div class="simtrk"><i data-bar="need"></i></div></div><div class="simcmprow"><span>수령</span><div class="simtrk"><i class="g" data-bar="recv"></i></div></div><div class="simgap" data-o="gapnote"></div></div>':'';
+  w.innerHTML='<div class="simh">🎚 '+cfg.t+' — 조건을 바꿔보세요</div><div class="simctl">'+ctl+'</div><div class="simout">'+out+'</div>'+bar+
+    '<div class="simfoot">※ 참고용 간이 시뮬레이션(물가 '+infl+'% 가정, 기존 자산 '+(Math.round(asset/1e7)/10)+'억 포함). 정밀 수치는 본문 표를 따릅니다.</div>';
   try{if(window.JEBSIM)JEBSIM.update(w);}catch(_){}
   return w;}
 function addSim(){if(!deck.slides.length){return toast('먼저 자료를 생성해 주세요');}if(topic!=='연금설계'){return toast('지금은 연금설계에서만 시뮬레이터를 지원해요');}const p=params||{};const it={type:'sim',domain:'pension',ca:+p.age||40,ra:+p.retire||65,le:90,asset:Math.round((+p.asset||1)*1e8),exp:+p.desiredMonthlyExpense||300,rate:5,infl:2.5};const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:'은퇴 설계 라이브 시뮬레이션',conclusion:'은퇴 나이·생활비·수익률을 바꾸면 은퇴시점 생활비·자산·수령액이 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 은퇴를 늦추거나 수익률을 높이면 수령액이 어떻게 달라지는지 바로 보실 수 있습니다.'};const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('라이브 시뮬레이터를 추가했어요 🎚');}
@@ -812,34 +819,59 @@ if(window.matchMedia&&window.matchMedia('(max-width:700px)').matches){var _l0=do
 window.JEBSIM=(function(){
   function num(v){v=parseFloat(v);return isFinite(v)?v:0;}
   function calc(d){
-    var ca=num(d.ca),ra=num(d.ra),le=num(d.le)||90,exp=num(d.exp)*10000,asset=num(d.asset),rr=num(d.rate)/100,inf=num(d.infl)/100;
+    var ca=num(d.ca),ra=num(d.ra),le=num(d.le)||90,exp=num(d.exp)*10000,asset=num(d.asset),
+        rr=num(d.rate)/100,inf=num(d.infl)/100,dep=num(d.dep)*10000,depy=num(d.depy);
     if(!inf)inf=0.025;
     var yTo=Math.max(0,ra-ca),yIn=Math.max(1,le-ra);
-    var futExp=exp*Math.pow(1+inf,yTo);
+    var depY=Math.min(Math.max(0,depy),yTo);
+    var rm=Math.pow(1+rr,1/12)-1,Nd=Math.round(depY*12);
     var assetFV=asset*Math.pow(1+rr,yTo);
-    var rRecv=rr*0.7,rmY=(1+rRecv)/(1+inf)-1,rm=Math.pow(1+rmY,1/12)-1,N=yIn*12;
-    var recv=rm===0?assetFV/N:assetFV*rm/(1-Math.pow(1+rm,-N));
-    return {futExp:futExp,assetFV:assetFV,recv:recv,gap:Math.max(0,futExp-recv)};
+    var contribEnd=rm===0?dep*Nd:dep*(Math.pow(1+rm,Nd)-1)/rm;
+    var contribFV=contribEnd*Math.pow(1+rr,Math.max(0,yTo-depY));
+    var corpus=assetFV+contribFV;
+    var futExp=exp*Math.pow(1+inf,yTo);
+    var rRecv=rr*0.7,rmY=(1+rRecv)/(1+inf)-1,rmr=Math.pow(1+rmY,1/12)-1,Nr=yIn*12;
+    var recv=rmr===0?corpus/Nr:corpus*rmr/(1-Math.pow(1+rmr,-Nr));
+    return {corpus:corpus,futExp:futExp,recv:recv,gap:Math.max(0,futExp-recv),years:yIn};
   }
   function man(v){return Math.round(v/10000).toLocaleString()+'만원';}
   function eok(v){return (Math.round(v/100000000*10)/10)+'억원';}
   function q(root,s){return root.querySelector(s);}
   function update(root){
     if(!root)return;
-    var sRa=q(root,'[data-k="ra"]'),sEx=q(root,'[data-k="exp"]'),sRt=q(root,'[data-k="rate"]');
+    var sDep=q(root,'[data-k="dep"]'),sDepy=q(root,'[data-k="depy"]'),sRt=q(root,'[data-k="rate"]'),sRa=q(root,'[data-k="ra"]'),sEx=q(root,'[data-k="exp"]');
     var d={ca:root.getAttribute('data-ca'),le:root.getAttribute('data-le'),asset:root.getAttribute('data-asset'),infl:root.getAttribute('data-infl'),
-      ra:sRa?sRa.value:root.getAttribute('data-ra'),exp:sEx?sEx.value:root.getAttribute('data-exp'),rate:sRt?sRt.value:root.getAttribute('data-rate')};
+      exp:sEx?sEx.value:root.getAttribute('data-exp'),
+      dep:sDep?sDep.value:root.getAttribute('data-dep'),depy:sDepy?sDepy.value:root.getAttribute('data-depy'),
+      rate:sRt?sRt.value:root.getAttribute('data-rate'),ra:sRa?sRa.value:root.getAttribute('data-ra')};
     var sv=function(k,t){var e=q(root,'[data-v="'+k+'"]');if(e)e.textContent=t;};
-    if(sRa)sv('ra',sRa.value+'세');if(sEx)sv('exp',(+sEx.value).toLocaleString()+'만원');if(sRt)sv('rate',(+sRt.value).toFixed(1)+'%');
+    if(sDep)sv('dep',(+sDep.value).toLocaleString()+'만원');if(sDepy)sv('depy',(+sDepy.value)+'년');
+    if(sRt)sv('rate',(+sRt.value).toFixed(1)+'%');if(sRa)sv('ra',(+sRa.value)+'세');if(sEx)sv('exp',(+sEx.value).toLocaleString()+'만원');
     var r=calc(d),so=function(k,t){var e=q(root,'[data-o="'+k+'"]');if(e)e.textContent=t;};
-    so('futExp',man(r.futExp));so('assetFV',eok(r.assetFV));so('recv',man(r.recv));so('gap',man(r.gap));
+    so('corpus',eok(r.corpus));so('recv',man(r.recv));so('futExp',man(r.futExp));so('gap',man(r.gap));
+    var ey=q(root,'[data-o="years"]');if(ey)ey.textContent=Math.round(r.years)+'년';
     var base=Math.max(r.futExp,r.recv,1),bn=q(root,'[data-bar="need"]'),br=q(root,'[data-bar="recv"]');
     if(bn)bn.style.width=(r.futExp/base*100).toFixed(1)+'%';
     if(br)br.style.width=(r.recv/base*100).toFixed(1)+'%';
     var gp=q(root,'[data-o="gapnote"]');if(gp)gp.textContent=r.gap>0?('월 '+man(r.gap)+' 부족'):'목표 충족 \u2713';
   }
-  document.addEventListener('DOMContentLoaded',function(){var ns=document.querySelectorAll('.jebsim');for(var i=0;i<ns.length;i++){try{update(ns[i]);}catch(e){}}});
-  return {calc:calc,update:update};
+  // ── 3단계: 시나리오 그룹 링크(선택적 동기화) ──
+  var SVARS=['dep','depy','rate','ra','exp'];
+  // 같은 그룹(data-link) 위젯들. 링크 없으면 자기 자신만(독립)
+  function peers(root){var g=root.getAttribute('data-link');if(!g)return [root];
+    return Array.prototype.slice.call(document.querySelectorAll('.jebsim[data-link="'+g+'"]'));}
+  // 위젯의 슬라이더에서 시나리오 값 읽기(있는 키만)
+  function readState(root){var o={};for(var i=0;i<SVARS.length;i++){var k=SVARS[i],s=q(root,'[data-k="'+k+'"]');if(s)o[k]=s.value;}return o;}
+  // 위젯에 시나리오 값 적용: data-attr(항상) + 슬라이더(있으면) 둘 다
+  function applyState(root,st){for(var k in st){if(st[k]==null)continue;root.setAttribute('data-'+k,st[k]);var s=q(root,'[data-k="'+k+'"]');if(s)s.value=st[k];}}
+  // 슬라이더 변경 → 같은 그룹 전체에 전파 후 재계산
+  function sync(root){if(!root)return;var st=readState(root);var g=peers(root);for(var i=0;i<g.length;i++){applyState(g[i],st);update(g[i]);}}
+  // 로드 시: 그룹별로 첫 위젯 기준 상태 통일 후 전체 계산
+  function initAll(){var ns=document.querySelectorAll('.jebsim'),seen={},i,g;
+    for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&!seen[g])seen[g]=readState(ns[i]);}
+    for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&seen[g])applyState(ns[i],seen[g]);try{update(ns[i]);}catch(e){}}}
+  document.addEventListener('DOMContentLoaded',initAll);
+  return {calc:calc,update:update,sync:sync,initAll:initAll};
 })();
 </script>
 </body>
