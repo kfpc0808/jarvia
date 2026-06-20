@@ -6618,18 +6618,26 @@ async function doUpdateProfile(e){
 async function loadUsage(){
   let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
   const logs=snap.docs.map(d=>d.data());
-  if(!logs.length){$('tb-usage').innerHTML='<tr><td colspan="6" class="tc">이용 내역이 없습니다.</td></tr>';return;}
+  let apLogs=[];try{const apSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid),where('refType','==','ai_proposal'),orderBy('createdAt','desc'),limit(50)));apLogs=apSnap.docs.map(d=>d.data());}catch(e){try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));apLogs=all.docs.map(d=>d.data()).filter(t=>t.refType==='ai_proposal').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,50);}catch(e2){}}
+  if(!logs.length&&!apLogs.length){$('tb-usage').innerHTML='<tr><td colspan="6" class="tc">이용 내역이 없습니다.</td></tr>';return;}
   const cMap={};
   const typeNames2={video:'영상',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT'};
   for(const l of logs){if(!cMap[l.contentId]){const cached=allContents.find(x=>x.contentId===l.contentId);if(cached){cMap[l.contentId]={title:cached.title,type:typeNames2[cached.type]||cached.type};}else{const d=await getDoc(doc(db,'contents',l.contentId));if(d.exists()){cMap[l.contentId]={title:d.data().title,type:typeNames2[d.data().type]||d.data().type};}else{cMap[l.contentId]={title:'(이전이용내역)',type:'-'};}}}}
   const now=new Date();
-  $('tb-usage').innerHTML=logs.map(l=>{
+  const rows=[];
+  for(const l of logs){
     let expStr=fdate(l.expiresAt);let statusStr='';
     if(l.expiresAt){const ed=l.expiresAt.toDate?l.expiresAt.toDate():new Date(l.expiresAt);const diff=Math.ceil((ed-now)/(1000*60*60*24));
       if(diff>0){expStr+=' (D-'+diff+')';statusStr='<span style="color:var(--success);font-weight:600">이용가능</span>';}
       else{statusStr='<span style="color:var(--danger);font-weight:600">만료</span>';}}
-    return`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(cMap[l.contentId].title)}</td><td>${cMap[l.contentId].type}</td><td>${l.price>0?fmt(l.price)+'원':'<span class="t-free">무료</span>'}</td><td>${expStr}</td><td>${statusStr}</td></tr>`;
-  }).join('');
+    rows.push({t:l.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(l.createdAt)}</td><td>${esc(cMap[l.contentId].title)}</td><td>${cMap[l.contentId].type}</td><td>${l.price>0?fmt(l.price)+'원':'<span class="t-free">무료</span>'}</td><td>${expStr}</td><td>${statusStr}</td></tr>`});
+  }
+  for(const t of apLogs){
+    const amt=Math.abs(t.amount||0);
+    rows.push({t:t.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(t.createdAt)}</td><td>AI 제안서</td><td>제안서</td><td>${amt>0?fmt(amt)+'원':'<span class="t-free">무료</span>'}</td><td>-</td><td>-</td></tr>`});
+  }
+  rows.sort((a,b)=>b.t-a.t);
+  $('tb-usage').innerHTML=rows.map(r=>r.html).join('');
 }
 async function loadChargeHistory(){
   let psnap;try{psnap=await getDocs(query(collection(db,'payments'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'payments'),where('userId','==',me.uid)));psnap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
@@ -11047,6 +11055,8 @@ async function _consumeAiProposal(uid){
     var used=(ud.aiProposalUsage&&ud.aiProposalUsage[ym])||0;
     if(used<AI_PROPOSAL_FREE_PER_MONTH){
       tx.update(uRef,{[fieldKey]:increment(1),updatedAt:serverTimestamp()});
+      var fTxId=gid();
+      tx.set(doc(db,'transactions',fTxId),{txId:fTxId,userId:uid,type:'spend',amount:0,free:true,pointUsed:0,balanceUsed:0,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
       return{charged:false,used:used+1};
     }
     var price=AI_PROPOSAL_PRICE;
