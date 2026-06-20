@@ -609,6 +609,25 @@ async function callRoute(message){
   if(data.error||!data.route) throw new Error(data.error||'해석 실패');
   return data.route;
 }
+function applyCoverEdit(idx,instr){
+  const s=deck.slides[idx];let t=(instr||'').trim();
+  t=t.replace(/^\s*(표지|첫\s*(장|페이지|면)|1면|1번|슬라이드|제안서)\s*(에다가|에다|에|의)?\s*/,'');
+  for(let i=0;i<3;i++){t=t.replace(/\s*(을|를|로|으로)?\s*(넣어\s*주세요|넣어\s*줘|넣어|추가\s*해\s*줘|추가|바꿔\s*줘|바꿔|변경\s*해\s*줘|변경|수정\s*해\s*줘|수정|적어\s*줘|적어|써\s*줘|입력\s*해\s*줘|입력|표기\s*해\s*줘|표기|해\s*줘)\s*$/,'').trim();}
+  let field='pre',fname='고객명(첫 줄)',val=t;
+  const m=t.match(/^(고객\s*명|고객\s*이름|소속|지점명|회사명|법인명|직함|직책|담당자|작성자|성명|제목|타이틀|작성\s*일|작성\s*연월일|날짜|일자|상단\s*라벨|라벨|부제)\s*(?:을|를|은|는|:|：)?\s*(.+)$/);
+  if(m){val=m[2].trim();const lab=m[1].replace(/\s/g,'');
+    if(/소속|지점명|회사명|법인명/.test(lab)){field='org';fname='소속';}
+    else if(/직함|직책|담당자|작성자|성명/.test(lab)){field='byline';fname='성명·직함';}
+    else if(/제목|타이틀/.test(lab)){field='title';fname='제목';}
+    else if(/작성일|작성연월일|날짜|일자/.test(lab)){field='date';fname='작성일';}
+    else if(/라벨/.test(lab)){field='srLabel';fname='상단 라벨';}
+  }else{val=t.replace(/\s*(고객\s*명|고객\s*이름|이름)\s*$/,'').trim();}
+  val=val.replace(/\s*(으로|로|을|를|은|는|이|가|에)\s*$/,'').trim();
+  if(!val)return '표지에 넣을 내용을 알려주세요 — 예: "고객명 김길동", "소속 한국생명 강남지점". 표지의 모든 글자는 직접 클릭해서도 입력할 수 있어요.';
+  if(field==='pre'&&!/(고객님|위한)/.test(val))val=val+' 고객님을 위한';
+  s[field]=val;
+  return '표지의 '+fname+'을(를) "'+val+'"(으)로 넣었습니다. ✓ (표지의 모든 글자는 직접 클릭해서도 바로 고칠 수 있어요.)';
+}
 function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.classList.add('flash');}
 async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
@@ -641,9 +660,10 @@ async function send(){
 
   // edit
   if(idx==null||!deck.slides[idx]){ return aiReply(route.reply||'어느 슬라이드를 수정할까요? 번호로 알려주시거나 슬라이드를 클릭해 주세요.'); }
+  if(deck.slides[idx].region==='cover'){selectedIdx=idx;const msg=applyCoverEdit(idx,route.instruction||t);renderDeck();scrollToSlide(idx);flash(idx);return aiReply(msg);}
   selectedIdx=idx;renderDeck();scrollToSlide(idx);const node=document.getElementById('deck').children[idx];if(node)node.classList.add('working');
   aiReply((route.speed==='slow'&&route.notice)?route.notice:`${idx+1}번 슬라이드를 작성자가 다시 쓰는 중이에요…`);
-  const sig=s=>(s.title||'')+'|'+(s.subtitle||'')+'|'+(s.conclusion||'')+'|'+JSON.stringify(s.content||[]);
+  const sig=s=>(s.title||'')+'|'+(s.subtitle||'')+'|'+(s.pre||'')+'|'+(s.srLabel||'')+'|'+(s.date||'')+'|'+(s.org||'')+'|'+(s.byline||'')+'|'+(s.conclusion||'')+'|'+JSON.stringify(s.content||[]);
   const before=sig(deck.slides[idx]);
   try{
     const u=await callWriter(deck.slides[idx],route.instruction||t);
