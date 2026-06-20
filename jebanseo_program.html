@@ -585,7 +585,7 @@ async function generate(){
   deck={slides:[]};renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,clientName})});
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,clientName,needBasis:chosenBasis||undefined})});
     const data=await r.json();
     if(data.error||!data.deck) throw new Error(data.error||'덱 없음');
     if(data.params){params=data.params;fillChips(data.params);}
@@ -661,6 +661,12 @@ function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.
 async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
   MSGS.push({who:'me',html:t});paint();inp.value='';autoGrow(inp,150);
+  if(pendingGen){const _f=pendingGen.field;pendingGen=null;
+    if(_f==='basis'){ if(/소득|대체율|②|2|둘째|두번/.test(t)){chosenBasis='income';aiReply('소득대체율(소득의 80%) 기준으로 만들게요…');}else{chosenBasis='expense';aiReply('희망 생활비 기준으로 만들게요…');} return askNext(); }
+    if(/\d/.test(t)&&!/미반영|모름|몰라|없|제외|안\s*함/.test(t)){rawInput+='\n국민연금 예상 월 수령액: '+t+' (고객 제공). 이 값을 은퇴 후 소득으로 반영해 부족분을 계산할 것.';aiReply('국민연금 예상 수령액을 반영해 자료를 만들게요…');}
+    else{rawInput+='\n※ 국민연금 미반영(입력 없음 — 반영 시 부족분이 줄어듦). 슬라이드에 "국민연금 별도·미반영"을 반드시 표시할 것.';aiReply('국민연금은 미반영으로 진행할게요 — 자료에 그 점을 표시합니다…');}
+    return askNext();
+  }
   if(!deck.slides.length){return aiReply('먼저 시작 화면에서 자료를 생성하거나, 저장한 자료를 열어 주세요.');}
   let route;
   try{ route=await callRoute(t); }
@@ -718,7 +724,24 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
   const found=Object.keys(p).length;
   return {chips,params:p,pct:Math.max(60,Math.min(95,52+found*9))};
 }
-let rawInput="", clientName="";
+let rawInput="", clientName="", pendingGen=null, chosenBasis=null;
+function preflightAsk(text,topic){
+  const t=text||'';
+  if((topic==='연금설계'||topic==='보험설계')&&!/국민연금|노령연금|예상\s*연금|공적\s*연금|연금\s*수령|연금\s*가입/.test(t)){
+    return {field:'ss',q:'자료를 만들기 전에 한 가지만 먼저 여쭤볼게요 — 고객님의 <b>국민연금 예상 월 수령액</b>을 알고 계신가요?<br>금액(예: 월 90만 원)을 알려주시면 부족분이 더 정확해지고, 모르시면 <b>"미반영"</b>이라고 답해 주시면 국민연금을 빼고 진행하면서 자료에 그 점을 표시할게요.'};
+  }
+  return null;
+}
+function preflightAsks(text,topic){
+  const qs=[]; const a=preflightAsk(text,topic); if(a) qs.push(a);
+  // 필요자금 기준 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만 물음
+  if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
+    qs.push({field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>소득대체율</b> 기준 — 현재 소득의 약 80%를 목표로<br>편하신 쪽을 <b>"생활비"</b> 또는 <b>"소득"</b>이라고 답해 주세요. (고객이 생활비를 분명히 말했으면 보통 ①을 권합니다.)'});
+  }
+  return qs;
+}
+let preflightQueue=[];
+function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pendingGen={field:a.field};aiReply(a.q);} else generate(); }
 async function startSession(){
   rawInput=document.getElementById('startin').value.trim();
   clientName=(document.getElementById('startname').value||'').trim();
@@ -727,7 +750,8 @@ async function startSession(){
   document.getElementById('pct').textContent='…';document.getElementById('gfill').style.width='12%';
   document.getElementById('topic').textContent=topic+' · 고객';
   document.getElementById('startloading').style.display='block';document.getElementById('gobtn').disabled=true;document.querySelector('#start .inbox').style.opacity='.45';
-  setTimeout(async()=>{document.getElementById('start').style.display='none';MSGS.length=0;await generate();},400);
+  preflightQueue=preflightAsks(rawInput,topic);
+  setTimeout(()=>{document.getElementById('start').style.display='none';MSGS.length=0;askNext();},400);
 }
 function fillChips(p){
   const c=[];
