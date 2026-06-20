@@ -430,19 +430,33 @@ function reseq(){deck.slides.forEach((s,i)=>{s.slideNum=String(i+1).padStart(2,'
 function simRow(k,label,val,unit,min,max,step){return '<label class="simrow"><span>'+label+' <b data-v="'+k+'">'+val+unit+'</b></span><input type="range" data-k="'+k+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'" oninput="window.JEBSIM&&JEBSIM.sync(this.closest(\'.jebsim\'))"></label>';}
 function simOut(k,label,cls){return '<div class="simcell"><span>'+label+'</span><b data-o="'+k+'"'+(cls?' class="'+cls+'"':'')+'>—</b></div>';}
 /* 모드별 시뮬레이터 설정 — 슬라이드 주제에 맞는 컨트롤만 노출 */
-const SIM_SLIDERS={dep:['월 납입액','만원',0,200,5],depy:['납입 기간','년',5,40,1],rate:['예상 수익률','%',2,8,0.5],ra:['연금개시 나이','세',55,75,1],exp:['목표 월생활비','만원',100,700,10]};
-const SIM_OUTS={corpus:['적립 총액(개시시점)'],recv:['월 예상 수령액'],futExp:['은퇴시점 월 생활비'],gap:['월 부족액','warn'],years:['수령 기간']};
-const SIM_MODES={full:{t:'라이브 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','futExp','gap'],bar:true},accum:{t:'적립 시뮬레이션',s:['dep','depy','rate'],o:['corpus','recv'],bar:false},payout:{t:'수령 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','years'],bar:false},gap:{t:'부족액 시뮬레이션',s:['dep','depy','ra','exp'],o:['recv','gap'],bar:true}};
-function renderSim(it){const ca=it.ca||40,ra=it.ra||65,le=it.le||90,asset=it.asset||100000000,exp=it.exp||300,rate=it.rate||5,infl=it.infl||2.5,dep=(it.dep!=null?it.dep:50),depy=(it.depy!=null?it.depy:Math.max(1,ra-ca));
-  const vals={dep:dep,depy:depy,rate:rate,ra:ra,exp:exp};const cfg=SIM_MODES[it.mode]||SIM_MODES.full;
-  const w=elt('div','jebsim');const A={ca:ca,le:le,asset:asset,infl:infl,exp:exp,dep:dep,depy:depy,rate:rate,ra:ra};
-  Object.keys(A).forEach(k=>w.setAttribute('data-'+k,A[k]));
-  if(it.link)w.setAttribute('data-link',it.link);
-  const ctl=cfg.s.map(k=>{const x=SIM_SLIDERS[k];return simRow(k,x[0],vals[k],x[1],x[2],x[3],x[4]);}).join('');
+const SIM_SLIDERS={dep:['월 납입액','만원',0,200,5],depy:['납입 기간','년',5,40,1],rate:['예상 수익률','%',2,8,0.5],ra:['연금개시 나이','세',55,75,1],exp:['목표 월생활비','만원',100,700,10],
+  surv:['유족 월 생활비','만원',100,700,10],supy:['부양 기간','년',5,40,1],edu:['자녀 교육비','억',0,5,0.5],cover:['기존 보장액','억',0,20,0.5],
+  fin:['연 금융소득','만원',0,10000,100],oth:['연 근로·기타소득','만원',0,20000,100],
+  tasset:['총 상속재산','억',5,200,5],cash:['현금성 비중','%',0,100,5],spouse:['배우자','',0,1,1]};
+const SIM_OUTS={corpus:['적립 총액(개시시점)'],recv:['월 예상 수령액'],futExp:['은퇴시점 월 생활비'],gap:['월 부족액','warn'],years:['수령 기간'],
+  needCover:['필요 보장액'],gapCover:['부족 보장액','warn'],
+  taxMode:['과세 방식'],taxAmt:['예상 세금(연)'],margRate:['적용 한계세율'],
+  estTax:['예상 상속세'],liquidity:['납부 가능 유동성'],gapLiq:['유동성 부족','warn']};
+const SIM_MODES={
+  full:{d:'pension',t:'라이브 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','futExp','gap'],bar:true,bl:['필요','수령']},
+  accum:{d:'pension',t:'적립 시뮬레이션',s:['dep','depy','rate'],o:['corpus','recv'],bar:false},
+  payout:{d:'pension',t:'수령 시뮬레이션',s:['dep','depy','rate','ra'],o:['corpus','recv','years'],bar:false},
+  gap:{d:'pension',t:'부족액 시뮬레이션',s:['dep','depy','ra','exp'],o:['recv','gap'],bar:true,bl:['필요','수령']},
+  cover:{d:'insurance',t:'보장 시뮬레이션',s:['surv','supy','edu','cover'],o:['needCover','gapCover'],bar:true,bl:['필요','기존']},
+  tax:{d:'asset',t:'과세 시뮬레이션',s:['fin','oth'],o:['taxMode','taxAmt','margRate'],bar:false},
+  estate:{d:'corporate',t:'상속·유동성 시뮬레이션',s:['tasset','cash','spouse'],o:['estTax','liquidity','gapLiq'],bar:true,bl:['상속세','유동성']}};
+const SIM_DEF={ca:40,ra:65,le:90,asset:100000000,infl:2.5,exp:300,dep:50,depy:25,rate:5,surv:300,supy:20,edu:1,cover:0,fin:1000,oth:5000,tasset:30,cash:20,spouse:1};
+function renderSim(it){const cfg=SIM_MODES[it.mode]||SIM_MODES.full;const dom=cfg.d||'pension';
+  const v=Object.assign({},SIM_DEF,it);
+  const w=elt('div','jebsim');w.setAttribute('data-domain',dom);if(it.link)w.setAttribute('data-link',it.link);
+  Object.keys(v).forEach(k=>{if(v[k]!=null&&typeof v[k]!=='object')w.setAttribute('data-'+k,v[k]);});
+  const ctl=cfg.s.map(k=>{const x=SIM_SLIDERS[k];return simRow(k,x[0],v[k],x[1],x[2],x[3],x[4]);}).join('');
   const out=cfg.o.map(k=>{const o=SIM_OUTS[k];return simOut(k,o[0],o[1]);}).join('');
-  const bar=cfg.bar?'<div class="simcmp"><div class="simcmprow"><span>필요</span><div class="simtrk"><i data-bar="need"></i></div></div><div class="simcmprow"><span>수령</span><div class="simtrk"><i class="g" data-bar="recv"></i></div></div><div class="simgap" data-o="gapnote"></div></div>':'';
+  const bl=cfg.bl||['필요','수령'];
+  const bar=cfg.bar?'<div class="simcmp"><div class="simcmprow"><span>'+bl[0]+'</span><div class="simtrk"><i data-bar="need"></i></div></div><div class="simcmprow"><span>'+bl[1]+'</span><div class="simtrk"><i class="g" data-bar="recv"></i></div></div><div class="simgap" data-o="gapnote"></div></div>':'';
   w.innerHTML='<div class="simh">🎚 '+cfg.t+' — 조건을 바꿔보세요</div><div class="simctl">'+ctl+'</div><div class="simout">'+out+'</div>'+bar+
-    '<div class="simfoot">※ 참고용 간이 시뮬레이션(물가 '+infl+'% 가정, 기존 자산 '+(Math.round(asset/1e7)/10)+'억 포함). 정밀 수치는 본문 표를 따릅니다.</div>';
+    '<div class="simfoot">※ 참고용 간이 시뮬레이션 — 조절 시 즉시 재계산됩니다. 정밀 수치는 본문 표를 따릅니다.</div>';
   try{if(window.JEBSIM)JEBSIM.update(w);}catch(_){}
   return w;}
 function addSim(){if(!deck.slides.length){return toast('먼저 자료를 생성해 주세요');}if(topic!=='연금설계'){return toast('지금은 연금설계에서만 시뮬레이터를 지원해요');}const p=params||{};const it={type:'sim',domain:'pension',ca:+p.age||40,ra:+p.retire||65,le:90,asset:Math.round((+p.asset||1)*1e8),exp:+p.desiredMonthlyExpense||300,rate:5,infl:2.5};const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:'은퇴 설계 라이브 시뮬레이션',conclusion:'은퇴 나이·생활비·수익률을 바꾸면 은퇴시점 생활비·자산·수령액이 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 은퇴를 늦추거나 수익률을 높이면 수령액이 어떻게 달라지는지 바로 보실 수 있습니다.'};const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('라이브 시뮬레이터를 추가했어요 🎚');}
@@ -817,10 +831,23 @@ if(window.matchMedia&&window.matchMedia('(max-width:700px)').matches){var _l0=do
 </script>
 <script id="jebsimsrc">
 window.JEBSIM=(function(){
+  var MAN=10000,EOK=100000000;
   function num(v){v=parseFloat(v);return isFinite(v)?v:0;}
-  function calc(d){
-    var ca=num(d.ca),ra=num(d.ra),le=num(d.le)||90,exp=num(d.exp)*10000,asset=num(d.asset),
-        rr=num(d.rate)/100,inf=num(d.infl)/100,dep=num(d.dep)*10000,depy=num(d.depy);
+  function man(v){return Math.round(v/MAN).toLocaleString()+'만원';}
+  function eok(v){return (Math.round(v/EOK*10)/10)+'억원';}
+  function pctf(v){return (Math.round(v*10)/10)+'%';}
+  function yrf(v){return Math.round(v)+'년';}
+  function q(root,s){return root.querySelector(s);}
+  // 누진 종합소득세 (만원 과표 → 만원 세액)
+  function incTax(b){var br=[[1400,0.06],[5000,0.15],[8800,0.24],[15000,0.35],[30000,0.38],[50000,0.40],[100000,0.42],[1e12,0.45]];var t=0,p=0;for(var i=0;i<br.length;i++){if(b>p){t+=(Math.min(b,br[i][0])-p)*br[i][1];p=br[i][0];}else break;}return t;}
+  function incMarg(b){var c=[1400,5000,8800,15000,30000,50000,100000],r=[6,15,24,35,38,40,42];for(var i=0;i<c.length;i++){if(b<=c[i])return r[i];}return 45;}
+  // 누진 상속세 (억 과표 → 억 세액)
+  function estTaxF(b){var br=[[1,0.10],[5,0.20],[10,0.30],[30,0.40],[1e9,0.50]];var t=0,p=0;for(var i=0;i<br.length;i++){if(b>p){t+=(Math.min(b,br[i][0])-p)*br[i][1];p=br[i][0];}else break;}return t;}
+
+  // ── 도메인 계산기 (간이 미러 · 참고용) ──
+  function calcPension(d){
+    var ca=num(d.ca),ra=num(d.ra),le=num(d.le)||90,exp=num(d.exp)*MAN,asset=num(d.asset),
+        rr=num(d.rate)/100,inf=num(d.infl)/100,dep=num(d.dep)*MAN,depy=num(d.depy);
     if(!inf)inf=0.025;
     var yTo=Math.max(0,ra-ca),yIn=Math.max(1,le-ra);
     var depY=Math.min(Math.max(0,depy),yTo);
@@ -832,46 +859,58 @@ window.JEBSIM=(function(){
     var futExp=exp*Math.pow(1+inf,yTo);
     var rRecv=rr*0.7,rmY=(1+rRecv)/(1+inf)-1,rmr=Math.pow(1+rmY,1/12)-1,Nr=yIn*12;
     var recv=rmr===0?corpus/Nr:corpus*rmr/(1-Math.pow(1+rmr,-Nr));
-    return {corpus:corpus,futExp:futExp,recv:recv,gap:Math.max(0,futExp-recv),years:yIn};
+    return {corpus:corpus,futExp:futExp,recv:recv,gap:Math.max(0,futExp-recv),years:yIn,_need:futExp,_have:recv};
   }
-  function man(v){return Math.round(v/10000).toLocaleString()+'만원';}
-  function eok(v){return (Math.round(v/100000000*10)/10)+'억원';}
-  function q(root,s){return root.querySelector(s);}
+  function calcInsurance(d){
+    var surv=num(d.surv)*MAN,supy=num(d.supy),edu=num(d.edu)*EOK,cover=num(d.cover)*EOK;
+    var need=surv*12*supy+edu;var gap=Math.max(0,need-cover);
+    return {needCover:need,gapCover:gap,_need:need,_have:cover};
+  }
+  function calcAsset(d){
+    var fin=num(d.fin),oth=num(d.oth); // 만원/년
+    var sep=Math.min(fin,2000),comp=Math.max(0,fin-2000);
+    var sepTax=sep*0.154; // 분리과세 15.4%
+    var compTax=comp>0?(incTax(oth+comp)-incTax(oth)):0; // 종합 합산분 한계 추가세
+    var tax=(sepTax+compTax)*MAN;
+    var marg=fin>2000?incMarg(oth+comp):15.4;
+    return {taxMode:fin>2000?1:0,taxAmt:tax,margRate:marg};
+  }
+  function calcCorp(d){
+    var ta=num(d.tasset),cash=num(d.cash),spouse=num(d.spouse);
+    var ded=5+(spouse?5:0); // 일괄공제 5억 + 배우자공제(간이 5억)
+    var baseB=Math.max(0,ta-ded);
+    var tax=estTaxF(baseB),liq=ta*cash/100,gap=Math.max(0,tax-liq);
+    return {estTax:tax*EOK,liquidity:liq*EOK,gapLiq:gap*EOK,_need:tax*EOK,_have:liq*EOK};
+  }
+  var DOM={
+    pension:{calc:calcPension,fmt:{corpus:eok,recv:man,futExp:man,gap:man,years:yrf},barfmt:man,barpre:'월 '},
+    insurance:{calc:calcInsurance,fmt:{needCover:eok,gapCover:eok},barfmt:eok,barpre:''},
+    asset:{calc:calcAsset,fmt:{taxAmt:man,margRate:pctf,taxMode:function(v){return v?'종합과세 대상':'분리과세';}}},
+    corporate:{calc:calcCorp,fmt:{estTax:eok,liquidity:eok,gapLiq:eok},barfmt:eok,barpre:''}
+  };
+  var UNIT={dep:'만원',depy:'년',rate:'%',ra:'세',exp:'만원',surv:'만원',supy:'년',edu:'억',cover:'억',fin:'만원',oth:'만원',tasset:'억',cash:'%',child:'명',spouse:''};
+  function slabel(k,v){if(k==='spouse')return (+v?'있음':'없음');if(UNIT[k]==='%')return (+v).toFixed(1)+'%';if(k==='edu'||k==='cover'||k==='tasset')return (+v)+UNIT[k];return (+v).toLocaleString()+UNIT[k];}
+  var VARS=['ca','ra','le','asset','infl','exp','dep','depy','rate','surv','supy','edu','cover','fin','oth','tasset','cash','child','spouse'];
+  function readData(root){var d={};for(var i=0;i<VARS.length;i++){var k=VARS[i],s=q(root,'[data-k="'+k+'"]');d[k]=s?s.value:root.getAttribute('data-'+k);}return d;}
   function update(root){
     if(!root)return;
-    var sDep=q(root,'[data-k="dep"]'),sDepy=q(root,'[data-k="depy"]'),sRt=q(root,'[data-k="rate"]'),sRa=q(root,'[data-k="ra"]'),sEx=q(root,'[data-k="exp"]');
-    var d={ca:root.getAttribute('data-ca'),le:root.getAttribute('data-le'),asset:root.getAttribute('data-asset'),infl:root.getAttribute('data-infl'),
-      exp:sEx?sEx.value:root.getAttribute('data-exp'),
-      dep:sDep?sDep.value:root.getAttribute('data-dep'),depy:sDepy?sDepy.value:root.getAttribute('data-depy'),
-      rate:sRt?sRt.value:root.getAttribute('data-rate'),ra:sRa?sRa.value:root.getAttribute('data-ra')};
-    var sv=function(k,t){var e=q(root,'[data-v="'+k+'"]');if(e)e.textContent=t;};
-    if(sDep)sv('dep',(+sDep.value).toLocaleString()+'만원');if(sDepy)sv('depy',(+sDepy.value)+'년');
-    if(sRt)sv('rate',(+sRt.value).toFixed(1)+'%');if(sRa)sv('ra',(+sRa.value)+'세');if(sEx)sv('exp',(+sEx.value).toLocaleString()+'만원');
-    var r=calc(d),so=function(k,t){var e=q(root,'[data-o="'+k+'"]');if(e)e.textContent=t;};
-    so('corpus',eok(r.corpus));so('recv',man(r.recv));so('futExp',man(r.futExp));so('gap',man(r.gap));
-    var ey=q(root,'[data-o="years"]');if(ey)ey.textContent=Math.round(r.years)+'년';
-    var base=Math.max(r.futExp,r.recv,1),bn=q(root,'[data-bar="need"]'),br=q(root,'[data-bar="recv"]');
-    if(bn)bn.style.width=(r.futExp/base*100).toFixed(1)+'%';
-    if(br)br.style.width=(r.recv/base*100).toFixed(1)+'%';
-    var gp=q(root,'[data-o="gapnote"]');if(gp)gp.textContent=r.gap>0?('월 '+man(r.gap)+' 부족'):'목표 충족 \u2713';
+    var D=DOM[root.getAttribute('data-domain')||'pension']||DOM.pension;
+    var ss=root.querySelectorAll('input[data-k]');
+    for(var i=0;i<ss.length;i++){var k=ss[i].getAttribute('data-k'),lab=q(root,'[data-v="'+k+'"]');if(lab)lab.textContent=slabel(k,ss[i].value);}
+    var r=D.calc(readData(root));
+    for(var key in r){if(key.charAt(0)==='_')continue;var e=q(root,'[data-o="'+key+'"]');if(e){var f=D.fmt[key];e.textContent=f?f(r[key]):r[key];}}
+    if(r._need!=null&&r._have!=null){var base=Math.max(r._need,r._have,1),bn=q(root,'[data-bar="need"]'),bh=q(root,'[data-bar="recv"]');
+      if(bn)bn.style.width=(r._need/base*100).toFixed(1)+'%';if(bh)bh.style.width=(r._have/base*100).toFixed(1)+'%';
+      var gp=q(root,'[data-o="gapnote"]');if(gp){var g=Math.max(0,r._need-r._have);gp.textContent=g>0?((D.barpre||'')+(D.barfmt||eok)(g)+' 부족'):'충족 \u2713';}}
   }
   // ── 3단계: 시나리오 그룹 링크(선택적 동기화) ──
-  var SVARS=['dep','depy','rate','ra','exp'];
-  // 같은 그룹(data-link) 위젯들. 링크 없으면 자기 자신만(독립)
-  function peers(root){var g=root.getAttribute('data-link');if(!g)return [root];
-    return Array.prototype.slice.call(document.querySelectorAll('.jebsim[data-link="'+g+'"]'));}
-  // 위젯의 슬라이더에서 시나리오 값 읽기(있는 키만)
-  function readState(root){var o={};for(var i=0;i<SVARS.length;i++){var k=SVARS[i],s=q(root,'[data-k="'+k+'"]');if(s)o[k]=s.value;}return o;}
-  // 위젯에 시나리오 값 적용: data-attr(항상) + 슬라이더(있으면) 둘 다
+  function peers(root){var g=root.getAttribute('data-link');if(!g)return [root];return Array.prototype.slice.call(document.querySelectorAll('.jebsim[data-link="'+g+'"]'));}
+  function readState(root){var o={};for(var i=0;i<VARS.length;i++){var k=VARS[i],s=q(root,'[data-k="'+k+'"]');if(s)o[k]=s.value;}return o;}
   function applyState(root,st){for(var k in st){if(st[k]==null)continue;root.setAttribute('data-'+k,st[k]);var s=q(root,'[data-k="'+k+'"]');if(s)s.value=st[k];}}
-  // 슬라이더 변경 → 같은 그룹 전체에 전파 후 재계산
   function sync(root){if(!root)return;var st=readState(root);var g=peers(root);for(var i=0;i<g.length;i++){applyState(g[i],st);update(g[i]);}}
-  // 로드 시: 그룹별로 첫 위젯 기준 상태 통일 후 전체 계산
-  function initAll(){var ns=document.querySelectorAll('.jebsim'),seen={},i,g;
-    for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&!seen[g])seen[g]=readState(ns[i]);}
-    for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&seen[g])applyState(ns[i],seen[g]);try{update(ns[i]);}catch(e){}}}
+  function initAll(){var ns=document.querySelectorAll('.jebsim'),seen={},i,g;for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&!seen[g])seen[g]=readState(ns[i]);}for(i=0;i<ns.length;i++){g=ns[i].getAttribute('data-link');if(g&&seen[g])applyState(ns[i],seen[g]);try{update(ns[i]);}catch(e){}}}
   document.addEventListener('DOMContentLoaded',initAll);
-  return {calc:calc,update:update,sync:sync,initAll:initAll};
+  return {calc:calcPension,dom:DOM,update:update,sync:sync,initAll:initAll};
 })();
 </script>
 </body>
