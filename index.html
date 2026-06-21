@@ -1256,6 +1256,7 @@
     <div id="mp-info" class="tp">
       <div class="bal-card"><span>충전 잔액</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
       <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
+      <div class="bal-card" id="mp-ai-card" style="background:linear-gradient(135deg,#1B3A5C,#0F2740);margin-top:8px;display:none"><span>📑 AI 제안서 · 이달 이용</span><strong id="mp-ai-status" style="font-size:15px;font-weight:700">—</strong></div>
       <form class="info-form" onsubmit="doUpdateProfile(event)">
         <div class="fr"><div class="fg"><label>이름</label><input id="mp-name" readonly class="ro"></div><div class="fg"><label>아이디</label><input id="mp-lid" readonly class="ro"></div></div>
         <div class="fr"><div class="fg"><label>소속사</label><input id="mp-comp"></div><div class="fg"><label>직함</label><input id="mp-ttl"></div></div>
@@ -6588,6 +6589,20 @@ async function loadMyPage(){
   if(!me||!meData)return;await refreshMe();
   $('mp-bal').textContent=fmt(meData.balance);
   $('mp-point').textContent=fmt(meData.point||0);
+  // ★ AI 제안서 이달 이용 현황
+  try{
+    var _aiCard=$('mp-ai-card'),_aiEl=$('mp-ai-status');
+    if(_aiCard&&_aiEl){
+      var _aiUnlimited=(meData.loginId==='gildong'||meData.loginId==='admin'||meData.role==='admin');
+      var _aiTier=AI_PROPOSAL_FREE_ROLES.indexOf(meData.role)>=0;
+      var _aiYm=new Date(Date.now()+9*3600*1000).toISOString().slice(0,7);
+      var _aiUsed=(meData.aiProposalUsage&&meData.aiProposalUsage[_aiYm])||0;
+      if(_aiUnlimited){_aiEl.textContent='무제한 이용';}
+      else if(_aiTier){var _aiLeft=Math.max(0,AI_PROPOSAL_FREE_PER_MONTH-_aiUsed);_aiEl.textContent='무료 '+_aiUsed+'/'+AI_PROPOSAL_FREE_PER_MONTH+'건 사용 · '+_aiLeft+'건 남음';}
+      else{_aiEl.textContent='무료 없음 · 1건당 '+fmt(AI_PROPOSAL_NONTIER_PRICE)+'원';}
+      _aiCard.style.display=(typeof AI_PROPOSAL_LIVE!=='undefined'&&AI_PROPOSAL_LIVE)?'':'none';
+    }
+  }catch(e){}
   $('mp-name').value=meData.name||'';$('mp-lid').value=meData.loginId||'';
   $('mp-comp').value=meData.company||'';$('mp-ttl').value=meData.title||'';
   $('mp-phone').value=meData.phone||'';$('mp-email').value=meData.email||'';
@@ -6618,7 +6633,7 @@ async function doUpdateProfile(e){
 async function loadUsage(){
   let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
   const logs=snap.docs.map(d=>d.data());
-  let apLogs=[];try{const apSnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid),where('refType','==','ai_proposal'),orderBy('createdAt','desc'),limit(50)));apLogs=apSnap.docs.map(d=>d.data());}catch(e){try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));apLogs=all.docs.map(d=>d.data()).filter(t=>t.refType==='ai_proposal').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,50);}catch(e2){}}
+  let apLogs=[];try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));apLogs=all.docs.map(d=>d.data()).filter(t=>t.refType==='ai_proposal'||t.refType==='ai_proposal_slide').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,80);}catch(e){}
   if(!logs.length&&!apLogs.length){$('tb-usage').innerHTML='<tr><td colspan="6" class="tc">이용 내역이 없습니다.</td></tr>';return;}
   const cMap={};
   const typeNames2={video:'영상',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT'};
@@ -6634,7 +6649,10 @@ async function loadUsage(){
   }
   for(const t of apLogs){
     const amt=Math.abs(t.amount||0);
-    rows.push({t:t.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(t.createdAt)}</td><td>AI 제안서</td><td>제안서</td><td>${amt>0?fmt(amt)+'원':'<span class="t-free">무료</span>'}</td><td>-</td><td>-</td></tr>`});
+    const isSlide=t.refType==='ai_proposal_slide';
+    const label=isSlide?'슬라이드 추가':'AI 제안서';
+    const memo=t.memo?esc(t.memo):(isSlide?'슬라이드 추가(200원)':'자료생성');
+    rows.push({t:t.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(t.createdAt)}</td><td>${memo}</td><td>${label}</td><td>${amt>0?fmt(amt)+'원':'<span class="t-free">무료</span>'}</td><td>-</td><td>-</td></tr>`});
   }
   rows.sort((a,b)=>b.t-a.t);
   $('tb-usage').innerHTML=rows.map(r=>r.html).join('');
@@ -11030,7 +11048,7 @@ var AI_PROPOSAL_URL = 'https://kfpc0808.github.io/jarvia/jebanseo_program.html';
 var AI_PROPOSAL_SAMPLE_URL = '';
 // ★ true로 변경 시 4종 회원(지사장·이너서클·컨홈·자비아멤버십) "월 2건 무료 + 초과 건당 3,000원" 체계 가동.
 //    현재 false → gildong/admin/관리자만 이용 가능, 그 외 전원 안내팝업.
-var AI_PROPOSAL_LIVE = true;
+var AI_PROPOSAL_LIVE = false;
 var AI_PROPOSAL_FREE_ROLES = ['branch_manager','inner_circle','con_homepage','jarvia_member'];
 var AI_PROPOSAL_PRICE = 5000;
 var AI_PROPOSAL_NONTIER_PRICE = 10000;
