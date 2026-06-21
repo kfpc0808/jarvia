@@ -605,6 +605,19 @@ function renderChart(c){const wrap=elt('div','chart');const W=560,H=185,pl=46,pb
       const lt=document.createElementNS(ns,'text');lt.setAttribute('x',cx);lt.setAttribute('y',H-pb+15);lt.setAttribute('text-anchor','middle');lt.setAttribute('font-size','11');lt.setAttribute('fill','#52606D');lt.textContent=c.labels[i];svg.appendChild(lt);});}
   wrap.appendChild(svg);if(c.unit){const cap=elt('div','cap');cap.textContent='단위: '+c.unit;wrap.appendChild(cap);}return wrap;}
 function renderTable(t){const tb=elt('table','t');t.rows.forEach((row,ri)=>{const tr=elt('tr');row.forEach(cell=>{const c=elt(ri===0?'th':'td');c.textContent=cell;tr.appendChild(c);});tb.appendChild(tr);});return tb;}
+// AI가 스키마를 무시하고 마크다운 표(| a | b |)를 문자열로 뱉을 때 → 구조화 표로 자동 복원
+function mdTableToStruct(s){
+  if(typeof s!=='string'||s.indexOf('|')<0)return null;
+  const cells=s.split('|').map(x=>x.trim()).filter(x=>x!=='');
+  const isSep=x=>/^:?-{2,}:?$/.test(x);
+  const N=cells.filter(isSep).length;
+  if(N<2)return null;
+  const body=cells.filter(x=>!isSep(x)).map(x=>x.replace(/\*\*/g,'').trim());
+  if(body.length<N*2)return null;
+  const rows=[];
+  for(let i=0;i+N<=body.length;i+=N)rows.push(body.slice(i,i+N));
+  return rows.length>=2?{type:'table',rows:rows}:null;
+}
 function renderCards(c){const w=elt('div','cards');if(c.dir==='col'||c.cols===1)w.classList.add('cvert');else if(c.cols>=2){w.classList.add('cgrid');w.style.setProperty('--cgc',c.cols);}c.cards.forEach(cd=>{const d=elt('div','cd');const l=elt('div','l');l.textContent=cd.label;const x=elt('div','x');x.textContent=cd.text;d.appendChild(l);d.appendChild(x);w.appendChild(d);});return w;}
 function renderStats(c){const w=elt('div','stats');if(c.dir==='col'||c.cols===1)w.classList.add('cvert');(c.items||[]).forEach(it=>{const d=elt('div','stat'+(it.tone?(' '+it.tone):''));const v=elt('div','v');v.textContent=it.value;if(it.unit){const u=elt('span','u');u.textContent=it.unit;v.appendChild(u);}const l=elt('div','l');l.textContent=it.label;d.appendChild(v);d.appendChild(l);w.appendChild(d);});return w;}
 function _cleanStr(it){return it.split(String.fromCharCode(92)+'n').join(' ').replace(/\s+/g,' ').trim();}
@@ -681,7 +694,7 @@ function renderContent(items,idx){
   const f=document.createDocumentFragment();
   (items||[]).forEach((it,k)=>{
     let inner=null,align=null,kind='';
-    if(typeof it==='string'){const s=_cleanStr(it);if(s===''||s==='notes'||s===':'||s==='notes:')return;inner=elt('div','blt');setRich(inner,s);kind='str';if(idx!=null)mkEditable(inner,v=>{deck.slides[idx].content[k]=v;});}
+    if(typeof it==='string'){const _mdt=mdTableToStruct(it);if(_mdt){if(idx!=null)deck.slides[idx].content[k]=_mdt;inner=renderTable(_mdt);kind='blk';}else{const s=_cleanStr(it);if(s===''||s==='notes'||s===':'||s==='notes:')return;inner=elt('div','blt');setRich(inner,s);kind='str';if(idx!=null)mkEditable(inner,v=>{deck.slides[idx].content[k]=v;});}}
     else if(it&&it.type==='text'){align=it.align||'left';inner=elt('div','ftx');setLines(inner,it.text||'');kind='text';if(idx!=null)mkEditable(inner,v=>{deck.slides[idx].content[k].text=v;});}
     else if(it&&it.type==='image'){if(it.free)return;align=it.align||'center';inner=elt('div','fimg');const im=elt('img');im.src=it.src||'';if(it.w)im.style.width=it.w+'%';inner.appendChild(im);kind='image';}
     else if(it&&it.type==='table'){inner=renderTable(it);kind='blk';}
@@ -1040,16 +1053,18 @@ async function generate(){
 function nums(t){const m=t.match(/\d+/g);return m?m.map(n=>parseInt(n)-1):[];}
 async function callWriter(slide,instruction){
   const ctx={...params}; if(clientName) ctx.clientName=clientName;
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'edit',slide,instruction,ctx})});
+  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'edit',slide,instruction,ctx,calc})});
   const data=await r.json();
   if(data.error||!data.slide) throw new Error(data.error||'편집 실패');
+  auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];
   return data.slide;
 }
 async function callAdd(instruction){
   const ctx={...params,...calc}; if(clientName) ctx.clientName=clientName;
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add',topic,instruction,ctx})});
+  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add',topic,instruction,ctx,calc})});
   const data=await r.json();
   if(data.error||!data.slide) throw new Error(data.error||'추가 실패');
+  auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];
   return data.slide;
 }
 async function callRoute(message){
@@ -1197,6 +1212,7 @@ async function runWriteSlide(idx,instr,speed,notice){
       const cs=await chargeSlideOp('수정',idx+1);    // ★ 성공·변경 있을 때만 차감
       if(cs.charged)toast('슬라이드 수정 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
       aiReply(`${idx+1}번 슬라이드를 수정했습니다. ✓`);
+      if(auditFlags.length) aiReply(auditWarnHtml(auditFlags));
     }
   }catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. <b>(실패 — 차감되지 않았어요)</b> ('+(e.message||e)+')');}
 }
@@ -1211,7 +1227,9 @@ async function runAddSlide(pos,instr){
     deck.slides[pos]=ns;reseq();renderDeck();scrollToSlide(pos);flash(pos);
     const cs=await chargeSlideOp('추가',pos+1);     // ★ 성공했을 때만 차감
     if(cs.charged)toast('슬라이드 추가 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
-    return aiReply(`새 슬라이드를 ${pos+1}번 위치에 추가했습니다. ✓`);
+    aiReply(`새 슬라이드를 ${pos+1}번 위치에 추가했습니다. ✓`);
+    if(auditFlags.length) aiReply(auditWarnHtml(auditFlags));
+    return;
   }catch(e){deck.slides.splice(pos,1);reseq();renderDeck();return aiReply('슬라이드 추가에 실패했어요. <b>(실패 — 차감되지 않았어요)</b> ('+(e.message||e)+')');}
 }
 
