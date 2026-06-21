@@ -1045,7 +1045,7 @@ async function callRoute(message){
   const slides=deck.slides.map((s,i)=>({n:i+1,title:s.title||''}));
   let recent=MSGS.slice(-100).map(m=>(m.who==='me'?'사용자: ':'진행자: ')+(m.html||'').replace(/<[^>]+>/g,'')).join('\n');
   if(recent.length>9000)recent=recent.slice(-9000);
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interpret',message,slides,topic,clientName,recent})});
+  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interpret',message,slides,topic,clientName,recent,origReq:origRequest})});
   const data=await r.json();
   if(data.error||!data.route) throw new Error(data.error||'해석 실패');
   return data.route;
@@ -1086,12 +1086,18 @@ function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.
 async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
   MSGS.push({who:'me',html:t});paint();inp.value='';autoGrow(inp,150);
-  if(pendingGen){const _f=pendingGen.field;const _act=pendingGen.act;pendingGen=null;
+  if(pendingGen){const _f=pendingGen.field;const _act=pendingGen.act;const _q=pendingGen.q;pendingGen=null;
     if(_f==='basis'){ if(/소득|대체율|②|2|둘째|두번/.test(t)){chosenBasis='income';aiReply('소득대체율(소득의 80%) 기준으로 만들게요…');}else{chosenBasis='expense';aiReply('희망 생활비 기준으로 만들게요…');} return askNext(); }
     if(_f==='pillars'){ if(/[0-9]/.test(t)&&!/없|미보유|모름|몰라|해당/.test(t)){rawInput+=' 퇴직연금·개인연금 예상 월수령액: '+t+' (고객 제공). 3층(국민·퇴직·개인) 분해에 반영할 것.';aiReply('퇴직·개인연금을 3층 구조에 반영할게요…');}else{rawInput+=' 퇴직연금·개인연금 없음(국민연금 외 추가 연금 미보유).';aiReply('국민연금 외 추가 연금은 없는 것으로 진행할게요…');} return askNext(); }
     if(_f==='housing'){ if(/[0-9]/.test(t)&&!/없|미보유|모름|몰라|해당|아니/.test(t)){rawInput+=' 보유 주택 가격(시세): '+t+' (고객 제공). 주택연금 추정 월수령액을 산출하되 추정치이며 한국주택금융공사 공식 계산기 확인이 필요함을 명시할 것.';aiReply('주택연금으로 만들 수 있는 노후 월수입을 추정해 반영할게요…');}else{rawInput+=' 보유 주택 없음(주택연금 해당 없음).';aiReply('주택연금은 해당 없음으로 진행할게요…');} return askNext(); }
     if(_f==='simask'){ if(/취소|아니|싫|그만|됐|안 만들|안만|필요\s*없/.test(t)){ return aiReply('네, 시뮬레이터는 넣지 않을게요. 다른 걸 도와드릴까요?'); } if(/정적|차트|표|그래프/.test(t)&&!/동적|움직|슬라이더|라이브/.test(t)){ return aiReply('정적 차트로 할게요 — 어떤 비교를 보여드릴까요? 예: <b>조기/연기 비교</b>, <b>3층 연금 구조</b>, <b>은퇴 크레바스</b>. 말씀해 주시면 그 슬라이드를 만들어 드려요. (이건 계산결과 실제 값으로만 그립니다.)'); } addSim(); return aiReply('라이브 시뮬레이터를 추가했어요 🎚 — 슬라이드에서 슬라이더를 움직이면 결과가 즉시 바뀝니다. 값은 그 자리에서 직접 조정하시면 되니 <b>추가 수정 비용이 들지 않아요</b>.'); }
     if(_f==='doconfirm'){ if(/아니|취소|그만|싫|됐|별로|안 ?해|안 ?만들|안할|안만/.test(t)){ return aiReply('네, 진행하지 않을게요. 다시 지시해 주세요.'); } if(/예|네|응|그래|좋|진행|만들|수정|해줘|해 줘|ㅇㅋ|확인|오케|ok/i.test(t)){ if(_act&&_act.kind==='add') return runAddSlide(_act.pos,_act.instruction); if(_act&&_act.kind==='edit') return runWriteSlide(_act.idx,_act.instruction,_act.speed,_act.notice); } return aiReply('진행하려면 “예”, 취소하려면 “아니오”라고 답해 주세요. 다른 내용이면 그대로 다시 말씀해 주세요.'); }
+    if(_f==='interview'){
+      const qq=(_q||'추가 질문').replace(/<[^>]+>/g,'');
+      if(/^\s*(미반영|모름|모르|몰라|없음|없어|없다|없|해당\s*없|스킵|건너|넘어|패스|pass|\.|-)\s*$/i.test(t)){ aiReply('네, 그 항목은 미반영으로 진행할게요.'); }
+      else{ rawInput+='\n• '+qq+' → '+t+' (고객 제공)'; aiReply('반영했습니다. ✓'); }
+      return askNextInterview();
+    }
     if(/\d/.test(t)&&!/미반영|모름|몰라|없|제외|안\s*함/.test(t)){rawInput+='\n국민연금 예상 월 수령액: '+t+' (고객 제공). 이 값을 은퇴 후 소득으로 반영해 부족분을 계산할 것.';aiReply('국민연금 예상 수령액을 반영해 자료를 만들게요…');}
     else{rawInput+='\n※ 국민연금 미반영(입력 없음 — 반영 시 부족분이 줄어듦). 슬라이드에 "국민연금 별도·미반영"을 반드시 표시할 것.';aiReply('국민연금은 미반영으로 진행할게요 — 자료에 그 점을 표시합니다…');}
     return askNext();
@@ -1195,7 +1201,7 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
   const found=Object.keys(p).length;
   return {chips,params:p,pct:Math.max(60,Math.min(95,52+found*9))};
 }
-let rawInput="", clientName="", pendingGen=null, chosenBasis=null;
+let rawInput="", clientName="", pendingGen=null, chosenBasis=null, origRequest="";
 function preflightAsk(text,topic){
   const t=text||'';
   if((topic==='연금설계'||topic==='보험설계')&&!/국민연금|노령연금|예상\s*연금|공적\s*연금|연금\s*수령|연금\s*가입/.test(t)){
@@ -1221,6 +1227,38 @@ function preflightAsks(text,topic){
 }
 let preflightQueue=[];
 function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pendingGen={field:a.field};aiReply(a.q);} else generate(); }
+
+/* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
+let interviewQueue=[];
+function basisAsk(text,topic){
+  // 필요자금 '기준' 선택 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만(chosenBasis 플래그)
+  if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
+    return [{field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>소득대체율</b> 기준 — 현재 소득의 약 80%를 목표로<br>편하신 쪽을 <b>"생활비"</b> 또는 <b>"소득"</b>이라고 답해 주세요.'}];
+  }
+  return [];
+}
+async function startInterview(){
+  aiReply('좋은 자료를 위해 <b>꼭 필요한 내용</b>만 빠르게 확인할게요. (모르시는 항목은 “미반영”이라고 답하셔도 됩니다.)');
+  let qs=null;
+  try{
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName})});
+    const data=await r.json();
+    if(data && Array.isArray(data.questions)){ qs=data.questions.slice(0,8); if(data.note && qs.length) aiReply(data.note); }
+  }catch(_e){ qs=null; }
+  if(qs===null){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }  // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
+  interviewQueue=qs;
+  askNextInterview();
+}
+function askNextInterview(){
+  if(interviewQueue.length){
+    const a=interviewQueue.shift();
+    pendingGen={field:'interview',q:a.q};
+    aiReply((a.q||'')+(a.hint?'<span class="q">'+a.hint+'</span>':''));
+  } else {
+    preflightQueue=basisAsk(rawInput,topic);  // 인터뷰가 필수 항목을 이미 물었으니, 연금 '기준 선택'만 추가(중복 방지)
+    askNext();
+  }
+}
 let MEMBER={name:'',tier:'',paid:false};
 const PAID_TIERS=['자비아멤버십','이너서클','지사장','컨홈회원'];
 const ROLE_TIER={branch_manager:'지사장',inner_circle:'이너서클',con_homepage:'컨홈회원',jarvia_member:'자비아멤버십',jarvia_inner:'이너서클',jarvia_report:'자비아멤버십'};
@@ -1249,14 +1287,21 @@ async function startSession(){
   const ag=document.getElementById('agree');
   if(!ag||!ag.checked){toast('이용안내를 확인하고 동의에 체크해 주세요.');const t=document.getElementById('termsbox');if(t){t.classList.add('shake');setTimeout(function(){t.classList.remove('shake');},600);}return;}
   rawInput=document.getElementById('startin').value.trim();
+  origRequest=rawInput;
   clientName=(document.getElementById('startname').value||'').trim();
   topic=startTopic;
   document.getElementById('pchips').innerHTML='';
   document.getElementById('pct').textContent='…';document.getElementById('gfill').style.width='12%';
   document.getElementById('topic').textContent=topic+' · 고객';
   document.getElementById('startloading').style.display='block';document.getElementById('gobtn').disabled=true;document.querySelector('#start .inbox').style.opacity='.45';
-  preflightQueue=preflightAsks(rawInput,topic);
-  setTimeout(()=>{document.getElementById('start').style.display='none';MSGS.length=0;askNext();},400);
+  setTimeout(()=>{
+    document.getElementById('start').style.display='none';
+    MSGS.length=0;
+    // ★ 사용자가 처음 입력한 요청을 대화 맨 위에 그대로 표시 + 진행자가 처음부터 기억하도록
+    if(origRequest){ MSGS.push({who:'me',html:'<b>요청하신 내용</b><br>'+escHtml(origRequest)+(clientName?'<br><span class="q">고객: '+escHtml(clientName)+'</span>':'')}); }
+    paint();
+    startInterview();
+  },400);
 }
 function fillChips(p){
   const c=[];
