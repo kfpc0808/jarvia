@@ -11044,50 +11044,6 @@ function _aiProposalAllowed(){
 function _aiProposalYM(){
   return new Date(Date.now()+9*3600*1000).toISOString().slice(0,7);
 }
-// 월 카운터 +1, 무료 한도 초과 시 포인트 우선 차감 (Firestore 트랜잭션)
-async function _consumeAiProposal(uid){
-  var uRef=doc(db,'users',uid);
-  var ym=_aiProposalYM();
-  var fieldKey='aiProposalUsage.'+ym;
-  return runTransaction(db,async function(tx){
-    var uDoc=await tx.get(uRef);
-    if(!uDoc.exists())throw new Error('데이터 오류');
-    var ud=uDoc.data();
-    var used=(ud.aiProposalUsage&&ud.aiProposalUsage[ym])||0;
-    if(used<AI_PROPOSAL_FREE_PER_MONTH){
-      tx.update(uRef,{[fieldKey]:increment(1),updatedAt:serverTimestamp()});
-      var fTxId=gid();
-      tx.set(doc(db,'transactions',fTxId),{txId:fTxId,userId:uid,type:'spend',amount:0,free:true,pointUsed:0,balanceUsed:0,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
-      return{charged:false,used:used+1};
-    }
-    var price=AI_PROPOSAL_PRICE;
-    var totalAvail=(ud.point||0)+(ud.balance||0);
-    if(totalAvail<price)throw new Error('INSUFFICIENT_BALANCE');
-    var pointUsed=Math.min(ud.point||0,price);
-    var balUsed=price-pointUsed;
-    var np=(ud.point||0)-pointUsed;
-    var nb=(ud.balance||0)-balUsed;
-    var txId=gid();
-    tx.update(uRef,{point:np,balance:nb,[fieldKey]:increment(1),updatedAt:serverTimestamp()});
-    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
-    return{charged:true,price:price,point:np,balance:nb,used:used+1};
-  });
-}
-async function _runAiProposalPaid(){
-  try{
-    var r=await _consumeAiProposal(me.uid);
-    if(r.point!==undefined)meData.point=r.point;
-    if(r.balance!==undefined)meData.balance=r.balance;
-    if(typeof updateBal==='function')updateBal();
-    if(typeof logSvc==='function')logSvc('ai_proposal');
-    if(r.charged){ if(typeof toast==='function')toast('💰 '+fmt(AI_PROPOSAL_PRICE)+'원 차감 · 이번 달 '+r.used+'번째 이용','success'); }
-    else{ if(typeof toast==='function')toast('이번 달 무료 '+r.used+'/'+AI_PROPOSAL_FREE_PER_MONTH+'건 이용','success'); }
-    window.open(AI_PROPOSAL_URL,'_blank');
-  }catch(err){
-    if(err.message==='INSUFFICIENT_BALANCE'){ if(typeof toast==='function')toast('잔액이 부족합니다. 충전 후 이용해주세요.','warning'); if(typeof openCharge==='function')openCharge(); }
-    else{ if(typeof toast==='function')toast('이용 오류: '+(err.message||err),'error'); }
-  }
-}
 // 일반회원/대상 외 안내팝업 (샘플 URL 있을 때만 샘플버튼 노출)
 function _openAiProposalGuide(){
   var _sb=document.getElementById('aip-guide-sample');
@@ -11110,7 +11066,7 @@ function goAiProposal(){
   window.open(_aiProposalUrl(),'_blank');
 }
 // ★ 프로그램(저장 시)에서 차감 요청 처리 — 4종: 월5건 무료 후 5,000원 / 일반: 건당 10,000원
-async function _chargeAiProposalSave(uid, role){
+async function _chargeAiProposalSave(uid, role, memo){
   var isTier = AI_PROPOSAL_FREE_ROLES.indexOf(role)>=0;
   var price = isTier ? AI_PROPOSAL_PRICE : AI_PROPOSAL_NONTIER_PRICE;
   var freeQuota = isTier ? AI_PROPOSAL_FREE_PER_MONTH : 0;
@@ -11125,7 +11081,7 @@ async function _chargeAiProposalSave(uid, role){
     if(used<freeQuota){
       tx.update(uRef,{[fieldKey]:increment(1),updatedAt:serverTimestamp()});
       var fTxId=gid();
-      tx.set(doc(db,'transactions',fTxId),{txId:fTxId,userId:uid,type:'spend',amount:0,free:true,pointUsed:0,balanceUsed:0,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
+      tx.set(doc(db,'transactions',fTxId),{txId:fTxId,userId:uid,type:'spend',amount:0,free:true,pointUsed:0,balanceUsed:0,refType:'ai_proposal',refId:ym,memo:(memo||'AI제안서 자료생성'),createdAt:serverTimestamp()});
       return{charged:false,used:used+1,freeQuota:freeQuota};
     }
     var totalAvail=(ud.point||0)+(ud.balance||0);
@@ -11136,12 +11092,12 @@ async function _chargeAiProposalSave(uid, role){
     var nb=(ud.balance||0)-balUsed;
     var txId=gid();
     tx.update(uRef,{point:np,balance:nb,[fieldKey]:increment(1),updatedAt:serverTimestamp()});
-    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal',refId:ym,memo:(memo||'AI제안서 자료생성'),createdAt:serverTimestamp()});
     return{charged:true,price:price,point:np,balance:nb,used:used+1,freeQuota:freeQuota};
   });
 }
 // ★ 슬라이드 20회 초과분 — 장당 200원 차감 (무료 한도 없음, 포인트 우선)
-async function _chargeAiProposalSlide(uid){
+async function _chargeAiProposalSlide(uid, memo){
   var price=200;
   var uRef=doc(db,'users',uid);
   return runTransaction(db,async function(tx){
@@ -11156,7 +11112,7 @@ async function _chargeAiProposalSlide(uid){
     var nb=(ud.balance||0)-balUsed;
     var txId=gid();
     tx.update(uRef,{point:np,balance:nb,updatedAt:serverTimestamp()});
-    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal_slide',createdAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal_slide',memo:(memo||'슬라이드 추가(200원)'),createdAt:serverTimestamp()});
     return{charged:true,price:price,point:np,balance:nb};
   });
 }
@@ -11169,16 +11125,19 @@ window.addEventListener('message', async function(ev){
   if(!window.me){ reply({ok:false,error:'NOT_LOGGED_IN'}); return; }
   if(_aiProposalAllowed()){ reply({ok:true,charged:false,unlimited:true,balance:(window.meData&&meData.balance)||0,point:(window.meData&&meData.point)||0}); return; }
   var role=(window.meData&&meData.role)||'';
+  var _dt=d.detail||{};
+  var _memoSave=(_dt.domain||'AI제안서')+(_dt.client?(' · '+_dt.client):'')+' 자료생성';
+  var _memoSlide='슬라이드 '+(_dt.kind||'추가')+(_dt.n?(' '+_dt.n+'번'):'');
   try{
     if(d.kind==='slide'){
-      var rs=await _chargeAiProposalSlide(me.uid);
+      var rs=await _chargeAiProposalSlide(me.uid,_memoSlide);
       if(rs.point!==undefined)meData.point=rs.point;
       if(rs.balance!==undefined)meData.balance=rs.balance;
       if(typeof updateBal==='function')updateBal();
       reply({ok:true,charged:true,kind:'slide',price:rs.price,balance:(meData.balance||0),point:(meData.point||0)});
       return;
     }
-    var r=await _chargeAiProposalSave(me.uid, role);
+    var r=await _chargeAiProposalSave(me.uid, role, _memoSave);
     if(r.point!==undefined)meData.point=r.point;
     if(r.balance!==undefined)meData.balance=r.balance;
     if(typeof updateBal==='function')updateBal();

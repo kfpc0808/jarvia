@@ -849,13 +849,20 @@ async function generate(){
     const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,clientName,needBasis:chosenBasis||undefined,member:MEMBER})});
     const data=await r.json();
     if(data.error||!data.deck) throw new Error(data.error||'덱 없음');
+    // ★ 생성 성공 → 즉시 1건 차감 (결제 실패 시 덱 미제공)
+    const cg=await chargeGenerate();
+    if(!cg.ok){ stopGenTimer(); return aiReply(chargeFailMsg(cg.error)); }
+    aiOpCount=0;                                   // 새 문서 → 슬라이드 20회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
     if(data.calc) calc=data.calc;
     stopGenTimer();
     for(const s of data.deck.slides){deck.slides.push(s);renderDeck();const last=document.getElementById('deck').children[deck.slides.length-1];if(last){last.classList.add('flash');last.scrollIntoView({behavior:'smooth',block:'center'});}await new Promise(res=>setTimeout(res,350));}
     ensureDeckExtras();renderDeck();
     aiReply(GUIDE_HTML);
-    if(!firstSaveDone)showSavePrompt();
+    if(cg.dev)toast('자료 생성 · 개발모드(미과금)');
+    else if(cg.unlimited)toast('자료 생성 · 무제한 회원');
+    else if(cg.charged===false)toast('자료 생성 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
+    else toast('자료 생성 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
   }catch(e){
     stopGenTimer();
     aiReply('자료 생성에 실패했어요. FUNCTION_URL이 올바른지, Cloud Function이 배포됐는지 확인해 주세요. ('+(e.message||e)+')');
@@ -958,7 +965,7 @@ async function send(){
     let pos=route.position?Math.max(0,Math.min(deck.slides.length,route.position-1)):deck.slides.length;
     const instr=route.instruction||t;
     pendingGen={field:'doconfirm',act:{kind:'add',pos,instruction:instr}};
-    return aiReply(`${pos+1}번 위치에 <b>새 슬라이드</b>를 만들까요? — “${instr}”<br><b>예</b>면 만들고(생성 1회 비용), 아니면 <b>아니오</b>. 직접 채우시려면 “<b>빈 슬라이드 추가</b>”라고 하세요(무료).`);
+    return aiReply(`${pos+1}번 위치에 <b>새 슬라이드</b>를 만들까요? — “${instr}”<br><b>예</b>면 만들고(${opCostNote()}), 아니면 <b>아니오</b>. 직접 채우시려면 “<b>빈 슬라이드 추가</b>”라고 하세요(무료).`);
   }
 
   if(op==='delete'){ if(deck.slides[idx]){const ttl=deck.slides[idx].title;deck.slides.splice(idx,1);reseq();selectedIdx=null;renderDeck();return aiReply(`${idx+1}번 "${ttl}"을 지웠습니다. ✓`);} return aiReply('어느 슬라이드를 지울까요?'); }
@@ -972,12 +979,15 @@ async function send(){
   {const _lay=tryLayoutEdit(idx,(route.instruction||'')+' '+t);if(_lay){selectedIdx=idx;renderDeck();scrollToSlide(idx);flash(idx);return aiReply(_lay);}}
   { const instr=route.instruction||t;
     pendingGen={field:'doconfirm',act:{kind:'edit',idx,instruction:instr,speed:route.speed,notice:route.notice}};
-    return aiReply(`${idx+1}번 슬라이드를 “${instr}” 방향으로 다시 쓸까요?<br><b>예</b>면 수정하고(수정 1회 비용), 아니면 <b>아니오</b>. 글자만 고치실 거면 슬라이드를 직접 클릭해 수정하실 수 있어요(무료).`);
+    return aiReply(`${idx+1}번 슬라이드를 “${instr}” 방향으로 다시 쓸까요?<br><b>예</b>면 수정하고(${opCostNote()}), 아니면 <b>아니오</b>. 글자만 고치실 거면 슬라이드를 직접 클릭해 수정하실 수 있어요(무료).`);
   }
 }
 
 async function runWriteSlide(idx,instr,speed,notice){
   if(!deck.slides[idx])return aiReply('해당 슬라이드를 찾지 못했어요.');
+  const cs=await chargeSlideOp('수정',idx+1);
+  if(!cs.ok)return aiReply(chargeFailMsg(cs.error));
+  if(cs.charged)toast('슬라이드 수정 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
   selectedIdx=idx;renderDeck();scrollToSlide(idx);const node=document.getElementById('deck').children[idx];if(node)node.classList.add('working');
   aiReply((speed==='slow'&&notice)?notice:`${idx+1}번 슬라이드를 작성자가 다시 쓰는 중이에요…`);
   const sig=s=>(s.title||'')+'|'+(s.subtitle||'')+'|'+(s.pre||'')+'|'+(s.srLabel||'')+'|'+(s.date||'')+'|'+(s.org||'')+'|'+(s.byline||'')+'|'+(s.conclusion||'')+'|'+JSON.stringify(s.content||[]);
@@ -991,6 +1001,9 @@ async function runWriteSlide(idx,instr,speed,notice){
   }catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')');}
 }
 async function runAddSlide(pos,instr){
+  const cs=await chargeSlideOp('추가',pos+1);
+  if(!cs.ok)return aiReply(chargeFailMsg(cs.error));
+  if(cs.charged)toast('슬라이드 추가 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
   aiReply('새 슬라이드를 작성자가 만드는 중이에요…');
   deck.slides.splice(pos,0,{title:'새 슬라이드',subtitle:'작성자가 작성 중…',content:[]});reseq();renderDeck();scrollToSlide(pos);
   const phNode=document.getElementById('deck').children[pos];if(phNode)phNode.classList.add('working');
@@ -1049,16 +1062,18 @@ function resolveMember(){let name='',tier='';try{const q=new URLSearchParams(loc
 function termItems(m){
   const nm=m.name||'회원';const tg=m.paid?('('+m.tier+')'):'(일반회원)';
   const head='<b>'+nm+'</b> 회원님<span class="tier">'+tg+'</span>';
-  const common=[
+  const freeCnt=m.paid?5:0;
+  const item2=m.paid
+    ? '추가 생성 시 자료 1건당 <b>10,000원</b>입니다. (<b>'+nm+'</b> 회원님은 <b>50% 할인</b>되어 <b>5,000원</b>입니다.)'
+    : '추가 생성 시 자료 1건당 <b>10,000원</b>입니다.';
+  return [
+    head+'은 <b>[월 '+freeCnt+'건]</b> ‘무료이용’ 하실 수 있습니다.',
+    item2,
     '1차 ‘자료생성’ 후 AI를 통해 슬라이드 수정/추가 작업을 <b>총 20회</b> 하실 수 있습니다. (직접 편집/추가는 무료)',
     '슬라이드 무료생성 건수(20회) 이후 슬라이드를 추가로 생성할 때마다 <b>[200원]</b>이 과금됩니다.',
     '슬라이드는 자유롭게 추가할 수 있으며 간단한 수정·편집을 직접 하실 수 있습니다. (무료)',
     '진행 전 <b>잔액을 확인</b>하여 주시기 바랍니다.'
   ];
-  const lead=m.paid
-    ? [head+'은 <b>[월 5건]</b> ‘무료이용’ 하실 수 있습니다.','무료 5건 초과 시, 추가 생성은 자료 1건당 <b>5,000원</b>입니다.']
-    : [head+'은 자료 생성 <b>1건당 10,000원</b>입니다. (무료 제공 없음)'];
-  return lead.concat(common);
 }
 function renderTerms(){const ol=document.getElementById('tlist');if(!ol)return;ol.innerHTML=termItems(MEMBER).map(function(t){return '<li>'+t+'</li>';}).join('');}
 function applyMember(){MEMBER=resolveMember();renderTerms();}
@@ -1214,36 +1229,47 @@ const VIEWER_JS=`(function(){
   window.__printA4=function(){if(!slides().length){alert('인쇄할 슬라이드가 없습니다.');return;}window.print();};
 })();`;
 
-let saveCount=0, firstSaveDone=false;
+let aiOpCount=0;                       // 문서당 AI 수정/추가 횟수 (20회 무료, 초과 장당 200원)
+const AI_FREE_OPS=20, AI_SLIDE_PRICE=200;
 function wonFmt(n){return (Number(n)||0).toLocaleString('ko-KR')+'원';}
 function isDevMode(){try{return new URLSearchParams(location.search).get('dev')==='1';}catch(_){return false;}}
-function requestCharge(kind){return new Promise(function(resolve){
+function requestCharge(kind,detail){return new Promise(function(resolve){
   if(!window.opener){resolve({ok:false,error:'NO_OPENER'});return;}
   var reqId='c'+Date.now()+Math.random().toString(36).slice(2,6);var done=false;
   function onMsg(ev){var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
   window.addEventListener('message',onMsg);
-  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:kind||'save',member:MEMBER},'*');}
+  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:kind||'generate',member:MEMBER,detail:detail||{}},'*');}
   catch(_){window.removeEventListener('message',onMsg);resolve({ok:false,error:'NO_OPENER'});return;}
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},12000);
 });}
-async function saveFile(skipConfirm){
+function chargeFailMsg(err){
+  if(err==='INSUFFICIENT_BALANCE')return '잔액이 부족합니다. 자비아(jarvia.co.kr)에서 충전 후 다시 이용해 주세요.';
+  if(err==='NO_OPENER'||err==='TIMEOUT')return '결제 연결을 확인할 수 없습니다. 자비아에서 "제안서 생성(대화형)"으로 다시 열어 주세요.';
+  if(err==='NOT_LOGGED_IN')return '로그인이 필요합니다. 자비아에서 로그인 후 이용해 주세요.';
+  return '결제 처리 오류: '+(err||'');
+}
+// ★ 자료 생성 시 1건 차감 (4종: 월5건 무료→5,000원 / 일반: 10,000원)
+async function chargeGenerate(){
+  if(isDevMode())return {ok:true,dev:true};
+  const res=await requestCharge('generate',{domain:topic,client:clientName||'',kind:'자료생성'});
+  if(!res.ok)return {ok:false,error:res.error};
+  return {ok:true,unlimited:res.unlimited,charged:res.charged,price:res.price,balance:res.balance,used:res.used,freeQuota:res.freeQuota};
+}
+// ★ AI 슬라이드 수정/추가 1회 — 20회까지 무료, 초과 시 장당 200원 (전 회원 공통, 즉시 차감)
+async function chargeSlideOp(kindLabel,n){
+  aiOpCount++;
+  if(aiOpCount<=AI_FREE_OPS)return {ok:true,charged:false,count:aiOpCount};
+  if(isDevMode())return {ok:true,charged:true,dev:true,count:aiOpCount};
+  const res=await requestCharge('slide',{kind:kindLabel,n:n,qty:1});
+  if(!res.ok){aiOpCount--;return {ok:false,error:res.error};}
+  return {ok:true,charged:true,price:res.price||AI_SLIDE_PRICE,balance:res.balance,count:aiOpCount};
+}
+// 다음 AI 작업 비용 안내 문구
+function opCostNote(){return aiOpCount<AI_FREE_OPS?`무료 · ${aiOpCount}/${AI_FREE_OPS}회 사용`:'200원 차감';}
+function saveFile(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
-  if(isDevMode()){_doSaveFile();saveCount++;firstSaveDone=true;hideSavePrompt();toast('저장 완료 · 개발모드(미과금)');return;}
-  if(!skipConfirm && !confirm('이 자료를 저장합니다.\n저장 시 자료 1건이 차감됩니다(무료 한도 내면 무료). 계속할까요?'))return;
-  toast('저장 처리 중…');
-  const res=await requestCharge('save');
-  if(!res.ok){
-    if(res.error==='INSUFFICIENT_BALANCE')alert('잔액이 부족합니다.\n자비아(jarvia.co.kr)에서 충전 후 다시 저장해 주세요.');
-    else if(res.error==='NO_OPENER'||res.error==='TIMEOUT')alert('결제 연결을 확인할 수 없습니다.\n자비아에서 "제안서 생성(대화형)" 으로 다시 열어 주세요.');
-    else if(res.error==='NOT_LOGGED_IN')alert('로그인이 필요합니다. 자비아에서 로그인 후 이용해 주세요.');
-    else alert('저장 처리 오류: '+(res.error||''));
-    return;
-  }
   _doSaveFile();
-  saveCount++; firstSaveDone=true; hideSavePrompt();
-  if(res.unlimited)toast('저장 완료 · 무제한 회원');
-  else if(res.charged===false)toast('저장 완료 · 이번 달 무료 '+res.used+'/'+res.freeQuota+'건');
-  else toast('저장 완료 · '+wonFmt(res.price)+' 차감 (잔액 '+wonFmt(res.balance)+')');
+  toast('저장 완료 (무료) · 파일이 다운로드됩니다');
 }
 function showSavePrompt(){const m=document.getElementById('saveprompt');if(m)m.classList.add('on');}
 function hideSavePrompt(){const m=document.getElementById('saveprompt');if(m)m.classList.remove('on');}
