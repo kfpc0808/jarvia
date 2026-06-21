@@ -1086,13 +1086,30 @@ function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.
 async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
   MSGS.push({who:'me',html:t});paint();inp.value='';autoGrow(inp,150);
-  if(pendingGen){const _f=pendingGen.field;const _act=pendingGen.act;const _q=pendingGen.q;pendingGen=null;
+  if(pendingGen){const _f=pendingGen.field;const _act=pendingGen.act;const _q=pendingGen.q;const _sug=pendingGen.suggested;pendingGen=null;
     if(_f==='basis'){ if(/소득|대체율|②|2|둘째|두번/.test(t)){chosenBasis='income';aiReply('소득대체율(소득의 80%) 기준으로 만들게요…');}else{chosenBasis='expense';aiReply('희망 생활비 기준으로 만들게요…');} return askNext(); }
     if(_f==='pillars'){ if(/[0-9]/.test(t)&&!/없|미보유|모름|몰라|해당/.test(t)){rawInput+=' 퇴직연금·개인연금 예상 월수령액: '+t+' (고객 제공). 3층(국민·퇴직·개인) 분해에 반영할 것.';aiReply('퇴직·개인연금을 3층 구조에 반영할게요…');}else{rawInput+=' 퇴직연금·개인연금 없음(국민연금 외 추가 연금 미보유).';aiReply('국민연금 외 추가 연금은 없는 것으로 진행할게요…');} return askNext(); }
     if(_f==='housing'){ if(/[0-9]/.test(t)&&!/없|미보유|모름|몰라|해당|아니/.test(t)){rawInput+=' 보유 주택 가격(시세): '+t+' (고객 제공). 주택연금 추정 월수령액을 산출하되 추정치이며 한국주택금융공사 공식 계산기 확인이 필요함을 명시할 것.';aiReply('주택연금으로 만들 수 있는 노후 월수입을 추정해 반영할게요…');}else{rawInput+=' 보유 주택 없음(주택연금 해당 없음).';aiReply('주택연금은 해당 없음으로 진행할게요…');} return askNext(); }
     if(_f==='simask'){ if(/취소|아니|싫|그만|됐|안 만들|안만|필요\s*없/.test(t)){ return aiReply('네, 시뮬레이터는 넣지 않을게요. 다른 걸 도와드릴까요?'); } if(/정적|차트|표|그래프/.test(t)&&!/동적|움직|슬라이더|라이브/.test(t)){ return aiReply('정적 차트로 할게요 — 어떤 비교를 보여드릴까요? 예: <b>조기/연기 비교</b>, <b>3층 연금 구조</b>, <b>은퇴 크레바스</b>. 말씀해 주시면 그 슬라이드를 만들어 드려요. (이건 계산결과 실제 값으로만 그립니다.)'); } addSim(); return aiReply('라이브 시뮬레이터를 추가했어요 🎚 — 슬라이드에서 슬라이더를 움직이면 결과가 즉시 바뀝니다. 값은 그 자리에서 직접 조정하시면 되니 <b>추가 수정 비용이 들지 않아요</b>.'); }
     if(_f==='doconfirm'){ if(/아니|취소|그만|싫|됐|별로|안 ?해|안 ?만들|안할|안만/.test(t)){ return aiReply('네, 진행하지 않을게요. 다시 지시해 주세요.'); } if(/예|네|응|그래|좋|진행|만들|수정|해줘|해 줘|ㅇㅋ|확인|오케|ok/i.test(t)){ if(_act&&_act.kind==='add') return runAddSlide(_act.pos,_act.instruction); if(_act&&_act.kind==='edit') return runWriteSlide(_act.idx,_act.instruction,_act.speed,_act.notice); } return aiReply('진행하려면 “예”, 취소하려면 “아니오”라고 답해 주세요. 다른 내용이면 그대로 다시 말씀해 주세요.'); }
+    if(_f==='topicpick'){
+      let pick=_topicFromText(t);
+      if(!pick){ if(/첫|1|전자|처음/.test(t)) pick=selectedTopic; else if(/둘|2|후자|두번|나중/.test(t)) pick=_sug; }
+      if(pick!==selectedTopic && pick!==_sug) pick=null;       // 둘 중 하나가 아니면 무효
+      if(!pick){ pendingGen={field:'topicpick',suggested:_sug}; return aiReply('<b>'+_topicShort(selectedTopic)+'</b> 또는 <b>'+_topicShort(_sug)+'</b> 중 하나로 알려주세요.'); }
+      topic=pick; topicLocked=true;
+      const tn=document.getElementById('topic'); if(tn) tn.textContent=topic+' · 고객';
+      aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
+      return startInterview();      // 확정 분야로 인터뷰 — lockTopic=true라 다시 안 물음
+    }
     if(_f==='interview'){
+      const _corr=detectTopicCorrection(t);
+      if(_corr && _corr!==topic){
+        topic=_corr; topicLocked=true; interviewQueue=[];
+        const tn=document.getElementById('topic'); if(tn) tn.textContent=topic+' · 고객';
+        aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
+        return startInterview();   // 확정 분야로 다시 — lockTopic=true라 더는 안 바뀜
+      }
       const qq=(_q||'추가 질문').replace(/<[^>]+>/g,'');
       if(/^\s*(미반영|모름|모르|몰라|없음|없어|없다|없|해당\s*없|스킵|건너|넘어|패스|pass|\.|-)\s*$/i.test(t)){ aiReply('네, 그 항목은 미반영으로 진행할게요.'); }
       else{ rawInput+='\n• '+qq+' → '+t+' (고객 제공)'; aiReply('반영했습니다. ✓'); }
@@ -1201,7 +1218,7 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
   const found=Object.keys(p).length;
   return {chips,params:p,pct:Math.max(60,Math.min(95,52+found*9))};
 }
-let rawInput="", clientName="", pendingGen=null, chosenBasis=null, origRequest="";
+let rawInput="", clientName="", pendingGen=null, chosenBasis=null, origRequest="", selectedTopic="", topicLocked=false;
 function preflightAsk(text,topic){
   const t=text||'';
   if((topic==='연금설계'||topic==='보험설계')&&!/국민연금|노령연금|예상\s*연금|공적\s*연금|연금\s*수령|연금\s*가입/.test(t)){
@@ -1237,15 +1254,40 @@ function basisAsk(text,topic){
   }
   return [];
 }
+function _topicShort(t){ return (t||'').replace(/설계|관리|컨설팅/g,''); }
+function _topicFromText(t){
+  t=t||'';
+  if(/기업|법인|가지급금|이익잉여금|가업\s*승계|임원\s*퇴직/.test(t)) return '기업컨설팅';
+  if(/연금|노후|은퇴/.test(t)) return '연금설계';
+  if(/보험|보장|사망보험|진단비/.test(t)) return '보험설계';
+  if(/자산\s*관리|포트폴리오|자산\s*배분|투자\s*성향/.test(t)) return '자산관리';
+  return null;
+}
+function detectTopicCorrection(t){
+  t=(t||'').trim();
+  if(!t || t.length>25 || /\d/.test(t)) return null;   // 길거나 숫자 포함 → 보통 답변
+  const dom=_topicFromText(t);
+  if(!dom) return null;
+  if(/맞|아니|으로|로\s|로$|할래|해줘|해 줘|이야|이에요|예요|입니다/.test(t)) return dom;
+  return null;
+}
 async function startInterview(){
   aiReply('좋은 자료를 위해 <b>꼭 필요한 내용</b>만 빠르게 확인할게요. (모르시는 항목은 “미반영”이라고 답하셔도 됩니다.)');
-  let qs=null;
+  let data=null;
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName})});
-    const data=await r.json();
-    if(data && Array.isArray(data.questions)){ qs=data.questions.slice(0,8); if(data.note && qs.length) aiReply(data.note); }
-  }catch(_e){ qs=null; }
-  if(qs===null){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }  // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked})});
+    data=await r.json();
+  }catch(_e){ data=null; }
+  if(!data || data.error){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }   // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
+  // 분야 불일치 → 임의로 안 바꾸고, 사용자에게 어느 분야인지 물어봄 (확정 상태면 안 물음)
+  const VALID=['연금설계','보험설계','자산관리','기업컨설팅'];
+  if(!topicLocked && data.mismatch && data.suggestedTopic && VALID.indexOf(data.suggestedTopic)>=0 && data.suggestedTopic!==topic){
+    pendingGen={field:'topicpick',suggested:data.suggestedTopic};
+    aiReply('입력하신 내용을 보니 <b>'+data.suggestedTopic+'</b> 자료 같은데, <b>'+selectedTopic+'</b>를 선택하셨어요. 🤔<br>혹시 어느 분야의 자료를 만드실 계획이세요? <b>'+_topicShort(selectedTopic)+'</b> 또는 <b>'+_topicShort(data.suggestedTopic)+'</b> 로 알려주세요.');
+    return;   // 사용자 답을 기다림
+  }
+  const qs = Array.isArray(data.questions) ? data.questions.slice(0,8) : [];
+  if(data.note && qs.length) aiReply(data.note);
   interviewQueue=qs;
   askNextInterview();
 }
@@ -1290,6 +1332,7 @@ async function startSession(){
   origRequest=rawInput;
   clientName=(document.getElementById('startname').value||'').trim();
   topic=startTopic;
+  selectedTopic=startTopic; topicLocked=false;
   document.getElementById('pchips').innerHTML='';
   document.getElementById('pct').textContent='…';document.getElementById('gfill').style.width='12%';
   document.getElementById('topic').textContent=topic+' · 고객';
