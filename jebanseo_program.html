@@ -574,7 +574,7 @@
 <div id="jtoast"></div>
 
 <script>
-let deck={slides:[]}, selectedIdx=null, topic="연금설계", params={}, calc={};
+let deck={slides:[]}, selectedIdx=null, topic="연금설계", params={}, calc={}, auditFlags=[];
 // Cloud Function 주소 (jarvia-platform · asia-northeast3). 콘솔의 함수 트리거 URL과 다르면 그 값으로 교체하세요.
 const FUNCTION_URL = "https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi";
 const MAIN_URL = "https://jarvia.co.kr"; // ★ 자비아 메인 주소 (필요시 교체)
@@ -990,6 +990,15 @@ function scrollToSlide(idx){const node=document.getElementById('deck').children[
 const MSGS=[];
 function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who);d.innerHTML=x.html;m.appendChild(d);});m.scrollTop=m.scrollHeight;}
 function aiReply(t){MSGS.push({who:'ai',html:t});paint();}
+// 숫자 감시망 경고 — 백엔드 numberAudit(계산 엔진에서 검증 안 된 금액)을 발표·전달 전 컨설턴트에게 알림
+function auditWarnHtml(flags){
+  const list=flags.map(f=>'<b>'+escHtml(String(f))+'</b>').join(' &nbsp; ');
+  return '<div style="border:1px solid var(--gold);background:var(--goldbg);border-radius:10px;padding:12px 14px;margin:2px 0;">'
+    +'<div style="font-weight:700;color:var(--ink);margin-bottom:6px;">⚠ 검수 필요 — 검증되지 않은 금액</div>'
+    +'<div style="color:var(--slate);font-size:13px;line-height:1.6;">아래 금액은 계산 엔진에서 확인되지 않았습니다. 고객에게 <b>발표·전달하기 전에 반드시 확인</b>하고, 사실과 다르면 해당 슬라이드를 수정해 주세요. (값이 맞다면 그대로 두셔도 됩니다.)</div>'
+    +'<div style="margin-top:8px;color:var(--red);font-weight:600;font-size:15px;">'+list+'</div>'
+    +'</div>';
+}
 
 const GUIDE_HTML='<div class="guidebox"><div class="gt">✨ 자료가 완성됐어요 — 이렇게 쓰세요</div>'
 +'<div class="gi"><i>1</i><span><b>글자를 직접 클릭하면 편집</b>(무료) — 정렬·크기·색상 툴바가 떠요. 본문 아래 <b>＋텍스트 행/＋이미지</b>로 자유 추가.</span></div>'
@@ -998,7 +1007,7 @@ const GUIDE_HTML='<div class="guidebox"><div class="gt">✨ 자료가 완성됐�
 +'<div class="gi"><i>4</i><span>상단 <b>💾 저장 / 📄 PDF</b>로 보관·출력. 더 자세한 건 왼쪽 위 <b>📖 이용가이드</b>를 눌러보세요.</span></div>'
 +'<div class="gtip">💡 직접 편집은 무료, AI 수정은 비용이에요 — 할 수 있는 건 직접 하시면 비용이 절약됩니다.</div></div>';
 async function generate(){
-  deck={slides:[]};renderGenLoading();
+  deck={slides:[]};auditFlags=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
     const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,clientName,needBasis:chosenBasis||undefined,member:MEMBER})});
@@ -1010,10 +1019,12 @@ async function generate(){
     aiOpCount=0;                                   // 새 문서 → 슬라이드 20회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
     if(data.calc) calc=data.calc;
+    auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];   // ★ 검증 안 된 금액 목록
     stopGenTimer();
     for(const s of data.deck.slides){deck.slides.push(s);renderDeck();const last=document.getElementById('deck').children[deck.slides.length-1];if(last){last.classList.add('flash');last.scrollIntoView({behavior:'smooth',block:'center'});}await new Promise(res=>setTimeout(res,350));}
     ensureDeckExtras();renderDeck();
     aiReply(GUIDE_HTML);
+    if(auditFlags.length) aiReply(auditWarnHtml(auditFlags));   // ★ 검증 안 된 금액이 있으면 검수 경고
     if(cg.dev)toast('자료 생성 · 개발모드(미과금)');
     else if(cg.unlimited)toast('자료 생성 · 무제한 회원');
     else if(cg.charged===false)toast('자료 생성 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
