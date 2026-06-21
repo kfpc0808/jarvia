@@ -11030,10 +11030,11 @@ var AI_PROPOSAL_URL = 'https://kfpc0808.github.io/jarvia/jebanseo_program.html';
 var AI_PROPOSAL_SAMPLE_URL = '';
 // ★ true로 변경 시 4종 회원(지사장·이너서클·컨홈·자비아멤버십) "월 2건 무료 + 초과 건당 3,000원" 체계 가동.
 //    현재 false → gildong/admin/관리자만 이용 가능, 그 외 전원 안내팝업.
-var AI_PROPOSAL_LIVE = false;
+var AI_PROPOSAL_LIVE = true;
 var AI_PROPOSAL_FREE_ROLES = ['branch_manager','inner_circle','con_homepage','jarvia_member'];
-var AI_PROPOSAL_PRICE = 3000;
-var AI_PROPOSAL_FREE_PER_MONTH = 2;
+var AI_PROPOSAL_PRICE = 5000;
+var AI_PROPOSAL_NONTIER_PRICE = 10000;
+var AI_PROPOSAL_FREE_PER_MONTH = 5;
 // gildong/admin/관리자 = 무제한 무료
 function _aiProposalAllowed(){
   var lid = (window.meData && meData.loginId) || '';
@@ -11093,21 +11094,73 @@ function _openAiProposalGuide(){
   if(_sb)_sb.style.display=AI_PROPOSAL_SAMPLE_URL?'block':'none';
   if(typeof openM==='function')openM('mdl-ai-proposal-guide');
 }
+function _aiProposalUrl(){
+  var n=(window.meData&&meData.name)||'', r=(window.meData&&meData.role)||'';
+  var sep=AI_PROPOSAL_URL.indexOf('?')>=0?'&':'?';
+  return AI_PROPOSAL_URL+sep+'name='+encodeURIComponent(n)+'&role='+encodeURIComponent(r);
+}
 function goAiProposal(){
   if(!window.me){ if(typeof openM==='function') openM('mdl-login-prompt'); return; }
-  // gildong/admin/관리자 → 무제한
-  if(_aiProposalAllowed()){
-    if(typeof logSvc==='function') logSvc('ai_proposal');
-    window.open(AI_PROPOSAL_URL, '_blank');
-    return;
-  }
-  // 유료체계 미가동 → 그 외 전원 안내팝업
+  // gildong/admin/관리자 → 무제한 (차감 없음)
+  if(_aiProposalAllowed()){ if(typeof logSvc==='function') logSvc('ai_proposal'); window.open(_aiProposalUrl(),'_blank'); return; }
+  // 유료체계 미가동 → 안내팝업
   if(!AI_PROPOSAL_LIVE){ _openAiProposalGuide(); return; }
-  // 가동 시 → 4종 회원만 무료2건+차감, 나머지는 안내팝업
-  var role=(window.meData&&meData.role)||'';
-  if(AI_PROPOSAL_FREE_ROLES.indexOf(role)>=0){ _runAiProposalPaid(); return; }
-  _openAiProposalGuide();
+  // 가동: 4종 회원·일반회원 모두 진입 가능. 차감은 프로그램 "저장 시" postMessage 로 처리.
+  if(typeof logSvc==='function') logSvc('ai_proposal');
+  window.open(_aiProposalUrl(),'_blank');
 }
+// ★ 프로그램(저장 시)에서 차감 요청 처리 — 4종: 월5건 무료 후 5,000원 / 일반: 건당 10,000원
+async function _chargeAiProposalSave(uid, role){
+  var isTier = AI_PROPOSAL_FREE_ROLES.indexOf(role)>=0;
+  var price = isTier ? AI_PROPOSAL_PRICE : AI_PROPOSAL_NONTIER_PRICE;
+  var freeQuota = isTier ? AI_PROPOSAL_FREE_PER_MONTH : 0;
+  var uRef=doc(db,'users',uid);
+  var ym=_aiProposalYM();
+  var fieldKey='aiProposalUsage.'+ym;
+  return runTransaction(db,async function(tx){
+    var uDoc=await tx.get(uRef);
+    if(!uDoc.exists())throw new Error('데이터 오류');
+    var ud=uDoc.data();
+    var used=(ud.aiProposalUsage&&ud.aiProposalUsage[ym])||0;
+    if(used<freeQuota){
+      tx.update(uRef,{[fieldKey]:increment(1),updatedAt:serverTimestamp()});
+      var fTxId=gid();
+      tx.set(doc(db,'transactions',fTxId),{txId:fTxId,userId:uid,type:'spend',amount:0,free:true,pointUsed:0,balanceUsed:0,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
+      return{charged:false,used:used+1,freeQuota:freeQuota};
+    }
+    var totalAvail=(ud.point||0)+(ud.balance||0);
+    if(totalAvail<price)throw new Error('INSUFFICIENT_BALANCE');
+    var pointUsed=Math.min(ud.point||0,price);
+    var balUsed=price-pointUsed;
+    var np=(ud.point||0)-pointUsed;
+    var nb=(ud.balance||0)-balUsed;
+    var txId=gid();
+    tx.update(uRef,{point:np,balance:nb,[fieldKey]:increment(1),updatedAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal',refId:ym,createdAt:serverTimestamp()});
+    return{charged:true,price:price,point:np,balance:nb,used:used+1,freeQuota:freeQuota};
+  });
+}
+// ★ 프로그램(다른 탭)에서 오는 차감 요청 수신
+window.addEventListener('message', async function(ev){
+  var d=ev&&ev.data; if(!d||d.type!=='jbCharge') return;
+  if(String(ev.origin||'').indexOf('kfpc0808.github.io')<0 && String(ev.origin||'').indexOf('jarvia')<0) return;
+  var src=ev.source;
+  function reply(m){ try{ src&&src.postMessage(Object.assign({type:'jbChargeResult',reqId:d.reqId}, m), ev.origin); }catch(_){} }
+  if(!window.me){ reply({ok:false,error:'NOT_LOGGED_IN'}); return; }
+  if(_aiProposalAllowed()){ reply({ok:true,charged:false,unlimited:true,balance:(window.meData&&meData.balance)||0,point:(window.meData&&meData.point)||0}); return; }
+  var role=(window.meData&&meData.role)||'';
+  try{
+    var r=await _chargeAiProposalSave(me.uid, role);
+    if(r.point!==undefined)meData.point=r.point;
+    if(r.balance!==undefined)meData.balance=r.balance;
+    if(typeof updateBal==='function')updateBal();
+    if(typeof logSvc==='function')logSvc('ai_proposal');
+    reply({ok:true,charged:r.charged,price:r.price||0,used:r.used,freeQuota:r.freeQuota,balance:(meData.balance||0),point:(meData.point||0)});
+  }catch(err){
+    if(err.message==='INSUFFICIENT_BALANCE'){ reply({ok:false,error:'INSUFFICIENT_BALANCE'}); if(typeof openCharge==='function')openCharge(); }
+    else reply({ok:false,error:(err.message||'ERROR')});
+  }
+});
 </script>
 
 <style>
