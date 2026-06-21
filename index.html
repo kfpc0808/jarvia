@@ -11140,6 +11140,26 @@ async function _chargeAiProposalSave(uid, role){
     return{charged:true,price:price,point:np,balance:nb,used:used+1,freeQuota:freeQuota};
   });
 }
+// ★ 슬라이드 20회 초과분 — 장당 200원 차감 (무료 한도 없음, 포인트 우선)
+async function _chargeAiProposalSlide(uid){
+  var price=200;
+  var uRef=doc(db,'users',uid);
+  return runTransaction(db,async function(tx){
+    var uDoc=await tx.get(uRef);
+    if(!uDoc.exists())throw new Error('데이터 오류');
+    var ud=uDoc.data();
+    var totalAvail=(ud.point||0)+(ud.balance||0);
+    if(totalAvail<price)throw new Error('INSUFFICIENT_BALANCE');
+    var pointUsed=Math.min(ud.point||0,price);
+    var balUsed=price-pointUsed;
+    var np=(ud.point||0)-pointUsed;
+    var nb=(ud.balance||0)-balUsed;
+    var txId=gid();
+    tx.update(uRef,{point:np,balance:nb,updatedAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId:txId,userId:uid,type:'spend',amount:-price,pointUsed:pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'ai_proposal_slide',createdAt:serverTimestamp()});
+    return{charged:true,price:price,point:np,balance:nb};
+  });
+}
 // ★ 프로그램(다른 탭)에서 오는 차감 요청 수신
 window.addEventListener('message', async function(ev){
   var d=ev&&ev.data; if(!d||d.type!=='jbCharge') return;
@@ -11150,6 +11170,14 @@ window.addEventListener('message', async function(ev){
   if(_aiProposalAllowed()){ reply({ok:true,charged:false,unlimited:true,balance:(window.meData&&meData.balance)||0,point:(window.meData&&meData.point)||0}); return; }
   var role=(window.meData&&meData.role)||'';
   try{
+    if(d.kind==='slide'){
+      var rs=await _chargeAiProposalSlide(me.uid);
+      if(rs.point!==undefined)meData.point=rs.point;
+      if(rs.balance!==undefined)meData.balance=rs.balance;
+      if(typeof updateBal==='function')updateBal();
+      reply({ok:true,charged:true,kind:'slide',price:rs.price,balance:(meData.balance||0),point:(meData.point||0)});
+      return;
+    }
     var r=await _chargeAiProposalSave(me.uid, role);
     if(r.point!==undefined)meData.point=r.point;
     if(r.balance!==undefined)meData.balance=r.balance;
