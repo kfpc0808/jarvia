@@ -257,6 +257,13 @@
   #start .terms ol.tlist li b{color:var(--navy);}
   #start .terms .tier{color:var(--gold);font-weight:700;}
   #start .terms .agree{display:flex;align-items:center;gap:9px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--navy);font-weight:700;cursor:pointer;user-select:none;}
+  #start .terms .qstat{margin-top:11px;font-size:12.5px;line-height:1.5;color:var(--slate);background:#F7F9FC;border:1px solid var(--line);border-radius:9px;padding:8px 11px;}
+  #start .terms .qstat:empty{display:none;}
+  #start .terms .qstat b{color:var(--navy);}
+  #start .terms .qstat.ok{background:#F0F7F1;border-color:#CDE5CF;}
+  #start .terms .qstat.warn{background:#FDF3E7;border-color:#F3D9B0;}
+  #start .terms .qstat.warn b{color:#B26A00;}
+  #start .terms .qstat.dev{background:#EEF1F6;border-color:#D5DCE8;color:#5A6B86;}
   #start .terms .agree input{width:18px;height:18px;accent-color:var(--gold);cursor:pointer;flex:none;}
   #start .terms .agree .req{color:#C0392B;font-weight:800;font-size:12px;}
   #start .terms.shake{animation:tshake .5s;border-color:#E3B7B0;}
@@ -392,6 +399,7 @@
   <div class="terms" id="termsbox">
     <div class="tt">＊이용안내</div>
     <ol class="tlist" id="tlist"></ol>
+    <div class="qstat" id="quotaStatus"></div>
     <label class="agree"><input type="checkbox" id="agree" onchange="onAgree()"> 위 이용안내를 확인했으며 <b>동의</b>합니다. <span class="req">(필수)</span></label>
   </div>
   <div class="orrow">또는 <button class="linklike" type="button" onclick="openFile()">📂 저장한 자료 열기</button><span id="resumewrap" style="display:none"> · <button class="linklike" type="button" onclick="restore('__last')">⟲ 이전 작업 이어하기</button></span></div>
@@ -851,7 +859,7 @@ async function generate(){
     if(data.error||!data.deck) throw new Error(data.error||'덱 없음');
     // ★ 생성 성공 → 즉시 1건 차감 (결제 실패 시 덱 미제공)
     const cg=await chargeGenerate();
-    if(!cg.ok){ stopGenTimer(); return aiReply(chargeFailMsg(cg.error)); }
+    if(!cg.ok){ stopGenTimer(); return aiReply(handleChargeFail(cg.error)); }
     aiOpCount=0;                                   // 새 문서 → 슬라이드 20회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
     if(data.calc) calc=data.calc;
@@ -863,6 +871,7 @@ async function generate(){
     else if(cg.unlimited)toast('자료 생성 · 무제한 회원');
     else if(cg.charged===false)toast('자료 생성 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
     else toast('자료 생성 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
+    refreshQuota();
   }catch(e){
     stopGenTimer();
     aiReply('자료 생성에 실패했어요. FUNCTION_URL이 올바른지, Cloud Function이 배포됐는지 확인해 주세요. ('+(e.message||e)+')');
@@ -986,7 +995,7 @@ async function send(){
 async function runWriteSlide(idx,instr,speed,notice){
   if(!deck.slides[idx])return aiReply('해당 슬라이드를 찾지 못했어요.');
   const cs=await chargeSlideOp('수정',idx+1);
-  if(!cs.ok)return aiReply(chargeFailMsg(cs.error));
+  if(!cs.ok)return aiReply(handleChargeFail(cs.error));
   if(cs.charged)toast('슬라이드 수정 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
   selectedIdx=idx;renderDeck();scrollToSlide(idx);const node=document.getElementById('deck').children[idx];if(node)node.classList.add('working');
   aiReply((speed==='slow'&&notice)?notice:`${idx+1}번 슬라이드를 작성자가 다시 쓰는 중이에요…`);
@@ -1002,7 +1011,7 @@ async function runWriteSlide(idx,instr,speed,notice){
 }
 async function runAddSlide(pos,instr){
   const cs=await chargeSlideOp('추가',pos+1);
-  if(!cs.ok)return aiReply(chargeFailMsg(cs.error));
+  if(!cs.ok)return aiReply(handleChargeFail(cs.error));
   if(cs.charged)toast('슬라이드 추가 · 200원 차감 (잔액 '+wonFmt(cs.balance)+')');
   aiReply('새 슬라이드를 작성자가 만드는 중이에요…');
   deck.slides.splice(pos,0,{title:'새 슬라이드',subtitle:'작성자가 작성 중…',content:[]});reseq();renderDeck();scrollToSlide(pos);
@@ -1076,7 +1085,7 @@ function termItems(m){
   ];
 }
 function renderTerms(){const ol=document.getElementById('tlist');if(!ol)return;ol.innerHTML=termItems(MEMBER).map(function(t){return '<li>'+t+'</li>';}).join('');}
-function applyMember(){MEMBER=resolveMember();renderTerms();}
+function applyMember(){MEMBER=resolveMember();renderTerms();refreshQuota();}
 function onAgree(){const a=document.getElementById('agree');const b=document.getElementById('gobtn');if(!b)return;const ok=!!(a&&a.checked);b.disabled=!ok;b.classList.toggle('off',!ok);}
 async function startSession(){
   const ag=document.getElementById('agree');
@@ -1266,6 +1275,37 @@ async function chargeSlideOp(kindLabel,n){
 }
 // 다음 AI 작업 비용 안내 문구
 function opCostNote(){return aiOpCount<AI_FREE_OPS?`무료 · ${aiOpCount}/${AI_FREE_OPS}회 사용`:'200원 차감';}
+// 잔액부족이면 자비아(충전창) 탭을 앞으로 + 안내문구 반환
+function handleChargeFail(err){
+  if(err==='INSUFFICIENT_BALANCE'){try{window.opener&&window.opener.focus();}catch(_){}}
+  return chargeFailMsg(err);
+}
+// ★ 무료 건수·잔액 조회 (읽기전용, 차감 없음)
+function requestQuota(){return new Promise(function(resolve){
+  if(!window.opener){resolve({ok:false,error:'NO_OPENER'});return;}
+  var reqId='q'+Date.now()+Math.random().toString(36).slice(2,6);var done=false;
+  function onMsg(ev){var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
+  window.addEventListener('message',onMsg);
+  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:'quota',member:MEMBER},'*');}
+  catch(_){window.removeEventListener('message',onMsg);resolve({ok:false,error:'NO_OPENER'});return;}
+  setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},10000);
+});}
+async function refreshQuota(){
+  const el=document.getElementById('quotaStatus');if(!el)return;
+  if(isDevMode()){el.innerHTML='🛠 개발모드 — 미과금 테스트';el.className='qstat dev';return;}
+  if(!window.opener){el.textContent='';el.className='qstat';return;}      // 직접 열림 → 표시 안 함
+  const q=await requestQuota();
+  if(!q.ok){el.textContent='';el.className='qstat';return;}
+  if(q.unlimited){el.innerHTML='✓ 무제한 회원 · 잔액 <b>'+wonFmt(q.balance)+'</b>';el.className='qstat ok';return;}
+  if(q.paid){
+    const left=Math.max(0,(q.freeQuota||0)-(q.used||0));
+    el.innerHTML='이번 달 무료 <b>'+(q.used||0)+'/'+(q.freeQuota||0)+'</b>건 사용 · <b>'+left+'건 남음</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
+    el.className='qstat '+(left>0?'ok':'warn');
+  }else{
+    el.innerHTML='무료 제공 없음 · 자료 1건당 <b>10,000원</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
+    el.className='qstat warn';
+  }
+}
 function saveFile(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
   _doSaveFile();
