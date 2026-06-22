@@ -313,12 +313,12 @@
         <div class="sub">체크하면 위 ①②항목 대신 이 금액을 예상자산으로 사용합니다. (오늘 가치)</div>
       </div>
 
-      <div class="sec-title">국민연금</div>
+      <div class="sec-title">국민연금 (노령연금)</div>
       <div class="row">
         <div class="input">
           <div class="label">예상 월수령액</div>
           <div class="field"><span class="unit">₩</span><input id="ssMonthly" inputmode="numeric" placeholder="1,100,000"></div>
-          <div class="sub">공단 모의계산값(오늘 가치)</div>
+          <div class="sub">정상 개시 시점 기준 · 공단 모의계산값(오늘 가치)</div>
         </div>
         <div class="input">
           <div class="label">수령 개시 나이</div>
@@ -330,6 +330,11 @@
           <div class="sub">수령 시작 후 매년 오르는 비율. <b>기본은 물가연동</b>(물가상승률과 동일)으로 인상분이 이미 반영됩니다. 보수적으로 보려면 물가보다 낮게 조정.</div>
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:#42526b;cursor:pointer">
+        <input type="checkbox" id="ssEarlyDefer" style="width:16px;height:16px" checked>
+        조기·연기 수령 자동 반영 <span style="color:#7b879b">(조기 −6%/년, 연기 +7.2%/년, 각 최대 5년)</span>
+      </label>
+      <div id="ssAdjNote" class="sm-tax" style="margin-top:8px"></div>
 
       <div class="sec-title">수익률 / 물가 가정</div>
       <div class="row">
@@ -722,6 +727,52 @@ function validate(v){
 //  계산 실행
 // ============================================================
 let LAST = null; // 마지막 계산 입력 보관 (시뮬용)
+// ============================================================
+//  노령연금 조기/연기 수령 보정 (조기 −6%/년, 연기 +7.2%/년, 각 최대 5년)
+// ============================================================
+function normalSsAge(cAge){
+  const by = (new Date().getFullYear()) - (cAge||0); // 출생연도 근사
+  if(by <= 1952) return 60;
+  if(by <= 1956) return 61;
+  if(by <= 1960) return 62;
+  if(by <= 1964) return 63;
+  if(by <= 1968) return 64;
+  return 65;
+}
+function ssFactor(startAge, normalAge){
+  const d = startAge - normalAge;
+  if(d < 0) return 1 - 0.06*Math.min(5, -d);   // 조기노령연금 감액
+  if(d > 0) return 1 + 0.072*Math.min(5, d);   // 연기연금 가산
+  return 1;
+}
+function adjustedSsMonthly(){
+  const raw = toInt(document.getElementById('ssMonthly').value);
+  if(!document.getElementById('ssEarlyDefer').checked) return raw;
+  const nAge = normalSsAge(toInt(document.getElementById('currentAge').value));
+  const startAge = toInt(document.getElementById('ssStartAge').value) || 65;
+  return Math.round(raw * ssFactor(startAge, nAge));
+}
+function updateSsAdj(){
+  const note = document.getElementById('ssAdjNote');
+  if(!note) return;
+  const raw = toInt(document.getElementById('ssMonthly').value);
+  const startAge = toInt(document.getElementById('ssStartAge').value) || 65;
+  const cAge = toInt(document.getElementById('currentAge').value);
+  if(!document.getElementById('ssEarlyDefer').checked){
+    note.innerHTML = '조기·연기 자동 반영 <b>꺼짐</b> — 입력한 월수령액을 그대로 사용합니다.';
+    return;
+  }
+  const nAge = normalSsAge(cAge);
+  const f = ssFactor(startAge, nAge);
+  const adj = Math.round(raw * f);
+  let s = '정상 개시 <b>'+nAge+'세</b> 기준 · 설정 '+startAge+'세 → ';
+  if(f < 1) s += '조기수령 <b>'+Math.round((1-f)*100)+'% 감액</b>';
+  else if(f > 1) s += '연기수령 <b>'+(Math.round((f-1)*1000)/10)+'% 가산</b>';
+  else s += '<b>감액·가산 없음</b>';
+  s += ' → 적용 월수령액 <b>'+won(adj)+'</b>';
+  note.innerHTML = s;
+}
+
 function gatherInput(){
   return {
     currentAge: toInt(document.getElementById('currentAge').value),
@@ -732,7 +783,7 @@ function gatherInput(){
     streams: [{ lump: toInt(document.getElementById('currentLump').value), monthly: toInt(document.getElementById('monthlySaving').value), years: toNum(document.getElementById('savingYears').value) }],
     useDirectProjected: document.getElementById('useDirect').checked,
     directProjected: toInt(document.getElementById('directProjected').value),
-    ssMonthly: toInt(document.getElementById('ssMonthly').value),
+    ssMonthly: adjustedSsMonthly(),
     ssStartAge: toInt(document.getElementById('ssStartAge').value) || 65,
     ssGrowthRate: (document.getElementById('ssGrowthRate').value.trim()==='' ? toNum(document.getElementById('inflationRate').value)/100 : toNum(document.getElementById('ssGrowthRate').value)/100),
     accumRate: toNum(document.getElementById('accumRate').value)/100,
@@ -829,6 +880,8 @@ function runSim(){
 //  초기화
 // ============================================================
 ['monthlyExpense','ssMonthly','directProjected','currentLump','monthlySaving'].forEach(id=>attachComma(document.getElementById(id)));
+['currentAge','ssMonthly','ssStartAge'].forEach(id=>document.getElementById(id).addEventListener('input', updateSsAdj));
+document.getElementById('ssEarlyDefer').addEventListener('change', updateSsAdj);
 bindExpToggle();
 document.getElementById('useDirect').addEventListener('change', e=>{
   document.getElementById('directWrap').style.display = e.target.checked ? 'block':'none';
@@ -851,6 +904,7 @@ document.getElementById('inflationRate').value = '2.5';
 document.getElementById('currentLump').value = '80,000,000';
 document.getElementById('monthlySaving').value = '500,000';
 document.getElementById('ssGrowthRate').value = '2.5';
+updateSsAdj();
 
 // ============================================================
 //  상담용 시뮬레이터 (calcPensionPlan 엔진 재사용)
