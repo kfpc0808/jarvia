@@ -3892,23 +3892,7 @@ async function doRegister(e){
       lastLoginAt:serverTimestamp(),
       createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
     });
-    // 단체 추천인이면 포인트 지급 스킵, 일반 추천인이면 포인트 지급
-    if(refCode&&!isGroupRef){
-      // 일반 추천: 추천인에게 5,000P 지급 (point + referralPoints 동시 업데이트, 트랜젝션 기록)
-      try{
-        const refSnap2=await getDocs(query(collection(db,'users'),where('referralCode','==',refCode),limit(1)));
-        if(!refSnap2.empty){
-          const refUid=refSnap2.docs[0].id;
-          const txId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
-          await runTransaction(db,async tx=>{
-            const rd=(await tx.get(doc(db,'users',refUid))).data();
-            const newPt=(rd.point||0)+5000;
-            tx.update(doc(db,'users',refUid),{referralPoints:increment(5000),point:increment(5000),updatedAt:serverTimestamp()});
-            tx.set(doc(db,'transactions',txId),{txId,userId:refUid,type:'referral_reward',amount:5000,pointAfter:newPt,memo:'추천 가입 보상',createdAt:serverTimestamp()});
-          });
-        }
-      }catch(e){console.warn('추천 포인트 지급 실패',e);}
-    }
+    // [추천보상 정책 변경 2026-06] 가입 시 즉시 지급 폐지 → 자비아멤버십(무제한) 전환 시 추천인에게 10,000P 1회 지급(admin grantMembership에서 처리). referredBy는 위 setDoc에 저장되어 멤버십 전환 시 추천인 조회에 사용됨.
     localStorage.removeItem('jarvia_ref');localStorage.removeItem('jarvia_subdomain');
     // ★ 가입 직후 자동 로그인 해제 — onAuthStateChanged가 main 페이지로 자동 이동시키는 것 방지
     try{await signOut(auth);}catch(e){console.warn('가입 후 signOut 실패(무시):',e);}
@@ -10515,7 +10499,7 @@ async function loadReferrals(){
     renderRefList('all');
   }else{
     $('ref-table-wrap').innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>가입일</th><th>회원유형</th><th>포인트 지급</th></tr></thead><tbody id="tb-referrals"></tbody></table></div>`;
-    $('tb-referrals').innerHTML=directRefs.length?directRefs.map(r=>`<tr><td>${esc(r.name)}</td><td>${fdate(r.createdAt)}</td><td>${roleLabel(r.role)}</td><td><span style="color:var(--success);font-weight:600">✅ 5,000P</span></td></tr>`).join(''):'<tr><td colspan="4" class="tc">추천한 회원이 없습니다.</td></tr>';
+    $('tb-referrals').innerHTML=directRefs.length?directRefs.map(r=>`<tr><td>${esc(r.name)}</td><td>${fdate(r.createdAt)}</td><td>${roleLabel(r.role)}</td><td>${r.membershipReferralRewarded?'<span style="color:var(--success);font-weight:600">✅ 10,000P</span>':'<span style="color:#999">멤버십 전환 시 지급</span>'}</td></tr>`).join(''):'<tr><td colspan="4" class="tc">추천한 회원이 없습니다.</td></tr>';
   }
   $('tb-referral-rewards').innerHTML=rewards.length?rewards.map(r=>`<tr><td>${fdatetime(r.createdAt)}</td><td>${esc(r.memo||'추천 가입 보상')}</td><td><span style="color:var(--success);font-weight:700">+${fmt(r.amount)}P</span></td></tr>`).join(''):'<tr><td colspan="3" class="tc">지급 내역이 없습니다.</td></tr>';
 }

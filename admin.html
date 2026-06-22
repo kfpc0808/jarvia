@@ -3330,7 +3330,23 @@ async function grantMembership(uid){
     if(prevRole!=='jarvia_member'){updateData.originalRole=prevRole;}
     else if(!data.originalRole){updateData.originalRole='user';}
     await updateDoc(userRef,updateData);
-    // [2026-05] 멤버십 부여 시 추천보상 50,000P 지급 로직 삭제 — 추천보상은 가입 시 5,000P로 일원화
+    // ★ [2026-06] 자비아멤버십(무제한) 신규 전환 시 추천인에게 10,000P 1회 지급
+    try{
+      if(isUnlimited && prevRole!=='jarvia_member' && data.referredBy && !data.groupMasterId && !data.membershipReferralRewarded){
+        const refSnap=await getDocs(query(collection(db,'users'),where('referralCode','==',data.referredBy),limit(1)));
+        if(!refSnap.empty){
+          const refUid=refSnap.docs[0].id;
+          const rTxId='ref_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+          await runTransaction(db,async tx=>{
+            const rd=(await tx.get(doc(db,'users',refUid))).data();
+            const newPt=(rd.point||0)+10000;
+            tx.update(doc(db,'users',refUid),{referralPoints:increment(10000),point:increment(10000),updatedAt:serverTimestamp()});
+            tx.update(userRef,{membershipReferralRewarded:true});
+            tx.set(doc(db,'transactions',rTxId),{txId:rTxId,userId:refUid,type:'referral_reward',amount:10000,pointAfter:newPt,refType:'membership_referral',refId:uid,memo:'자비아멤버십 추천가입 보상',createdAt:serverTimestamp()});
+          });
+        }
+      }
+    }catch(e){console.warn('멤버십 추천보상 지급 실패',e);}
     await logRoleChange(uid,data.name||'',data.loginId||'',prevRole,'jarvia_member',prevRole==='jarvia_member'?'멤버십 기간변경':'멤버십 부여',admData?.name||'');
     toast('멤버십 부여 완료 ('+periodTxt+')','success');
     closeM('mdl-member');loadMembers();loadMembership();
