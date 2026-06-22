@@ -282,21 +282,35 @@
         </div>
       </div>
 
-      <div class="sec-title">보유 / 가입 연금</div>
-      <div class="stream-head">
-        <div>항목</div><div>현재 적립금</div><div>월 납입액</div><div>납입기간</div><div></div>
+      <div id="ownAssets">
+      <div class="sec-title">① 이미 모아놓은 연금 자산 (목돈)</div>
+      <div class="input" style="flex:1 1 100%">
+        <div class="field"><span class="unit">₩</span><input id="currentLump" inputmode="numeric" placeholder="0"></div>
+        <div class="sub">지금까지 모은 <b>퇴직연금·IRP·개인연금</b> 등의 현재 평가액 합계(목돈)입니다. 추가 납입이 없어도 은퇴까지 수익률로 불어나 예상자산이 됩니다.</div>
       </div>
-      <div id="streams" class="streams"></div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button id="addStream" class="btn ghost btn-sm" type="button">＋ 항목 추가</button>
+
+      <div class="sec-title">② 매월 저축 계획 (연금 재원으로 모으는 금액)</div>
+      <div class="row">
+        <div class="input">
+          <div class="label">월 저축액</div>
+          <div class="field"><span class="unit">₩</span><input id="monthlySaving" inputmode="numeric" placeholder="500,000"></div>
+        </div>
+        <div class="input">
+          <div class="label">저축 기간</div>
+          <div class="field"><input id="savingYears" inputmode="numeric" placeholder="은퇴까지"><span class="hint">년</span></div>
+          <div class="sub">비우면 은퇴까지</div>
+        </div>
       </div>
+      <div class="sub" style="margin:2px 2px 4px">앞으로 <b>연금 재원으로 매월 모을 금액과 기간</b>입니다. 이 적립분이 은퇴까지 운용·누적되어 예상자산의 핵심이 됩니다. (예: 월 50만 × 15년)</div>
+      </div>
+
       <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:#42526b;cursor:pointer">
         <input type="checkbox" id="useDirect" style="width:16px;height:16px">
         은퇴시점 <b>예상 적립액</b>을 직접 입력 (이미 아는 경우)
       </label>
       <div id="directWrap" class="input" style="display:none;margin-top:8px">
         <div class="field"><span class="unit">₩</span><input id="directProjected" inputmode="numeric" placeholder="은퇴시점 예상 적립액"></div>
-        <div class="sub">체크하면 위 항목 대신 이 금액을 예상자산으로 사용합니다. (오늘 가치)</div>
+        <div class="sub">체크하면 위 ①②항목 대신 이 금액을 예상자산으로 사용합니다. (오늘 가치)</div>
       </div>
 
       <div class="sec-title">국민연금</div>
@@ -309,6 +323,11 @@
         <div class="input">
           <div class="label">수령 개시 나이</div>
           <div class="field"><input id="ssStartAge" inputmode="numeric" placeholder="65"><span class="hint">세</span></div>
+        </div>
+        <div class="input">
+          <div class="label">수령 후 인상률</div>
+          <div class="field"><input id="ssGrowthRate" inputmode="decimal" placeholder="2.5"><span class="hint">% 연</span></div>
+          <div class="sub">수령 시작 후 매년 오르는 비율. <b>기본은 물가연동</b>(물가상승률과 동일)으로 인상분이 이미 반영됩니다. 보수적으로 보려면 물가보다 낮게 조정.</div>
         </div>
       </div>
 
@@ -516,6 +535,7 @@ function calcPensionPlan(p){
         accumRate    = p.accumRate,
         receiveRate  = p.receiveRate,
         inflationRate= p.inflationRate,
+        ssGrowthRate = (p.ssGrowthRate != null ? p.ssGrowthRate : p.inflationRate),
         addMonthly   = p.addMonthly || 0,
         addYears     = p.addYears || 0;
 
@@ -558,7 +578,7 @@ function calcPensionPlan(p){
   let needAtRetire = 0;
   for(let k=1;k<=N;k++){
     const age = retireAge + k/12;
-    const ss = (age >= ssStartAge) ? ssMonthly : 0;
+    const ss = (age >= ssStartAge) ? ssMonthly * Math.pow((1+ssGrowthRate)/(1+inflationRate), age - ssStartAge) : 0;
     const net = Math.max(0, grossNeed - otherMonthly - ss);
     needAtRetire += net / Math.pow(1+rRec, k);
   }
@@ -595,7 +615,7 @@ function calcPensionPlan(p){
   for(let k=1;k<=N;k++){
     bal *= (1+rRec);
     const age = retireAge + k/12;
-    const ss = (age >= ssStartAge) ? ssMonthly : 0;
+    const ss = (age >= ssStartAge) ? ssMonthly * Math.pow((1+ssGrowthRate)/(1+inflationRate), age - ssStartAge) : 0;
     const net = Math.max(0, grossNeed - otherMonthly - ss);
     bal -= net;
     if(bal <= 0 && depletionAge === null){ depletionAge = Math.round((retireAge + k/12)*10)/10; bal = 0; }
@@ -617,35 +637,8 @@ function calcPensionPlan(p){
 // ============================================================
 //  보유 연금 항목 행 관리
 // ============================================================
-const DEFAULT_STREAMS = [
-  {name:'퇴직연금 / IRP', lump:'50,000,000', monthly:'200,000', years:''},
-  {name:'개인연금(연금저축)', lump:'30,000,000', monthly:'300,000', years:'10'},
-];
-function streamRow(d){
-  d = d || {name:'',lump:'',monthly:'',years:''};
-  const wrap = document.createElement('div');
-  wrap.className = 'stream-row';
-  wrap.innerHTML =
-    '<div class="cell"><input class="s-name" type="text" placeholder="항목명" value="'+(d.name||'')+'"></div>'+
-    '<div class="cell"><span class="unit">₩</span><input class="s-lump money" inputmode="numeric" placeholder="0" value="'+(d.lump||'')+'"></div>'+
-    '<div class="cell"><span class="unit">₩</span><input class="s-monthly money" inputmode="numeric" placeholder="0" value="'+(d.monthly||'')+'"></div>'+
-    '<div class="cell"><input class="s-years" inputmode="numeric" placeholder="은퇴까지" value="'+(d.years||'')+'"><span class="unit">년</span></div>'+
-    '<button class="x-btn" type="button" title="삭제">×</button>';
-  wrap.querySelector('.x-btn').addEventListener('click', ()=>wrap.remove());
-  wrap.querySelectorAll('.money').forEach(attachComma);
-  return wrap;
-}
-function readStreams(){
-  const out = [];
-  document.querySelectorAll('#streams .stream-row').forEach(r=>{
-    out.push({
-      lump: toInt(r.querySelector('.s-lump').value),
-      monthly: toInt(r.querySelector('.s-monthly').value),
-      years: toNum(r.querySelector('.s-years').value)
-    });
-  });
-  return out;
-}
+// (보유연금 항목 표 → ① 목돈 + ② 매월 저축 일원화로 대체됨)
+
 
 // ============================================================
 //  생활비 기준 토글
@@ -736,11 +729,12 @@ function gatherInput(){
     lifeExpectancy: toInt(document.getElementById('lifeExpectancy').value),
     monthlyExpense: toInt(document.getElementById('monthlyExpense').value),
     expenseBasis: expenseBasis,
-    streams: readStreams(),
+    streams: [{ lump: toInt(document.getElementById('currentLump').value), monthly: toInt(document.getElementById('monthlySaving').value), years: toNum(document.getElementById('savingYears').value) }],
     useDirectProjected: document.getElementById('useDirect').checked,
     directProjected: toInt(document.getElementById('directProjected').value),
     ssMonthly: toInt(document.getElementById('ssMonthly').value),
     ssStartAge: toInt(document.getElementById('ssStartAge').value) || 65,
+    ssGrowthRate: (document.getElementById('ssGrowthRate').value.trim()==='' ? toNum(document.getElementById('inflationRate').value)/100 : toNum(document.getElementById('ssGrowthRate').value)/100),
     accumRate: toNum(document.getElementById('accumRate').value)/100,
     receiveRate: toNum(document.getElementById('receiveRate').value)/100,
     inflationRate: toNum(document.getElementById('inflationRate').value)/100
@@ -834,13 +828,11 @@ function runSim(){
 // ============================================================
 //  초기화
 // ============================================================
-['monthlyExpense','ssMonthly','directProjected'].forEach(id=>attachComma(document.getElementById(id)));
+['monthlyExpense','ssMonthly','directProjected','currentLump','monthlySaving'].forEach(id=>attachComma(document.getElementById(id)));
 bindExpToggle();
-DEFAULT_STREAMS.forEach(d=>document.getElementById('streams').appendChild(streamRow(d)));
-document.getElementById('addStream').addEventListener('click', ()=>document.getElementById('streams').appendChild(streamRow()));
 document.getElementById('useDirect').addEventListener('change', e=>{
   document.getElementById('directWrap').style.display = e.target.checked ? 'block':'none';
-  document.getElementById('streams').style.opacity = e.target.checked ? .45 : 1;
+  document.getElementById('ownAssets').style.opacity = e.target.checked ? .45 : 1;
 });
 document.getElementById('run').addEventListener('click', calculate);
 document.getElementById('addMonthly').addEventListener('input', runSim);
@@ -856,6 +848,9 @@ document.getElementById('ssStartAge').value = '65';
 document.getElementById('accumRate').value = '5.0';
 document.getElementById('receiveRate').value = '3.5';
 document.getElementById('inflationRate').value = '2.5';
+document.getElementById('currentLump').value = '80,000,000';
+document.getElementById('monthlySaving').value = '500,000';
+document.getElementById('ssGrowthRate').value = '2.5';
 
 // ============================================================
 //  상담용 시뮬레이터 (calcPensionPlan 엔진 재사용)
