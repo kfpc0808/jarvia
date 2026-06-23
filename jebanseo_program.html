@@ -24,6 +24,11 @@
   .msg.ai{align-self:flex-start;background:rgba(255,255,255,.07);padding:9px 12px;border-radius:3px 12px 12px 12px;}
   .msg.me{align-self:flex-end;background:var(--gold);color:#231a06;padding:9px 12px;border-radius:12px 3px 12px 12px;font-weight:500;}
   .msg.ai .q{color:#C8B98E;font-size:11px;display:block;margin-top:5px;}
+  .msg.ai.typing{display:inline-flex;align-items:center;gap:5px;padding:12px 14px;}
+  .msg.ai.typing .tdot{width:7px;height:7px;border-radius:50%;background:#AEB6C2;animation:tbounce 1.25s infinite ease-in-out both;}
+  .msg.ai.typing .tdot:nth-child(2){animation-delay:.16s;}
+  .msg.ai.typing .tdot:nth-child(3){animation-delay:.32s;}
+  @keyframes tbounce{0%,70%,100%{transform:translateY(0);opacity:.45;}35%{transform:translateY(-5px);opacity:1;}}
   .linput{padding:11px 12px;border-top:1px solid rgba(255,255,255,.08);display:flex;gap:7px;}
   .linput input{flex:1;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);border-radius:9px;padding:10px 12px;color:#fff;font-size:14px;font-family:inherit;}
   .linput input::placeholder{color:#8896A8;}.linput input:focus{outline:none;border-color:var(--gold);}
@@ -1023,8 +1028,10 @@ function scrollToSlide(idx){const node=document.getElementById('deck').children[
 
 /* ===== 진행자 메시지 ===== */
 const MSGS=[];
-function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who);d.innerHTML=x.html;m.appendChild(d);});m.scrollTop=m.scrollHeight;}
-function aiReply(t){MSGS.push({who:'ai',html:t});paint();}
+function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else{d.innerHTML=x.html;}m.appendChild(d);});m.scrollTop=m.scrollHeight;}
+function showThinking(){if(MSGS.some(x=>x.thinking))return;MSGS.push({who:'ai',thinking:true});paint();}
+function hideThinking(){const i=MSGS.findIndex(x=>x.thinking);if(i>=0){MSGS.splice(i,1);paint();}}
+function aiReply(t){const i=MSGS.findIndex(x=>x.thinking);if(i>=0)MSGS.splice(i,1);MSGS.push({who:'ai',html:t});paint();}
 // 숫자 감시망 경고 — 백엔드 numberAudit(계산 엔진에서 검증 안 된 금액)을 발표·전달 전 컨설턴트에게 알림
 function auditWarnHtml(flags){
   const list=flags.map(f=>'<b>'+escHtml(String(f))+'</b>').join(' &nbsp; ');
@@ -1091,7 +1098,7 @@ async function callAdd(instruction){
 }
 async function callRoute(message){
   const slides=deck.slides.map((s,i)=>({n:i+1,title:s.title||''}));
-  let recent=MSGS.slice(-100).map(m=>(m.who==='me'?'사용자: ':'진행자: ')+(m.html||'').replace(/<[^>]+>/g,'')).join('\n');
+  let recent=MSGS.filter(m=>!m.thinking).slice(-100).map(m=>(m.who==='me'?'사용자: ':'진행자: ')+(m.html||'').replace(/<[^>]+>/g,'')).join('\n');
   if(recent.length>9000)recent=recent.slice(-9000);
   const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interpret',message,slides,topic,clientName,recent,origReq:origRequest})});
   const data=await r.json();
@@ -1195,6 +1202,7 @@ async function send(){
     return aiReply(`${pos+1}번 위치에 <b>빈 슬라이드</b>를 넣었어요. 제목·내용을 클릭해 직접 채우시면 됩니다. <b>(무료 — AI 호출 없음)</b>`);
   }
   let route;
+  showThinking();
   try{ route=await callRoute(t); }
   catch(e){ return aiReply('이해하는 데 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')'); }
   const op=route.op||'edit';
@@ -1230,6 +1238,7 @@ async function runWriteSlide(idx,instr,speed,notice){
   if(!pre.ok)return aiReply(handleChargeFail(pre.error));
   selectedIdx=idx;renderDeck();scrollToSlide(idx);const node=document.getElementById('deck').children[idx];if(node)node.classList.add('working');
   aiReply((speed==='slow'&&notice)?notice:`${idx+1}번 슬라이드를 작성자가 다시 쓰는 중이에요…`);
+  showThinking();
   const sig=s=>(s.title||'')+'|'+(s.subtitle||'')+'|'+(s.pre||'')+'|'+(s.srLabel||'')+'|'+(s.date||'')+'|'+(s.org||'')+'|'+(s.byline||'')+'|'+(s.conclusion||'')+'|'+JSON.stringify(s.content||[]);
   const before=sig(deck.slides[idx]);
   try{
@@ -1250,6 +1259,7 @@ async function runAddSlide(pos,instr){
   const pre=await precheckSlideOp();
   if(!pre.ok)return aiReply(handleChargeFail(pre.error));
   aiReply('새 슬라이드를 작성자가 만드는 중이에요…');
+  showThinking();
   deck.slides.splice(pos,0,{title:'새 슬라이드',subtitle:'작성자가 작성 중…',content:[]});reseq();renderDeck();scrollToSlide(pos);
   const phNode=document.getElementById('deck').children[pos];if(phNode)phNode.classList.add('working');
   try{
@@ -1347,6 +1357,7 @@ async function startInterview(){
   interviewRound++;   // 다회차: 라운드 증가
   if(interviewRound===1) aiReply('좋은 자료를 위해 <b>꼭 필요한 내용</b>만 빠르게 확인할게요. (모르시는 항목은 “미반영”이라고 답하셔도 됩니다.)');
   else aiReply('답변 감사합니다. 자료를 더 정확히 만들기 위해 <b>몇 가지만 더</b> 확인할게요.');
+  showThinking();
   let data=null;
   try{
     const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked})});
