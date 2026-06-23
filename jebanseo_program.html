@@ -1052,7 +1052,7 @@ async function generate(){
   deck={slides:[]};auditFlags=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,clientName,companyName,needBasis:chosenBasis||undefined,member:MEMBER})});
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'generate',topic,text:rawInput,params:collectedParams,clientName,companyName,needBasis:chosenBasis||undefined,member:MEMBER})});
     const data=await r.json();
     if(data.error||!data.deck) throw new Error(data.error||'덱 없음');
     // ★ 생성 성공 → 즉시 1건 차감 (결제 실패 시 덱 미제공)
@@ -1293,7 +1293,7 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
   const found=Object.keys(p).length;
   return {chips,params:p,pct:Math.max(60,Math.min(95,52+found*9))};
 }
-let rawInput="", clientName="", companyName="", pendingGen=null, chosenBasis=null, origRequest="", selectedTopic="", topicLocked=false;
+let rawInput="", clientName="", companyName="", collectedParams={}, pendingGen=null, chosenBasis=null, origRequest="", selectedTopic="", topicLocked=false;
 let interviewRound=0, _lastRoundAsked=false, totalAsked=0; const INTERVIEW_MAX_ROUNDS=3;  // 다회차 인터뷰: 라운드 한도(무한루프 방지) + 직전 라운드 질문 여부 + 총 질문 수
 function preflightAsk(text,topic){
   const t=text||'';
@@ -1364,6 +1364,8 @@ async function startInterview(){
     data=await r.json();
   }catch(_e){ data=null; }
   if(!data || data.error){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }   // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
+  // ★ 인터뷰가 누적 추출한 구조화 값 모으기(매 라운드 전체 대화 기반) → 생성 때 params로 전달해 막판 단일 파싱 누락 보완
+  if(data.collected && typeof data.collected==='object'){ collectedParams={...collectedParams, ...data.collected}; }
   // 분야 불일치 → 임의로 안 바꾸고, 사용자에게 어느 분야인지 물어봄 (확정 상태면 안 물음)
   const VALID=['연금설계','보험설계','자산관리','기업컨설팅'];
   if(interviewRound===1 && !topicLocked && data.mismatch && data.suggestedTopic && VALID.indexOf(data.suggestedTopic)>=0 && data.suggestedTopic!==topic){
@@ -1439,7 +1441,7 @@ async function startSession(){
     // ★ 사용자가 처음 입력한 요청을 대화 맨 위에 그대로 표시 + 진행자가 처음부터 기억하도록
     if(origRequest){ MSGS.push({who:'me',html:'<b>요청하신 내용</b><br>'+escHtml(origRequest)+(clientName?'<br><span class="q">고객: '+escHtml(clientName)+(companyName?' · '+escHtml(companyName):'')+'</span>':'')}); }
     paint();
-    interviewRound=0; _lastRoundAsked=false; totalAsked=0;   // 새 인터뷰 세션: 라운드 초기화
+    interviewRound=0; _lastRoundAsked=false; totalAsked=0; collectedParams={};   // 새 인터뷰 세션: 라운드·누적값 초기화
     startInterview();
   },400);
 }
@@ -1604,12 +1606,18 @@ let aiOpCount=0;                       // 문서당 AI 수정/추가 횟수 (20�
 const AI_FREE_OPS=20, AI_SLIDE_PRICE=200;
 function wonFmt(n){return (Number(n)||0).toLocaleString('ko-KR')+'원';}
 function isDevMode(){try{return new URLSearchParams(location.search).get('dev')==='1';}catch(_){return false;}}
+// ★ 보안: 과금·회원 메시지는 신뢰하는 출처(JARVIA 플랫폼)만 주고받는다.
+//   앱과 JARVIA가 같은 출처(github.io)라 location.origin이 곧 신뢰 출처. JARVIA가 별도 도메인이면 아래 목록에 추가.
+const JB_TRUSTED_ORIGINS=(function(){const s=new Set();try{s.add(location.origin);}catch(_){}
+  ['https://jarvia.co.kr','https://www.jarvia.co.kr'].forEach(function(o){s.add(o);});  // ★ 실제 JARVIA 도메인에 맞게 확인/수정
+  return s;})();
+function jbParentOrigin(){try{if(document.referrer){var o=new URL(document.referrer).origin;if(JB_TRUSTED_ORIGINS.has(o))return o;}}catch(_){}return location.origin;}
 function requestCharge(kind,detail){return new Promise(function(resolve){
   if(!window.opener){resolve({ok:false,error:'NO_OPENER'});return;}
   var reqId='c'+Date.now()+Math.random().toString(36).slice(2,6);var done=false;
-  function onMsg(ev){var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
+  function onMsg(ev){if(!JB_TRUSTED_ORIGINS.has(ev.origin))return;var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
   window.addEventListener('message',onMsg);
-  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:kind||'generate',member:MEMBER,detail:detail||{}},'*');}
+  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:kind||'generate',member:MEMBER,detail:detail||{}},jbParentOrigin());}
   catch(_){window.removeEventListener('message',onMsg);resolve({ok:false,error:'NO_OPENER'});return;}
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},12000);
 });}
@@ -1656,9 +1664,9 @@ function handleChargeFail(err){
 function requestQuota(){return new Promise(function(resolve){
   if(!window.opener){resolve({ok:false,error:'NO_OPENER'});return;}
   var reqId='q'+Date.now()+Math.random().toString(36).slice(2,6);var done=false;
-  function onMsg(ev){var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
+  function onMsg(ev){if(!JB_TRUSTED_ORIGINS.has(ev.origin))return;var d=ev&&ev.data;if(!d||d.type!=='jbChargeResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d);}
   window.addEventListener('message',onMsg);
-  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:'quota',member:MEMBER},'*');}
+  try{window.opener.postMessage({type:'jbCharge',reqId:reqId,kind:'quota',member:MEMBER},jbParentOrigin());}
   catch(_){window.removeEventListener('message',onMsg);resolve({ok:false,error:'NO_OPENER'});return;}
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},10000);
 });}
@@ -1778,7 +1786,7 @@ setupMic('startin','micstart');setupMic('cmd','miccmd');
   const si=document.getElementById('startin');if(si)si.addEventListener('input',()=>autoGrow(si,360));
   window.addEventListener('scroll',()=>{if(edTarget)showEdbar(edTarget);},true);})();
 (function(){applyMember();onAgree();
-  window.addEventListener('message',function(e){try{var d=e&&e.data;if(d&&(d.jarviaMember||d.member)){window.JARVIA_MEMBER=d.jarviaMember||d.member;applyMember();}}catch(_){}});})();
+  window.addEventListener('message',function(e){if(!JB_TRUSTED_ORIGINS.has(e.origin))return;try{var d=e&&e.data;if(d&&(d.jarviaMember||d.member)){window.JARVIA_MEMBER=d.jarviaMember||d.member;applyMember();}}catch(_){}});})();
 offerResume();
 renderDeck();paintEx();updateIdFields();
 if(window.matchMedia&&window.matchMedia('(max-width:700px)').matches){var _l0=document.getElementById('left');if(_l0)_l0.classList.add('collapsed');}
