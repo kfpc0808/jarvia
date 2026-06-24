@@ -1879,6 +1879,7 @@
           <option value="mat">이번 달 만기·갱신</option>
         </select>
       </div>
+      <div id="fcc-sub-box" style="margin-bottom:10px;border:1px solid #BFD3F0;background:#F2F7FF;border-radius:8px;padding:10px 12px"><button type="button" id="fcc-sub-btn" onclick="fccCalSubscribe()" style="width:100%;padding:11px;font-size:13px;font-weight:700;color:#fff;background:#2563EB;border:none;border-radius:8px;cursor:pointer">🔔 캘린더 자동 구독 — 한 번만 설정하면 끝</button><div style="font-size:10px;color:#5B6B8C;margin-top:5px;line-height:1.5">한 번 등록하면 이후 고객을 추가·수정만 해도 폰 캘린더에 <b>자동</b> 반영됩니다. (다운로드·매번 누르기 없음)</div><div id="fcc-sub-result" style="display:none;margin-top:10px"></div></div>
       <div style="margin-bottom:10px"><button type="button" onclick="fccExportIcs('all')" style="width:100%;padding:10px;font-size:13px;font-weight:700;color:#1B3A5C;background:#FFF8E7;border:1px solid #E0C36B;border-radius:8px;cursor:pointer">📅 전체 고객 캘린더 추가 (.ics)</button><div style="font-size:10px;color:#9CA3AF;margin-top:5px;line-height:1.5">생일·상령일·만기 일정이 한 번에 추가됩니다. 폰 캘린더에 넣으려면 <b>폰에서</b> 눌러주세요. (30일·7일·당일 알림 포함)</div></div>
       <div id="fcc-summary" style="font-size:12px;color:#8B93AE;margin-bottom:8px"></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="5" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
@@ -5948,6 +5949,63 @@ function _fccIcsStamp(){return new Date().toISOString().replace(/[-:]/g,'').repl
 function _fccIcsAlarms(){return ['-P29DT15H','-P6DT15H','PT9H'].map(function(t){return 'BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:알림\r\nTRIGGER:'+t+'\r\nEND:VALARM';}).join('\r\n');}
 function _fccIcsEvent(uid,d,yearly,summary){return 'BEGIN:VEVENT\r\nUID:'+uid+'\r\nDTSTAMP:'+_fccIcsStamp()+'\r\nDTSTART;VALUE=DATE:'+_fccIcsDate(d)+(yearly?'\r\nRRULE:FREQ=YEARLY':'')+'\r\nSUMMARY:'+_fccIcsEsc(summary)+'\r\nTRANSP:TRANSPARENT\r\n'+_fccIcsAlarms()+'\r\nEND:VEVENT';}
 function _fccInsLabel(t){return ({silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금'})[t||'']||'';}
+/* ── 🔔 캘린더 자동 구독 (2단계) — calIssueToken 호출·기기별 안내·로컬 캐시 ── */
+function fccCalKey(){ return me?('fccCalUrl_'+me.uid):''; }
+function fccCalGetCached(){ try{ return localStorage.getItem(fccCalKey())||''; }catch(e){ return ''; } }
+function fccCalSetCached(u){ try{ localStorage.setItem(fccCalKey(),u||''); }catch(e){} }
+async function fccCalIssue(){
+  var fn=httpsCallable(functions,'calIssueToken');
+  var r=await fn({}); var d=(r&&r.data)||{};
+  if(!d.ok||!d.url) throw new Error(d.error||'발급 실패');
+  fccCalSetCached(d.url);
+  return d.url;
+}
+window.fccCalSubscribe=async function(){
+  if(!me){toast('로그인이 필요합니다.');return;}
+  var cached=fccCalGetCached();
+  if(cached){ fccCalRender(cached); toast('내 구독 주소','success'); return; }
+  var btn=document.getElementById('fcc-sub-btn');
+  if(btn){btn.disabled=true;btn.dataset.t=btn.textContent;btn.textContent='주소 생성 중…';}
+  try{ var url=await fccCalIssue(); fccCalRender(url); toast('구독 주소가 생성되었습니다','success'); }
+  catch(e){ toast('구독 주소 생성 실패: '+((e&&e.message)||e)); }
+  finally{ if(btn){btn.disabled=false;btn.textContent=btn.dataset.t||'🔔 캘린더 자동 구독 — 한 번만 설정하면 끝';} }
+};
+window.fccCalReissue=async function(){
+  if(!me){toast('로그인이 필요합니다.');return;}
+  if(!confirm('주소를 새로 발급하면 기존 주소는 즉시 무효가 됩니다.\n쓰던 기기는 새 주소로 다시 구독해야 합니다. 계속할까요?'))return;
+  try{ var url=await fccCalIssue(); fccCalRender(url); toast('새 주소가 발급되었습니다','success'); }
+  catch(e){ toast('재발급 실패: '+((e&&e.message)||e)); }
+};
+window.fccCalCopy=function(t){
+  if(!t)return;
+  try{ navigator.clipboard.writeText(t).then(function(){toast('주소가 복사되었습니다','success');},function(){fccCalCopyFallback(t);}); }
+  catch(e){ fccCalCopyFallback(t); }
+};
+function fccCalCopyFallback(t){
+  try{ var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('주소가 복사되었습니다','success'); }
+  catch(e){ toast('복사 실패 — 주소를 길게 눌러 복사하세요'); }
+}
+function fccCalRender(url){
+  var box=document.getElementById('fcc-sub-result'); if(!box)return;
+  var webcal=url.replace(/^https:/,'webcal:');
+  var ua=navigator.userAgent||'';
+  var isIOS=/iPhone|iPad|iPod/i.test(ua), isAOS=/Android/i.test(ua);
+  var H=function(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');};
+  var head='';
+  if(isIOS){
+    head='<a href="'+H(webcal)+'" style="display:block;text-align:center;padding:12px;background:#0A84FF;color:#fff;font-weight:700;font-size:13px;border-radius:8px;text-decoration:none">📲 아이폰 캘린더에 바로 구독</a>'
+        +'<div style="font-size:10.5px;color:#5B6B8C;margin-top:5px;line-height:1.5">버튼을 누르고 “구독 추가”만 선택하면 끝. 이후 자동 반영됩니다.</div>';
+  }else if(isAOS){
+    head='<div style="padding:10px;background:#FFF8E7;border:1px solid #E0C36B;border-radius:8px;font-size:11.5px;color:#5B4A1A;line-height:1.6"><b>안드로이드(구글)</b>는 <b>PC에서 한 번만</b> 등록하면 이후 폰에 자동 반영됩니다.<br>PC → <b>calendar.google.com</b> → “다른 캘린더 ＋” → “URL로 추가” → 아래 주소 붙여넣기.</div>';
+  }else{
+    head='<div style="padding:10px;background:#EEF4FF;border:1px solid #BFD3F0;border-radius:8px;font-size:11.5px;color:#2B4A7A;line-height:1.6"><b>구글 캘린더</b>: “다른 캘린더 ＋” → “URL로 추가” → 아래 주소 붙여넣기.<br><b>아이폰</b>은 폰에서 이 페이지를 열어 “바로 구독” 버튼을 누르세요.</div>';
+  }
+  box.innerHTML=head
+    +'<div style="display:flex;gap:6px;margin-top:8px"><input type="text" readonly value="'+H(url)+'" onclick="this.select()" style="flex:1;min-width:0;font-size:11px;padding:7px 8px;border:1px solid #C7D2DE;border-radius:6px;background:#fff;color:#334455"><button type="button" onclick="fccCalCopy(this.previousElementSibling.value)" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#E8EEF6;border:1px solid #C7D2DE;border-radius:6px;padding:0 12px;cursor:pointer">복사</button></div>'
+    +'<div style="text-align:right;margin-top:7px"><button type="button" onclick="fccCalReissue()" style="font-size:11px;color:#9CA3AF;background:none;border:none;cursor:pointer;text-decoration:underline">주소 재발급(보안)</button></div>';
+  box.style.display='';
+  var sb=document.getElementById('fcc-sub-btn'); if(sb)sb.textContent='🔔 내 구독 주소 보기';
+}
 window.fccExportIcs=function(which){
   if(!me){toast('로그인이 필요합니다.');return;}
   var list;
