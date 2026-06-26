@@ -1071,7 +1071,20 @@ function scrollToSlide(idx){const node=document.getElementById('deck').children[
 
 /* ===== 진행자 메시지 ===== */
 const MSGS=[];
-function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else{d.innerHTML=x.html;}m.appendChild(d);});m.scrollTop=m.scrollHeight;}
+function sanitizeMessageHtml(value){
+  const tpl=document.createElement('template');
+  tpl.innerHTML=String(value||'');
+  tpl.content.querySelectorAll('script,iframe,object,embed,link,meta,base,form,input,button,textarea,select,option,svg,math').forEach(el=>el.remove());
+  tpl.content.querySelectorAll('*').forEach(el=>{
+    Array.from(el.attributes).forEach(attr=>{
+      const name=String(attr.name||'').toLowerCase();
+      const val=String(attr.value||'').trim().toLowerCase();
+      if(name.startsWith('on')||name==='srcdoc'||((name==='href'||name==='src'||name==='xlink:href'||name==='action'||name==='formaction')&&/^(?:javascript|vbscript|data:text\/html):/.test(val)))el.removeAttribute(attr.name);
+    });
+  });
+  return tpl.innerHTML;
+}
+function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else if(x.who==='ai'||x.trustedHtml===true){d.innerHTML=sanitizeMessageHtml(x.html||'');}else{d.textContent=String(x.text!=null?x.text:(x.html||''));}m.appendChild(d);});m.scrollTop=m.scrollHeight;}
 function showThinking(){if(MSGS.some(x=>x.thinking))return;MSGS.push({who:'ai',thinking:true});paint();}
 function hideThinking(){const i=MSGS.findIndex(x=>x.thinking);if(i>=0){MSGS.splice(i,1);paint();}}
 function aiReply(t){const i=MSGS.findIndex(x=>x.thinking);if(i>=0)MSGS.splice(i,1);MSGS.push({who:'ai',html:t});paint();}
@@ -1130,30 +1143,72 @@ const FIN_FIELD_PATTERNS={
   borrowings:/(?:차입금총계|차입금)/,loanAmount:/(?:가지급금|주임종대여금|단기대여금|기타대여금|대여금)/
 };
 function _financialTouchedKeys(text){const s=String(text||'');return Object.keys(FIN_FIELD_PATTERNS).filter(k=>FIN_FIELD_PATTERNS[k].test(s));}
+function _financialIntentKeys(text,intent){
+  const s=String(text||'').replace(/\s+/g,' '),hits=[];
+  Object.keys(FIN_FIELD_PATTERNS).forEach(k=>{
+    const re=new RegExp(FIN_FIELD_PATTERNS[k].source,'g');let m;
+    while((m=re.exec(s)))hits.push({key:k,start:m.index,end:m.index+m[0].length});
+  });
+  hits.sort((a,b)=>a.start-b.start||b.end-a.end);
+  const found=new Set();
+  hits.forEach((hit,i)=>{
+    let right=i<hits.length-1?hits[i+1].start:s.length;
+    const nextP=[',','，',';','；','.','。','\n'].map(ch=>s.indexOf(ch,hit.end)).filter(x=>x>=0);
+    if(nextP.length)right=Math.min(right,Math.min(...nextP));
+    if(new RegExp(intent).test(s.slice(hit.start,right)))found.add(hit.key);
+  });
+  return Array.from(found);
+}
 function _financialExplicitDeleteKeys(text){
-  const s=String(text||'').replace(/\s+/g,' ');
-  if(!/(?:제외|삭제|빼|성격\s*(?:을\s*)?확인|미확인|확정하지|해당\s*(?:아님|없음))/.test(s))return [];
-  return _financialTouchedKeys(s);
+  return _financialIntentKeys(text,'(?:제외|삭제|빼|성격\\s*(?:을\\s*)?확인|미확인|확정하지|해당\\s*(?:아님|없음))');
 }
 function _financialExplicitZeroKeys(text){
-  const s=String(text||'').replace(/\s+/g,' ');
-  if(!/(?:없음|없다|없습니다|(?:^|[^\d])0\s*(?:원|만원|억원)?(?:$|[^\d]))/.test(s))return [];
-  return _financialTouchedKeys(s);
+  return _financialIntentKeys(text,'(?:없음|없다|없습니다|(?:^|[^\\d])0\\s*(?:원|만원|억원)?(?:$|[^\\d]))');
+}
+function _financialCorrectionMeta(text){
+  const s=String(text||'').replace(/[,，]/g,' ').replace(/\s+/g,' ').trim(),out={};
+  let m=s.match(/(?:기준\s*(?:연도|년도)|사업\s*(?:연도|년도))\s*(?:는|은|:|=)?\s*((?:19|20)\d{2})\s*년?/);
+  if(m)out.baseYear=Number(m[1]);
+  m=s.match(/(?:비교\s*(?:연도|년도)|전기\s*(?:연도|년도))\s*(?:는|은|:|=)?\s*((?:19|20)\d{2})\s*년?/);
+  if(m)out.comparisonYear=Number(m[1]);
+  if(/(?:비교\s*(?:연도|년도)|전기\s*(?:연도|년도))\s*(?:는|은|:|=)?\s*(?:없음|없다|없습니다|미사용|해당\s*없음)/.test(s))out.comparisonYearAbsent=true;
+  m=s.match(/(?:금액\s*)?단위\s*(?:는|은|:|=)?\s*(백만원|억원|만원|천원|원)/);
+  if(m)out.unit=m[1];
+  m=s.match(/(?:재무제표(?:\s*구분)?\s*(?:는|은|:|=)?\s*(별도|연결)|(별도|연결)\s*재무제표)/);
+  if(m)out.statementType=m[1]||m[2];
+  return out;
+}
+function _financialStrictNoneKeys(text){
+  return _financialIntentKeys(text,'(?:제외|삭제|빼|해당\\s*(?:아님|없음)|보유하지\\s*않|존재하지\\s*않)');
+}
+function _financialUncertainResolved(message,resolvedKeys,meta){
+  const msg=String(message||'').replace(/\s+/g,' ');
+  if(meta.baseYear!=null&&/(?:기준|사업)\s*(?:연도|년도)|재무제표\s*기준(?:일|연도)/.test(msg))return true;
+  if((meta.comparisonYear!=null||meta.comparisonYearAbsent)&&/(?:비교|전기)\s*(?:연도|년도)/.test(msg))return true;
+  if(meta.unit&&/(?:금액\s*)?단위/.test(msg))return true;
+  if(meta.statementType&&/(?:별도|연결|재무제표\s*구분).*(?:불명|미확인|확인|여부)|(?:불명|미확인).*(?:별도|연결|재무제표\s*구분)/.test(msg))return true;
+  return Array.from(resolvedKeys||[]).some(k=>FIN_FIELD_PATTERNS[k]&&FIN_FIELD_PATTERNS[k].test(msg));
 }
 function mergeFinancialData(base,next,options){
   const b=base&&typeof base==='object'?JSON.parse(JSON.stringify(base)):{},n=next&&typeof next==='object'?next:{},opt=options||{};
-  const out={...b};
+  const out={...b},meta=opt.correctionMode?_financialCorrectionMeta(opt.sourceText):{};
   ['baseYear','comparisonYear','statementType','unit'].forEach(k=>{if(n[k]!=null&&String(n[k]).trim()!=='')out[k]=n[k];});
+  ['baseYear','comparisonYear','statementType','unit'].forEach(k=>{if(meta[k]!=null&&String(meta[k]).trim()!=='')out[k]=meta[k];});
+  if(meta.comparisonYearAbsent)delete out.comparisonYear;
   const be=b.extracted&&typeof b.extracted==='object'?b.extracted:{},ne=n.extracted&&typeof n.extracted==='object'?n.extracted:n;
   out.extracted={...be};
   Object.keys(ne||{}).forEach(k=>{if(ne[k]!=null&&!(typeof ne[k]==='string'&&ne[k].trim()===''))out.extracted[k]=ne[k];});
-  _financialExplicitZeroKeys(opt.sourceText).forEach(k=>{out.extracted[k]=0;});
-  _financialExplicitDeleteKeys(opt.sourceText).forEach(k=>{delete out.extracted[k];});
+  const zeroKeys=_financialExplicitZeroKeys(opt.sourceText),deleteKeys=_financialExplicitDeleteKeys(opt.sourceText);
+  zeroKeys.forEach(k=>{out.extracted[k]=0;});
+  deleteKeys.forEach(k=>{delete out.extracted[k];});
   const oldUncertain=_financialUncertain(b),newUncertain=_financialUncertain(n);
   if(opt.correctionMode){
-    const touched=_financialTouchedKeys(opt.sourceText);
-    const keepOld=oldUncertain.filter(msg=>!touched.some(k=>FIN_FIELD_PATTERNS[k].test(msg)));
-    out.uncertain=[...new Set(keepOld.concat(newUncertain))];
+    const resolvedKeys=new Set();
+    Object.keys(FIN_FIELD_PATTERNS).forEach(k=>{if(_finNum(ne&&ne[k])!=null)resolvedKeys.add(k);});
+    zeroKeys.forEach(k=>resolvedKeys.add(k));
+    _financialStrictNoneKeys(opt.sourceText).forEach(k=>resolvedKeys.add(k));
+    const unresolved=oldUncertain.concat(newUncertain).filter(msg=>!_financialUncertainResolved(msg,resolvedKeys,meta));
+    out.uncertain=[...new Set(unresolved)];
   }else out.uncertain=[...new Set(oldUncertain.concat(newUncertain))];
   if(Array.isArray(n.confirmationSummary))out.confirmationSummary=n.confirmationSummary.slice();
   out.userConfirmed=false;out.confirmed=false;out.confirmationStatus='pending';
@@ -1211,7 +1266,11 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
     return false;
   }
 }
-function isAffirmative(t){return /^\s*(예|네|응|그래|맞아|맞습니다|확인|확인했습니다|오케이|ok|yes|ㅇㅋ)\s*[.!]?\s*$/i.test(String(t||''));}
+function isAffirmative(t){
+  const s=String(t||'').trim().toLowerCase().replace(/[.!?。！？,，]+/g,' ').replace(/\s+/g,' ').trim();
+  if(!s||/(?:아니|안\s*맞|틀|수정|취소|보류|미확인|확인\s*못)/.test(s))return false;
+  return /^(?:(?:예|네|응|그래|맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|오케이|ㅇㅋ|ok|yes)(?:\s+(?:맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|그대로(?:\s+진행(?:해\s*주세요)?)?|진행(?:해\s*주세요)?))?|그대로\s+진행(?:해\s*주세요)?|진행해\s*주세요)$/.test(s);
+}
 function updateInterviewStatus(data){
   const score=Number(data&&data.coverageScore);
   if(Number.isFinite(score)){
@@ -1346,7 +1405,7 @@ async function send(){
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
   const financialInputMode=!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||looksLikeFinancialFragment(t)||pendingFinancialData||confirmedFinancialData||(pendingGen&&/^financial/.test(String(pendingGen.field||''))));
   if(financialInputMode&&t.length>5000){toast('재무자료는 한 번에 최대 5,000자입니다. 여러 메시지로 나누어 입력해 주세요.',4200);return;}
-  MSGS.push({who:'me',html:t});paint();inp.value='';autoGrow(inp,150);updateCmdCount();
+  MSGS.push({who:'me',text:t});paint();inp.value='';autoGrow(inp,150);updateCmdCount();
   if(!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||((pendingFinancialData||confirmedFinancialData)&&looksLikeFinancialFragment(t)))&&(!pendingGen||pendingGen.field==='interview')){
     pendingGen=null;interviewQueue=[];rawInput+='\n[추가 재무자료]\n'+t;
     aiReply('추가 재무자료를 구조화해 기존 추출값과 합친 뒤 다시 확인받겠습니다…');
@@ -1721,7 +1780,7 @@ async function startSession(){
     document.getElementById('start').style.display='none';
     MSGS.length=0;
     // ★ 사용자가 처음 입력한 요청을 대화 맨 위에 그대로 표시 + 진행자가 처음부터 기억하도록
-    if(origRequest){ MSGS.push({who:'me',html:'<b>요청하신 내용</b><br>'+escHtml(origRequest)+(clientName?'<br><span class="q">고객: '+escHtml(clientName)+(companyName?' · '+escHtml(companyName):'')+'</span>':'')}); }
+    if(origRequest){ MSGS.push({who:'me',trustedHtml:true,html:'<b>요청하신 내용</b><br>'+escHtml(origRequest)+(clientName?'<br><span class="q">고객: '+escHtml(clientName)+(companyName?' · '+escHtml(companyName):'')+'</span>':'')}); }
     paint();
     interviewRound=0; _lastRoundAsked=false; totalAsked=0; collectedParams={};
     interviewState={coverageScore:0,missingCritical:[],missingUseful:[],answeredUnknown:[],activeIssueGroups:[],ready:false,readyReason:''};
