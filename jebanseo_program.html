@@ -592,11 +592,11 @@
   <div class="spbox">
     <div class="sptop">✅ 자료가 생성되었습니다</div>
     <div class="spbody">
-      <p>완성된 자료를 <b>저장</b>하면 이용이 시작됩니다.<br>저장 시 <b>자료 1건</b>이 차감됩니다. <span class="spnote">(무료 한도 내면 무료, 4종 회원 월 4건)</span></p>
-      <p class="spsub">저장 후에도 슬라이드 수정·이미지·정렬은 <b>무료</b>로 계속하실 수 있어요.</p>
+      <p><b>저장해야 이용이 확정</b>되며, 저장 시 <b>자료 1건</b>이 차감됩니다. <span class="spnote">(정규회원 월 4건 무료, 초과 시 5,000원 · 일반회원 건당 10,000원)</span></p>
+      <p class="spsub">저장 후 슬라이드 수정·추가는 <b>10회 무료</b>(이후 장당 200원)로 이어집니다. <b>저장 전에는 수정·추가가 잠겨</b> 있습니다.</p>
     </div>
     <div class="spbtns">
-      <button class="spsave" onclick="saveFile(true)">💾 저장하기</button>
+      <button class="spsave" onclick="saveAndCharge()">💾 저장하고 이용 시작</button>
       <button class="splater" onclick="hideSavePrompt()">나중에</button>
     </div>
   </div>
@@ -729,6 +729,7 @@
 
 <script>
 let deck={slides:[]}, selectedIdx=null, topic="연금설계", params={}, calc={}, auditFlags=[], qualityAudit=[], calcOmissions=[];
+let _deckSaved=true;   // 생성된 덱이 저장(과금)됐는지 — false면 미저장(편집 잠금)
 // Cloud Function 주소 (jarvia-platform · asia-northeast3). 콘솔의 함수 트리거 URL과 다르면 그 값으로 교체하세요.
 const FUNCTION_URL = "https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi";
 const MAIN_URL = "https://jarvia.co.kr"; // ★ 자비아 메인 주소 (필요시 교체)
@@ -1925,9 +1926,8 @@ async function generate(){
       return;
     }
     if(data.error||!data.deck) throw new Error(data.message||data.error||'덱 없음');
-    // ★ 생성 성공 → 즉시 1건 차감 (결제 실패 시 덱 미제공)
-    const cg=await chargeGenerate();
-    if(!cg.ok){ stopGenTimer(); return aiReply(handleChargeFail(cg.error)); }
+    // ★ A안: 생성 시 차감하지 않음 → 덱을 '미저장' 상태로 표시, 저장 시 과금
+    _deckSaved=false;                              // 미저장 상태 (저장 전 편집 잠금)
     aiOpCount=0;                                   // 새 문서 → 슬라이드 10회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
     if(data.calc) calc=data.calc;
@@ -1942,10 +1942,7 @@ async function generate(){
     if(auditFlags.length) aiReply(auditWarnHtml(auditFlags));   // ★ 검증 안 된 금액이 있으면 검수 경고
     if(qualityAudit.length) aiReply(qualityAuditWarnHtml(qualityAudit));
     if(calcOmissions.length) aiReply(calcOmissionWarnHtml(calcOmissions));
-    if(cg.dev)toast('자료 생성 · 개발모드(미과금)');
-    else if(cg.unlimited)toast('자료 생성 · 무제한 회원');
-    else if(cg.charged===false)toast('자료 생성 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
-    else toast('자료 생성 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
+    showSavePrompt();                              // ★ 생성 완료 → 저장 유도 팝업 (저장해야 과금·확정)
     refreshQuota();
   }catch(e){
     stopGenTimer();
@@ -2485,6 +2482,7 @@ function renderLib(){
 function restore(id){
   const o=loadStore();const d=id==='__last'?o.__last:o[id];if(!d)return;
   topic=d.topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:(d.deck&&d.deck.slides)||[]};
+  _deckSaved=true;   // 저장된 자료 복원 → 편집 가능 (이미 과금됨)
   document.getElementById('start').style.display='none';
   document.getElementById('topic').textContent=topic+' · 고객';
   document.getElementById('pct').textContent='저장됨';document.getElementById('gfill').style.width='100%';
@@ -2664,6 +2662,7 @@ function requestCharge(kind,detail){return new Promise(function(resolve){
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},12000);
 });}
 function chargeFailMsg(err){
+  if(err==='NOT_SAVED')return '먼저 <b>💾 저장하고 이용 시작</b>을 눌러 자료를 저장해 주세요. 저장 후 슬라이드 수정·추가가 가능합니다. 🙂';
   if(err==='TRIAL_DONE'||err==='TRIAL_USED')return '무료체험 자료 생성은 <b>1회</b>까지입니다. 정식 이용은 자비아(jarvia.co.kr) 가입 후 가능합니다. 🙂';
   if(err==='TRIAL_OPS_DONE')return '무료체험 AI 작업은 <b>10회</b>까지입니다. 직접 편집은 계속 무제한으로 가능해요. 정식 이용은 자비아 가입 후 이용해 주세요.';
   if(err==='TRIAL_ERR')return '체험 처리 연결을 확인할 수 없습니다. 잠시 후 다시 시도하거나, 체험 링크로 다시 들어와 주세요.';
@@ -2702,6 +2701,7 @@ async function chargeSlideOp(kindLabel,n){
 }
 // ★ 사전 점검(차감 없음) — AI 실패에도 부당 차감되지 않도록, AI 호출 전엔 '가능 여부'만 확인
 async function precheckSlideOp(){
+  if(!_deckSaved)return {ok:false,error:'NOT_SAVED'};   // ★ 저장 전엔 편집 잠금 (먼저 저장)
   if(TRIAL.on)return aiOpCount<AI_FREE_OPS?{ok:true}:{ok:false,error:'TRIAL_OPS_DONE'};
   if(aiOpCount<AI_FREE_OPS)return {ok:true};      // 무료 구간 → 통과(차감 없음)
   if(isDevMode())return {ok:true};
@@ -2743,6 +2743,23 @@ async function refreshQuota(){
     el.innerHTML='무료 제공 없음 · 자료 1건당 <b>10,000원</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
     el.className='qstat warn';
   }
+}
+async function saveAndCharge(){
+  if(!deck.slides.length){return aiReply('저장할 자료가 없습니다.');}
+  if(_deckSaved){ hideSavePrompt(); return saveFile(); }   // 이미 저장(과금)된 자료 → 파일 저장만
+  // ★ 저장 시점에 과금 (A안 핵심)
+  const cg=await chargeGenerate();
+  if(!cg.ok){ return aiReply(handleChargeFail(cg.error)); }
+  _deckSaved=true;                                          // 저장 완료 → 편집 잠금 해제
+  hideSavePrompt();
+  // 과금 결과 안내
+  if(cg.dev)toast('저장 완료 · 개발모드(미과금)');
+  else if(cg.unlimited)toast('저장 완료 · 무제한 회원');
+  else if(cg.trial)toast('저장 완료 · 무료체험');
+  else if(cg.charged===false)toast('저장 완료 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
+  else toast('저장 완료 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
+  refreshQuota();
+  try{await _doSaveFile();}catch(_){}                       // 파일 다운로드도 진행
 }
 async function saveFile(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
@@ -2801,6 +2818,7 @@ function handleFile(e){
     d=m?JSON.parse(m[1]):JSON.parse(txt);
     if(!d.deck||!d.deck.slides||!d.deck.slides.length)throw new Error('형식 오류');
     topic=d.topic||topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:d.deck.slides};ensureDeckExtras();
+    _deckSaved=true;   // 저장된 파일 열기 → 편집 가능 (이미 과금됨)
     document.getElementById('start').style.display='none';
     document.getElementById('topic').textContent=topic+' · 고객';
     document.getElementById('pct').textContent='불러옴';document.getElementById('gfill').style.width='100%';
