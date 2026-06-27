@@ -1304,6 +1304,7 @@ const GUIDE_HTML='<div class="guidebox"><div class="gt">✨ 자료가 완성됐�
 +'<div class="gi"><i>4</i><span>상단 <b>💾 저장 / 📄 PDF</b>로 보관·출력. 더 자세한 건 왼쪽 위 <b>📖 이용가이드</b>를 눌러보세요.</span></div>'
 +'<div class="gtip">💡 직접 편집은 무료, AI 수정은 비용이에요 — 할 수 있는 건 직접 하시면 비용이 절약됩니다.</div></div>';
 async function generate(){
+  if(TRIAL.on&&TRIAL.consumed){aiReply('무료체험 자료 생성은 <b>1회</b>까지예요. 지금 만든 자료는 계속 <b>직접 편집</b>하실 수 있고, 정식 이용은 자비아(jarvia.co.kr) 가입 후 가능합니다. 🙂');return;}
   deck={slides:[]};auditFlags=[];qualityAudit=[];calcOmissions=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
@@ -2006,6 +2007,10 @@ const VIEWER_JS=`(function(){
 
 let aiOpCount=0;                       // 문서당 AI 수정/추가 횟수 (10회 무료, 초과 장당 200원)
 const AI_FREE_OPS=10, AI_SLIDE_PRICE=200;
+// ── 무료체험 모드 (jebanseo_trial.html에서 ?trial=토큰 으로 진입) ──
+// var → window.TRIAL 로 노출(아래 체험 모듈에서 참조). 일반 모드면 on=false 라 기존 동작 그대로.
+var TRIAL={on:false,token:'',consumed:false};
+(function(){try{var t=new URLSearchParams(location.search).get('trial');if(t){TRIAL.on=true;TRIAL.token=t;}}catch(_){}})();
 function wonFmt(n){return (Number(n)||0).toLocaleString('ko-KR')+'원';}
 function isDevMode(){try{return new URLSearchParams(location.search).get('dev')==='1';}catch(_){return false;}}
 // ★ 보안: 과금·회원 메시지는 신뢰하는 출처(JARVIA 플랫폼)만 주고받는다.
@@ -2052,6 +2057,9 @@ function requestCharge(kind,detail){return new Promise(function(resolve){
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},12000);
 });}
 function chargeFailMsg(err){
+  if(err==='TRIAL_DONE'||err==='TRIAL_USED')return '무료체험 자료 생성은 <b>1회</b>까지입니다. 정식 이용은 자비아(jarvia.co.kr) 가입 후 가능합니다. 🙂';
+  if(err==='TRIAL_OPS_DONE')return '무료체험 AI 작업은 <b>10회</b>까지입니다. 직접 편집은 계속 무제한으로 가능해요. 정식 이용은 자비아 가입 후 이용해 주세요.';
+  if(err==='TRIAL_ERR')return '체험 처리 연결을 확인할 수 없습니다. 잠시 후 다시 시도하거나, 체험 링크로 다시 들어와 주세요.';
   if(err==='INSUFFICIENT_BALANCE')return '잔액이 부족합니다. 자비아(jarvia.co.kr)에서 충전 후 다시 이용해 주세요.';
   if(err==='NO_OPENER'||err==='TIMEOUT')return '결제 연결을 확인할 수 없습니다. 자비아에서 "제안서 생성(대화형)"으로 다시 열어 주세요.';
   if(err==='NOT_LOGGED_IN')return '로그인이 필요합니다. 자비아에서 로그인 후 이용해 주세요.';
@@ -2059,6 +2067,14 @@ function chargeFailMsg(err){
 }
 // ★ 자료 생성 시 1건 차감 (4종: 월4건 무료→5,000원 / 일반: 10,000원)
 async function chargeGenerate(){
+  if(TRIAL.on){
+    if(TRIAL.consumed)return {ok:false,error:'TRIAL_DONE'};
+    if(typeof window.jbTrialConsume!=='function')return {ok:false,error:'TRIAL_ERR'};
+    const r=await window.jbTrialConsume(TRIAL.token);
+    if(r.ok){TRIAL.consumed=true;return {ok:true,trial:true};}
+    if(r.used){TRIAL.consumed=true;return {ok:false,error:'TRIAL_USED'};}
+    return {ok:false,error:r.error||'TRIAL_ERR'};
+  }
   if(isDevMode())return {ok:true,dev:true};
   const res=await requestCharge('generate',{domain:topic,client:clientName||'',kind:'자료생성'});
   if(!res.ok)return {ok:false,error:res.error};
@@ -2067,6 +2083,10 @@ async function chargeGenerate(){
 // ★ AI 슬라이드 수정/추가 1회 — 10회까지 무료, 초과 시 장당 200원 (전 회원 공통, 즉시 차감)
 async function chargeSlideOp(kindLabel,n){
   aiOpCount++;
+  if(TRIAL.on){
+    if(aiOpCount>AI_FREE_OPS){aiOpCount--;return {ok:false,error:'TRIAL_OPS_DONE'};}
+    return {ok:true,charged:false,trial:true,count:aiOpCount};
+  }
   if(aiOpCount<=AI_FREE_OPS)return {ok:true,charged:false,count:aiOpCount};
   if(isDevMode())return {ok:true,charged:true,dev:true,count:aiOpCount};
   const res=await requestCharge('slide',{kind:kindLabel,n:n,qty:1});
@@ -2075,6 +2095,7 @@ async function chargeSlideOp(kindLabel,n){
 }
 // ★ 사전 점검(차감 없음) — AI 실패에도 부당 차감되지 않도록, AI 호출 전엔 '가능 여부'만 확인
 async function precheckSlideOp(){
+  if(TRIAL.on)return aiOpCount<AI_FREE_OPS?{ok:true}:{ok:false,error:'TRIAL_OPS_DONE'};
   if(aiOpCount<AI_FREE_OPS)return {ok:true};      // 무료 구간 → 통과(차감 없음)
   if(isDevMode())return {ok:true};
   const q=await requestQuota();
@@ -2357,6 +2378,56 @@ window.JEBSIM=(function(){
   document.addEventListener('input',function(e){var s=e.target;if(s&&s.getAttribute&&s.getAttribute('data-k')&&s.closest){var r=s.closest('.jebsim');if(r)sync(r);}},true);
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initAll);else initAll();
   return {calc:calcPension,dom:DOM,update:update,sync:sync,initAll:initAll};
+})();
+</script>
+
+<!-- 무료체험 부트스트랩: ?trial=토큰 진입 시에만 동작 (일반 모드는 완전 무영향) -->
+<script type="module">
+(async function(){
+  if (window.TRIAL && window.TRIAL.on) {
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js');
+    const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
+    const app = initializeApp(FC);
+    const functions = getFunctions(app, 'asia-northeast3');
+
+    // 첫 생성 시점에 호출 — 서버에서 1회 소진 확정
+    window.jbTrialConsume = async function(token){
+      try{
+        await httpsCallable(functions,'consumeTrial')({ token });
+        return { ok:true };
+      }catch(e){
+        const c=(e&&e.code)||'';
+        if(c.indexOf('already-exists')>=0) return { ok:false, used:true };
+        return { ok:false, error:'TRIAL_ERR' };
+      }
+    };
+
+    // 진입 시 토큰 유효성 확인 → 만료/사용됨이면 안내 오버레이로 차단
+    const blockTrial=(title,desc)=>{
+      const o=document.createElement('div');
+      o.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(15,24,48,.97);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:28px;text-align:center;font-family:"Noto Sans KR",sans-serif;';
+      o.innerHTML='<div style="font-family:\'Nanum Myeongjo\',serif;font-weight:800;color:#fff;font-size:22px;">'+title+'</div>'
+        +'<div style="color:rgba(255,255,255,.7);font-size:14px;line-height:1.7;max-width:340px;">'+desc+'</div>'
+        +'<a href="https://jarvia.co.kr" style="margin-top:6px;background:#B8943E;color:#1B2A4A;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:11px;font-size:15px;">자비아로 이동</a>';
+      document.body.appendChild(o);
+    };
+    try{
+      const res=await httpsCallable(functions,'checkTrial')({ token: window.TRIAL.token });
+      const d=(res&&res.data)||{};
+      if(!d.valid){
+        if(d.reason==='consumed') blockTrial('체험을 모두 사용하셨어요','이 번호의 무료체험은 이미 이용되었습니다.<br>정식 이용은 자비아 가입 후 가능합니다.');
+        else blockTrial('체험 링크가 만료되었어요','체험 링크는 발급 후 10분간 유효합니다.<br>담당자에게 링크를 다시 요청해 주세요.');
+        return;
+      }
+    }catch(_){ /* 검증 실패해도 진입 허용 — 실제 1회 게이트는 생성 시 consumeTrial이 책임 */ }
+
+    // 체험 안내 배너 (레이아웃 영향 없는 고정 핀)
+    const bar=document.createElement('div');
+    bar.style.cssText='position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9000;background:rgba(27,42,74,.96);color:#f3ead6;border:1px solid rgba(184,148,62,.55);border-radius:999px;padding:8px 18px;font-family:"Noto Sans KR",sans-serif;font-size:12.5px;font-weight:500;box-shadow:0 8px 24px rgba(15,24,48,.3);white-space:nowrap;max-width:94vw;overflow:hidden;text-overflow:ellipsis;';
+    bar.textContent='🎁 무료체험 · 자료 생성 1회 · AI 작업 10회 · 직접 편집 무제한';
+    document.body.appendChild(bar);
+  }
 })();
 </script>
 </body>
