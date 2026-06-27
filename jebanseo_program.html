@@ -493,6 +493,7 @@
     </div>
     <div class="chips" id="pchips"></div>
     <div class="msgs" id="msgs"></div>
+    <div id="gennowbar" style="display:none;padding:0 0 9px;"><button type="button" onclick="forceGenerate()" style="width:100%;padding:11px;border:1px solid var(--gold);border-radius:10px;background:var(--goldbg);color:var(--gold);font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;letter-spacing:-.01em;">✨ 질문 그만 받고 지금 바로 생성</button></div>
     <div class="linput"><div class="cmdwrap"><textarea id="cmd" rows="1" maxlength="5000" placeholder="지시내용을 입력하세요!"></textarea><div class="cmdmeta" id="cmdcount">0 / 5,000자</div></div><div class="linbtns"><button type="button" class="mic micsm" id="miccmd" title="음성 입력">🎤</button><button onclick="send()">↑</button></div></div>
   </aside>
   <div class="split" id="split" title="좌우 폭 조절 (드래그 · 더블클릭=기본폭)"></div>
@@ -1101,7 +1102,13 @@ function sanitizeMessageHtml(value){
   });
   return tpl.innerHTML;
 }
-function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else if(x.who==='ai'||x.trustedHtml===true){d.innerHTML=sanitizeMessageHtml(x.html||'');}else{d.textContent=String(x.text!=null?x.text:(x.html||''));}m.appendChild(d);});m.scrollTop=m.scrollHeight;}
+function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else if(x.who==='ai'||x.trustedHtml===true){d.innerHTML=sanitizeMessageHtml(x.html||'');}else{d.textContent=String(x.text!=null?x.text:(x.html||''));}m.appendChild(d);});m.scrollTop=m.scrollHeight;
+  // '지금 바로 생성' 버튼: 인터뷰 중(덱 없음·시작화면 숨김·생각중 아님·재무확인 아님)에만 노출
+  var _gn=document.getElementById('gennowbar');
+  if(_gn){var _st=document.getElementById('start');
+    var _show=(!deck.slides.length)&&(_st&&_st.style.display==='none')&&!MSGS.some(x=>x.thinking)&&!(pendingGen&&/^financial/.test(String(pendingGen.field||'')));
+    _gn.style.display=_show?'block':'none';}
+}
 function showThinking(){if(MSGS.some(x=>x.thinking))return;MSGS.push({who:'ai',thinking:true});paint();}
 function hideThinking(){const i=MSGS.findIndex(x=>x.thinking);if(i>=0){MSGS.splice(i,1);paint();}}
 function aiReply(t){const i=MSGS.findIndex(x=>x.thinking);if(i>=0)MSGS.splice(i,1);MSGS.push({who:'ai',html:t});paint();}
@@ -1493,10 +1500,7 @@ async function send(){
         return startInterview();   // 확정 분야로 다시 — lockTopic=true라 더는 안 바뀜
       }
       if(wantsGenerateNow(t)){   // "이정도로 만들어줘" 류 → 질문 그만 받고 바로 생성
-        interviewQueue=[]; _lastRoundAsked=false;
-        aiReply('네, 지금까지 받은 내용으로 바로 자료를 만들게요. (빠진 핵심값은 자료에 “정밀산출 필요”로 표시됩니다.)');
-        preflightQueue=basisAsk(rawInput,topic);
-        return askNext();
+        return forceGenerate();
       }
       const qq=(_q||'추가 질문').replace(/<[^>]+>/g,'');
       if(/^\s*(미반영|모름|모르|몰라|없음|없어|없다|없|해당\s*없|스킵|건너|넘어|패스|pass|\.|-)\s*$/i.test(t)){ rawInput+='\n• '+qq+' → 미반영 (사용자 답변)'; aiReply('네, 그 항목은 미반영으로 기록하고 반복 질문하지 않을게요.'); }
@@ -1663,6 +1667,14 @@ function preflightAsks(text,topic){
 }
 let preflightQueue=[];
 function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pendingGen={field:a.field};aiReply(a.q);} else generate(); }
+// 질문 그만 받고 즉시 생성 (말 입력·버튼 공통 경로)
+function forceGenerate(){
+  if(deck.slides.length) return;   // 이미 생성됨 → 무시
+  interviewQueue=[]; _lastRoundAsked=false;
+  aiReply('네, 지금까지 받은 내용으로 바로 자료를 만들게요. (빠진 핵심값은 자료에 "정밀산출 필요"로 표시됩니다.)');
+  preflightQueue=basisAsk(rawInput,topic);
+  return askNext();
+}
 
 /* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
 let interviewQueue=[];
