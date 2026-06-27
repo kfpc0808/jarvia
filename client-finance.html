@@ -2288,21 +2288,28 @@ window._fb = {
   },
 
   async getFcData(fcId) {
+    // Storage 임시파일 권한을 담당 컨설턴트 UID 기준으로 제한하기 위해
+    // users/{uid}.loginId == fcId 관계를 함께 조회한다.
+    const uq = await getDocs(query(
+      collection(fbDb,'users'),where('loginId','==',fcId),limit(1)));
+    const fcAuthUid = uq.empty ? '' : uq.docs[0].id;
+    const ud = uq.empty ? {} : uq.docs[0].data();
+
     const snap = await getDoc(doc(fbDb,'consultants',fcId));
-    if(snap.exists()) return snap.data();
+    if(snap.exists()) {
+      const cd=snap.data();
+      return {...cd,fcId,fcAuthUid:cd.fcAuthUid||cd.authUid||fcAuthUid};
+    }
     const aq = await getDocs(query(
       collection(fbDb,'admins'),where('loginId','==',fcId),limit(1)));
     if(!aq.empty){
       const ad=aq.docs[0].data();
-      return {name:ad.name||fcId,title:ad.title||'',company:ad.company||'',fcId};
+      return {name:ad.name||fcId,title:ad.title||'',company:ad.company||'',phone:ad.phone||'',fcId,fcAuthUid:ad.fcAuthUid||ad.authUid||fcAuthUid};
     }
-    const uq = await getDocs(query(
-      collection(fbDb,'users'),where('loginId','==',fcId),limit(1)));
     if(!uq.empty){
-      const ud=uq.docs[0].data();
-      return {name:ud.name||fcId,title:ud.title||'',company:ud.company||'',fcId};
+      return {name:ud.name||fcId,title:ud.title||'',company:ud.company||'',phone:ud.phone||'',fcId,fcAuthUid};
     }
-    return {name:'',title:'',company:'',fcId};
+    return {name:'',title:'',company:'',fcId,fcAuthUid:''};
   },
 
   async checkFcRole(fcId) { return true; },
@@ -7198,12 +7205,14 @@ function cSV(){
   try {
     if (window._fb) {
       const fc = await fb().getFcData(fcId);
-      fcData = fc || { name:'', title:'', company:'', fcId };
+      fcData = fc || { name:'', title:'', company:'', fcId, fcAuthUid:'' };
+      window._fcAuthUid = fcData.fcAuthUid || '';
     }
   } catch(e) {
     console.warn('[init] FC 프로필 조회 실패:', e.message);
   }
-  if (!fcData) fcData = { name:'', title:'', company:'', fcId };
+  if (!fcData) fcData = { name:'', title:'', company:'', fcId, fcAuthUid:'' };
+  window._fcAuthUid = fcData.fcAuthUid || window._fcAuthUid || '';
 
   // loadingState 숨기고 바로 진입
   document.getElementById('loadingState').style.display = 'none';
@@ -7252,14 +7261,19 @@ function cSV(){
    - Firestore: 접속 상태 + WebRTC 신호만 중계
 ══════════════════════════════════════════════════ */
 import{getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,doc,setDoc,getDoc,deleteDoc,onSnapshot,collection,addDoc,getDocs,serverTimestamp}
+import{getFirestore,doc,setDoc,getDoc,deleteDoc,updateDoc,onSnapshot,collection,addDoc,getDocs,serverTimestamp}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const _db = getFirestore(getApp(),'javia-db');
 const _params = new URLSearchParams(location.search);
 const _fcId = _params.get('fc')||'';
-let _clientId = '', _fcOnline = false, _p2pReady = false;
+const _lifeRequestId = (_params.get('requestId')||'').slice(0,80);
+const _lifeEventLabel = (_params.get('event')||'생활변화 맞춤점검').slice(0,80);
+const _fcUidParam = (_params.get('fcUid')||'').slice(0,128);
+function _resolvedFcAuthUid(){return _fcUidParam||String(window._fcAuthUid||'').slice(0,128);}
+let _clientId = '', _clientName = '', _fcOnline = false, _p2pReady = false;
 let _pc = null, _dc = null, _recvBuf = [], _recvMeta = null;
+let _pendingLifeMetaId = '', _pendingLifeFile = null, _pendingAckTimer = null;
 const CHUNK = 16384;
 const ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
 
@@ -7267,7 +7281,7 @@ const ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.co
 function _p2pInit(){
   if(!_fcId||_fcId==='demo') return;
   const sk = 'jf_sess_'+_fcId;
-  try{ const s=JSON.parse(localStorage.getItem(sk)||'null'); if(s?.clientId) _clientId=s.clientId; }catch(e){}
+  try{ const s=JSON.parse(localStorage.getItem(sk)||'null'); if(s?.clientId){ _clientId=s.clientId; _clientName=s.name||'고객'; } }catch(e){}
   if(!_clientId){ setTimeout(_p2pInit,2000); return; }
   _p2pReady = true;
   _setPresence(true);
@@ -7324,6 +7338,7 @@ function _pickFile(){
   inp.onchange=()=>{
     if(inp.files[0]){
       const f=inp.files[0];
+      if(f.size>10*1024*1024){_toast('파일 1건당 10MB 이하만 가능합니다','err');inp.remove();return;}
       const sz=f.size>1048576?(f.size/1048576).toFixed(1)+'MB':Math.round(f.size/1024)+'KB';
       _showProgress('attach',0,f.name+' ('+sz+')');
       _sendFile(f);
@@ -7335,6 +7350,40 @@ function _pickFile(){
 // 오프라인 모듈에서 P2P 직접 전송 사용
 window._p2pPickFile = _pickFile;
 window._p2pFcOnline = ()=> _fcOnline;
+
+function _lifeConsentData(){
+  const c=window._lifeFileConsentRecord||{};
+  return {
+    fileConsentPersonal:c.personal===true,
+    fileConsentCredit:c.credit===true,
+    fileConsentSensitive:c.sensitive===true,
+    fileConsentTemporaryStorage:c.temporaryStorage===true,
+    fileConsentVersion:String(c.version||'life-file-2026-06-v3').slice(0,60),
+    fileConsentAt:c.agreedAt?new Date(c.agreedAt):new Date(),
+    fileConsentNotice:{
+      purpose:'생활변화 점검을 위한 자료 전달·검토·수신상태 관리',
+      items:'파일명, 파일크기, 파일형식, 전송방식, 전송상태 및 고객이 선택하여 보낸 자료 내용',creditItems:'자료에 포함된 소득, 자산, 부채, 대출, 보험계약·보험금, 연금, 금융상품 관련 정보',
+      recipient:'담당 컨설턴트',
+      retention:'전송 메타정보는 상담 처리 완료일부터 1년간 보관하고, 오프라인 임시파일 원본은 수신·삭제 또는 업로드 후 최대 7일 이내 파기',
+      refusal:'동의를 거부할 수 있으나 자료전송과 자료 기반 상담 준비가 제한됨',
+      withdrawal:'담당 컨설턴트에게 동의 철회와 삭제를 요청할 수 있음'
+    }
+  };
+}
+async function _recordLifeFile(file,mode,status,extra={}){
+  if(!_lifeRequestId||!_clientId) return '';
+  const ts=Date.now();
+  const id=(_lifeRequestId+'_'+ts+'_'+Math.random().toString(36).slice(2,6)).slice(0,180);
+  try{
+    await setDoc(doc(_db,'life_request_files',id),{
+      fileId:id,requestId:_lifeRequestId,fcId:_fcId,fcAuthUid:_resolvedFcAuthUid(),clientId:_clientId,clientName:_clientName||'고객',
+      eventLabel:_lifeEventLabel,fileName:String(file.name||'파일').slice(0,180),
+      fileSize:Number(file.size)||0,mimeType:String(file.type||'application/octet-stream').slice(0,120),
+      transferMode:mode,transferStatus:status,..._lifeConsentData(),...extra,createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+    });
+    return id;
+  }catch(e){console.warn('[life-file-meta]',e.message);return '';}
+}
 
 async function _sendFile(file){
   const room = _fcId+'_'+_clientId;
@@ -7352,9 +7401,24 @@ async function _sendFile(file){
   _dc = _pc.createDataChannel('file');
 
   // 전송 진행
-  _dc.onopen=()=>{
-    _dc.send(JSON.stringify({name:file.name,size:file.size,type:file.type}));
+  _dc.onopen=async()=>{
+    _pendingLifeFile=file;
+    _pendingLifeMetaId=await _recordLifeFile(file,'p2p','sending');
+    _dc.send(JSON.stringify({name:file.name,size:file.size,type:file.type,requestId:_lifeRequestId||null,contextLabel:_lifeEventLabel||null,metaId:_pendingLifeMetaId||null}));
     _sendChunks(file);
+  };
+  _dc.onmessage=async(ev)=>{
+    if(typeof ev.data!=='string')return;
+    try{
+      const ack=JSON.parse(ev.data);
+      if(ack?.type==='file_received'&&(!ack.requestId||ack.requestId===_lifeRequestId)){
+        clearTimeout(_pendingAckTimer);_pendingAckTimer=null;
+        if(_pendingLifeMetaId)await updateDoc(doc(_db,'life_request_files',_pendingLifeMetaId),{transferStatus:'received',receivedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        try{await setDoc(sigRef,{status:'received'},{merge:true});}catch(e){}
+        _toast('상대방 수신 완료 ✓','ok');_hideProgress();
+        _pendingLifeMetaId='';_pendingLifeFile=null;
+      }
+    }catch(e){}
   };
   _dc.onclose=()=>{ _cleanup(room); };
 
@@ -7366,7 +7430,8 @@ async function _sendFile(file){
   const offer=await _pc.createOffer();
   await _pc.setLocalDescription(offer);
   await setDoc(sigRef,{from:'client',offer:{type:offer.type,sdp:offer.sdp},
-    fileName:file.name,fileSize:file.size,ts:serverTimestamp(),status:'pending'});
+    fileName:file.name,fileSize:file.size,requestId:_lifeRequestId||null,contextLabel:_lifeEventLabel||null,fcAuthUid:_resolvedFcAuthUid(),clientId:_clientId,
+    ts:serverTimestamp(),status:'pending'});
 
   // answer 대기
   const unsub=onSnapshot(sigRef,(snap)=>{
@@ -7398,7 +7463,13 @@ async function _sendChunks(file){
       _showProgress('send',Math.round(offset/total*100),file.name);
     }
     _dc.send('__EOF__');
-    setTimeout(()=>{_toast('전송 완료 ✓','ok');_hideProgress();},500);
+    if(_pendingLifeMetaId){updateDoc(doc(_db,'life_request_files',_pendingLifeMetaId),{transferStatus:'sent_unconfirmed',updatedAt:serverTimestamp()}).catch(()=>{});}
+    _showProgress('confirm',100,file.name);
+    clearTimeout(_pendingAckTimer);
+    _pendingAckTimer=setTimeout(()=>{
+      _toast('전송은 끝났지만 상대방 수신 확인을 받지 못했습니다','');
+      _hideProgress();
+    },15000);
   }
   next();
 }
@@ -7413,12 +7484,13 @@ function _watchSignal(){
   });
 }
 
+function _p2pEsc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function _showRecvPopup(sig,room){
   if(document.getElementById('p2pRecv')) return;
   const sz=sig.fileSize>1048576?(sig.fileSize/1048576).toFixed(1)+'MB':Math.round(sig.fileSize/1024)+'KB';
   const div=document.createElement('div');
   div.id='p2pRecv'; div.className='p2p-recv';
-  div.innerHTML=`<div class="p2p-recv-name">📥 ${sig.fileName}</div>
+  div.innerHTML=`<div class="p2p-recv-name">📥 ${_p2pEsc(sig.fileName)}</div>
     <div class="p2p-recv-size">크기: ${sz} · 컨설턴트가 보낸 파일</div>
     <div class="p2p-recv-btns">
       <button style="background:var(--bg-warm);color:var(--ink-lt)" onclick="window._p2pReject('${room}')">거절</button>
@@ -7477,14 +7549,15 @@ function _onRecvData(ev){
       card=document.createElement('div'); card.id='p2pDownload';
       card.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:9999;background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);padding:18px 20px;width:calc(100vw - 40px);max-width:360px;border-left:4px solid var(--green)';
       card.innerHTML=`<div style="font-size:14px;font-weight:800;color:var(--ink);margin-bottom:4px">📥 파일 수신 완료</div>
-        <div style="font-size:12px;color:var(--ink-lt);margin-bottom:12px">${nm} · ${sz}</div>
+        <div style="font-size:12px;color:var(--ink-lt);margin-bottom:12px">${_p2pEsc(nm)} · ${sz}</div>
         <div style="display:flex;gap:8px">
           <button onclick="this.closest('#p2pDownload').remove()"
             style="flex:1;padding:11px;border-radius:10px;background:var(--bg-warm);color:var(--ink-lt);font-size:13px;font-weight:700;border:none;cursor:pointer">닫기</button>
-          <a href="${url}" download="${nm}" onclick="setTimeout(()=>this.closest('#p2pDownload').remove(),500)"
+          <a href="${url}" download="${_p2pEsc(nm)}" onclick="setTimeout(()=>this.closest('#p2pDownload').remove(),500)"
             style="flex:1;padding:11px;border-radius:10px;background:var(--green);color:#fff;font-size:13px;font-weight:800;border:none;cursor:pointer;text-align:center;text-decoration:none;display:block">저장하기 ↓</a>
         </div>`;
       document.body.appendChild(card);
+      try{if(_dc?.readyState==='open')_dc.send(JSON.stringify({type:'file_received',requestId:_recvMeta?.requestId||null,fileName:nm,metaId:_recvMeta?.metaId||null,receivedAt:Date.now()}));}catch(e){}
       _toast('파일 수신 완료 — 저장 버튼을 눌러주세요','ok');
       _recvBuf=[]; _recvMeta=null;
       return;
@@ -7508,7 +7581,7 @@ function _showProgress(dir,pct,name){
     el.innerHTML='<div class="p2p-status"></div><div class="p2p-prog"><div class="p2p-prog-fill"></div></div>';
     document.body.appendChild(el);
   }
-  const label = dir==='attach'?'📎 첨부됨 · 연결 중...':dir==='send'?'📤 전송 중':'📥 수신 중';
+  const label = dir==='attach'?'📎 첨부됨 · 연결 중...':dir==='send'?'📤 전송 중':dir==='confirm'?'✅ 전송 완료 · 수신 확인 중':'📥 수신 중';
   el.querySelector('.p2p-status').textContent=`${label} · ${name}${pct>0?' · '+pct+'%':''}`;
   el.querySelector('.p2p-prog-fill').style.width=(dir==='attach'?0:pct)+'%';
 }
@@ -7538,16 +7611,24 @@ function _toast(m,t){
 <!-- ══ 오프라인 파일 전송 (Firebase Storage 폴백) ══ -->
 <script type="module">
 import{getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,doc,setDoc,getDocs,deleteDoc,collection,query,where,onSnapshot,serverTimestamp}
+import{getFirestore,doc,setDoc,getDocs,deleteDoc,updateDoc,collection,query,where,limit,onSnapshot,serverTimestamp}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-import{getStorage,ref,uploadBytes,getDownloadURL,deleteObject}
+import{getStorage,ref,uploadBytes,getDownloadURL,getBlob,deleteObject}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const _odb = getFirestore(getApp(),'javia-db');
 const _ost = getStorage(getApp());
 const MAX_FILE_SIZE = 10*1024*1024;
 const EXPIRE_DAYS = 7;
-const _oFcId = new URLSearchParams(location.search).get('fc')||'';
+const _oParams = new URLSearchParams(location.search);
+const _oFcId = _oParams.get('fc')||'';
+const _oLifeRequestId = (_oParams.get('requestId')||'').slice(0,80);
+const _oLifeEventLabel = (_oParams.get('event')||'생활변화 맞춤점검').slice(0,80);
+const _oFcUidParam = (_oParams.get('fcUid')||'').slice(0,128);
+function _oFcAuthUid(){return _oFcUidParam||String(window._fcAuthUid||'').slice(0,128);}
+function _safeFileName(v){return String(v||'file').replace(/[\/\\:*?"<>|#%{}]/g,'_').slice(0,140)||'file';}
+function _fileConsent(){const c=window._lifeFileConsentRecord||{};return{fileConsentPersonal:c.personal===true,fileConsentCredit:c.credit===true,fileConsentSensitive:c.sensitive===true,fileConsentTemporaryStorage:c.temporaryStorage===true,fileConsentVersion:String(c.version||'life-file-2026-06-v3').slice(0,60),fileConsentAt:c.agreedAt?new Date(c.agreedAt):new Date(),fileConsentNotice:{purpose:'생활변화 점검을 위한 자료 전달·검토·수신상태 관리',items:'파일명, 파일크기, 파일형식, 전송방식, 전송상태 및 고객이 선택하여 보낸 자료 내용',creditItems:'자료에 포함된 소득, 자산, 부채, 대출, 보험계약·보험금, 연금, 금융상품 관련 정보',recipient:'담당 컨설턴트',retention:'전송 메타정보는 상담 처리 완료일부터 1년간 보관하고, 오프라인 임시파일 원본은 수신·삭제 또는 업로드 후 최대 7일 이내 파기',refusal:'동의를 거부할 수 있으나 자료전송과 자료 기반 상담 준비가 제한됨',withdrawal:'담당 컨설턴트에게 동의 철회와 삭제를 요청할 수 있음'}};}
+const _oLifeAction = _oParams.get('action')||'';
 let _oClientId = '', _oClientName = '';
 
 function _oInit(){
@@ -7558,6 +7639,7 @@ function _oInit(){
   }catch(e){}
   if(!_oClientId){ setTimeout(_oInit,2000); return; }
   _checkPendingFiles();
+  if(_oLifeAction==='send-file'&&_oLifeRequestId)setTimeout(_showLifeFileEntry,250);
 }
 setTimeout(_oInit,3000);
 
@@ -7600,20 +7682,36 @@ window._offlineSendToFc = async function(){
     try{
       for(const f of files){
         const ts=Date.now();
-        const path=`p2p_files/${_oFcId}/${ts}_${f.name}`;
+        const fcUid=_oFcAuthUid();
+        if(_oLifeRequestId&&!fcUid)throw new Error('담당 컨설턴트 식별정보를 확인하지 못했습니다. 채널에서 다시 접속해 주세요.');
+        const path=_oLifeRequestId
+          ?`p2p_request_files/${fcUid}/${_oClientId}/${ts}_${_safeFileName(f.name)}`
+          :`p2p_files/${_oFcId}/${ts}_${_safeFileName(f.name)}`;
         const sRef=ref(_ost,path);
-        await uploadBytes(sRef,f);
-        const url=await getDownloadURL(sRef);
+        await uploadBytes(sRef,f,{customMetadata:{fcAuthUid:fcUid||'',clientId:_oClientId,requestId:_oLifeRequestId||'',consentVersion:(_fileConsent().fileConsentVersion||''),consentCredit:String(_fileConsent().fileConsentCredit===true)}});
+        // 생활변화 민감자료는 장기 download token URL을 만들지 않고 인증된 Storage 경로로만 수신합니다.
+        // 기존 일반 전송은 호환성을 위해 기존 URL 방식을 유지합니다.
+        const url=_oLifeRequestId?null:await getDownloadURL(sRef);
         const docId=`${_oFcId}_${_oClientId}_${ts}`;
         await setDoc(doc(_odb,'p2p_offline_files',docId),{
           from:'client', fromId:_oClientId, fromName:_oClientName,
           to:'fc', toId:_oFcId, toName:'컨설턴트',
-          fcId:_oFcId, clientId:_oClientId,
+          fcId:_oFcId, fcAuthUid:fcUid||null, clientId:_oClientId,
           fileName:f.name, fileSize:f.size, fileUrl:url, storagePath:path,
-          status:'pending',
-          createdAt:serverTimestamp(),
+          requestId:_oLifeRequestId||null, contextLabel:_oLifeEventLabel||null,
+          ..._fileConsent(),status:'pending',
+          createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
           expiresAt:new Date(Date.now()+EXPIRE_DAYS*86400000)
         });
+        if(_oLifeRequestId){
+          const metaId=(_oLifeRequestId+'_'+ts+'_'+Math.random().toString(36).slice(2,6)).slice(0,180);
+          await setDoc(doc(_odb,'life_request_files',metaId),{
+            fileId:metaId,requestId:_oLifeRequestId,fcId:_oFcId,fcAuthUid:fcUid||'',clientId:_oClientId,clientName:_oClientName||'고객',
+            eventLabel:_oLifeEventLabel,fileName:String(f.name||'파일').slice(0,180),fileSize:Number(f.size)||0,
+            mimeType:String(f.type||'application/octet-stream').slice(0,120),transferMode:'storage',transferStatus:'pending',
+            ..._fileConsent(),offlineDocId:docId,storagePath:path,createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+          });
+        }
       }
       _oToast(`파일 ${files.length}건 전송 완료 ✓`,'ok');
     }catch(e){
@@ -7624,6 +7722,29 @@ window._offlineSendToFc = async function(){
   };
   document.body.appendChild(inp);inp.click();
 };
+
+
+/* ── 생활변화 요청에서 진입한 경우: 자료전송 안내 ── */
+function _showLifeFileEntry(){
+  if(_oLifeAction!=='send-file'||!_oLifeRequestId||document.getElementById('lifeFileEntry'))return;
+  let sess=null;try{sess=JSON.parse(localStorage.getItem('jf_sess_'+_oFcId)||'null');}catch(e){}
+  const logged=!!sess?.clientId;
+  const ov=document.createElement('div');ov.id='lifeFileEntry';
+  ov.style.cssText='position:fixed;inset:0;z-index:12000;background:rgba(10,15,30,.62);display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(5px)';
+  ov.innerHTML=`<div style="width:100%;max-width:480px;background:#fff;border-radius:22px 22px 0 0;padding:20px 18px calc(24px + env(safe-area-inset-bottom));box-shadow:0 -8px 35px rgba(0,0,0,.18)">
+    <div style="width:38px;height:4px;border-radius:3px;background:#DDE1E8;margin:-6px auto 15px"></div>
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px"><div style="width:44px;height:44px;border-radius:13px;background:#E6F5F0;color:#0A7B61;display:flex;align-items:center;justify-content:center;font-size:22px">📎</div><div><div style="font-size:10px;color:#A68B4B;font-weight:800;letter-spacing:1px">SECURE DOCUMENT TRANSFER</div><div style="font-size:17px;font-weight:900;color:#141B2D">관련 자료 보내기</div></div></div>
+    <div style="font-size:13px;color:#2D3652;line-height:1.7;background:#F7F8FA;border-radius:11px;padding:12px 13px;margin-bottom:11px"><b>${_oLifeEventLabel.replace(/[<>&"]/g,'')}</b> 점검에 필요한 자료를 담당 컨설턴트에게 보냅니다.<br>온라인이면 기기로 직접 전달되고, 오프라인이면 동의 후 7일간 임시 보관됩니다.</div>
+    <div style="font-size:11px;color:#7C5C1A;line-height:1.6;background:#FFF8E7;border:1px solid #E8D5B0;border-radius:10px;padding:10px 12px;margin-bottom:10px">주민등록번호 뒷자리, 계좌·카드번호 전체, 비밀번호, 인증번호, 보안카드·OTP는 가린 뒤 보내주세요.</div>
+    ${logged?`<label style="display:flex;align-items:flex-start;gap:8px;padding:10px 11px;border:1px solid #C9D8EE;border-radius:9px;background:#F7FAFF;font-size:10.5px;line-height:1.55;color:#5A6484;margin-bottom:7px"><input id="lifeFileConsentPersonal" type="checkbox" style="margin-top:2px"><span><b style="color:#1B3A6B">[필수] 자료·전송정보 처리 동의</b><br>파일명·크기·전송상태는 상담 처리 완료일부터 1년간 요청 처리기록으로 서버에 저장됩니다. 온라인 파일 원본은 기기 간 직접전송되고, 오프라인 파일 원본은 수신·삭제 또는 업로드 후 최대 7일 이내 파기됩니다. 동의를 거부하거나 담당 컨설턴트에게 철회·삭제를 요청할 수 있으나 자료전송이 제한됩니다.</span></label><label style="display:flex;align-items:flex-start;gap:8px;padding:10px 11px;border:1px solid #C7D7B5;border-radius:9px;background:#F8FBF5;font-size:10.5px;line-height:1.55;color:#56634B;margin-bottom:7px"><input id="lifeFileConsentCredit" type="checkbox" style="margin-top:2px"><span><b style="color:#486B2F">[필수] 개인(신용)정보 처리 동의</b><br>첨부자료에 포함된 소득·자산·부채·대출·보험계약·보험금·연금·금융상품 정보를 생활변화 점검과 상담 준비 목적으로 처리하고 담당 컨설턴트가 열람하는 데 동의합니다.</span></label><label style="display:flex;align-items:flex-start;gap:8px;padding:10px 11px;border:1px solid #F4C7A5;border-radius:9px;background:#FFF8F3;font-size:10.5px;line-height:1.55;color:#6B584B;margin-bottom:12px"><input id="lifeFileConsentSensitive" type="checkbox" style="margin-top:2px"><span><b style="color:#9A4D12">[필수] 건강·의료 등 민감정보 별도 처리 동의</b><br>첨부자료에 건강검진·진단·치료·입원·수술·간병 정보가 포함된 경우 담당 컨설턴트의 상담 준비와 자료 검토 목적으로 처리하는 데 동의합니다.</span></label><button id="lifeFileStart" style="width:100%;padding:14px;border:none;border-radius:11px;background:linear-gradient(135deg,#0A7B61,#159673);color:#fff;font-size:14px;font-weight:800;cursor:pointer">자료 선택하고 보내기</button>`:`<button id="lifeFileLogin" style="width:100%;padding:14px;border:none;border-radius:11px;background:linear-gradient(135deg,#1B3A6B,#2D5DAE);color:#fff;font-size:14px;font-weight:800;cursor:pointer">로그인·가입 후 자료 보내기</button><div style="font-size:10px;color:#8B93AE;text-align:center;margin-top:7px">본인 확인과 안전한 전송을 위해 로그인이 필요합니다.</div>`}
+    <button id="lifeFileClose" style="width:100%;padding:10px;border:none;background:transparent;color:#8B93AE;font-size:12px;cursor:pointer;margin-top:5px">나중에 보내기</button>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#lifeFileClose').onclick=()=>ov.remove();
+  const st=ov.querySelector('#lifeFileStart');if(st)st.onclick=()=>{const p=ov.querySelector('#lifeFileConsentPersonal')?.checked===true;const c=ov.querySelector('#lifeFileConsentCredit')?.checked===true;const m=ov.querySelector('#lifeFileConsentSensitive')?.checked===true;if(!p||!c||!m){_oToast('자료 처리·개인(신용)정보·민감정보 별도 동의가 필요합니다','err');return;}window._lifeFileConsentRecord={personal:true,credit:true,sensitive:true,temporaryStorage:true,version:'life-file-2026-06-v3',agreedAt:new Date().toISOString()};ov.remove();window._offlineSendToFc&&window._offlineSendToFc();};
+  const lg=ov.querySelector('#lifeFileLogin');if(lg)lg.onclick=()=>{ov.remove();if(typeof window.exitLanding==='function')window.exitLanding('Login');else location.href=location.pathname+location.search;};
+}
+setTimeout(_showLifeFileEntry,4200);
 
 /* ── FC → 고객: 수신 대기 (pending 파일 감지) ── */
 const _offlineFiles = {};
@@ -7656,24 +7777,51 @@ function _showOfflineRecv(docId,d){
   document.body.appendChild(div);
 }
 
+async function _updateLifeFileByOfflineDocId(docId,status,extra={}){
+  if(!_oClientId)return;
+  try{
+    const snap=await getDocs(query(collection(_odb,'life_request_files'),where('offlineDocId','==',docId),where('clientId','==',_oClientId),limit(10)));
+    for(const d of snap.docs)await updateDoc(d.ref,{transferStatus:status,...extra,updatedAt:serverTimestamp()});
+  }catch(e){console.warn('[life-file-status]',e.message);}
+}
 window._offlineAccept=async function(docId){
   document.getElementById('offRecv_'+docId)?.remove();
   const fd = _offlineFiles[docId];
   if(!fd){ console.error('[offline] 파일 정보 없음:', docId); return; }
   try{
-    const a=document.createElement('a');a.href=fd.fileUrl;a.download=fd.fileName;a.target='_blank';
-    document.body.appendChild(a);a.click();a.remove();
+    let blob;
+    if(fd.requestId&&fd.storagePath){
+      // 생활변화 민감자료: 인증된 Storage 경로로 직접 다운로드
+      blob=await getBlob(ref(_ost,fd.storagePath));
+    }else if(fd.fileUrl){
+      // 기존 일반 전송 호환: 종전 download URL 방식 유지
+      const res=await fetch(fd.fileUrl);if(!res.ok)throw new Error('파일 다운로드 실패');
+      blob=await res.blob();
+    }else if(fd.storagePath){
+      blob=await getBlob(ref(_ost,fd.storagePath));
+    }else{
+      throw new Error('파일 경로를 확인할 수 없습니다.');
+    }
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=fd.fileName||'file';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+    await deleteObject(ref(_ost,fd.storagePath));
     await deleteDoc(doc(_odb,'p2p_offline_files',docId));
-    try{await deleteObject(ref(_ost,fd.storagePath));}catch(e){}
+    await _updateLifeFileByOfflineDocId(docId,'received',{receivedAt:serverTimestamp()});
     delete _offlineFiles[docId];
     _oToast('다운로드 완료 · 서버에서 삭제됨 ✓','ok');
-  }catch(e){console.error('[offline-accept]',e);}
+  }catch(e){console.error('[offline-accept]',e);_oToast('다운로드 또는 서버 삭제에 실패했습니다','err');}
 };
 
 window._offlineReject=async function(docId){
-  document.getElementById('offRecv_'+docId)?.remove();
-  try{await deleteDoc(doc(_odb,'p2p_offline_files',docId));}catch(e){}
-  delete _offlineFiles[docId];
+  const fd=_offlineFiles[docId];
+  try{
+    if(fd?.storagePath)await deleteObject(ref(_ost,fd.storagePath));
+    await deleteDoc(doc(_odb,'p2p_offline_files',docId));
+    await _updateLifeFileByOfflineDocId(docId,'deleted',{deletedAt:serverTimestamp()});
+    document.getElementById('offRecv_'+docId)?.remove();
+    delete _offlineFiles[docId];
+    _oToast('파일이 서버에서 삭제되었습니다','ok');
+  }catch(e){console.error('[offline-reject]',e);_oToast('파일 삭제에 실패했습니다. 다시 시도해 주세요','err');}
 };
 
 function _oToast(m,t){
