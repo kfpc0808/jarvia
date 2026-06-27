@@ -1561,7 +1561,7 @@ async function send(){
       topic=pick; topicLocked=true;
       const tn=document.getElementById('topic'); if(tn) tn.textContent=topic+' · 고객';
       aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
-      interviewRound=0; _lastRoundAsked=false; totalAsked=0; interviewState.ready=false;   // 정정된 분야로 새로 시작
+      interviewRound=0; _lastRoundAsked=false; totalAsked=0; interviewState.ready=false; askedQuestions=[];   // 정정된 분야로 새로 시작
       return startInterview();      // 확정 분야로 인터뷰 — lockTopic=true라 다시 안 물음
     }
     if(_f==='interview'){
@@ -1570,7 +1570,7 @@ async function send(){
         topic=_corr; topicLocked=true; interviewQueue=[];
         const tn=document.getElementById('topic'); if(tn) tn.textContent=topic+' · 고객';
         aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
-        interviewRound=0; _lastRoundAsked=false; totalAsked=0;   // 정정된 분야로 새로 시작
+        interviewRound=0; _lastRoundAsked=false; totalAsked=0; askedQuestions=[];   // 정정된 분야로 새로 시작
         return startInterview();   // 확정 분야로 다시 — lockTopic=true라 더는 안 바뀜
       }
       if(wantsGenerateNow(t)){   // "이정도로 만들어줘" 류 → 질문 그만 받고 바로 생성
@@ -1752,6 +1752,7 @@ function forceGenerate(){
 
 /* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
 let interviewQueue=[];
+let askedQuestions=[];   // 이미 물어본 질문 누적 → 백엔드에 보내 중복질문 방지
 function basisAsk(text,topic){
   // 필요자금 '기준' 선택 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만(chosenBasis 플래그)
   if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
@@ -1790,7 +1791,7 @@ async function startInterview(){
   showThinking();
   let data=null;
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked})});
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[]})});
     data=await r.json();
   }catch(_e){ data=null; }
   if(!data || data.error){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }   // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
@@ -1824,6 +1825,7 @@ function askNextInterview(){
   if(interviewQueue.length){
     const a=interviewQueue.shift();
     totalAsked++;   // 총 질문 수 누적
+    if(a&&a.q)askedQuestions.push(a.q);   // 중복질문 방지용 누적
     pendingGen={field:'interview',q:a.q};
     let extra=(a.hint?'<span class="q">'+a.hint+'</span>':'');
     if(totalAsked>=8) extra+='<span class="q">※ 충분하시면 언제든 <b>“이정도로 만들어줘”</b>라고 하시면 현재 정보로 생성합니다.</span>';
@@ -2085,12 +2087,12 @@ const VIEWER_JS=`(function(){
         nb.onclick=(function(el){return function(e){e.stopPropagation();el.classList.toggle('note-open');};})(slm);
         slm.appendChild(nb);
       }
-      // 목차 번호 클릭 → 해당 본문 페이지로 이동
-      var toc=S[ti];var nums=toc.querySelectorAll('.tnum');
+      // 목차 줄(번호+글자) 전체 클릭 → 해당 본문 페이지로 이동
+      var toc=S[ti];var rows=toc.querySelectorAll('.trow');
       var body=[];for(var j=0;j<S.length;j++){if(j===ti)continue;if(S[j].querySelector('.canvas.cover'))continue;body.push(S[j]);}
-      for(var k=0;k<nums.length;k++){
-        (function(kk){var n=nums[kk];if(!body[kk])return;n.style.cursor='pointer';n.title='이 페이지로 이동';
-          n.onclick=function(e){e.stopPropagation();body[kk].scrollIntoView({behavior:'smooth',block:'start'});};})(k);
+      for(var k=0;k<rows.length;k++){
+        (function(kk){var r=rows[kk];if(!body[kk])return;r.style.cursor='pointer';r.title='이 페이지로 이동';
+          r.onclick=function(e){e.stopPropagation();body[kk].scrollIntoView({behavior:'smooth',block:'start'});};})(k);
       }
     }
   }
