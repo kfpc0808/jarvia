@@ -17,6 +17,11 @@
   .topic{font-size:12px;color:#9DA8B8;margin-top:3px;}
   .gauge{margin-top:11px;}.gauge .lab{display:flex;justify-content:space-between;font-size:11px;color:#9DA8B8;margin-bottom:4px;}.gauge .lab b{color:#fff;}
   .gbar{height:6px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden;}.gbar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),#D9B362);border-radius:4px;transition:width .4s;}
+  .hbal{margin-top:10px;font-size:11.5px;line-height:1.45;color:#C7D0DD;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px 10px;}
+  .hbal:empty{display:none;}.hbal b{color:#fff;font-weight:700;}
+  .hbal.ok{background:rgba(46,112,88,.18);border-color:rgba(46,112,88,.42);}
+  .hbal.warn{background:rgba(176,133,43,.18);border-color:rgba(176,133,43,.45);}.hbal.warn b{color:#E7C66B;}
+  .hbal.dev{background:rgba(255,255,255,.08);color:#9DB0C8;}
   .chips{padding:10px 14px 4px;display:flex;flex-wrap:wrap;gap:5px;border-bottom:1px solid rgba(255,255,255,.08);}
   .pchip{font-size:11px;background:rgba(255,255,255,.08);color:#C7D0DD;border-radius:12px;padding:3px 9px;}.pchip b{color:#fff;}
   .msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:11px;}
@@ -567,6 +572,7 @@
       <button class="guidebtn" onclick="openGuide()" title="이용 가이드 열기">📖 이용가이드</button>
       <div class="topic" id="topic">—</div>
       <div class="gauge"><div class="lab"><span>자료 완성도</span><b id="pct">—</b></div><div class="gbar"><i id="gfill" style="width:0%"></i></div></div>
+      <div class="hbal" id="hbal"></div>
     </div>
     <div class="chips" id="pchips"></div>
     <div class="msgs" id="msgs"></div>
@@ -2270,10 +2276,9 @@ function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pen
 // 질문 그만 받고 즉시 생성 (말 입력·버튼 공통 경로)
 function forceGenerate(){
   if(deck.slides.length) return;   // 이미 생성됨 → 무시
-  pendingGen=null; interviewQueue=[]; _lastRoundAsked=false;   // 인터뷰 상태 정리(버튼 진입 시 누락 방지)
+  pendingGen=null; interviewQueue=[]; preflightQueue=[]; _lastRoundAsked=false;   // ★ 인터뷰·사전질문 모두 정리 — '질문 그만'이므로 basis 등 추가 질문 없이 즉시 생성(연금 basis 질문이 또 뜨던 문제 차단)
   aiReply('네, 지금까지 받은 내용으로 바로 자료를 만들게요. (빠진 핵심값은 자료에 "정밀산출 필요"로 표시됩니다.)');
-  preflightQueue=basisAsk(rawInput,topic);
-  return askNext();
+  return generate();
 }
 
 /* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
@@ -2748,19 +2753,37 @@ function requestQuota(){return new Promise(function(resolve){
   setTimeout(function(){if(!done){window.removeEventListener('message',onMsg);resolve({ok:false,error:'TIMEOUT'});}},10000);
 });}
 async function refreshQuota(){
-  const el=document.getElementById('quotaStatus');if(!el)return;
-  if(isDevMode()){el.innerHTML='🛠 개발모드 — 미과금 테스트';el.className='qstat dev';return;}
-  if(!window.opener){el.textContent='';el.className='qstat';return;}      // 직접 열림 → 표시 안 함
+  const el=document.getElementById('quotaStatus');
+  const hb=document.getElementById('hbal');   // ★ 좌측 헤더 잔액/무료건수 표시
+  if(!el && !hb)return;
+  if(isDevMode()){
+    if(el){el.innerHTML='🛠 개발모드 — 미과금 테스트';el.className='qstat dev';}
+    if(hb){hb.innerHTML='🛠 개발모드 · 미과금';hb.className='hbal dev';}
+    return;
+  }
+  if(!window.opener){      // 직접 열림 → 표시 안 함
+    if(el){el.textContent='';el.className='qstat';}
+    if(hb){hb.textContent='';hb.className='hbal';}
+    return;
+  }
   const q=await requestQuota();
-  if(!q.ok){el.textContent='';el.className='qstat';return;}
-  if(q.unlimited){el.innerHTML='✓ 무제한 회원 · 잔액 <b>'+wonFmt(q.balance)+'</b>';el.className='qstat ok';return;}
+  if(!q.ok){
+    if(el){el.textContent='';el.className='qstat';}
+    if(hb){hb.textContent='';hb.className='hbal';}
+    return;
+  }
+  if(q.unlimited){
+    if(el){el.innerHTML='✓ 무제한 회원 · 잔액 <b>'+wonFmt(q.balance)+'</b>';el.className='qstat ok';}
+    if(hb){hb.innerHTML='✓ 무제한 회원 · 잔액 <b>'+wonFmt(q.balance)+'</b>';hb.className='hbal ok';}
+    return;
+  }
   if(q.paid){
     const left=Math.max(0,(q.freeQuota||0)-(q.used||0));
-    el.innerHTML='이번 달 무료 <b>'+(q.used||0)+'/'+(q.freeQuota||0)+'</b>건 사용 · <b>'+left+'건 남음</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
-    el.className='qstat '+(left>0?'ok':'warn');
+    if(el){el.innerHTML='이번 달 무료 <b>'+(q.used||0)+'/'+(q.freeQuota||0)+'</b>건 사용 · <b>'+left+'건 남음</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';el.className='qstat '+(left>0?'ok':'warn');}
+    if(hb){hb.innerHTML='무료 <b>'+left+'/'+(q.freeQuota||0)+'건</b> 남음 · 잔액 <b>'+wonFmt(q.balance)+'</b>';hb.className='hbal '+(left>0?'ok':'warn');}
   }else{
-    el.innerHTML='무료 제공 없음 · 자료 1건당 <b>10,000원</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
-    el.className='qstat warn';
+    if(el){el.innerHTML='무료 제공 없음 · 자료 1건당 <b>10,000원</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';el.className='qstat warn';}
+    if(hb){hb.innerHTML='잔액 <b>'+wonFmt(q.balance)+'</b> · 건당 10,000원';hb.className='hbal warn';}
   }
   // ★ 진입 시 충전 유도: 무료도 없고(소진) + 잔액도 부족한 경우만, 1회 안내
   try{ maybePromptCharge(q); }catch(_){}
