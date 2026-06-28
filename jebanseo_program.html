@@ -980,7 +980,7 @@ function buildToc(s,idx){
   const ft=elt('div','tfoot edt');ft.setAttribute('data-ph','면책 문구');setRich(ft,s.foot||'');mkEditable(ft,v=>{deck.slides[idx].foot=v;});cv.appendChild(ft);
   return cv;
 }
-function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak':'')+(idx===selectedIdx?' sel':''));sl.onclick=()=>{selectedIdx=idx;renderDeck();};
+function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak':'')+(idx===selectedIdx?' sel':''));sl.onclick=(e)=>{if(e&&e.target&&((e.target.closest&&e.target.closest('.jebsim'))||/^(INPUT|BUTTON|SELECT|TEXTAREA|LABEL)$/.test(e.target.tagName))){selectedIdx=idx;return;}selectedIdx=idx;renderDeck();};
   if(idx!=null)sl.appendChild(makeSlideTb(idx));
   if(idx!=null){
     sl.addEventListener('dragover',function(e){if(window.__dragSlide==null)return;e.preventDefault();e.dataTransfer.dropEffect='move';sl.classList.add('dropmark');});
@@ -2873,7 +2873,7 @@ async function _doSaveFile(){
     el.querySelectorAll('.sledit,.rowtb,.frh,.frdel,.sltb').forEach(x=>x.remove());
   });
   const deckHTML=nodes.map(n=>n.outerHTML).join('');
-  const _hasSim=deck.slides.some(s=>(s.content||[]).some(c=>c&&c.type==='sim'));
+  const _hasSim=deck.slides.some(s=>(s.content||[]).some(c=>c&&(c.type==='sim'||c.type==='cmpsim'||c.type==='minisim')));
   const _se=document.getElementById('jebsimsrc');
   const simScript=(_hasSim&&_se)?('<scr'+'ipt>'+_se.textContent+'<\/scr'+'ipt>'):'';
   let calcScript='';
@@ -2884,6 +2884,35 @@ async function _doSaveFile(){
     }catch(_e){}
     if(!calcScript)calcScript='<scr'+'ipt src="./jarvia-calculators-browser.js"><\/scr'+'ipt>';
   }
+  // ★ 미니/비교 시뮬 계산 런타임 — standalone export에서도 슬라이더가 즉시 재계산되도록
+  //   editor의 계산 함수·데이터를 그대로 직렬화해 인라인(일반 시뮬은 JEBSIM 자체 리스너로 동작하므로 별도 불필요)
+  let miniCmpScript='';
+  if(_hasSim){
+    try{
+      const _rt=
+        'var SIM_SLIDERS='+JSON.stringify(SIM_SLIDERS)+';'+
+        'var SIM_OUTS='+JSON.stringify(SIM_OUTS)+';'+
+        'var MINISIM_CATALOG='+JSON.stringify(MINISIM_CATALOG)+';'+
+        'var COMPARE_CATALOG='+JSON.stringify(COMPARE_CATALOG)+';'+
+        num.toString()+'\n'+
+        _miniByDom.toString()+'\n'+
+        _cmpById.toString()+'\n'+
+        fmtCompareVal.toString()+'\n'+
+        updateMiniSim.toString()+'\n'+
+        updateCompareSim.toString()+'\n'+
+        '(function(){function _initSims(){'+
+        'document.querySelectorAll(".minisim").forEach(function(w){try{updateMiniSim(w);}catch(_){}});'+
+        'document.querySelectorAll(".cmpsim").forEach(function(w){try{updateCompareSim(w);}catch(_){}});'+
+        '}'+
+        'document.addEventListener("input",function(e){var t=e.target;if(!t||!t.closest)return;'+
+        'var mw=t.closest(".minisim");if(mw&&t.classList&&t.classList.contains("miniaxisr")){try{updateMiniSim(mw);}catch(_){}return;}'+
+        'var cw=t.closest(".cmpsim");if(cw&&t.classList&&(t.classList.contains("cmpaxisr")||t.hasAttribute("data-k"))){try{updateCompareSim(cw);}catch(_){}}'+
+        '},true);'+
+        'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",_initSims);else setTimeout(_initSims,0);'+
+        '})();';
+      miniCmpScript='<scr'+'ipt>'+_rt.replace(/<\/script/gi,'<\\/script')+'<\/scr'+'ipt>';
+    }catch(_e){}
+  }
   const H=jbMeasureHeights(nodes);
   const printHTML=jbBuildPrintPages(nodes,H);
   const css=document.querySelector('style').innerHTML;
@@ -2892,7 +2921,7 @@ async function _doSaveFile(){
     '@media print{@page{size:A4 portrait;margin:0;}.viewerbar,#present,.exwrap{display:none!important;}.printdoc{display:block!important;}'+PRINTCSS+'}';
   const html='<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title>'+
     '<link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700;800&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">'+
-    '<style>'+css+exCss+VIEWER_CSS+'</style></head><body>'+VIEWER_BAR+'<div class="exwrap"><div class="deck">'+deckHTML+'</div></div><div class="printdoc">'+printHTML+'</div>'+VIEWER_OVERLAY+calcScript+simScript+
+    '<style>'+css+exCss+VIEWER_CSS+'</style></head><body>'+VIEWER_BAR+'<div class="exwrap"><div class="deck">'+deckHTML+'</div></div><div class="printdoc">'+printHTML+'</div>'+VIEWER_OVERLAY+calcScript+simScript+miniCmpScript+
     '<script>'+VIEWER_JS+'<\/script>'+
     '<script type="application/json" id="jebdata">'+JSON.stringify(data).replace(/</g,'\\u003c')+'<\/script></body></html>';
   const safe=s=>(s||'').replace(/[\\/:*?"<>|]/g,'').trim();
