@@ -602,6 +602,21 @@
   </div>
 </div>
 
+<!-- ★ 잔액 부족 사전 안내(진입 시) -->
+<div class="modal" id="chargeprompt">
+  <div class="spbox">
+    <div class="sptop">💳 충전이 필요합니다</div>
+    <div class="spbody">
+      <p id="cp-text">잔액이 부족합니다. 충전 후 이용해 주세요.</p>
+      <p class="spsub">충전은 자비아(jarvia.co.kr) 메인 화면에서 진행됩니다.</p>
+    </div>
+    <div class="spbtns">
+      <button class="spsave" onclick="gotoCharge()">확인 — 충전하러 가기</button>
+      <button class="splater" onclick="closeChargePrompt()">나중에</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="fbmodal">
   <div class="spbox">
     <div class="sptop">✍ 개선 의견 보내기</div>
@@ -2747,7 +2762,39 @@ async function refreshQuota(){
     el.innerHTML='무료 제공 없음 · 자료 1건당 <b>10,000원</b> · 잔액 <b>'+wonFmt(q.balance)+'</b>';
     el.className='qstat warn';
   }
+  // ★ 진입 시 충전 유도: 무료도 없고(소진) + 잔액도 부족한 경우만, 1회 안내
+  try{ maybePromptCharge(q); }catch(_){}
 }
+// ★ 잔액 부족 사전 안내 (무제한·무료보유 제외) — 진입 시 1회
+var _chargePrompted=false;
+function maybePromptCharge(q){
+  if(_chargePrompted) return;                 // 1회만
+  if(!q || !q.ok) return;
+  if(q.unlimited) return;                      // 무제한 회원 제외
+  var price = q.paid ? 5000 : 10000;           // 1건 생성 가격(정규/일반)
+  var freeLeft = q.paid ? Math.max(0,(q.freeQuota||0)-(q.used||0)) : 0;
+  var bal = Number(q.balance)||0;
+  // 무료 남았거나(>0) 잔액이 1건 이상 충분하면 → 안내 안 함
+  if(freeLeft>0 || bal>=price) return;
+  _chargePrompted=true;
+  showChargePrompt(bal, price);
+}
+function showChargePrompt(bal, price){
+  var m=document.getElementById('chargeprompt');
+  if(m){
+    var t=document.getElementById('cp-text');
+    if(t)t.innerHTML='현재 <b>잔액 '+wonFmt(bal)+'</b>으로는 자료를 생성·저장할 수 없습니다.<br>자료 1건 생성에 <b>'+wonFmt(price)+'</b>이 필요합니다.<br><br>먼저 <b>충전</b>한 뒤 이용해 주세요.';
+    m.classList.add('on');
+  }
+}
+function gotoCharge(){
+  var m=document.getElementById('chargeprompt'); if(m)m.classList.remove('on');
+  if(!window.opener){ window.open('https://jarvia.co.kr/index.html','_blank'); return; }
+  try{ window.opener.postMessage({type:'jbOpenCharge'}, jbParentOrigin()); }catch(_){}
+  try{ window.opener.focus(); }catch(_){}
+  toast('자비아 메인의 충전 화면을 열었어요. 충전 후 이 화면으로 돌아와 주세요.');
+}
+function closeChargePrompt(){ var m=document.getElementById('chargeprompt'); if(m)m.classList.remove('on'); }
 /* ★ 저장(과금) 전 모든 편집 차단 가드 — 덱이 있는데 미저장이면 막고 저장 팝업 유도 */
 function requireSaved(){
   if(deck.slides.length && !_deckSaved){
