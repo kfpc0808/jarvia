@@ -1934,9 +1934,11 @@ async function generate(){
   try{
     const genPayload={action:'generate',topic,text:rawInput,params:collectedParams,clientName,companyName,needBasis:chosenBasis||undefined,member:MEMBER};
     if(topic==='기업컨설팅'&&(financialTableDetected||pendingFinancialData||confirmedFinancialData)){
-      genPayload.requireFinancialConfirmation=true;
+      if(_forceGen){ genPayload.skipFinancialConfirm=true; }   // ★ 즉시생성: 재무확인 건너뜀(미확인값은 '정밀산출 필요'로 표기)
+      else { genPayload.requireFinancialConfirmation=true; }
       if(confirmedFinancialData)genPayload.confirmedFinancialData=confirmedFinancialData;
     }
+    _forceGen=false;   // ★ 1회성 신호 — 사용 후 즉시 초기화(이후 일반 생성에 영향 없음)
     const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(genPayload)});
     const data=await r.json();
     if(r.status===409&&data&&data.error==='FINANCIAL_CONFIRMATION_REQUIRED'){
@@ -2283,9 +2285,11 @@ function preflightAsks(text,topic){
 let preflightQueue=[];
 function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pendingGen={field:a.field};aiReply(a.q);} else generate(); }
 // 질문 그만 받고 즉시 생성 (말 입력·버튼 공통 경로)
+let _forceGen=false;   // ★ 즉시생성 버튼 신호 — generate()가 1회 읽고 초기화(기업 재무확인 게이트 강제 통과용)
 function forceGenerate(){
   if(deck.slides.length) return;   // 이미 생성됨 → 무시
   pendingGen=null; interviewQueue=[]; preflightQueue=[]; _lastRoundAsked=false;   // ★ 인터뷰·사전질문 모두 정리 — '질문 그만'이므로 basis 등 추가 질문 없이 즉시 생성(연금 basis 질문이 또 뜨던 문제 차단)
+  _forceGen=true;   // ★ 무조건 생성: 기업 재무확인 게이트도 건너뛰고 바로 생성
   aiReply('네, 지금까지 받은 내용으로 바로 자료를 만들게요. (빠진 핵심값은 자료에 "정밀산출 필요"로 표시됩니다.)');
   return generate();
 }
