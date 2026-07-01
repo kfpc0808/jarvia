@@ -9945,6 +9945,27 @@ function calculateForUI(type, rawInput = {}) {
     };
   }
 
+  if (normalizedType === 'termcompare') {
+    const wholeLifeMonthlyPremium = _uiFinite(input, ['wholeLifeMonthlyPremium', 'wholePrem']);
+    const termMonthlyPremium = _uiFinite(input, ['termMonthlyPremium', 'termPrem']);
+    const payYears = _uiFinite(input, ['payYears', 'payY']);
+    const investReturn = _uiRate(input, ['investReturn', 'investR']);
+    const values = { wholeLifeMonthlyPremium, termMonthlyPremium, payYears, investReturn };
+    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+    if (missingInputs.length) return _uiFailure('termcompare', missingInputs);
+    const result = personal.calcTermVsWholeLife(values);
+    if (!result || result.calculated === false) return result || _uiFailure('termcompare');
+    return {
+      calculated: true,
+      calculator: 'termcompare',
+      wholeTotal: Math.round(Number(result.wholeLifeTotalPaid) || 0),
+      termTotal: Math.round(Number(result.termTotalPaid) || 0),
+      saved: Math.round(Number(result.premiumSaved) || 0),
+      investFV: Math.round(Number(result.diffInvestFV) || 0),
+      warnings: _uiWarnings(result),
+    };
+  }
+
   if (normalizedType === 'financialIncome') {
     const interestIncome = _uiFinite(input, ['interestIncome', 'interest', 'fin']);
     const dividendIncome = _uiFinite(input, ['dividendIncome', 'dividend']);
