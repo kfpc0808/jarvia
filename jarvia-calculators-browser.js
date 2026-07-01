@@ -9966,6 +9966,97 @@ function calculateForUI(type, rawInput = {}) {
     };
   }
 
+  if (normalizedType === 'criticalillness') {
+    const treatmentCost = _uiFinite(input, ['treatmentCost', 'ciTreat']);
+    const recoveryMonths = _uiFinite(input, ['recoveryMonths', 'ciRecov']);
+    const monthlyIncome = _uiFinite(input, ['monthlyIncome', 'ciIncome']);
+    const incomeLossRate = _uiRate(input, ['incomeLossRate', 'ciLossRate']);
+    const extraCost = _uiFinite(input, ['extraCost', 'ciExtra']);
+    const existingDiagnosisBenefit = _uiFinite(input, ['existingDiagnosisBenefit', 'ciExisting']);
+    const values = { treatmentCost, recoveryMonths, monthlyIncome, incomeLossRate, extraCost, existingDiagnosisBenefit };
+    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+    if (missingInputs.length) return _uiFailure('criticalillness', missingInputs);
+    const result = personal.calcCriticalIllnessNeed(values);
+    if (!result || result.calculated === false) return result || _uiFailure('criticalillness');
+    return {
+      calculated: true,
+      calculator: 'criticalillness',
+      ciNeed: Math.round(Number(result.totalNeed) || 0),
+      ciGap: Math.round(Number(result.requiredCoverageGap) || 0),
+      ciLoss: Math.round(Number(result.incomeLoss) || 0),
+      ciTreat: Math.round(Number(result.treatmentCost) || 0),
+      warnings: _uiWarnings(result),
+    };
+  }
+
+  if (normalizedType === 'affordability') {
+    const monthlyIncome = _uiFinite(input, ['monthlyIncome', 'affIncome']);
+    const protectionPremium = _uiFinite(input, ['protectionPremium', 'affProt']);
+    const savingsPremium = _uiFinite(input, ['savingsPremium', 'affSav']);
+    const targetRate = _uiRate(input, ['targetRate', 'affTarget']);
+    const maxRate = _uiRate(input, ['maxRate', 'affMax']);
+    const values = { monthlyIncome, protectionPremium, savingsPremium, targetRate, maxRate };
+    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+    if (missingInputs.length) return _uiFailure('affordability', missingInputs);
+    const result = personal.calcInsuranceAffordability(values);
+    if (!result || result.calculated === false) return result || _uiFailure('affordability');
+    return {
+      calculated: true,
+      calculator: 'affordability',
+      affProtRatio: Math.round(Number(result.protectionRatio) * 1000) / 10,
+      affTotalRatio: Math.round(Number(result.totalRatio) * 1000) / 10,
+      affRecommend: Math.round(Number(result.recommendedPremium) || 0),
+      affHeadroom: Math.round(Number(result.headroom) || 0),
+      warnings: _uiWarnings(result),
+    };
+  }
+
+  if (normalizedType === 'childinsurance') {
+    const diagnosisCost = _uiFinite(input, ['diagnosisCost', 'chDiag']);
+    const hospitalDailyCost = _uiFinite(input, ['hospitalDailyCost', 'chDaily']);
+    const expectedHospitalDays = _uiFinite(input, ['expectedHospitalDays', 'chDays']);
+    const surgeryReserve = _uiFinite(input, ['surgeryReserve', 'chSurg']);
+    const eduContinuity = _uiFinite(input, ['eduContinuity', 'chEdu']);
+    const existingChildCoverage = _uiFinite(input, ['existingChildCoverage', 'chExisting']);
+    const values = { diagnosisCost, hospitalDailyCost, expectedHospitalDays, surgeryReserve, eduContinuity, existingChildCoverage };
+    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+    if (missingInputs.length) return _uiFailure('childinsurance', missingInputs);
+    const result = personal.calcChildInsuranceNeed(values);
+    if (!result || result.calculated === false) return result || _uiFailure('childinsurance');
+    return {
+      calculated: true,
+      calculator: 'childinsurance',
+      chNeed: Math.round(Number(result.totalNeed) || 0),
+      chGap: Math.round(Number(result.requiredCoverageGap) || 0),
+      chDiagOut: Math.round(Number(result.diagnosisCost) || 0),
+      chHosp: Math.round(Number(result.hospitalCost) || 0),
+      warnings: _uiWarnings(result),
+    };
+  }
+
+  if (normalizedType === 'medicalexpense') {
+    const annualMedicalCost = _uiFinite(input, ['annualMedicalCost', 'medAnnual']);
+    const coveredRate = _uiRate(input, ['coveredRate', 'medCovered']);
+    const copayCovered = _uiRate(input, ['copayCovered', 'medCopayCov']);
+    const copayNonCovered = _uiRate(input, ['copayNonCovered', 'medCopayNon']);
+    const years = _uiFinite(input, ['years', 'medYears']);
+    const medicalInflation = _uiRate(input, ['medicalInflation', 'medInfl']);
+    const values = { annualMedicalCost, coveredRate, copayCovered, copayNonCovered, years, medicalInflation };
+    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+    if (missingInputs.length) return _uiFailure('medicalexpense', missingInputs);
+    const result = personal.calcMedicalExpenseExposure(values);
+    if (!result || result.calculated === false) return result || _uiFailure('medicalexpense');
+    return {
+      calculated: true,
+      calculator: 'medicalexpense',
+      medNoIns: Math.round(Number(result.exposedNoInsurance) || 0),
+      medWithIns: Math.round(Number(result.exposedWithInsurance) || 0),
+      medAnnualBen: Math.round(Number(result.annualBenefit) || 0),
+      medCumBen: Math.round(Number(result.cumulativeBenefit) || 0),
+      warnings: _uiWarnings(result),
+    };
+  }
+
   if (normalizedType === 'financialIncome') {
     const interestIncome = _uiFinite(input, ['interestIncome', 'interest', 'fin']);
     const dividendIncome = _uiFinite(input, ['dividendIncome', 'dividend']);
