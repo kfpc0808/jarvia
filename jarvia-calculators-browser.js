@@ -1458,6 +1458,7 @@ function calcPersonalPPT(input) {
       withdrawYears: withdrawA.years,
       // 목표 역산(명목) — 헤드라인·시뮬 공용
       futureMonthlyExpense: npA.futureMonthlyExpense,
+      requiredCorpus: npA.requiredCorpus,        // 목표 달성 명목 필요 목돈(부족자금 슬라이드용)
       requiredMonthlySave: npA.requiredMonthlySave,
       basis: 'nominal',
     },
@@ -1469,6 +1470,7 @@ function calcPersonalPPT(input) {
       monthlyPension: npB.monthlyReceive,        // 명목 월수령 — 기존 혼용값 대체
       withdrawYears: withdrawB.years,
       futureMonthlyExpense: npB.futureMonthlyExpense,
+      requiredCorpus: npB.requiredCorpus,        // 목표 달성 명목 필요 목돈(부족자금 슬라이드용)
       requiredMonthlySave: npB.requiredMonthlySave,
       basis: 'nominal',
     },
