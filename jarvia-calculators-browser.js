@@ -1387,6 +1387,20 @@ function calcPersonalPPT(input) {
     inflationRate,
   });
 
+  // 5-C. 명목·통장 기준 단일 산출 — planA/planB 수령액을 calcPensionNominalPlan으로 통일(명목 적립+실질 인출 혼용 제거)
+  const npA = calcPensionNominalPlan({
+    currentAge, retireAge, lifeExpectancy,
+    currentAsset: currentSaving, monthlyDeposit: monthlyInvestment, depositYears: yearsToRetire,
+    accumRate: returnRateA, receiveRate: returnRateA * 0.7, inflationRate,
+    targetMonthlyExpense: monthlyExpense, pensionMonthly: ssMonthly, pensionBasis: 'indexed',
+  });
+  const npB = calcPensionNominalPlan({
+    currentAge, retireAge, lifeExpectancy,
+    currentAsset: currentSaving, monthlyDeposit: monthlyInvestment, depositYears: yearsToRetire,
+    accumRate: returnRateB, receiveRate: returnRateB * 0.7, inflationRate,
+    targetMonthlyExpense: monthlyExpense, pensionMonthly: ssMonthly, pensionBasis: 'indexed',
+  });
+
   // 6. 세액공제
   const taxCredit = calcTaxCredit({
     totalSalary: annualIncome,
@@ -1438,18 +1452,25 @@ function calcPersonalPPT(input) {
     planA: {
       label: 'A안 (성장형)',
       returnRate: returnRateA,
-      totalFV: compoundA.totalFV,
+      totalFV: compoundA.totalFV,               // 은퇴시점 명목 적립액(통장 기준)
       totalFV_억: compoundA.summary.total_억,
-      monthlyPension: pensionA.monthlyReceive,
+      monthlyPension: npA.monthlyReceive,        // 명목 월수령(명목 적립×명목 인출) — 기존 혼용값 대체
       withdrawYears: withdrawA.years,
+      // 목표 역산(명목) — 헤드라인·시뮬 공용
+      futureMonthlyExpense: npA.futureMonthlyExpense,
+      requiredMonthlySave: npA.requiredMonthlySave,
+      basis: 'nominal',
     },
     planB: {
       label: 'B안 (안정형)',
       returnRate: returnRateB,
       totalFV: compoundB.totalFV,
       totalFV_억: compoundB.summary.total_억,
-      monthlyPension: pensionB.monthlyReceive,
+      monthlyPension: npB.monthlyReceive,        // 명목 월수령 — 기존 혼용값 대체
       withdrawYears: withdrawB.years,
+      futureMonthlyExpense: npB.futureMonthlyExpense,
+      requiredMonthlySave: npB.requiredMonthlySave,
+      basis: 'nominal',
     },
 
     // 은퇴 필요자금
