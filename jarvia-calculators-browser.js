@@ -687,6 +687,74 @@ function calcPensionPlan(p){
   };
 }
 
+// ═══════════════════════════════════════════════════════════
+// 4-C. 은퇴·연금 (명목·통장 기준) + 목표 역산  [단일 진실 함수]
+//   · 모든 금액은 은퇴시점 명목(통장에 실제 찍히는 금액) 기준.
+//   · pensionBasis: 'indexed'(국민연금 물가연동, 오늘 구매력 유지) | 'nominal'(입력값 그대로)
+//   · 프론트 시뮬·백엔드 헤드라인이 이 함수 하나를 공유해 기준 불일치를 원천 차단한다.
+// ═══════════════════════════════════════════════════════════
+function calcPensionNominalPlan(p){
+  const s = p && typeof p === 'object' ? p : {};
+  const missing = _missingFinite(s, ['currentAge','retireAge','lifeExpectancy','accumRate','receiveRate','inflationRate']);
+  if (missing.length) return _invalidCalculation('calcPensionNominalPlan', missing);
+  const currentAge = s.currentAge, retireAge = s.retireAge, lifeExpectancy = s.lifeExpectancy;
+  const currentAsset = Math.max(0, Number(s.currentAsset) || 0);
+  const monthlyDeposit = Math.max(0, Number(s.monthlyDeposit) || 0);
+  const accumRate = s.accumRate, receiveRate = s.receiveRate, inflationRate = s.inflationRate;
+  const targetMonthlyExpense = Math.max(0, Number(s.targetMonthlyExpense) || 0);
+  const pensionMonthly = Math.max(0, Number(s.pensionMonthly) || 0);
+  const pensionBasis = (String(s.pensionBasis || 'indexed').toLowerCase() === 'nominal') ? 'nominal' : 'indexed';
+  const invalid = [];
+  if (retireAge < currentAge) invalid.push('retireAge');
+  if (lifeExpectancy <= retireAge) invalid.push('lifeExpectancy');
+  if ([accumRate, receiveRate, inflationRate].some(v => v <= -1)) invalid.push('rate');
+  if (invalid.length) return { ..._invalidCalculation('calcPensionNominalPlan', [], ['입력 범위를 확인해 주세요.']), invalidInputs: invalid };
+
+  const Ym = Math.round((retireAge - currentAge) * 12);   // 적립 개월(은퇴까지)
+  const Nm = Math.round((lifeExpectancy - retireAge) * 12); // 수령 개월
+  const ram = accumRate / 12, rrm = receiveRate / 12;       // 월 명목 수익률(적립/수령)
+  const fvF = ram === 0 ? Ym : (Math.pow(1 + ram, Ym) - 1) / ram;   // 적립 연금계수(명목)
+  const pvF = rrm === 0 ? Nm : (1 - Math.pow(1 + rrm, -Nm)) / rrm;  // 수령 연금현가계수(명목)
+  const assetFV = currentAsset * Math.pow(1 + ram, Ym);            // 현재자산의 은퇴시점 명목가치
+
+  // (A) 지금 계획으로 은퇴시점에 쌓이는 명목 코퍼스·월수령 (납입은 depositYears까지, 이후 은퇴까지 성장)
+  const depM = Math.min(Math.round((Number.isFinite(s.depositYears) && s.depositYears > 0 ? s.depositYears : (retireAge - currentAge)) * 12), Ym);
+  const depFV = monthlyDeposit * (ram === 0 ? depM : (Math.pow(1 + ram, depM) - 1) / ram) * Math.pow(1 + ram, Ym - depM);
+  const corpusPlan = assetFV + depFV;
+  const recvPlan = pvF > 0 ? corpusPlan / pvF : 0;
+
+  // (B) 목표 역산: 오늘 목표 → 은퇴시점 명목 필요액 → 필요 목돈 → 필요 월저축
+  const infF = Math.pow(1 + inflationRate, Ym / 12);
+  const futExpense = targetMonthlyExpense * infF;                  // 은퇴시점 명목 목표 월생활비
+  const penAtRetire = pensionBasis === 'nominal' ? pensionMonthly : pensionMonthly * infF;
+  const netNeed = Math.max(0, futExpense - penAtRetire);           // 순 사적 월필요
+  const needCorpus = netNeed * pvF;                                // 필요 목돈(명목)
+  const requiredSave = fvF > 0 ? Math.max(0, needCorpus - assetFV) / fvF : 0; // 필요 월저축(역산)
+
+  // (C) 지금 계획 대비 과부족
+  const incomeAtRetire = penAtRetire + recvPlan;
+  const incomeGap = Math.max(0, futExpense - incomeAtRetire);      // 명목 월 소득 부족
+  const saveGap = requiredSave - monthlyDeposit;                   // +부족 / -여유
+  const corpusGap = Math.max(0, needCorpus - corpusPlan);
+
+  return {
+    calculated: true, basis: 'nominal', pensionBasis,
+    yearsToRetire: retireAge - currentAge, yearsInRetire: lifeExpectancy - retireAge,
+    corpus: Math.round(corpusPlan),                 // 지금 계획 적립(통장, 명목)
+    monthlyReceive: Math.round(recvPlan),           // 지금 계획 월수령(명목)
+    futureMonthlyExpense: Math.round(futExpense),   // 65세 명목 목표 월생활비
+    pensionAtRetire: Math.round(penAtRetire),
+    netMonthlyNeed: Math.round(netNeed),            // 순 사적 월필요
+    requiredCorpus: Math.round(needCorpus),         // 필요 목돈
+    requiredMonthlySave: Math.round(requiredSave),  // 필요 월저축(역산)
+    incomeAtRetire: Math.round(incomeAtRetire),
+    monthlyIncomeGap: Math.round(incomeGap),
+    monthlySaveGap: Math.round(saveGap),
+    corpusGap: Math.round(corpusGap),
+  };
+}
+
+
 
 // ═══════════════════════════════════════════════════════════
 // 4-C. 은퇴 후 연도별 현금흐름 시뮬레이션
@@ -1963,6 +2031,7 @@ module.exports = {
   // 연금
   calcPension,
   calcPensionPlan,
+  calcPensionNominalPlan,
 
   // 세액공제
   calcTaxCredit,
@@ -9829,53 +9898,49 @@ function calculateForUI(type, rawInput = {}) {
     if ([accumRate, receiveRate, inflationRate].some(value => value <= -1 || value > 1)) invalidInputs.push('rate');
     if (invalidInputs.length) return _uiFailure('pension', [], invalidInputs, ['입력 범위를 확인해 주세요.']);
 
-    const plan = personal.calcPensionPlan({
+    const np = personal.calcPensionNominalPlan({
       currentAge,
       retireAge,
       lifeExpectancy,
-      streams: [{ lump: currentAsset, monthly: monthlyDeposit, years: depositYears }],
-      ssMonthly: pensionMonthly,
-      ssStartAge: retireAge,
-      otherMonthly: 0,
-      monthlyExpense: targetMonthlyExpense,
-      expenseBasis: 'today',
+      currentAsset,
+      monthlyDeposit,
+      depositYears,
       accumRate,
       receiveRate,
       inflationRate,
-      addMonthly: 0,
-      addYears: 0,
+      targetMonthlyExpense,
+      pensionMonthly,
+      pensionBasis: input.pensionBasis,
     });
-    if (plan && plan.calculated === false) return { ...plan, calculator: 'pension' };
-    const payout = personal.calcPension({
-      principal: Math.max(0, Number(plan && plan.projected) || 0),
-      monthlyPmt: 0,
-      accumYears: 0,
-      receiveYears: lifeExpectancy - retireAge,
-      accumRate: 0,
-      receiveRate,
-      inflationRate,
-    });
-    if (payout && payout.calculated === false) return { ...payout, calculator: 'pension' };
-    const fundMonthly = Math.max(0, Number(payout.monthlyReceive) || 0);
-    const totalMonthlyIncome = pensionMonthly + fundMonthly;
-    const monthlyGap = Math.max(0, targetMonthlyExpense - totalMonthlyIncome);
+    if (np && np.calculated === false) return { ...np, calculator: 'pension' };
     return {
       calculated: true,
       calculator: 'pension',
-      corpus: Math.round(Number(plan.projected) || 0),
-      recv: Math.round(fundMonthly),
+      basis: 'nominal',
+      pensionBasis: np.pensionBasis,
+      // 지금 계획(명목·통장 기준) — 기존 셀 호환
+      corpus: np.corpus,                 // 은퇴시점 적립 총액(통장에 찍히는 실제 금액)
+      recv: np.monthlyReceive,           // 명목 월 수령액
+      gap: np.monthlyIncomeGap,          // 명목 월 소득 부족(목표 대비)
+      years: np.yearsInRetire,
       pensionMonthly: Math.round(pensionMonthly),
-      totalMonthlyIncome: Math.round(totalMonthlyIncome),
-      futExp: Math.round(targetMonthlyExpense),
-      gap: Math.round(monthlyGap),
-      years: lifeExpectancy - retireAge,
-      needAtRetire: Math.round(Number(plan.needAtRetire) || 0),
-      capitalGap: Math.round(Number(plan.gap) || 0),
-      _need: Math.round(targetMonthlyExpense),
-      _have: Math.round(totalMonthlyIncome),
+      totalMonthlyIncome: np.incomeAtRetire,
+      // 목표 역산(명목) — 신규 셀
+      futExp: np.futureMonthlyExpense,   // 은퇴시점 명목 목표 월생활비
+      penAtRetire: np.pensionAtRetire,
+      netNeed: np.netMonthlyNeed,        // 순 사적 월필요
+      needCorpus: np.requiredCorpus,     // 필요 목돈
+      requiredSave: np.requiredMonthlySave, // 목표 위한 월 저축(역산)
+      saveGap: np.monthlySaveGap,        // 월 저축 과부족(+부족/-여유)
+      capitalGap: np.corpusGap,
+      // 비교 바(필요 vs 은퇴시점 예상 월소득)
+      _need: np.futureMonthlyExpense,
+      _have: np.incomeAtRetire,
       warnings: _uniqueStrings([
-        ..._uiWarnings(plan, payout),
-        ...(view === 'accum' ? ['적립총액과 월수령액은 입력한 적립기·수령기 수익률 및 물가상승률 기준입니다.'] : ['월 생활비·월 수령액은 오늘 가치 기준으로 비교했습니다.']),
+        '모든 금액은 은퇴시점 명목(통장에 찍히는 실제 금액) 기준입니다. 물가상승률을 조절해 목표를 협의하세요.',
+        np.pensionBasis === 'indexed'
+          ? '국민연금은 물가연동(오늘 구매력 유지)으로 가정했습니다.'
+          : '국민연금은 입력 월수령액을 미래 명목으로 그대로 반영했습니다.',
       ]),
     };
   }
