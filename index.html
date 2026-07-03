@@ -4208,9 +4208,14 @@ onAuthStateChanged(auth,async u=>{
       setTimeout(maybeShowJbWelcome,600);
       return;
     }
-    let d=await getDoc(doc(db,'users',u.uid));
-    if(!d.exists()&&!_authWait){_authWait=true;await new Promise(r=>setTimeout(r,1500));d=await getDoc(doc(db,'users',u.uid));_authWait=false;}
-    if(d.exists()){
+    // ★ users 문서 조회 견고화 — 일시적 실패/전파지연으로 정상 회원을 로그아웃시키지 않도록 최대 3회 재시도 (전역 _authWait 경쟁 제거)
+    let d=null,_readErr=false;
+    for(let _try=0;_try<3;_try++){
+      try{d=await getDoc(doc(db,'users',u.uid));if(d.exists())break;_readErr=false;}
+      catch(_e){_readErr=true;}
+      if(_try<2)await new Promise(r=>setTimeout(r,1200));
+    }
+    if(d&&d.exists()){
       meData=d.data();window.meData=meData;
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
       // ── 단일 세션(중복 로그인 차단): 로그인 확인 + 같은 브라우저 탭 허용 ──
@@ -4326,6 +4331,12 @@ onAuthStateChanged(auth,async u=>{
       loadBizAlert();       // 🏢 기업 맞춤 신규 공고 알림 (2026-06-12)
       setupPlatformPWA();
     }else{
+      // ★ 일시적 조회 실패(_readErr)로 정상 회원을 튕기지 않음: 익명계정 또는 (오류 없이) 문서가 확실히 없는 경우만 로그아웃
+      if(!u.isAnonymous && _readErr){
+        console.warn('users 조회 일시 실패 — 세션 유지 (uid:'+u.uid+')');
+        toast('일시적인 오류입니다. 잠시 후 다시 시도해주세요.','warning');
+        return;
+      }
       // ★ 인증은 됐지만 users에 없는 경우 (익명인증 등) → 로그아웃 후 로그인 페이지
       console.warn('인증 유저가 users에 없음 (uid:'+u.uid+', isAnonymous:'+u.isAnonymous+') — 로그아웃 처리');
       me=null;meData=null;
