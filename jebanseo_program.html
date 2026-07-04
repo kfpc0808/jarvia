@@ -382,6 +382,11 @@
   .fconfirm .fv{color:#fff;font-weight:600;word-break:break-word;}
   .fconfirm .fissues{margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(228,91,91,.12);color:#FFB2B2;}
   .fconfirm .fok{margin-top:8px;color:#DCC98D;}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;}
+  .chip{display:inline-flex;align-items:center;gap:4px;padding:7px 13px;border-radius:999px;border:1px solid rgba(200,167,90,.6);background:rgba(200,167,90,.13);color:#EFD9A6;font-size:13px;font-weight:700;cursor:pointer;user-select:none;line-height:1.2;transition:background .12s;}
+  .chip:hover{background:rgba(200,167,90,.28);}
+  .chip.fix{border-color:rgba(174,182,194,.55);background:rgba(174,182,194,.10);color:#CBD2DC;}
+  .chip.fix:hover{background:rgba(174,182,194,.22);}
 
   #start .go{background:var(--ink);color:#fff;border:none;border-radius:10px;padding:11px 18px;font-size:14.5px;cursor:pointer;font-family:inherit;white-space:nowrap;}
   #start .ex{margin-top:11px;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:center;}#start .ex span{font-size:13px;white-space:nowrap;}
@@ -1737,6 +1742,28 @@ function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.for
 function showThinking(){if(MSGS.some(x=>x.thinking))return;MSGS.push({who:'ai',thinking:true});paint();}
 function hideThinking(){const i=MSGS.findIndex(x=>x.thinking);if(i>=0){MSGS.splice(i,1);paint();}}
 function aiReply(t){const i=MSGS.findIndex(x=>x.thinking);if(i>=0)MSGS.splice(i,1);MSGS.push({who:'ai',html:t});paint();}
+/* ── 답변 칩(버튼) — 클릭하면 지정 문구가 사용자 메시지로 그대로 전송돼 기존 파싱을 100% 통과 ── */
+function escAttr(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function chipsHtml(list){
+  if(!Array.isArray(list)||!list.length)return '';
+  return '<div class="chips">'+list.map(c=>{
+    if(!c)return '';
+    if(c.focus)return '<span class="chip fix" role="button" tabindex="0" data-chipfocus="'+escAttr(c.hint||'')+'">'+escHtml(c.label||'')+'</span>';
+    return '<span class="chip" role="button" tabindex="0" data-chip="'+escAttr(c.send!=null?c.send:(c.label||''))+'">'+escHtml(c.label||'')+'</span>';
+  }).join('')+'</div>';
+}
+(function(){
+  const box=document.getElementById('msgs');if(!box)return;
+  function fireChip(el){
+    const inp=document.getElementById('cmd');if(!inp)return;
+    if(el.hasAttribute('data-chipfocus')){const h=el.getAttribute('data-chipfocus')||'';if(h)toast(h,4600);inp.focus();return;}
+    if(MSGS.some(x=>x.thinking))return;   // 처리 중 중복 클릭 방지
+    const v=el.getAttribute('data-chip')||'';if(!v)return;
+    inp.value=v;autoGrow(inp,150);updateCmdCount();send();
+  }
+  box.addEventListener('click',e=>{const el=e.target.closest('.chip');if(el)fireChip(el);});
+  box.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const el=e.target.closest('.chip');if(el){e.preventDefault();fireChip(el);}});
+})();
 // 숫자 감시망 경고 — 백엔드 numberAudit(계산 엔진에서 검증 안 된 금액)을 발표·전달 전 컨설턴트에게 알림
 function auditWarnHtml(flags){
   const list=flags.map(f=>'<b>'+escHtml(String(f))+'</b>').join(' &nbsp; ');
@@ -1892,12 +1919,14 @@ function financialConfirmHtml(financial,issues){
     '<div class="fgrid">'+rows.map(r=>'<div class="fk">'+escHtml(r[0])+'</div><div class="fv">'+escHtml(String(r[1]))+'</div>').join('')+'</div>'+
     (uncertain.length?'<div class="fissues"><b>불확실 항목 — 확인 후 정정 필요</b><br>'+uncertain.map(x=>'· '+x).join('<br>')+'</div>':'')+
     (issueList.length?'<div class="fissues"><b>확인 필요</b><br>'+issueList.map(x=>'· '+x).join('<br>')+'</div>':(!uncertain.length?'<div class="fok">✓ 기본 검산을 통과했습니다.</div>':''))+
-    '<div style="margin-top:9px;color:#E8EBF0;">내용이 맞으면 <b>“예”</b>, 다르면 <b>“매출액은 80억원, 단위는 백만원”</b>처럼 정정해 주세요. 정정하면 전체 내용을 다시 보여드립니다.</div></div>';
+    '<div style="margin-top:9px;color:#E8EBF0;">내용이 맞으면 아래 버튼을 누르시거나 <b>“예”</b>라고 답해 주세요. 다르면 <b>“매출액은 80억원, 단위는 백만원”</b>처럼 정정해 주세요. 정정하면 전체 내용을 다시 보여드립니다.</div>'+
+    chipsHtml([{label:'✓ 모두 맞음 — 확인 완료',send:'예'},{label:'✏️ 정정할 항목이 있어요',focus:true,hint:'정정할 항목과 값을 입력하세요. 예: 매출액은 80억원, 단위는 백만원'}])+'</div>';
 }
 async function beginFinancialExtraction(source,appendMode,correctionMode){
   const txt=String(source||'').trim();
   if(!txt)return false;
   if(txt.length>5000){aiReply('재무자료는 한 번에 최대 <b>5,000자</b>까지 처리할 수 있습니다. 내용을 나누어 입력해 주세요.');return false;}
+  const _confirmedSnapshot=confirmedFinancialData;   // 실패 시 원복용 — 확정 상태를 무효화 전에 보관
   if(!appendMode)financialSourceParts=[];financialSourceParts.push(txt);financialSourceText=financialSourceParts.join('\n');financialTableDetected=true;confirmedFinancialData=null;
   showThinking();
   try{
@@ -1910,15 +1939,32 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
     aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
     return true;
   }catch(e){
-    if(!appendMode)pendingFinancialData=null;financialValidation=[];pendingGen={field:'financialRetry'};
-    aiReply('재무자료 추출에 실패했어요. 표의 기준연도·단위·별도/연결 여부를 포함해 다시 붙여넣어 주세요. ('+(e.message||e)+')');
+    financialSourceParts.pop();financialSourceText=financialSourceParts.join('\n');   // 실패한 입력은 원문 누적에서 제거
+    if(!appendMode)pendingFinancialData=null;
+    if(appendMode&&pendingFinancialData){   // 정정/추가 실패 → 기존 추출값과 확인 대기 상태를 유지 (financialRetry 강등 금지)
+      financialValidation=clientFinancialValidation(pendingFinancialData);
+      pendingGen={field:'financialConfirm'};
+      aiReply('정정 내용을 반영하지 못했습니다. 정정할 항목과 값을 <b>“매출액은 80억원”</b>처럼 다시 적어 주시거나, 내용이 맞으면 <b>“예”</b>라고 답해 주세요. ('+escHtml(String(e.message||e))+')'
+        +chipsHtml([{label:'✓ 모두 맞음 — 확인 완료',send:'예'}]));
+    }else if(appendMode&&_confirmedSnapshot){   // 확인 완료 후 추가자료 반영 실패 → 확정 상태 원복, 인터뷰 계속
+      confirmedFinancialData=_confirmedSnapshot;
+      financialValidation=[];
+      aiReply('추가 자료를 반영하지 못했습니다. <b>기존에 확인 완료한 재무자료는 그대로 유지</b>되니 그대로 진행하셔도 되고, 추가 자료는 잠시 후 다시 붙여넣어 주세요. ('+escHtml(String(e.message||e))+')');
+      return startInterview();   // 끊긴 인터뷰 흐름 재개 (askedQuestions 누적으로 중복 질문 방지됨)
+    }else{
+      financialValidation=[];pendingGen={field:'financialRetry'};
+      aiReply('재무자료 추출에 실패했어요. 표의 기준연도·단위·별도/연결 여부를 포함해 다시 붙여넣어 주세요. ('+(e.message||e)+')');
+    }
     return false;
   }
 }
 function isAffirmative(t){
   const s=String(t||'').trim().toLowerCase().replace(/[.!?。！？,，]+/g,' ').replace(/\s+/g,' ').trim();
-  if(!s||/(?:아니|안\s*맞|틀|수정|취소|보류|미확인|확인\s*못)/.test(s))return false;
-  return /^(?:(?:예|네|응|그래|맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|오케이|ㅇㅋ|ok|yes)(?:\s+(?:맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|그대로(?:\s+진행(?:해\s*주세요)?)?|진행(?:해\s*주세요)?))?|그대로\s+진행(?:해\s*주세요)?|진행해\s*주세요)$/.test(s);
+  if(!s||/(?:아니|안\s*맞|틀|수정|취소|보류|미확인|확인\s*못|맞지\s*않)/.test(s))return false;
+  if(/^(?:(?:예|네|응|그래|맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|오케이|ㅇㅋ|ok|yes)(?:\s+(?:맞아|맞아요|맞습니다|확인|확인했어요|확인했습니다|그대로(?:\s+진행(?:해\s*주세요)?)?|진행(?:해\s*주세요)?))?|그대로\s+진행(?:해\s*주세요)?|진행해\s*주세요)$/.test(s))return true;
+  // 확장: "모두 올바름" "내용이 맞는다고" "다 맞습니다" "정확합니다" "이상 없음" 등 — 선행 수식어 제거 후 긍정 어간 검사
+  const core=s.replace(/^(?:(?:모두|전부|다|내용이|내용은|위\s*내용이?|숫자(?:가|는)?)\s+)+/,'').trim();
+  return /^(?:올바(?:름|릅니다|라요)?|맞(?:음|다|네요|는다|는다고|아요|습니다|고요)?|정확(?:함|합니다|해요)?|이상\s*없(?:음|어요|습니다)?|문제\s*없(?:음|어요|습니다)?|ㅇㅇ)$/.test(core);
 }
 function updateInterviewStatus(data){
   const score=Number(data&&data.coverageScore);
@@ -2071,17 +2117,25 @@ async function send(){
       if(wantsGenerateNow(t)){ return forceGenerate(); }   // ★ 재무확인 중 "그냥 생성/이대로 만들어줘" → 정정 루프 대신 강제 생성(미확인값은 '정밀산출 필요'로 표기)
       if(isAffirmative(t)){
         if(!pendingFinancialData){return aiReply('확인할 재무자료가 없습니다. 재무표를 다시 붙여넣어 주세요.');}
-        if(financialValidation.length){pendingGen={field:'financialConfirm'};return aiReply('아직 확인이 필요한 항목이 있습니다. <b>기준연도·금액 단위·별도/연결 여부</b> 또는 불일치 수치를 정정해 주세요.');}
+        const hardIssues=financialValidation.filter(x=>!String(x&&x.code||'').startsWith('UNCERTAIN_'));   // 불확실 메모는 확인을 막지 않음 → '정밀산출 필요'로 진행
+        if(hardIssues.length){pendingGen={field:'financialConfirm'};return aiReply('아직 확인이 필요한 항목이 있습니다. <b>기준연도·금액 단위·별도/연결 여부</b> 또는 불일치 수치를 정정해 주세요.');}
         confirmedFinancialData=JSON.parse(JSON.stringify(pendingFinancialData));
         confirmedFinancialData.userConfirmed=true;confirmedFinancialData.confirmed=true;confirmedFinancialData.confirmationStatus='confirmed';
         collectedParams={...collectedParams,...financialToClientParams(confirmedFinancialData)};
         rawInput+='\n※ 위 재무자료는 사용자가 추출 결과를 확인 완료했습니다.';
+        const _unc=_financialUncertain(confirmedFinancialData);
+        if(_unc.length)rawInput+='\n[미확인 항목 — 숫자를 임의로 만들지 말고 해당 부분은 "정밀산출 필요"로 표기할 것] '+_unc.join(' / ');
         aiReply('재무자료를 확인값으로 반영했습니다. 이제 필요한 항목만 이어서 질문할게요. ✓');
         interviewRound=0;_lastRoundAsked=false;totalAsked=0;
         return startInterview();
       }
       const correction=String(t||'').trim();
-      if(!correction||/^\s*(아니|아니오|틀려|수정 필요)\s*[.!]?\s*$/.test(correction)){pendingGen={field:'financialConfirm'};return aiReply('다른 항목과 값을 적어 주세요. 예: <b>매출액은 80억원, 단위는 백만원</b>');}
+      if(!correction||/^\s*(아니|아니오|틀려|수정 필요)\s*[.!]?\s*$/.test(correction)
+        ||!/[0-9０-９]|매출|영업이익|순이익|자산|부채|자본|잉여금|현금|차입|가지급|단위|연도|별도|연결/.test(correction)){   // 정정문 같지 않으면 재추출 금지
+        pendingGen={field:'financialConfirm'};
+        return aiReply('정정할 항목과 값을 적어 주세요. 예: <b>매출액은 80억원, 단위는 백만원</b> — 내용이 모두 맞으면 아래 버튼을 누르거나 <b>“예”</b>라고 답해 주세요.'
+          +chipsHtml([{label:'✓ 모두 맞음 — 확인 완료',send:'예'}]));
+      }
       rawInput+='\n[재무자료 사용자 정정] '+correction;
       aiReply('정정 내용을 반영해 전체 재무자료를 다시 확인하겠습니다…');
       return beginFinancialExtraction(correction,true,true);
@@ -2089,7 +2143,8 @@ async function send(){
     if(_f==='basis'){
       if(/소득|대체율|②|2|둘째|두번/.test(t)){
         chosenBasis='income';pendingGen={field:'replacementRate'};
-        return aiReply('현재 소득 기준으로 진행하겠습니다. 은퇴 후 목표 생활비를 현재 소득의 <b>몇 %</b>로 잡을까요? 예: <b>70%</b> (모르면 “미반영”)');
+        return aiReply('현재 소득 기준으로 진행하겠습니다. 은퇴 후 목표 생활비를 현재 소득의 <b>몇 %</b>로 잡을까요?'
+          +chipsHtml([{label:'60%'},{label:'70% (일반 권장)',send:'70%'},{label:'80%'},{label:'미반영'}]));
       }
       chosenBasis='expense';aiReply('희망 생활비 기준으로 만들게요…');return askNext();
     }
@@ -2110,7 +2165,8 @@ async function send(){
       let pick=_topicFromText(t);
       if(!pick){ if(/첫|1|전자|처음/.test(t)) pick=selectedTopic; else if(/둘|2|후자|두번|나중/.test(t)) pick=_sug; }
       if(pick!==selectedTopic && pick!==_sug) pick=null;       // 둘 중 하나가 아니면 무효
-      if(!pick){ pendingGen={field:'topicpick',suggested:_sug}; return aiReply('<b>'+_topicShort(selectedTopic)+'</b> 또는 <b>'+_topicShort(_sug)+'</b> 중 하나로 알려주세요.'); }
+      if(!pick){ pendingGen={field:'topicpick',suggested:_sug}; return aiReply('<b>'+_topicShort(selectedTopic)+'</b> 또는 <b>'+_topicShort(_sug)+'</b> 중 하나로 알려주세요.'
+        +chipsHtml([{label:selectedTopic},{label:_sug}])); }
       topic=pick; topicLocked=true;
       const tn=document.getElementById('topic'); if(tn) tn.textContent=topic+' · '+(clientName||'고객');
       aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
@@ -2170,7 +2226,8 @@ async function send(){
     let pos=route.position?Math.max(0,Math.min(deck.slides.length,route.position-1)):deck.slides.length;
     const instr=route.instruction||t;
     pendingGen={field:'doconfirm',act:{kind:'add',pos,instruction:instr}};
-    return aiReply(`${pos+1}번 위치에 <b>새 슬라이드</b>를 만들까요? — “${instr}”<br><b>예</b>면 만들고(${opCostNote()}), 아니면 <b>아니오</b>. 직접 채우시려면 “<b>빈 슬라이드 추가</b>”라고 하세요(무료).`);
+    return aiReply(`${pos+1}번 위치에 <b>새 슬라이드</b>를 만들까요? — “${instr}”<br><b>예</b>면 만들고(${opCostNote()}), 아니면 <b>아니오</b>. 직접 채우시려면 “<b>빈 슬라이드 추가</b>”라고 하세요(무료).`
+      +chipsHtml([{label:'✓ 예, 만들어 주세요',send:'예'},{label:'아니오',send:'아니오'}]));
   }
 
   if(op==='delete'){ if(deck.slides[idx]){const ttl=deck.slides[idx].title;deck.slides.splice(idx,1);reseq();selectedIdx=null;renderDeck();return aiReply(`${idx+1}번 "${ttl}"을 지웠습니다. ✓`);} return aiReply('어느 슬라이드를 지울까요?'); }
@@ -2184,7 +2241,8 @@ async function send(){
   {const _lay=tryLayoutEdit(idx,(route.instruction||'')+' '+t);if(_lay){selectedIdx=idx;renderDeck();scrollToSlide(idx);flash(idx);return aiReply(_lay);}}
   { const instr=route.instruction||t;
     pendingGen={field:'doconfirm',act:{kind:'edit',idx,instruction:instr,speed:route.speed,notice:route.notice}};
-    return aiReply(`${idx+1}번 슬라이드를 “${instr}” 방향으로 다시 쓸까요?<br><b>예</b>면 수정하고(${opCostNote()}), 아니면 <b>아니오</b>. 글자만 고치실 거면 슬라이드를 직접 클릭해 수정하실 수 있어요(무료).`);
+    return aiReply(`${idx+1}번 슬라이드를 “${instr}” 방향으로 다시 쓸까요?<br><b>예</b>면 수정하고(${opCostNote()}), 아니면 <b>아니오</b>. 글자만 고치실 거면 슬라이드를 직접 클릭해 수정하실 수 있어요(무료).`
+      +chipsHtml([{label:'✓ 예, 수정해 주세요',send:'예'},{label:'아니오',send:'아니오'}]));
   }
 }
 
@@ -2280,15 +2338,18 @@ function preflightAsks(text,topic){
   const qs=[]; const a=preflightAsk(text,topic); if(a) qs.push(a);
   // 필요자금 기준 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만 물음
   if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
-    qs.push({field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>현재 소득 기준</b> — 목표 소득대체율을 확인해 계산<br>편하신 쪽을 <b>"생활비"</b> 또는 <b>"소득"</b>이라고 답해 주세요. (고객이 생활비를 분명히 말했으면 보통 ①을 권합니다.)'});
+    qs.push({field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>현재 소득 기준</b> — 목표 소득대체율을 확인해 계산<br>(고객이 생활비를 분명히 말했으면 보통 ①을 권합니다.)'
+      +chipsHtml([{label:'① 희망 생활비 기준',send:'희망 생활비 기준'},{label:'② 현재 소득 기준',send:'현재 소득 기준'}])});
   }
   // 3층 분해 — 퇴직/개인연금이 입력에 없을 때만 물음 (국민연금 외 추가 연금)
   if(topic==='연금설계' && !/퇴직연금|개인연금|연금저축|IRP|irp/.test(text||'')){
-    qs.push({field:'pillars',q:'노후에 <b>국민연금 외에</b> 받으실 연금이 더 있나요? <b>퇴직연금·개인연금</b> 예상 월액을 알려주시면 국민·퇴직·개인 <b>3층 구조</b>로 정확히 그려드려요.<br>(예: "퇴직 50만, 개인 30만" / 없으면 <b>"없음"</b>)'});
+    qs.push({field:'pillars',q:'노후에 <b>국민연금 외에</b> 받으실 연금이 더 있나요? <b>퇴직연금·개인연금</b> 예상 월액을 알려주시면 국민·퇴직·개인 <b>3층 구조</b>로 정확히 그려드려요.<br>(예: "퇴직 50만, 개인 30만")'
+      +chipsHtml([{label:'없음 — 국민연금만',send:'없음'}])});
   }
   // 주택연금 — 보유 주택이 입력에 없을 때만 물음 (선택, 마지막)
   if(topic==='연금설계' && !/주택|집|아파트|부동산|주택연금/.test(text||'')){
-    qs.push({field:'housing',q:'혹시 <b>보유하신 주택</b>이 있으신가요? 주택 가격(시세)을 알려주시면 <b>주택연금</b>으로 만들 수 있는 노후 월수입을 추정해 드려요.<br>(예: "4억" / 없거나 해당 없으면 <b>"없음"</b>)'});
+    qs.push({field:'housing',q:'혹시 <b>보유하신 주택</b>이 있으신가요? 주택 가격(시세)을 알려주시면 <b>주택연금</b>으로 만들 수 있는 노후 월수입을 추정해 드려요.<br>(예: "4억")'
+      +chipsHtml([{label:'없음 / 해당 없음',send:'없음'}])});
   }
   return qs;
 }
@@ -2310,7 +2371,8 @@ let askedQuestions=[];   // 이미 물어본 질문 누적 → 백엔드에 보�
 function basisAsk(text,topic){
   // 필요자금 '기준' 선택 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만(chosenBasis 플래그)
   if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
-    return [{field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>현재 소득 기준</b> — 목표 소득대체율을 확인해 계산<br>편하신 쪽을 <b>"생활비"</b> 또는 <b>"소득"</b>이라고 답해 주세요.'}];
+    return [{field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>현재 소득 기준</b> — 목표 소득대체율을 확인해 계산'
+      +chipsHtml([{label:'① 희망 생활비 기준',send:'희망 생활비 기준'},{label:'② 현재 소득 기준',send:'현재 소득 기준'}])}];
   }
   return [];
 }
@@ -2359,7 +2421,8 @@ async function startInterview(){
   const VALID=['연금설계','보험설계','자산관리','기업컨설팅'];
   if(interviewRound===1 && !topicLocked && data.mismatch && data.suggestedTopic && VALID.indexOf(data.suggestedTopic)>=0 && data.suggestedTopic!==topic){
     pendingGen={field:'topicpick',suggested:data.suggestedTopic};
-    aiReply('입력하신 내용을 보니 <b>'+data.suggestedTopic+'</b> 자료 같은데, <b>'+selectedTopic+'</b>를 선택하셨어요. 🤔<br>혹시 어느 분야의 자료를 만드실 계획이세요? <b>'+_topicShort(selectedTopic)+'</b> 또는 <b>'+_topicShort(data.suggestedTopic)+'</b> 로 알려주세요.');
+    aiReply('입력하신 내용을 보니 <b>'+data.suggestedTopic+'</b> 자료 같은데, <b>'+selectedTopic+'</b>를 선택하셨어요. 🤔<br>혹시 어느 분야의 자료를 만드실 계획이세요?'
+      +chipsHtml([{label:selectedTopic},{label:data.suggestedTopic}]));
     return;   // 사용자 답을 기다림
   }
   const remaining=Math.max(0,INTERVIEW_SAFETY_MAX_QUESTIONS-totalAsked);
@@ -2383,6 +2446,7 @@ function askNextInterview(){
     pendingGen={field:'interview',q:a.q};
     let extra=(a.hint?'<span class="q">'+a.hint+'</span>':'');
     if(totalAsked>=8) extra+='<span class="q">※ 충분하시면 언제든 <b>“이정도로 만들어줘”</b>라고 하시면 현재 정보로 생성합니다.</span>';
+    if(Array.isArray(a.chips)&&a.chips.length)extra+=chipsHtml(a.chips.map(c=>({label:c})));   // 백엔드 제공 답변 후보 → 탭해서 답변
     aiReply((a.q||'')+extra);
   } else {
     // 충족도가 부족하면 다시 평가하되, 비정상 반복만 안전상한으로 차단한다.
