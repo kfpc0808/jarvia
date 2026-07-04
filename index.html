@@ -519,6 +519,43 @@
   </div>
 </div>
 
+<!-- ★ 회원 탈퇴/해지 안내 모달 — 마이페이지 '탈퇴/해지' 클릭 시 표시 -->
+<div id="mdl-withdraw" class="modal hidden">
+  <div class="mdl-bg" onclick="closeM('mdl-withdraw')"></div>
+  <div class="mdl-box" style="max-width:480px;padding:26px 24px;max-height:90vh;overflow-y:auto">
+    <button class="mdl-x" onclick="closeM('mdl-withdraw')">×</button>
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:38px;margin-bottom:6px">⚠️</div>
+      <h2 style="font-size:18px;font-weight:700;color:#B91C1C;margin-bottom:4px">회원 탈퇴 / 해지 안내</h2>
+      <p style="color:var(--text-lt);font-size:13px">아래 내용을 반드시 확인해 주세요</p>
+    </div>
+    <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:16px 18px;margin-bottom:12px">
+      <ol style="margin:0;padding-left:18px;font-size:13px;color:#7F1D1D;line-height:1.9">
+        <li>탈퇴 시 월정기이용료(정가 10만원) 기준으로 사용한 일수에 대하여 금액을 납부해야 합니다. (정가 10만원 × 이용일수 / 30일)</li>
+        <li>탈퇴 후 재가입 시 정가 이용료를 납부해야 합니다. (등록비 50만원, 월이용료 10만원)</li>
+        <li>재가입 회원은 특별 프로모션 지급에서 제외됩니다.</li>
+        <li>사용하면서 입력된 모든 개별정보가 삭제됩니다. (복구 불가능)</li>
+        <li>개인정보가 삭제됩니다. (이름, 메일주소)</li>
+        <li>연락처는 재가입 확인용으로 암호화하여 어느 누구도 볼 수 없도록 저장되며 5년간 보관됩니다.</li>
+      </ol>
+      <p style="margin:12px 0 0;font-size:12px;color:#991B1B;font-weight:600">※ 정산 금액 및 재가입 절차는 담당자가 별도로 안내해 드립니다.</p>
+    </div>
+    <div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:14px 16px;margin-bottom:14px">
+      <p style="margin:0;font-size:13px;color:#9A3412;line-height:1.7;font-weight:600">⚠️ 내 채널이 즉시 비활성화됩니다.</p>
+      <p style="margin:6px 0 0;font-size:12px;color:#9A3412;line-height:1.7">고객이 회원님의 채널에 접속하면 "담당 컨설턴트가 더 이상 서비스를 이용할 수 없어 이용이 불가합니다"로 표시되며, 고객과의 연결이 종료됩니다.</p>
+    </div>
+    <div class="fg" style="margin-bottom:14px">
+      <label style="font-size:13px;color:var(--text-lt)">본인 확인 — 현재 비밀번호</label>
+      <input id="wd-pw" type="password" placeholder="비밀번호를 입력하세요">
+    </div>
+    <p style="text-align:center;font-size:14px;font-weight:700;color:var(--text);margin-bottom:14px">정말 탈퇴하시겠습니까?</p>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sec" style="flex:1" onclick="closeM('mdl-withdraw')">취소</button>
+      <button id="wd-confirm-btn" class="btn" style="flex:1;background:#B91C1C;color:#fff;border-color:#B91C1C" onclick="doWithdraw()">탈퇴하기</button>
+    </div>
+  </div>
+</div>
+
 <!-- ★ 병의원 찾기 미리보기 모달 — goHospital() 클릭 시 표시, '확인' 클릭 시 hospital-search.html 이동 -->
 <div id="mdl-hospital-preview" class="modal hidden">
   <div class="mdl-bg" onclick="closeM('mdl-hospital-preview')"></div>
@@ -1290,6 +1327,11 @@
         <div class="fg"><label>현재 비밀번호</label><input id="mp-cur-pw" type="password" placeholder="현재 비밀번호"></div>
         <div class="fr"><div class="fg"><label>새 비밀번호</label><input id="mp-new-pw" type="password" placeholder="6자 이상"></div><div class="fg"><label>새 비밀번호 확인</label><input id="mp-new-pw2" type="password" placeholder="한번 더 입력"></div></div>
         <button type="button" class="btn" onclick="doChangePw()">비밀번호 변경</button>
+      </div>
+
+      <!-- ▼ 회원 탈퇴/해지 (하단 우측) -->
+      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn" style="background:#B91C1C;color:#fff;border-color:#B91C1C" onclick="openWithdraw()">탈퇴 / 해지</button>
       </div>
     </div>
     <div id="mp-active" class="tp hidden"><div id="active-list"></div><div id="no-active" class="empty hidden">현재 이용 가능한 콘텐츠가 없습니다.</div></div>
@@ -3883,6 +3925,14 @@ async function doRegister(e){
     if(!idChk.empty)return toast('이미 사용 중인 아이디입니다.','error');
     const emChk=await getDocs(query(collection(db,'users'),where('email','==',email),limit(1)));
     if(!emChk.empty)return toast('이미 가입된 이메일입니다.','error');
+    // ★ 재가입 방지: 탈퇴 이력(연락처 해시) 확인 — 이력 있으면 온라인 가입 차단
+    try{
+      const _phFn=httpsCallable(functions,'checkPhoneBeforeSignup');
+      const _phRes=await _phFn({phone});
+      if(_phRes.data&&_phRes.data.blocked){
+        return toast(_phRes.data.message||'가입 이력이 있어 온라인 재가입이 불가합니다. 담당자에게 문의해 주세요.','error');
+      }
+    }catch(_phErr){console.warn('재가입 확인 실패(가입 계속):',_phErr);}
     const cred=await createUserWithEmailAndPassword(auth,email,pw);
     const refCode=localStorage.getItem('jarvia_ref')||'';
     // 추천인이 단체마스터인지 확인
@@ -4020,6 +4070,36 @@ async function doChangePw(){
     else toast('변경 실패: '+err.message,'error');
   }
 }
+
+// ── 회원 탈퇴/해지 ──
+function openWithdraw(){ if($('wd-pw'))$('wd-pw').value=''; openM('mdl-withdraw'); }
+async function doWithdraw(){
+  if(!me){toast('로그인이 필요합니다.','error');return;}
+  const pw=$('wd-pw').value;
+  if(!pw)return toast('본인 확인을 위해 비밀번호를 입력하세요.','error');
+  const btn=$('wd-confirm-btn');
+  btn.disabled=true;btn.textContent='처리 중...';
+  try{
+    // 1) 본인 재인증
+    const credential=EmailAuthProvider.credential(me.email,pw);
+    await reauthenticateWithCredential(me,credential);
+    // 2) 서버 탈퇴 처리(공통 로직: 소프트삭제·개인정보제거·고객정보삭제·추천클로백·Auth삭제)
+    const fn=httpsCallable(functions,'withdrawMember');
+    const res=await fn({});
+    if(!res.data||!res.data.success){throw new Error((res.data&&res.data.error)||'처리 실패');}
+    // 3) 로그아웃 후 안내
+    try{await signOut(auth);}catch(_e){}
+    me=null;window.me=null;meData=null;
+    closeM('mdl-withdraw');
+    toast('탈퇴가 완료되었습니다. 그동안 이용해 주셔서 감사합니다.','success');
+    setTimeout(function(){window.location.href='index.html';},1500);
+  }catch(err){
+    if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential')toast('비밀번호가 올바르지 않습니다.','error');
+    else toast('탈퇴 처리 실패: '+(err.message||'오류'),'error');
+    btn.disabled=false;btn.textContent='탈퇴하기';
+  }
+}
+
 async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
@@ -9606,6 +9686,7 @@ window.goClientReportLogged=async function(){
 };
 window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;window.pptgenStart=pptgenStart;
 window.doUpdateProfile=doUpdateProfile;window.doPartnership=doPartnership;window.doChangePw=doChangePw;window.doSendVerify=doSendVerify;window.doCheckVerify=doCheckVerify;
+window.openWithdraw=openWithdraw;window.doWithdraw=doWithdraw;
 // ═══ 특별 메시지 에디터 ═══
 function spEditorCmd(cmd){const el=$('fc-spmsg');if(!el)return;el.focus();document.execCommand(cmd,false,null);updateSpCount();}
 function spEditorClear(){const el=$('fc-spmsg');if(!el)return;if(!confirm('특별 메시지를 모두 지우시겠습니까?'))return;el.innerHTML='';updateSpCount();}
