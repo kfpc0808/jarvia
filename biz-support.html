@@ -720,6 +720,15 @@ function toDate(ymd){return new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.s
 const SAVED_MAX=100;   // ★ 고객기업 저장 한도 (2026-06-12: 20→100)
 let SAVED=[]; let editIdx=-1;
 let savedOpen=false; let savedQ='';   // 전체 보기 패널 상태
+/* ★ [2026-07-07] 칩 표시 정렬 모드 — 표시층만 정렬(배열은 최근사용순 유지 → 메인 배너 '최근 5곳' 집계 무영향). 기본 가나다순 = 클릭 시 칩 위치 고정 */
+let sortMode=(function(){try{return localStorage.getItem('bizChipSort')||'name';}catch(e){return 'name';}})();
+function sortItems(arr){
+  const a=[...arr];
+  if(sortMode==='name')a.sort((x,y)=>x.c.name.localeCompare(y.c.name,'ko'));
+  else if(sortMode==='saved')a.sort((x,y)=>(y.c.savedAt||0)-(x.c.savedAt||0));
+  /* 'use' = 배열 순서 그대로(최근사용순) */
+  return a;
+}
 function loadLocal(){ try{return JSON.parse(localStorage.getItem('biz_saved_companies')||'[]');}catch(e){return [];} }
 async function loadSavedServer(){
   try{
@@ -741,12 +750,12 @@ async function saveCompany(){
     const cur=SAVED[editIdx];
     const name=prompt('고객기업 이름(라벨) — 수정 가능', cur.name);
     if(name===null) return;
-    SAVED[editIdx]={name:(name.trim()||cur.name).slice(0,20), cond:curCond()};
+    SAVED[editIdx]={name:(name.trim()||cur.name).slice(0,20), cond:curCond(), savedAt:cur.savedAt||Date.now()};
     await persistSaved(); setEdit(-1); renderSaved();
   }else{
     const name=prompt('고객기업 이름(라벨)을 입력하세요','예: 김대표님');
     if(!name) return;
-    SAVED.unshift({name:name.trim().slice(0,20), cond:curCond()});
+    SAVED.unshift({name:name.trim().slice(0,20), cond:curCond(), savedAt:Date.now()});
     await persistSaved(); renderSaved();
   }
 }
@@ -754,7 +763,7 @@ async function saveCompanyNew(){
   if(condEmpty()){ alert('저장할 조건을 먼저 입력해주세요.'); return; }
   const name=prompt('새 고객기업 이름(라벨)을 입력하세요','예: 박사장님');
   if(!name) return;
-  SAVED.unshift({name:name.trim().slice(0,20), cond:curCond()});
+  SAVED.unshift({name:name.trim().slice(0,20), cond:curCond(), savedAt:Date.now()});
   await persistSaved(); setEdit(-1); renderSaved();
 }
 function setEdit(i){
@@ -773,8 +782,7 @@ function setEdit(i){
 function applyCompany(i,edit){
   if(!SAVED[i]) return;
   // ★ 최근 사용순: 불러온 기업을 맨 앞으로 (목록 순서 = 최근 사용 순서)
-  /* ★ [2026-07-06] 재정렬 직후 칩 재렌더 — DOM의 data-i/-e/-x 인덱스를 배열과 동기화 (반복 클릭 시 타 기업 조건 적용·오편집·오삭제 버그 수정) */
-  if(i>0){ const [mv]=SAVED.splice(i,1); SAVED.unshift(mv); persistSaved(); i=0; renderSaved(); }
+  if(i>0){ const [mv]=SAVED.splice(i,1); SAVED.unshift(mv); persistSaved(); i=0; }
   const c=SAVED[i];
   state={...state,region:'',size:'',ind:'',ksic:'',year:'',emp:'',...c.cond};
   $('f-region').value=c.cond.region||'';$('f-size').value=c.cond.size||'';$('f-ind').value=c.cond.ind||'';
@@ -793,20 +801,29 @@ function renderSaved(){
     return `<span class="sc" data-i="${i}"><b>${esc(c.name)}</b>${parts?' '+esc(parts):''} <span class="x" data-e="${i}" title="조건 수정">✏️</span><span class="x" data-x="${i}" title="삭제">✕</span></span>`;
   };
   let html='';
+  /* ★ [2026-07-07] 정렬 선택 UI — 가나다순(기본)·최근저장순·최근사용순 */
+  html+=`<select id="saved-sort" style="height:30px;padding:0 6px;border:1px solid #D5DEE8;border-radius:8px;font-size:12px;color:#3A4A5A;background:#fff;margin-right:2px">
+    <option value="name"${sortMode==='name'?' selected':''}>가나다순</option>
+    <option value="saved"${sortMode==='saved'?' selected':''}>최근저장순</option>
+    <option value="use"${sortMode==='use'?' selected':''}>최근사용순</option>
+  </select>`;
   if(savedOpen){
     html+=`<input type="text" id="saved-q" placeholder="기업 이름 검색" style="height:30px;padding:0 10px;border:1px solid #D5DEE8;border-radius:8px;font-size:12px;width:130px;margin-right:2px" value="${esc(savedQ)}">`;
     const q=savedQ.trim().toLowerCase();
-    const items=SAVED.map((c,i)=>({c,i})).filter(x=>!q||x.c.name.toLowerCase().includes(q));
+    const items=sortItems(SAVED.map((c,i)=>({c,i})).filter(x=>!q||x.c.name.toLowerCase().includes(q)));
     html+=items.map(x=>mkChip(x.c,x.i)).join(' ');
     if(!items.length) html+=`<span style="font-size:12px;color:#A0AEBB">검색 결과 없음</span>`;
     html+=` <span class="sc" id="saved-toggle" style="background:#EEF2F6;color:#5A6B7B">접기 ▴</span>`;
   }else{
-    html+=SAVED.slice(0,6).map((c,i)=>mkChip(c,i)).join(' ');
+    html+=sortItems(SAVED.map((c,i)=>({c,i}))).slice(0,6).map(x=>mkChip(x.c,x.i)).join(' ');
     if(SAVED.length>6) html+=` <span class="sc" id="saved-toggle" style="background:#EEF2F6;color:#5A6B7B">전체 ${SAVED.length}개 ▾</span>`;
   }
   $('saved-chips').innerHTML=html;
   const tg=$('saved-toggle');
   if(tg&&SAVED.length>6||savedOpen){ if(tg) tg.addEventListener('click',e=>{e.stopPropagation();savedOpen=!savedOpen;savedQ='';renderSaved();}); }
+  const ss=document.getElementById('saved-sort');
+  if(ss){ ss.addEventListener('click',e=>e.stopPropagation());
+    ss.addEventListener('change',e=>{ sortMode=e.target.value; try{localStorage.setItem('bizChipSort',sortMode);}catch(_){} renderSaved(); }); }
   const sq=document.getElementById('saved-q');
   if(sq){ sq.addEventListener('click',e=>e.stopPropagation());
     sq.addEventListener('input',e=>{ savedQ=e.target.value; renderSaved();
