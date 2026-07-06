@@ -212,7 +212,7 @@
       <p style="color:#666;margin:-8px 0 16px;font-size:13px">개인정보(이름·이메일·연락처)는 삭제되어 표시되지 않습니다. 아이디로 식별하며, 연락처 기반 특정인 조회는 회원관리의 「탈퇴회원 조회」를 이용하세요.</p>
       <div class="toolbar mt"><input id="wd-search" placeholder="아이디 검색..." oninput="renderWithdrawn()"> <select id="wd-sort" onchange="renderWithdrawn()"><option value="date-desc">탈퇴일 최신순</option><option value="date-asc">탈퇴일 오래된순</option><option value="id-asc">아이디 가나다순</option></select> <button class="btn btn-sec" onclick="loadWithdrawn()" style="margin-left:8px">🔄 새로고침</button></div>
       <div id="wd-summary" style="margin:8px 0 12px;font-size:13px;color:var(--primary);font-weight:600"></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No.</th><th>아이디</th><th>회원유형</th><th>탈퇴일</th><th>탈퇴경로</th><th style="text-align:right">이용일수</th><th style="text-align:right">참고정산금</th><th style="text-align:right">회수포인트</th><th>보관만료</th></tr></thead><tbody id="tb-withdrawn"></tbody></table></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No.</th><th>아이디</th><th>회원유형</th><th>탈퇴일</th><th>탈퇴경로</th><th style="text-align:right">이용일수</th><th style="text-align:right">참고정산금</th><th style="text-align:right">회수포인트</th><th>보관만료</th><th style="text-align:center">재가입</th></tr></thead><tbody id="tb-withdrawn"></tbody></table></div>
     </div>
     <div id="p-admins" class="panel hidden"><h2>관리자 관리</h2><button class="btn" id="btn-add-adm" onclick="document.getElementById('add-adm-form').classList.toggle('hidden')">관리자 추가</button><div id="add-adm-form" class="hidden form-box"><div class="fr"><div class="fg"><label>아이디</label><input id="na-id"></div><div class="fg"><label>이름</label><input id="na-name"></div><div class="fg"><label>비밀번호</label><input id="na-pw" type="password"></div></div><button class="btn" onclick="createAdmin()">생성</button> <button class="btn btn-sec" onclick="document.getElementById('add-adm-form').classList.add('hidden')">취소</button></div><div class="tbl-wrap"><table class="tbl mt"><thead><tr><th>아이디</th><th>이름</th><th>권한</th><th>마지막 로그인</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-admins"></tbody></table></div></div>
     <div id="p-contents" class="panel hidden"><h2>콘텐츠 관리</h2><button class="btn" onclick="showCF()">콘텐츠 등록</button> <button class="btn btn-sec" onclick="syncGitHub()">🔄 GitHub 동기화</button> <button class="btn btn-sec" onclick="showBatchUpload()">📦 일괄 등록</button> <button class="btn btn-sec" onclick="toggleBulkPrice()">💰 가격 일괄변경</button>
@@ -2702,14 +2702,14 @@ async function doWithdrawnLookup(){
 // ── 탈퇴회원 현황 (A방식: 아이디 기반, 개인정보 없음) ──
 let _wdData=[];
 async function loadWithdrawn(){
-  const tb=$('tb-withdrawn'); if(tb)tb.innerHTML='<tr><td colspan="9" class="tc">불러오는 중...</td></tr>';
+  const tb=$('tb-withdrawn'); if(tb)tb.innerHTML='<tr><td colspan="10" class="tc">불러오는 중...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'withdrawn_users'),orderBy('withdrawnAt','desc')));
     _wdData=snap.docs.map(d=>({id:d.id,...d.data()}));
     renderWithdrawn();
   }catch(e){
     console.error('탈퇴회원 현황 로드 실패:',e);
-    if(tb)tb.innerHTML='<tr><td colspan="9" class="tc" style="color:var(--danger)">로드 실패: '+esc(e.message||'')+'</td></tr>';
+    if(tb)tb.innerHTML='<tr><td colspan="10" class="tc" style="color:var(--danger)">로드 실패: '+esc(e.message||'')+'</td></tr>';
   }
 }
 function renderWithdrawn(){
@@ -2727,6 +2727,17 @@ function renderWithdrawn(){
   const totalClawback=_wdData.reduce((s,w)=>s+(w.clawbackAmount||0),0);
   if($('wd-summary'))$('wd-summary').innerHTML='총 탈퇴회원 <strong>'+_wdData.length+'명</strong>'+(kw?(' · 검색결과 '+rows.length+'명'):'')+' · 누적 회수포인트 <strong>'+fmt(totalClawback)+'P</strong>';
   const tb=$('tb-withdrawn'); if(!tb)return;
+  const _nowMs=Date.now();
+  const _reCell=w=>{
+    const until=w.reSignupApprovedUntil;
+    const untilMs=until?(until.toDate?until.toDate().getTime():new Date(until).getTime()):0;
+    const active=w.reSignupApproved===true && untilMs>_nowMs;
+    if(active){
+      const dleft=Math.max(0,Math.ceil((untilMs-_nowMs)/86400000));
+      return '<td style="text-align:center;white-space:nowrap"><span style="color:#166534;font-weight:600">✅ 승인됨 (D-'+dleft+')</span><br><button class="btn btn-sec" style="padding:2px 8px;font-size:11px;margin-top:2px" onclick="revokeReSignup(\''+esc(w.id)+'\')">승인 취소</button></td>';
+    }
+    return '<td style="text-align:center"><button class="btn" style="padding:4px 10px;font-size:12px" onclick="approveReSignup(\''+esc(w.id)+'\')">재가입 승인</button></td>';
+  };
   tb.innerHTML=rows.length?rows.map((w,i)=>
     '<tr><td style="text-align:center">'+(i+1)+'</td>'
     +'<td style="font-weight:600;color:var(--primary)">'+esc(w.loginId||'-')+'</td>'
@@ -2736,8 +2747,29 @@ function renderWithdrawn(){
     +'<td style="text-align:right">'+(w.usedDays||0)+'일</td>'
     +'<td style="text-align:right">'+fmt(w.settlementAmountRef||0)+'원</td>'
     +'<td style="text-align:right">'+(w.clawbackAmount?fmt(w.clawbackAmount)+'P':'-')+'</td>'
-    +'<td>'+fdate(w.expiresAt)+'</td></tr>'
-  ).join(''):'<tr><td colspan="9" class="tc">탈퇴회원이 없습니다.</td></tr>';
+    +'<td>'+fdate(w.expiresAt)+'</td>'
+    +_reCell(w)+'</tr>'
+  ).join(''):'<tr><td colspan="10" class="tc">탈퇴회원이 없습니다.</td></tr>';
+}
+
+// ── 재가입 승인 / 승인 취소 (관리자, 7일 유효) ──
+async function approveReSignup(docId){
+  if(!confirm('이 회원의 재가입을 승인하시겠습니까?\n\n· 승인 후 7일 이내 동일 연락처로 온라인 재가입이 가능해집니다.\n· 7일이 지나면 자동으로 만료됩니다.'))return;
+  try{
+    const fn=httpsCallable(functions,'approveReSignup');
+    const res=await fn({docId});
+    if(res.data&&res.data.success){toast('재가입 승인 완료 (7일 유효)','success');loadWithdrawn();}
+    else toast('승인 실패: '+((res.data&&res.data.error)||'오류'),'error');
+  }catch(e){toast('승인 오류: '+(e.message||''),'error');}
+}
+async function revokeReSignup(docId){
+  if(!confirm('재가입 승인을 취소하시겠습니까?'))return;
+  try{
+    const fn=httpsCallable(functions,'approveReSignup');
+    const res=await fn({docId,revoke:true});
+    if(res.data&&res.data.success){toast('재가입 승인이 취소되었습니다.','success');loadWithdrawn();}
+    else toast('취소 실패: '+((res.data&&res.data.error)||'오류'),'error');
+  }catch(e){toast('취소 오류: '+(e.message||''),'error');}
 }
 
 async function doAdjust(uid){
@@ -3410,6 +3442,7 @@ async function openFcDetail(fcId){
 window.admLogout=admLogout;window.goPanel=goPanel;window.openM=openM;window.closeM=closeM;
 window.withdrawSelectedMembers=withdrawSelectedMembers;window.openWithdrawnLookup=openWithdrawnLookup;window.doWithdrawnLookup=doWithdrawnLookup;
 window.loadWithdrawn=loadWithdrawn;window.renderWithdrawn=renderWithdrawn;
+window.approveReSignup=approveReSignup;window.revokeReSignup=revokeReSignup;
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteSelectedDR=deleteSelectedDR;window.toggleAllDR=toggleAllDR;
 window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteSelectedCDR=deleteSelectedCDR;window.toggleAllCDR=toggleAllCDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
 window.copyCdrShortScript=copyCdrShortScript;window.triggerCdrShortAudioUpload=triggerCdrShortAudioUpload;window.handleCdrShortAudioUpload=handleCdrShortAudioUpload;window.playCdrShortAudio=playCdrShortAudio;window.deleteCdrShortAudio=deleteCdrShortAudio;
