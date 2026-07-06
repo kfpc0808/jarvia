@@ -3934,6 +3934,22 @@ async function doRegister(e){
       }
     }catch(_phErr){console.warn('재가입 확인 실패(가입 계속):',_phErr);}
     const cred=await createUserWithEmailAndPassword(auth,email,pw);
+    // ★ 원자적 중복 잠금 (아이디·연락처) — 계정 생성 직후 인증 컨텍스트에서 실행.
+    //    문서ID 유일성으로 완전 동시요청도 하나만 성공(race 원천 차단). 실패 시 롤백.
+    const _nphone=String(phone||'').replace(/[^0-9]/g,'');
+    try{
+      await setDoc(doc(db,'uniq_loginid',loginId),{uid:cred.user.uid,createdAt:serverTimestamp()});
+    }catch(_le){
+      try{await cred.user.delete();}catch(_){}                 // 롤백: 방금 만든 Auth 삭제
+      return toast('이미 사용 중인 아이디입니다.','error');
+    }
+    try{
+      if(_nphone)await setDoc(doc(db,'uniq_phone',_nphone),{uid:cred.user.uid,createdAt:serverTimestamp()});
+    }catch(_pe){
+      try{await deleteDoc(doc(db,'uniq_loginid',loginId));}catch(_){}  // 롤백: 아이디 잠금 해제
+      try{await cred.user.delete();}catch(_){}                          // 롤백: Auth 삭제
+      return toast('이미 가입된 연락처입니다. 담당자에게 문의해 주세요.','error');
+    }
     const refCode=localStorage.getItem('jarvia_ref')||'';
     // 추천인이 단체마스터인지 확인
     let isGroupRef=false, groupMasterUid='';
@@ -3962,18 +3978,26 @@ async function doRegister(e){
         }catch(e){console.warn('서브도메인 단체 조회 실패',e);}
       }
     }
-    await setDoc(doc(db,'users',cred.user.uid),{
-      userId:cred.user.uid,name,company,title,phone,email,address:addr,loginId,loginIdLower:loginId.toLowerCase(),
-      role:isGroupRef?'jarvia_member':'user',
-      status:'active',balance:0,point:0,
-      referralCode:genRefCode(),
-      referredBy:refCode,
-      referralPoints:0,
-      ...(isGroupRef&&{monthlyFee:0,groupMasterId:groupMasterUid}),
-      agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
-      lastLoginAt:serverTimestamp(),
-      createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
-    });
+    try{
+      await setDoc(doc(db,'users',cred.user.uid),{
+        userId:cred.user.uid,name,company,title,phone,email,address:addr,loginId,loginIdLower:loginId.toLowerCase(),
+        role:isGroupRef?'jarvia_member':'user',
+        status:'active',balance:0,point:0,
+        referralCode:genRefCode(),
+        referredBy:refCode,
+        referralPoints:0,
+        ...(isGroupRef&&{monthlyFee:0,groupMasterId:groupMasterUid}),
+        agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
+        lastLoginAt:serverTimestamp(),
+        createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
+      });
+    }catch(_ue){
+      // users 문서 생성 실패 → 잠금·계정 롤백 후 중단
+      try{await deleteDoc(doc(db,'uniq_loginid',loginId));}catch(_){}
+      if(_nphone){try{await deleteDoc(doc(db,'uniq_phone',_nphone));}catch(_){}}
+      try{await cred.user.delete();}catch(_){}
+      return toast('가입 처리 실패: '+(_ue.message||'오류')+' 다시 시도해 주세요.','error');
+    }
     // [추천보상 정책 변경 2026-06] 가입 시 즉시 지급 폐지 → 자비아멤버십(무제한) 전환 시 추천인에게 10,000P 1회 지급(admin grantMembership에서 처리). referredBy는 위 setDoc에 저장되어 멤버십 전환 시 추천인 조회에 사용됨.
     localStorage.removeItem('jarvia_ref');localStorage.removeItem('jarvia_subdomain');
     // ★ 가입 직후 자동 로그인 해제 — onAuthStateChanged가 main 페이지로 자동 이동시키는 것 방지
