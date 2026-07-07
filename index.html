@@ -7334,6 +7334,56 @@ let _chResourceEditing=null; // 자료 편집 중 id
 let _chTestimonials=[];      // 등록된 후기 배열
 let _chTestimonialEditing=null; // 후기 편집 중 id
 
+/* ★ channelV2: 고객 상세 접속 내역 (fc_view_logs — 본인 fcAuthUid 로그만 규칙상 열람 가능) — 2026-07 */
+const CC_CARD_LABELS={channel_visit:'🏠 홈페이지 방문',daily_visit:'📰 데일리리포트 열람',cardDailyLink:'📰 오늘의 데일리 카드',cardCalendar:'📅 일정·이벤트 캘린더',cardSim:'🧮 시뮬레이션',cardCurated:'⭐ 추천 콘텐츠',cardDashboard:'💼 재무 대시보드',cardMorning:'🌅 아침독서',cardCert:'🎖 자격·경력',cardResource:'📂 자료실',cardReview:'💬 고객 후기'};
+const CC_CALC_LABELS={calc_pension:'국민연금 예상수령액',calc_retire:'노후 필요자금',calc_goalback:'목표 금액 역산',calc_house:'주택연금 예상수령액',calc_fv:'미래가치',calc_pv:'현재가치',calc_accum:'적립 시뮬',calc_compound:'복리 계산기',calc_irp:'연금저축·IRP 세액공제',calc_pensiontax:'연금소득세',calc_needins:'필요 보장액',calc_medself:'실손 자기부담금',calc_lifecmp:'종신 vs 정기 비교',calc_loan:'대출 이자',calc_saving:'예·적금 이자',calc_salary:'연봉 실수령액',calc_dutch:'더치페이(N빵)',calc_percent:'할인가 계산',calc_retiretax:'퇴직소득세',calc_inherit:'상속세',calc_gift:'증여세',calc_giftcmp:'증여 vs 상속 비교',calc_transfer:'양도소득세',calc_jeonse:'전월세 전환',calc_dsr:'대출 한도(DSR)',calc_ltv:'LTV·DTI 한도',calc_pyeong:'평 ↔ ㎡',calc_bmi:'BMI',calc_bmr:'기초대사량(BMR)',calc_stdwt:'표준체중',calc_burn:'칼로리 소모',calc_unit:'단위 변환(거리)',calc_age:'만 나이'};
+function ccEvLabel(ev){
+  const t=ev&&ev.t,id=(ev&&ev.id)||'';
+  if(t==='channel_visit')return CC_CARD_LABELS.channel_visit;
+  if(t==='daily_visit')return CC_CARD_LABELS.daily_visit;
+  if(t==='daily_section')return '📰 데일리 · '+id;
+  if(t==='content')return '📄 콘텐츠 열람'+(id?' · '+id:'');
+  if(t==='card'){
+    if(id.indexOf('calc_')===0)return '🧮 계산기 · '+(CC_CALC_LABELS[id]||id.replace('calc_',''));
+    return CC_CARD_LABELS[id]||('▫ '+id);
+  }
+  return '▫ '+(t||'활동')+(id?' · '+id:'');
+}
+window.ccOpenCustDetail=async function(slug,title){
+  let m=document.getElementById('ccCustDetailModal');if(m)m.remove();
+  m=document.createElement('div');m.id='ccCustDetailModal';
+  m.style.cssText='position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,.45)';
+  m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94vw,440px);max-height:80vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;padding:18px 16px">'
+    +'<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">'
+    +'<div style="font-size:15px;font-weight:800;color:#0F1B33">@'+slug+' 접속 내역</div>'
+    +'<button onclick="document.getElementById(\'ccCustDetailModal\').remove()" style="border:0;background:none;font-size:13px;color:#8a877f;cursor:pointer">닫기 ✕</button></div>'
+    +'<div style="font-size:11px;color:#5A6484;margin:2px 0 10px">'+title+' · 언제, 무엇을 봤는지 (최근 순)</div>'
+    +'<div id="ccCdBody" style="flex:1;overflow-y:auto;font-size:12px;color:#1B2430">불러오는 중…</div></div>';
+  document.body.appendChild(m);
+  const body=document.getElementById('ccCdBody');
+  try{
+    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('clientId','==',slug),limit(300)));
+    const logs=[];
+    qs.forEach(d=>{const v=d.data()||{};logs.push({at:(v.createdAt&&v.createdAt.toDate)?v.createdAt.toDate():null,events:Array.isArray(v.events)?v.events:[]});});
+    logs.sort((a,b)=>(b.at?+b.at:0)-(a.at?+a.at:0));
+    if(!logs.length){body.innerHTML='<div style="padding:14px 2px;color:#8a877f">아직 기록이 없습니다. 고객이 홈페이지를 이용하면 여기에 쌓여요.</div>';return;}
+    const ymd=d=>d?(d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'';
+    const hm=d=>d?(String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
+    let html='',lastDay='';
+    logs.forEach(l=>{
+      const day=ymd(l.at);
+      if(day!==lastDay){html+='<div style="margin:12px 0 4px;font-size:11px;font-weight:800;color:#A68B4B">'+ (day||'날짜 미상') +'</div>';lastDay=day;}
+      const evs=l.events.length?l.events:[{t:'channel_visit'}];
+      evs.forEach(ev=>{
+        html+='<div style="display:flex;gap:8px;align-items:baseline;padding:5px 2px;border-top:1px solid #F5F3EC">'
+          +'<span style="font-size:10.5px;color:#8a877f;font-family:ui-monospace,Menlo,monospace;flex-shrink:0">'+hm(l.at)+'</span>'
+          +'<span>'+ccEvLabel(ev)+'</span></div>';
+      });
+    });
+    body.innerHTML=html;
+  }catch(e){body.innerHTML='<div style="padding:14px 2px;color:#A32D2D">불러오기 실패 — 잠시 후 다시 열어주세요.</div>';}
+};
+
 /* ★ channelV2: 연결 고객 홈페이지 현황 로드 (consultants.channelV2===true 컨설턴트 전용) — 2026-07 */
 async function ccLoadCustomers(myId){
   const card=document.getElementById('ccCustCard');if(!card||!myId)return;
@@ -7360,9 +7410,9 @@ async function ccLoadCustomers(myId){
     const ago=d=>{if(!d)return '—';const dd=Math.floor((now-+d)/86400000);return dd<=0?'오늘':dd+'일 전';};
     document.getElementById('ccCustList').innerHTML=rows.length?rows.map(r=>{
       const on=r.seen&&(now-+r.seen)<AD;
-      return '<div style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid #F1EFE8;font-size:12.5px">'
+      return '<div onclick="ccOpenCustDetail(\''+r.slug+'\',\''+esc(r.title).replace(/'/g,'')+'\')" style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid #F1EFE8;font-size:12.5px;cursor:pointer" title="클릭하면 상세 접속 내역">'
         +'<span style="width:7px;height:7px;border-radius:50%;background:'+(on?'#22A06B':'#D9D5CA')+';flex-shrink:0"></span>'
-        +'<a href="/@'+encodeURIComponent(r.slug)+'" target="_blank" rel="noopener" style="font-weight:700;color:#1B3A6B;text-decoration:none;white-space:nowrap">@'+esc(r.slug)+'</a>'
+        +'<a href="/@'+encodeURIComponent(r.slug)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-weight:700;color:#1B3A6B;text-decoration:none;white-space:nowrap">@'+esc(r.slug)+'</a>'
         +'<span style="flex:1;color:#5A6484;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.title)+'</span>'
         +(r.prof?'<span style="font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;background:#FBF3DC;color:#854F0B;white-space:nowrap">'+esc(r.prof)+'</span>':'')
         +'<span style="font-size:10px;font-weight:800;border-radius:4px;padding:2px 6px;'+(r.tier===1?'background:#E6F1FB;color:#185FA5':'background:#F1EFE8;color:#5F5E5A')+'">'+(r.tier===1?'1차':'2차')+'</span>'
