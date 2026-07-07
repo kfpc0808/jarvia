@@ -4164,7 +4164,12 @@ window.ccStorage=(function(){
   }
   /* ── 최초 연결 (GIS 코드 플로우 팝업 → 서버 교환·보관) ── */
   function connect(){
-    return new Promise((res,rej)=>{
+    return new Promise(async(res,rej)=>{
+      // 인앱 브라우저(카톡 등)에서는 구글 로그인 팝업이 정책상 차단됨 — 사전 안내
+      const _ua=navigator.userAgent||'';
+      if(/KAKAOTALK|NAVER\(inapp|Instagram|FBAV|FBAN|Line\//i.test(_ua)){rej(new Error('inapp'));return;}
+      // GIS 스크립트 로딩 대기 (async defer — 최대 4초)
+      for(let i=0;i<20&&!(window.google&&google.accounts&&google.accounts.oauth2);i++){await new Promise(r=>setTimeout(r,200));}
       if(!(window.google&&google.accounts&&google.accounts.oauth2)){rej(new Error('gis'));return;}
       const c=google.accounts.oauth2.initCodeClient({
         client_id:GD_CLIENT_ID,scope:GD_SCOPES,ux_mode:'popup',prompt:'consent',
@@ -4178,7 +4183,7 @@ window.ccStorage=(function(){
             res(true);
           }catch(e){rej(e);}
         },
-        error_callback:()=>rej(new Error('popup'))
+        error_callback:(err)=>rej(new Error((err&&err.type)||'popup'))
       });
       c.requestCode();
     });
@@ -4323,7 +4328,13 @@ async function ccVaultUI(){
       m.remove();toast('☁️ 내 금고가 준비되었습니다 — 드라이브에 \'내 홈페이지 금고\' 폴더가 생겼어요','info');
     }catch(e){
       goBtn.disabled=false;goBtn.innerHTML='<span style="font-weight:900">G</span>&nbsp; Google 계정으로 연결';
-      toast('연결이 완료되지 않았어요 — 팝업 허용 후 다시 시도해주세요','warn');
+      const em=(e&&e.message)||'';
+      if(em==='inapp')toast('카카오톡 등 앱 안 브라우저에서는 구글 연결이 제한돼요.\n⋮ 메뉴 → "다른 브라우저로 열기" 후 다시 시도해주세요','warn');
+      else if(em==='popup_failed_to_open')toast('브라우저가 팝업을 차단했어요 — 주소창의 팝업 차단 아이콘을 눌러 허용 후 다시','warn');
+      else if(em==='popup_closed')toast('연결 창이 닫혔어요 — 다시 시도해주세요','warn');
+      else if(em==='gis')toast('연결 도구를 불러오는 중이에요 — 잠시 후 다시 눌러주세요','warn');
+      else if(em.indexOf('exchange')>=0)toast('서버 연결 처리 실패 — 잠시 후 다시 (지속 시 관리자 문의)','warn');
+      else toast('연결이 완료되지 않았어요 — 다시 시도해주세요 ('+em+')','warn');
     }
   };
   const ckBtn=document.getElementById('ccVtCheck');
