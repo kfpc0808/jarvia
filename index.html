@@ -7349,39 +7349,35 @@ function ccEvLabel(ev){
   }
   return '▫ '+(t||'활동')+(id?' · '+id:'');
 }
-window.ccOpenCustDetail=async function(slug,title){
-  let m=document.getElementById('ccCustDetailModal');if(m)m.remove();
-  m=document.createElement('div');m.id='ccCustDetailModal';
-  m.style.cssText='position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,.45)';
-  m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94vw,440px);max-height:80vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;padding:18px 16px">'
-    +'<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">'
-    +'<div style="font-size:15px;font-weight:800;color:#0F1B33">@'+slug+' 접속 내역</div>'
-    +'<button onclick="document.getElementById(\'ccCustDetailModal\').remove()" style="border:0;background:none;font-size:13px;color:#8a877f;cursor:pointer">닫기 ✕</button></div>'
-    +'<div style="font-size:11px;color:#5A6484;margin:2px 0 10px">'+title+' · 언제, 무엇을 봤는지 (최근 순)</div>'
-    +'<div id="ccCdBody" style="flex:1;overflow-y:auto;font-size:12px;color:#1B2430">불러오는 중…</div></div>';
-  document.body.appendChild(m);
-  const body=document.getElementById('ccCdBody');
+window.ccToggleCustDetail=async function(slug,title){
+  const wrap=document.getElementById('ccCdWrap_'+slug);
+  const arr=document.getElementById('ccCdArr_'+slug);
+  if(!wrap)return;
+  if(wrap.style.display!=='none'){wrap.style.display='none';if(arr)arr.textContent='▸';return;} // 접기
+  wrap.style.display='block';if(arr)arr.textContent='▾';
+  if(wrap.dataset.loaded==='1')return; // 이미 로드됨 — 펼치기만
+  wrap.innerHTML='<span style="color:#8a877f">불러오는 중…</span>';
   try{
     const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('clientId','==',slug),limit(300)));
     const logs=[];
     qs.forEach(d=>{const v=d.data()||{};logs.push({at:(v.createdAt&&v.createdAt.toDate)?v.createdAt.toDate():null,events:Array.isArray(v.events)?v.events:[]});});
     logs.sort((a,b)=>(b.at?+b.at:0)-(a.at?+a.at:0));
-    if(!logs.length){body.innerHTML='<div style="padding:14px 2px;color:#8a877f">아직 기록이 없습니다. 고객이 홈페이지를 이용하면 여기에 쌓여요.</div>';return;}
+    if(!logs.length){wrap.innerHTML='<span style="color:#8a877f">아직 기록이 없습니다. 고객이 홈페이지를 이용하면 여기에 쌓여요.</span>';wrap.dataset.loaded='1';return;}
     const ymd=d=>d?(d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'';
     const hm=d=>d?(String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
     let html='',lastDay='';
     logs.forEach(l=>{
       const day=ymd(l.at);
-      if(day!==lastDay){html+='<div style="margin:12px 0 4px;font-size:11px;font-weight:800;color:#A68B4B">'+ (day||'날짜 미상') +'</div>';lastDay=day;}
+      if(day!==lastDay){html+='<div style="margin:8px 0 3px;font-size:11px;font-weight:800;color:#A68B4B">'+(day||'날짜 미상')+'</div>';lastDay=day;}
       const evs=l.events.length?l.events:[{t:'channel_visit'}];
       evs.forEach(ev=>{
-        html+='<div style="display:flex;gap:8px;align-items:baseline;padding:5px 2px;border-top:1px solid #F5F3EC">'
+        html+='<div style="display:flex;gap:8px;align-items:baseline;padding:4px 2px;border-top:1px solid #F1EEE5">'
           +'<span style="font-size:10.5px;color:#8a877f;font-family:ui-monospace,Menlo,monospace;flex-shrink:0">'+hm(l.at)+'</span>'
           +'<span>'+ccEvLabel(ev)+'</span></div>';
       });
     });
-    body.innerHTML=html;
-  }catch(e){body.innerHTML='<div style="padding:14px 2px;color:#A32D2D">불러오기 실패 — 잠시 후 다시 열어주세요.</div>';}
+    wrap.innerHTML=html;wrap.dataset.loaded='1';
+  }catch(e){wrap.innerHTML='<span style="color:#A32D2D">불러오기 실패 — 잠시 후 다시 열어주세요.</span>';}
 };
 
 /* ★ channelV2: 연결 고객 홈페이지 현황 로드 (consultants.channelV2===true 컨설턴트 전용) — 2026-07 */
@@ -7410,15 +7406,18 @@ async function ccLoadCustomers(myId){
     const ago=d=>{if(!d)return '—';const dd=Math.floor((now-+d)/86400000);return dd<=0?'오늘':dd+'일 전';};
     document.getElementById('ccCustList').innerHTML=rows.length?rows.map(r=>{
       const on=r.seen&&(now-+r.seen)<AD;
-      return '<div onclick="ccOpenCustDetail(\''+r.slug+'\',\''+esc(r.title).replace(/'/g,'')+'\')" style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid #F1EFE8;font-size:12.5px;cursor:pointer" title="클릭하면 상세 접속 내역">'
+      return '<div onclick="ccToggleCustDetail(\''+r.slug+'\',\''+esc(r.title).replace(/'/g,'')+'\')" style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid #F1EFE8;font-size:12.5px;cursor:pointer" title="클릭하면 접속 내역 펼치기/접기">'
         +'<span style="width:7px;height:7px;border-radius:50%;background:'+(on?'#22A06B':'#D9D5CA')+';flex-shrink:0"></span>'
-        +'<a href="/@'+encodeURIComponent(r.slug)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-weight:700;color:#1B3A6B;text-decoration:none;white-space:nowrap">@'+esc(r.slug)+'</a>'
+        +'<span style="font-weight:700;color:#1B3A6B;white-space:nowrap">@'+esc(r.slug)+'</span>'
         +'<span style="flex:1;color:#5A6484;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.title)+'</span>'
         +(r.prof?'<span style="font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;background:#FBF3DC;color:#854F0B;white-space:nowrap">'+esc(r.prof)+'</span>':'')
         +'<span style="font-size:10px;font-weight:800;border-radius:4px;padding:2px 6px;'+(r.tier===1?'background:#E6F1FB;color:#185FA5':'background:#F1EFE8;color:#5F5E5A')+'">'+(r.tier===1?'1차':'2차')+'</span>'
         +'<span style="font-size:11px;color:#8a877f;white-space:nowrap">가입 '+fmt(r.created)+'</span>'
         +'<span style="font-size:11px;color:'+(on?'#0F6E56':'#8a877f')+';white-space:nowrap">방문 '+ago(r.seen)+'</span>'
-      +'</div>';}).join('')
+        +'<button onclick="event.stopPropagation();window.open(\'/@'+encodeURIComponent(r.slug)+'\',\'_blank\')" style="border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:6px;padding:3px 9px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap">채널보기</button>'
+        +'<span id="ccCdArr_'+r.slug+'" style="color:#B9B5AA;font-size:11px">▸</span>'
+      +'</div>'
+      +'<div id="ccCdWrap_'+r.slug+'" style="display:none;background:#FBFAF6;border:1px solid #EFECE3;border-radius:10px;margin:2px 0 8px 15px;padding:10px 12px;font-size:12px;max-height:260px;overflow-y:auto"></div>';}).join('')
     :'<div style="padding:14px 4px;font-size:12.5px;color:#8a877f">아직 연결된 고객 홈페이지가 없습니다. 채널 링크를 고객에게 보내보세요.</div>';
   }catch(e){card.style.display='none';}
 }
