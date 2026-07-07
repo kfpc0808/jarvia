@@ -2041,7 +2041,7 @@ async function init(){
         const _ccSnap=await getDoc(doc(db,'client_channels',_loginLower));
         if(_ccSnap.exists()){
           const _cc=_ccSnap.data();
-          window._ccSlug=_ccSnap.id;window._ccBrand=_cc.brand||null;
+          window._ccSlug=_ccSnap.id;window._ccBrand=_cc.brand||null;window._ccProf={ageGroup:_cc.ageGroup||'',job:_cc.job||''};
           window._ccShareUrl='https://jarvia.co.kr/channel?fc='+encodeURIComponent(_ccSnap.id); // OG 프록시 경유 — 카톡 미리보기에 고객 브랜딩(JARVIA 미노출)
           const _fcLow=String(_cc.fcLoginId||'').toLowerCase();
           if(_fcLow){userSnap=await getDocs(query(collection(db,'users'),where('loginIdLower','==',_fcLow),limit(1)));}
@@ -3750,6 +3750,16 @@ function applyClientBrand(){
           }catch(_e){toast('저장 실패 — 잠시 후 다시 시도해주세요','warn');}
         };
       }
+      // ★ 연령대·직업 라인 (소유자만 표시·설정) — 맞춤 콘텐츠·상담용
+      try{
+        let pl=document.getElementById('ccProfLine');
+        if(_isOwner){
+          if(!pl){pl=document.createElement('div');pl.id='ccProfLine';pl.style.cssText='margin-top:6px;font-size:11.5px;color:#C9A96E;cursor:pointer';bio.parentNode.insertBefore(pl,bio.nextSibling);}
+          const p=window._ccProf||{};
+          pl.textContent=(p.ageGroup||p.job)?('🎯 '+[p.ageGroup,p.job].filter(Boolean).join(' · ')+'  (탭해서 변경)'):'🎯 연령대·직업 설정하기 — 맞춤 콘텐츠·상담을 위해';
+          pl.onclick=()=>ccOpenProfileUI();
+        }else if(pl){pl.remove();}
+      }catch(_e){}
     }
   }catch(_e){}
 }
@@ -3873,6 +3883,44 @@ function ccOpenBrandUI(){
       window._ccBrand=Object.assign({},window._ccBrand,nb);
       m.remove();applyClientBrand();toast('명칭이 저장되었습니다','info');
     }catch(_e){toast('저장 실패 — 잠시 후 다시 시도해주세요','warn');btn.disabled=false;btn.textContent='적용하기';}
+  };
+}
+/* ── 연령대·직업 설정 (맞춤 콘텐츠·상담용, 소유자 전용) ── */
+function ccOpenProfileUI(){
+  const cur=Object.assign({ageGroup:'',job:''},window._ccProf||{});
+  const sel={ageGroup:cur.ageGroup,job:cur.job};
+  let m=document.getElementById('ccProfModal');if(m)m.remove();
+  const chip=(g,v,on)=>'<button type="button" data-g="'+g+'" data-v="'+v+'" style="border:'+(on?'2px solid #1B3A6B;background:#F0F4FA;font-weight:800':'1px solid #D9D5CA;background:#fff')+';border-radius:9px;padding:8px 0;font-size:12px;color:#1B2430;cursor:pointer">'+v+'</button>';
+  const AGES=['20대','30대','40대','50대','60대 이상'];
+  const JOBS=['직장인','자영업','전문직','공무원','주부','기타'];
+  m=document.createElement('div');m.id='ccProfModal';
+  m.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(0,0,0,.45)';
+  m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,360px);background:#fff;border-radius:18px;padding:20px 18px">'
+    +'<div style="font-size:16px;font-weight:800;color:#0F1B33">🎯 맞춤 정보 설정</div>'
+    +'<div style="background:#F0F4FA;border-radius:10px;padding:9px 11px;margin:10px 0 14px;font-size:10.5px;line-height:1.6;color:#3f66a0">이 정보는 <b>고객님께 맞춤형 콘텐츠를 제공해 드리고, 담당 컨설턴트가 맞춤형 상담을 진행할 수 있도록</b> 하기 위한 것입니다. 이름·연락처와 연결되지 않으며 언제든 변경할 수 있어요.</div>'
+    +'<div style="font-size:11px;color:#5F5E5A;margin-bottom:5px">연령대</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+AGES.map(v=>chip('ageGroup',v,sel.ageGroup===v)).join('')+'</div>'
+    +'<div style="font-size:11px;color:#5F5E5A;margin:14px 0 5px">직업</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+JOBS.map(v=>chip('job',v,sel.job===v)).join('')+'</div>'
+    +'<button id="ccPSave" type="button" style="width:100%;border:0;border-radius:12px;padding:13px;background:#1B3A6B;color:#fff;font-size:14px;font-weight:800;margin-top:16px">저장하기</button>'
+    +'<button id="ccPCancel" type="button" style="width:100%;border:0;background:none;color:#8a877f;font-size:12px;margin-top:8px">취소</button></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',ev=>{
+    const b=ev.target.closest('button[data-g]');if(!b)return;
+    const g=b.dataset.g;sel[g]=(sel[g]===b.dataset.v)?'':b.dataset.v; // 같은 칩 재탭=해제
+    m.querySelectorAll('button[data-g="'+g+'"]').forEach(x=>{
+      const on=x.dataset.v===sel[g];
+      x.style.border=on?'2px solid #1B3A6B':'1px solid #D9D5CA';x.style.background=on?'#F0F4FA':'#fff';x.style.fontWeight=on?'800':'400';
+    });
+  });
+  document.getElementById('ccPCancel').onclick=()=>m.remove();
+  document.getElementById('ccPSave').onclick=async()=>{
+    const btn=document.getElementById('ccPSave');btn.disabled=true;btn.textContent='저장 중…';
+    try{
+      await httpsCallable(fns,'updateClientBrand')({slug:window._ccSlug,ownerKey:localStorage.getItem('cc_owner_'+window._ccSlug),profile:{ageGroup:sel.ageGroup,job:sel.job}});
+      window._ccProf={ageGroup:sel.ageGroup,job:sel.job};
+      m.remove();applyClientBrand();toast('맞춤 정보가 저장되었습니다','info');
+    }catch(_e){toast('저장 실패 — 잠시 후 다시 시도해주세요','warn');btn.disabled=false;btn.textContent='저장하기';}
   };
 }
 window.ccMaybeShowJoin=function(){ // 프로필 로드 완료 후 호출 (channelV2 게이트)

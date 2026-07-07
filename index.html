@@ -1564,6 +1564,16 @@
       </div>
 
       <!-- ▼ 기본 프로필 (사진·이름·소속·직함·연락처·아침독서·네이버 — consultants 문서 / 내 채널·고객용 리포트 양쪽 반영) -->
+      <!-- ★ channelV2: 연결 고객 홈페이지 현황 (channelV2 플래그 컨설턴트에게만 표시) — 2026-07 -->
+      <div id="ccCustCard" style="display:none;background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-bottom:14px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:4px">
+          <h4 style="font-size:14px;font-weight:700;margin:0;color:#141B2D">👥 내 고객 홈페이지</h4>
+          <span id="ccCustSummary" style="font-size:12px;color:#5A6484">불러오는 중…</span>
+        </div>
+        <p style="font-size:12px;color:#5A6484;margin:0 0 8px">내 채널 링크로 가입한 고객들의 개인 홈페이지 목록입니다. 초록 점 = 최근 30일 내 방문.</p>
+        <div id="ccCustList" style="max-height:280px;overflow-y:auto"></div>
+      </div>
+
       <div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-bottom:14px">
         <h4 style="font-size:14px;font-weight:700;margin:0 0 4px;color:#141B2D">👤 기본 프로필</h4>
         <p style="font-size:12px;color:#5A6484;margin:0 0 12px">여기서 설정한 정보는 <strong>내 채널과 고객용 리포트 양쪽</strong>에 표시됩니다.</p>
@@ -7324,12 +7334,52 @@ let _chResourceEditing=null; // 자료 편집 중 id
 let _chTestimonials=[];      // 등록된 후기 배열
 let _chTestimonialEditing=null; // 후기 편집 중 id
 
+/* ★ channelV2: 연결 고객 홈페이지 현황 로드 (consultants.channelV2===true 컨설턴트 전용) — 2026-07 */
+async function ccLoadCustomers(myId){
+  const card=document.getElementById('ccCustCard');if(!card||!myId)return;
+  try{
+    const cs=await getDoc(doc(db,'consultants',myId));
+    if(!cs.exists()||cs.data().channelV2!==true){card.style.display='none';return;}
+    const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',myId)));
+    card.style.display='block';
+    const rows=[];
+    qs.forEach(d=>{const v=d.data()||{};rows.push({
+      slug:d.id,
+      title:(v.brand&&v.brand.title)||d.id,
+      tier:v.tier===2?2:1,
+      created:(v.createdAt&&v.createdAt.toDate)?v.createdAt.toDate():null,
+      seen:(v.lastSeenAt&&v.lastSeenAt.toDate)?v.lastSeenAt.toDate():null,
+      prof:[v.ageGroup,v.job].filter(Boolean).join('·')});});
+    rows.sort((a,b)=>(b.created?+b.created:0)-(a.created?+a.created:0)); // 최신 가입순 (복합 인덱스 불필요)
+    const now=Date.now(),AD=30*86400000;
+    const act=rows.filter(r=>r.seen&&(now-+r.seen)<AD).length;
+    const t1=rows.filter(r=>r.tier===1).length;
+    document.getElementById('ccCustSummary').innerHTML='연결 <b>'+rows.length+'명</b> · 30일 활성 <b style="color:#0F6E56">'+act+'명</b> · 직접 '+t1+' / 소개 '+(rows.length-t1);
+    const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const fmt=d=>d?(d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'—';
+    const ago=d=>{if(!d)return '—';const dd=Math.floor((now-+d)/86400000);return dd<=0?'오늘':dd+'일 전';};
+    document.getElementById('ccCustList').innerHTML=rows.length?rows.map(r=>{
+      const on=r.seen&&(now-+r.seen)<AD;
+      return '<div style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid #F1EFE8;font-size:12.5px">'
+        +'<span style="width:7px;height:7px;border-radius:50%;background:'+(on?'#22A06B':'#D9D5CA')+';flex-shrink:0"></span>'
+        +'<a href="/@'+encodeURIComponent(r.slug)+'" target="_blank" rel="noopener" style="font-weight:700;color:#1B3A6B;text-decoration:none;white-space:nowrap">@'+esc(r.slug)+'</a>'
+        +'<span style="flex:1;color:#5A6484;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.title)+'</span>'
+        +(r.prof?'<span style="font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;background:#FBF3DC;color:#854F0B;white-space:nowrap">'+esc(r.prof)+'</span>':'')
+        +'<span style="font-size:10px;font-weight:800;border-radius:4px;padding:2px 6px;'+(r.tier===1?'background:#E6F1FB;color:#185FA5':'background:#F1EFE8;color:#5F5E5A')+'">'+(r.tier===1?'1차':'2차')+'</span>'
+        +'<span style="font-size:11px;color:#8a877f;white-space:nowrap">가입 '+fmt(r.created)+'</span>'
+        +'<span style="font-size:11px;color:'+(on?'#0F6E56':'#8a877f')+';white-space:nowrap">방문 '+ago(r.seen)+'</span>'
+      +'</div>';}).join('')
+    :'<div style="padding:14px 4px;font-size:12.5px;color:#8a877f">아직 연결된 고객 홈페이지가 없습니다. 채널 링크를 고객에게 보내보세요.</div>';
+  }catch(e){card.style.display='none';}
+}
+
 async function loadChannelData(){
   if(!me||!meData)return;
   const loginId=meData.loginId||'';
   // URL 카드
   $('ch-handle').textContent=loginId||'아이디';
   $('ch-url-display').textContent=loginId?`https://jarvia.co.kr/@${loginId}`:'먼저 로그인 ID를 설정하세요';
+  ccLoadCustomers(loginId); // ★ channelV2: 연결 고객 현황 (비동기, 실패 무해)
   // users.channelData 로드
   try{
     const uSnap=await getDoc(doc(db,'users',me.uid));
