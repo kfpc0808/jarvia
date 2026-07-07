@@ -4138,6 +4138,153 @@ window.ccMaybeShowJoin=function(){ // 프로필 로드 완료 후 호출 (channe
   }catch(_e){}
 };
 
+// ═══════════ ★ 2-A: ccStorage — MY VAULT 공용 저장 모듈 (드라이브 토큰·폴더·암호화) 2026-07 ═══════════
+// 원칙: 파일은 폰↔드라이브 직행(서버 미경유) · 내용 AES-GCM 암호화 · 열쇠는 드라이브 appData(복구코드 불필요)
+const GD_CLIENT_ID='388025068900-njpkb225pte14fphelubl1i2h0nab8lj.apps.googleusercontent.com'; // ★★ Google OAuth 클라이언트 ID로 교체 (1곳)
+const GD_SCOPES='https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata';
+const CC_ROOT='내 홈페이지 금고';
+const CC_FOLDERS=['문서함','문서함/보험·증권','문서함/계약서','문서함/신분증·증명','문서함/세금·영수증','문서함/건강·의료','문서함/가족','문서함/기타','자산관리','머니캘린더','비밀번호금고','대화저장'];
+window.ccStorage=(function(){
+  let _tok='',_exp=0,_key=null,_folders=null;
+  const slug=()=>window._ccSlug||'';
+  const pin=()=>{try{return localStorage.getItem('cc_pin_'+slug())||'';}catch(_e){return '';}};
+  const connected=()=>{try{return localStorage.getItem('cc_gd_'+slug())==='1';}catch(_e){return false;}};
+  /* ── 접근토큰 (서버가 리프레시로 발급 — 재로그인 없음) ── */
+  async function token(){
+    if(_tok&&Date.now()<_exp-60000)return _tok;
+    const r=await httpsCallable(fns,'gdAccessToken')({slug:slug(),pin:pin()});
+    const d=r.data||{};if(!d.ok)throw new Error('token');
+    _tok=d.accessToken;_exp=Date.now()+((d.expiresIn||3500)*1000);
+    try{localStorage.setItem('cc_gd_'+slug(),'1');}catch(_e){}
+    return _tok;
+  }
+  /* ── 최초 연결 (GIS 코드 플로우 팝업 → 서버 교환·보관) ── */
+  function connect(){
+    return new Promise((res,rej)=>{
+      if(!(window.google&&google.accounts&&google.accounts.oauth2)){rej(new Error('gis'));return;}
+      const c=google.accounts.oauth2.initCodeClient({
+        client_id:GD_CLIENT_ID,scope:GD_SCOPES,ux_mode:'popup',prompt:'consent',
+        callback:async(resp)=>{
+          try{
+            if(!resp||!resp.code)throw new Error('no-code');
+            const r=await httpsCallable(fns,'gdExchangeCode')({slug:slug(),pin:pin(),code:resp.code});
+            const d=r.data||{};if(!d.ok)throw new Error('exchange');
+            if(d.accessToken){_tok=d.accessToken;_exp=Date.now()+((d.expiresIn||3500)*1000);}
+            try{localStorage.setItem('cc_gd_'+slug(),'1');}catch(_e){}
+            res(true);
+          }catch(e){rej(e);}
+        },
+        error_callback:()=>rej(new Error('popup'))
+      });
+      c.requestCode();
+    });
+  }
+  /* ── Drive API 공용 fetch ── */
+  async function api(path,opt){
+    const t=await token();
+    const r=await fetch('https://www.googleapis.com'+path,Object.assign({},opt,{headers:Object.assign({'Authorization':'Bearer '+t},(opt&&opt.headers)||{})}));
+    if(!r.ok)throw new Error('drive-'+r.status);
+    return r;
+  }
+  const esc=s=>String(s).replace(/'/g,"\\'");
+  async function findOne(q,fields){
+    const r=await api('/drive/v3/files?q='+encodeURIComponent(q+" and trashed=false")+'&fields=files(id,name'+(fields?','+fields:'')+')&pageSize=1',{});
+    const j=await r.json();return (j.files&&j.files[0])||null;
+  }
+  async function mkFolder(name,parent){
+    const r=await api('/drive/v3/files?fields=id',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:name,mimeType:'application/vnd.google-apps.folder',parents:parent?[parent]:undefined})});
+    return (await r.json()).id;
+  }
+  /* ── 폴더 자동 생성 + 자가 복구 (카테고리 = 폴더 1:1) ── */
+  async function ensureFolders(force){
+    if(_folders&&!force)return _folders;
+    try{if(!force){const c=JSON.parse(localStorage.getItem('cc_gdf_'+slug())||'null');if(c&&c.__root){_folders=c;return c;}}}catch(_e){}
+    const map={};
+    let root=await findOne("name='"+esc(CC_ROOT)+"' and mimeType='application/vnd.google-apps.folder' and 'root' in parents");
+    map.__root=root?root.id:await mkFolder(CC_ROOT);
+    for(const p of CC_FOLDERS){
+      const parts=p.split('/');const nm=parts[parts.length-1];
+      const parent=parts.length>1?map[parts.slice(0,-1).join('/')]:map.__root;
+      let f=await findOne("name='"+esc(nm)+"' and mimeType='application/vnd.google-apps.folder' and '"+parent+"' in parents");
+      map[p]=f?f.id:await mkFolder(nm,parent);
+    }
+    _folders=map;try{localStorage.setItem('cc_gdf_'+slug(),JSON.stringify(map));}catch(_e){}
+    return map;
+  }
+  /* ── 암호화 열쇠 — 드라이브 appData 보관 (기기 바뀌어도 계정 재연결 = 복구) ── */
+  async function vaultKey(){
+    if(_key)return _key;
+    let raw=null;
+    const f=await findOne("name='vault_key.v1' and 'appDataFolder' in parents");
+    if(f){
+      const r=await api('/drive/v3/files/'+f.id+'?alt=media',{});
+      raw=Uint8Array.from(atob((await r.json()).k),c=>c.charCodeAt(0));
+    }else{
+      raw=crypto.getRandomValues(new Uint8Array(32));
+      const meta={name:'vault_key.v1',parents:['appDataFolder']};
+      const body=JSON.stringify({k:btoa(String.fromCharCode.apply(null,raw))});
+      const bnd='ccb'+Date.now();
+      await api('/upload/drive/v3/files?uploadType=multipart',{method:'POST',
+        headers:{'Content-Type':'multipart/related; boundary='+bnd},
+        body:'--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+body+'\r\n--'+bnd+'--'});
+    }
+    _key=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']);
+    return _key;
+  }
+  async function enc(bytes){ // Uint8Array → iv(12)+ct
+    const k=await vaultKey();const iv=crypto.getRandomValues(new Uint8Array(12));
+    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},k,bytes));
+    const out=new Uint8Array(12+ct.length);out.set(iv);out.set(ct,12);return out;
+  }
+  async function dec(bytes){
+    const k=await vaultKey();
+    return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12)},k,bytes.slice(12)));
+  }
+  /* ── 파일 업서트(멀티파트) · 다운로드 ── */
+  async function upsert(folderKey,name,bytes,mime){
+    const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+    const ex=await findOne("name='"+esc(name)+"' and '"+parent+"' in parents");
+    const bnd='ccb'+Date.now();
+    const meta=ex?{name:name}:{name:name,parents:[parent]};
+    const head='--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+bnd+'\r\nContent-Type: '+(mime||'application/octet-stream')+'\r\nContent-Transfer-Encoding: base64\r\n\r\n';
+    let b64='';for(let i=0;i<bytes.length;i+=57*1000){b64+=btoa(String.fromCharCode.apply(null,bytes.slice(i,i+57*1000)));}
+    const body=head+b64+'\r\n--'+bnd+'--';
+    const path=ex?('/upload/drive/v3/files/'+ex.id+'?uploadType=multipart'):('/upload/drive/v3/files?uploadType=multipart');
+    const r=await api(path,{method:ex?'PATCH':'POST',headers:{'Content-Type':'multipart/related; boundary='+bnd},body:body});
+    return (await r.json()).id;
+  }
+  async function download(fileId){
+    const r=await api('/drive/v3/files/'+fileId+'?alt=media',{});
+    return new Uint8Array(await r.arrayBuffer());
+  }
+  /* ── VAULT 데이터 저장/불러오기 (암호화 .safe) — 기기 캐시 + 드라이브 백업 ── */
+  async function saveJson(folderKey,name,obj){
+    const raw=new TextEncoder().encode(JSON.stringify(obj));
+    try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(obj));}catch(_e){}
+    const ct=await enc(raw);
+    return upsert(folderKey,name+'.safe',ct,'application/octet-stream');
+  }
+  async function loadJson(folderKey,name){
+    try{const c=localStorage.getItem('cc_v_'+slug()+'_'+name);if(c)return JSON.parse(c);}catch(_e){}
+    try{
+      const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+      const f=await findOne("name='"+esc(name)+".safe' and '"+parent+"' in parents");
+      if(!f)return null;
+      const obj=JSON.parse(new TextDecoder().decode(await dec(await download(f.id))));
+      try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(obj));}catch(_e){}
+      return obj;
+    }catch(_e){return null;}
+  }
+  async function listFiles(folderKey){
+    const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+    const r=await api('/drive/v3/files?q='+encodeURIComponent("'"+parent+"' in parents and trashed=false")+'&fields=files(id,name,mimeType,size,createdTime,thumbnailLink)&pageSize=200&orderBy=createdTime desc',{});
+    return (await r.json()).files||[];
+  }
+  return {connect:connect,connected:connected,token:token,ensureFolders:ensureFolders,
+          saveJson:saveJson,loadJson:loadJson,uploadBytes:upsert,download:download,enc:enc,dec:dec,listFiles:listFiles};
+})();
+
 // ═══ 시작 ═══
 init();
 </script>
