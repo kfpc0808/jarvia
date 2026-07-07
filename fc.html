@@ -3755,17 +3755,8 @@ function applyClientBrand(){
           }catch(_e){toast('저장 실패 — 잠시 후 다시 시도해주세요','warn');}
         };
       }
-      // ★ 좌측 상단 ⚙️ 설정 버튼 (소유자 전용 — 연령대·직업 등, 추후 항목 확장)
-      try{
-        let gb=document.getElementById('ccGearBtn');
-        if(_isOwner&&!gb){
-          const hl=document.querySelector('.heroLabel');
-          if(hl){gb=document.createElement('button');gb.id='ccGearBtn';gb.type='button';gb.textContent='⚙️';gb.title='설정';
-            gb.style.cssText='margin-right:8px;width:28px;height:28px;font-size:14px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.28);border-radius:50%;cursor:pointer;padding:0;line-height:1;flex-shrink:0';
-            gb.onclick=()=>ccOpenSettings();
-            hl.insertBefore(gb,hl.firstChild);}
-        }else if(!_isOwner&&gb){gb.remove();}
-      }catch(_e){}
+      // ★ 우측 상단 ⚙️ 설정 버튼 — 모든 방문자 노출 (소유자=관리 메뉴 / 방문자=가입 코너)
+      try{ccEnsureGear();}catch(_e){}
     }
   }catch(_e){}
 }
@@ -3775,7 +3766,7 @@ function ccInjectJoinUI(){
   if(document.getElementById('ccJoinBanner'))return;
   const wrap=document.createElement('div');
   wrap.innerHTML=
-   '<div id="ccJoinBanner" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:76px;z-index:9500;background:#0F1B33;color:#fff;border:1px solid rgba(201,169,110,.55);border-radius:999px;padding:11px 18px;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(15,27,51,.35);cursor:pointer;white-space:nowrap">📱 나만의 홈페이지로 만들기</div>'
+   '<div id="ccJoinBanner" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:76px;z-index:9500;background:#0F1B33;color:#fff;border:1px solid rgba(201,169,110,.55);border-radius:999px;padding:11px 34px 11px 18px;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(15,27,51,.35);cursor:pointer;white-space:nowrap"><span id="ccJoinBannerTxt">📱 나만의 홈페이지로 만들기</span><span id="ccJoinBannerX" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:rgba(255,255,255,.55);padding:4px">✕</span></div>'
   +'<div id="ccJoinModal" style="display:none;position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,.45)">'
   +'<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,360px);background:#fff;border-radius:18px;padding:20px 18px;font-family:inherit">'
   +'<div style="font-size:16px;font-weight:800;color:#0F1B33">내 홈페이지 만들기</div>'
@@ -3818,11 +3809,21 @@ function ccInjectJoinUI(){
         S('ccDoneUrl').textContent='jarvia.co.kr/@'+d.slug;
         S('ccDoneUrl').onclick=()=>{try{navigator.clipboard.writeText('https://jarvia.co.kr/@'+d.slug);toast('주소가 복사되었습니다','info');}catch(_e){}};
         S('ccGoBtn').onclick=()=>{location.href='/@'+encodeURIComponent(d.slug);};}
-      else if(d.reason==='phone-taken'){S('ccJoinModal').style.display='none';ccInfoPopup('📱 이미 홈페이지가 있어요','이 번호로 만든 홈페이지가 이미 있습니다.<br>기존 홈페이지로 이동하시겠어요?','내 홈페이지로 이동',()=>{if(d.existingSlug)location.href='/@'+encodeURIComponent(d.existingSlug);});}
+      else if(d.reason==='phone-taken'){S('ccJoinModal').style.display='none';ccInfoPopup('📱 이미 홈페이지가 있어요','이 번호로 만든 홈페이지가 이미 있습니다.<br>이 기기를 내 홈페이지에 연결해 드릴게요.','이 기기에서 내 홈페이지 열기',async()=>{
+        try{
+          const rr=await httpsCallable(fns,'reclaimClientChannel')({phone:_ccVerifiedPhone});
+          const rd=rr.data||{};
+          if(rd.ok){try{localStorage.setItem('cc_owner_'+rd.slug,rd.ownerKey||'');localStorage.setItem('cc_my_slug',rd.slug);}catch(_e){}
+            location.href='/@'+encodeURIComponent(rd.slug);return;}
+        }catch(_e){}
+        if(d.existingSlug)location.href='/@'+encodeURIComponent(d.existingSlug); // 재연결 실패 시 열람만
+      });}
       else{toast('생성 실패 — 잠시 후 다시 시도해주세요','warn');}
     }catch(e){const m=(e&&e.message)||'';toast(m.indexOf('slug-')>=0?'주소를 다시 확인해주세요':m.indexOf('not-verified')>=0?'번호 인증을 먼저 완료해주세요':'생성 실패 — 잠시 후 다시 시도해주세요','warn');}
     claimBtn.disabled=false;claimBtn.textContent='내 홈페이지 열기';});
-  S('ccJoinBanner').addEventListener('click',()=>{const my=localStorage.getItem('cc_my_slug');if(my){location.href='/@'+encodeURIComponent(my);return;}S('ccJoinModal').style.display='block';setTimeout(()=>slugIn.focus(),80);});
+  S('ccJoinBanner').addEventListener('click',ev=>{
+    if(ev.target&&ev.target.id==='ccJoinBannerX'){try{sessionStorage.setItem('ccBannerHide','1');}catch(_e){}S('ccJoinBanner').style.display='none';return;}
+    const my=localStorage.getItem('cc_my_slug');if(my){location.href='/@'+encodeURIComponent(my);return;}S('ccJoinModal').style.display='block';setTimeout(()=>slugIn.focus(),80);});
   S('ccCloseBtn').addEventListener('click',()=>{S('ccJoinModal').style.display='none';});
 }
 /* ── 확인 버튼형 안내 팝업 (자동 소멸 토스트 대체) ── */
@@ -3949,25 +3950,44 @@ function ccOpenProfileUI(opt){
     }catch(_e){toast('저장 실패 — 잠시 후 다시 시도해주세요','warn');btn.disabled=false;btn.textContent=(opt.signup?'저장하고 계속':'저장하기');}
   };
 }
-/* ── ⚙️ 설정 메뉴 (소유자 전용 · 항목은 추후 확장) ── */
+/* ── ⚙️ 설정 버튼 생성 (우측 상단 · 모든 방문자) ── */
+function ccEnsureGear(){
+  if(document.getElementById('ccGearBtn'))return;
+  const hl=document.querySelector('.heroLabel');if(!hl)return;
+  const gb=document.createElement('button');gb.id='ccGearBtn';gb.type='button';gb.textContent='⚙️';gb.title='설정';
+  gb.style.cssText='margin-left:8px;width:28px;height:28px;font-size:14px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.28);border-radius:50%;cursor:pointer;padding:0;line-height:1;flex-shrink:0';
+  gb.onclick=()=>ccOpenSettings();
+  hl.appendChild(gb);
+}
+/* ── ⚙️ 설정 메뉴 (소유자=관리 / 방문자=가입 코너 · 항목은 추후 확장) ── */
 function ccOpenSettings(){
   let m=document.getElementById('ccSetModal');if(m)m.remove();
   m=document.createElement('div');m.id='ccSetModal';
   m.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(0,0,0,.45)';
   const item=(id,em,tt,ds)=>'<button type="button" id="'+id+'" style="display:flex;align-items:center;gap:11px;width:100%;background:#fff;border:1px solid #E6E2D9;border-radius:12px;padding:12px;cursor:pointer;text-align:left"><span style="font-size:18px">'+em+'</span><span style="flex:1"><b style="font-size:13px;color:#1B2430;display:block">'+tt+'</b><small style="font-size:10.5px;color:#8a877f">'+ds+'</small></span><span style="color:#B9B5AA">›</span></button>';
+  const _own=window._ccSlug&&(localStorage.getItem('cc_my_slug')===window._ccSlug)&&!!localStorage.getItem('cc_owner_'+window._ccSlug);
+  const _my=localStorage.getItem('cc_my_slug')||'';
+  let items='';
+  if(_own){
+    items=item('ccSetProf','🎯','연령대·직업','맞춤 콘텐츠·상담을 위해 (선택)')
+      +item('ccSetPhoto','🖼️','프로필 사진 변경','기본 그림 대신 내 사진으로')
+      +item('ccSetBrand','✏️','명칭 꾸미기','문구·서체·크기·색');
+  }else{
+    items=item('ccSetJoin','📱','나만의 홈페이지 만들기','30초면 나만의 주소가 생겨요')
+      +(_my?item('ccSetMy','🏠','내 홈페이지 열기','jarvia.co.kr/@'+_my):'');
+  }
   m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(90vw,340px);background:#F6F5F1;border-radius:18px;padding:18px 14px">'
-    +'<div style="font-size:15px;font-weight:800;color:#0F1B33;margin:0 4px 12px">⚙️ 내 홈페이지 설정</div>'
-    +'<div style="display:flex;flex-direction:column;gap:8px">'
-    +item('ccSetProf','🎯','연령대·직업','맞춤 콘텐츠·상담을 위해 (선택)')
-    +item('ccSetPhoto','🖼️','프로필 사진 변경','기본 그림 대신 내 사진으로')
-    +item('ccSetBrand','✏️','명칭 꾸미기','문구·서체·크기·색')
-    +'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:#0F1B33;margin:0 4px 12px">⚙️ '+(_own?'내 홈페이지 설정':'설정')+'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:8px">'+items+'</div>'
     +'<button id="ccSetClose" type="button" style="width:100%;border:0;background:none;color:#8a877f;font-size:12px;margin-top:12px">닫기</button></div>';
   document.body.appendChild(m);
   document.getElementById('ccSetClose').onclick=()=>m.remove();
-  document.getElementById('ccSetProf').onclick=()=>{m.remove();ccOpenProfileUI();};
-  document.getElementById('ccSetPhoto').onclick=()=>{m.remove();ccPickPhoto();};
-  document.getElementById('ccSetBrand').onclick=()=>{m.remove();ccOpenBrandUI();};
+  const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onclick=fn;};
+  bind('ccSetProf',()=>{m.remove();ccOpenProfileUI();});
+  bind('ccSetPhoto',()=>{m.remove();ccPickPhoto();});
+  bind('ccSetBrand',()=>{m.remove();ccOpenBrandUI();});
+  bind('ccSetJoin',()=>{m.remove();ccInjectJoinUI();const jm=document.getElementById('ccJoinModal');if(jm){jm.style.display='block';const si=document.getElementById('ccSlug');if(si)setTimeout(()=>si.focus(),80);}});
+  bind('ccSetMy',()=>{m.remove();location.href='/@'+encodeURIComponent(_my);});
 }
 /* ── 프로필 사진 선택 (폰 갤러리 → 축소 → 저장) ── */
 function ccPickPhoto(){
@@ -4008,8 +4028,10 @@ window.ccMaybeShowJoin=function(){ // 프로필 로드 완료 후 호출 (channe
     const my=localStorage.getItem('cc_my_slug');
     if(my&&window._ccSlug===my)return; // 내 홈페이지를 보는 중이면 미노출
     ccInjectJoinUI();
+    try{ccEnsureGear();}catch(_e){} // ⚙️ 설정(가입 코너 포함) — 방문자에게도
+    let hideB=false;try{hideB=sessionStorage.getItem('ccBannerHide')==='1';}catch(_e){}
     const b=document.getElementById('ccJoinBanner');
-    if(b){if(my){b.textContent='🏠 내 홈페이지 열기';}b.style.display='block';}
+    if(b&&!hideB){const bt=document.getElementById('ccJoinBannerTxt');if(my&&bt){bt.textContent='🏠 내 홈페이지 열기';}b.style.display='block';}
   }catch(_e){}
 };
 
