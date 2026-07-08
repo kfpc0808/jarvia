@@ -4312,10 +4312,28 @@ window.ccStorage=(function(){
     const k=await vaultKey();
     return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12)},k,bytes.slice(12)));
   }
-  /* ── 파일 업서트(멀티파트) · 다운로드 ── */
+  /* ── 파일 업서트 · 다운로드 ── */
+  async function uploadResumable(parent,name,data,mime,existingId){ // ★ 대용량: Blob 직송 (재개형)
+    const t=await token();
+    const meta=existingId?{name:name}:{name:name,parents:[parent]};
+    const init=await fetch('https://www.googleapis.com/upload/drive/v3/files'+(existingId?'/'+existingId:'')+'?uploadType=resumable&fields=id',{
+      method:existingId?'PATCH':'POST',
+      headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json; charset=UTF-8','X-Upload-Content-Type':mime||'application/octet-stream'},
+      body:JSON.stringify(meta)});
+    if(!init.ok)throw new Error('up-init-'+init.status);
+    const loc=init.headers.get('Location');
+    if(!loc)throw new Error('up-noloc');
+    const body=(data&&typeof data.arrayBuffer==='function')?data:new Blob([data],{type:mime||'application/octet-stream'});
+    const up=await fetch(loc,{method:'PUT',headers:{'Content-Type':mime||'application/octet-stream'},body:body});
+    if(!up.ok)throw new Error('up-put-'+up.status);
+    return (await up.json()).id;
+  }
   async function upsert(folderKey,name,bytes,mime){
     const map=await ensureFolders();const parent=map[folderKey]||map.__root;
     const ex=await findOne("name='"+esc(name)+"' and '"+parent+"' in parents");
+    const isBlob=bytes&&typeof bytes.arrayBuffer==='function';
+    const size=isBlob?bytes.size:bytes.length;
+    if(isBlob||size>4194304)return uploadResumable(parent,name,bytes,mime,ex&&ex.id); // 4MB 초과·Blob = 재개형
     const bnd='ccb'+Date.now();
     const meta=ex?{name:name}:{name:name,parents:[parent]};
     const head='--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+bnd+'\r\nContent-Type: '+(mime||'application/octet-stream')+'\r\nContent-Transfer-Encoding: base64\r\n\r\n';
@@ -5144,13 +5162,13 @@ function cdcThumb(file,type){ // 사진=축소본 / 영상=첫 장면 (96px JPEG
 async function cdcUpload(files){
   const upIds=[];
   for(const f of files){
-    if(f.size>26214400){toast(f.name+' — 25MB 초과로 건너뜀','warn');continue;}
     const type=cdcType(f.type||'');
-    const big=f.size>8388608||type==='vid'||type==='aud'; // 큰 파일·영상·음성 = 원본(스트리밍 가능), 문서·사진 = 암호화
+    const big=f.size>8388608||type==='vid'||type==='aud'; // 큰 파일·영상·음성 = 원본(스트리밍), 문서·사진 = 암호화
+    if(big&&f.size>524288000){toast(f.name+' — 영상·대용량은 500MB까지 담을 수 있어요','warn');continue;}
+    if(!big&&f.size>26214400){toast(f.name+' — 문서·사진(암호화)은 25MB까지예요','warn');continue;}
     toast((big?'업로드 중':'암호화 업로드 중')+' — '+f.name,'info');
     try{
-      const buf=new Uint8Array(await f.arrayBuffer());
-      const bytes=big?buf:await ccStorage.enc(buf);
+      const bytes=big?f:await ccStorage.enc(new Uint8Array(await f.arrayBuffer())); // ★ 원본은 Blob 그대로 (메모리 절약)
       const nm=big?f.name:(f.name+'.safe');
       const driveId=await ccStorage.uploadBytes('문서함/기타',nm,bytes,big?(f.type||'application/octet-stream'):'application/octet-stream');
       const thumb=await cdcThumb(f,type);
@@ -5602,7 +5620,7 @@ init();
     $("mpfSave").onclick=saveEdit;
     $("mpfGo").onclick=function(){edWish=false;$("mpfGo").classList.add("on");$("mpfWish").classList.remove("on");};
     $("mpfWish").onclick=function(){edWish=true;$("mpfWish").classList.add("on");$("mpfGo").classList.remove("on");};
-    $("mpfFile").onchange=function(e){var files=Array.prototype.slice.call(e.target.files||[]);var chain=Promise.resolve();files.forEach(function(f){chain=chain.then(function(){if(f.type.indexOf("video")===0&&f.size>26214400){toast("영상은 25MB까지 저장할 수 있어요 — "+f.name,"warn");return;}return (f.type.indexOf("video")===0?videoThumb(f):compressImg(f,1280,.82)).then(function(r){if(r)edPhotos.push(r);});});});chain.then(function(){renderEdPhotos();});e.target.value="";};
+    $("mpfFile").onchange=function(e){var files=Array.prototype.slice.call(e.target.files||[]);var chain=Promise.resolve();files.forEach(function(f){chain=chain.then(function(){if(f.type.indexOf("video")===0&&f.size>524288000){toast("영상은 500MB까지 저장할 수 있어요 — "+f.name,"warn");return;}return (f.type.indexOf("video")===0?videoThumb(f):compressImg(f,1280,.82)).then(function(r){if(r)edPhotos.push(r);});});});chain.then(function(){renderEdPhotos();});e.target.value="";};
     var kwT;$("mpfPlaceKw").addEventListener("input",function(){clearTimeout(kwT);kwT=setTimeout(doPlaceSearch,400);});
     $("mpfPlaceKw").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();doPlaceSearch();}});
     $("mpKw").addEventListener("input",function(){kw=$("mpKw").value.trim();renderList();});
@@ -5676,10 +5694,10 @@ init();
       return Promise.all((p.photos||[]).map(function(ph){
         var pre=Promise.resolve();
         if(ph.type==="video"&&ph.video&&!ph.driveId&&window._ccSlug&&window.ccStorage){ // ★ 영상 원본 드라이브 저장
-          pre=ph.video.arrayBuffer().then(function(ab){
+          pre=(function(){
             var nm=ph.video.name||"video.mp4";var ext=nm.indexOf(".")>=0?nm.slice(nm.lastIndexOf(".")):".mp4";
-            return window.ccStorage.uploadBytes("나의 장소","mp_"+p.id+"_"+Date.now()+ext,new Uint8Array(ab),ph.video.type||"video/mp4");
-          }).then(function(id){if(id){ph.driveId=id;ph.video=null;}}).catch(function(){});
+            return window.ccStorage.uploadBytes("나의 장소","mp_"+p.id+"_"+Date.now()+ext,ph.video,ph.video.type||"video/mp4"); // ★ Blob 직송
+          })().then(function(id){if(id){ph.driveId=id;ph.video=null;}}).catch(function(){});
         }
         return pre.then(function(){return gdBlobToB64(ph.blob);}).then(function(x){return {type:ph.type,data:x,driveId:ph.driveId||null};});
       }))
