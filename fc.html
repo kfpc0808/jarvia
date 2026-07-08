@@ -3784,7 +3784,7 @@ function applyClientBrand(){
     try{
       const _ico=(b.photo&&b.photo.indexOf('data:')===0)?b.photo:(location.origin+'/myhome_avatar.png');
       const _it=(_ico.indexOf('data:image/png')===0||_ico.indexOf('.png')>0)?'image/png':'image/jpeg';
-      const _mj={name:t+' — 나의 홈페이지',short_name:(t||'내 홈피').slice(0,10),start_url:'/@'+window._ccSlug,
+      const _mj={name:t+' — 나의 홈페이지',short_name:(t||'내 홈피').slice(0,10),start_url:location.origin+'/@'+window._ccSlug,
         display:'standalone',background_color:'#0F1B33',theme_color:'#0F1B33',orientation:'portrait',
         icons:[{src:_ico,sizes:'512x512',type:_it,purpose:'any'},{src:_ico,sizes:'192x192',type:_it,purpose:'any'}]};
       const _lm=document.getElementById('pwaManifest');
@@ -4382,34 +4382,47 @@ window.ccStorage=(function(){
     _folders=map;try{localStorage.setItem('cc_gdf_'+slug(),JSON.stringify(map));}catch(_e){}
     return map;
   }
-  /* ── 암호화 열쇠 — 드라이브 appData 보관 (기기 바뀌어도 계정 재연결 = 복구) ── */
-  async function vaultKey(){
-    if(_key)return _key;
-    let raw=null;
-    const f=await findOne("name='vault_key.v1' and 'appDataFolder' in parents");
-    if(f){
-      const r=await api('/drive/v3/files/'+f.id+'?alt=media',{});
-      raw=Uint8Array.from(atob((await r.json()).k),c=>c.charCodeAt(0));
-    }else{
-      raw=crypto.getRandomValues(new Uint8Array(32));
+  /* ── 암호화 열쇠 — 드라이브 숨김저장소(appData) 보관 ──
+     ★ 재작성: spaces=appDataFolder 누락으로 열쇠를 못 찾아 세션마다 새 열쇠가 생기던 결함 수정.
+       기존에 만들어진 열쇠 전부를 불러와 차례로 복호 시도 → 어느 열쇠로 잠겼든 데이터 복구. */
+  let _keysArr=null;
+  async function vaultKeys(){
+    if(_keysArr&&_keysArr.length)return _keysArr;
+    const arr=[];
+    try{
+      const r=await api('/drive/v3/files?q='+encodeURIComponent("name='vault_key.v1' and trashed=false")+'&spaces=appDataFolder&orderBy=createdTime&fields=files(id)&pageSize=25',{});
+      const files=(await r.json()).files||[];
+      for(const f of files){
+        try{
+          const rr=await api('/drive/v3/files/'+f.id+'?alt=media',{});
+          const raw=Uint8Array.from(atob((await rr.json()).k),c=>c.charCodeAt(0));
+          arr.push(await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']));
+        }catch(_e){}
+      }
+    }catch(_e){}
+    if(!arr.length){ // 진짜 최초 — 새 열쇠 1개 생성
+      const raw=crypto.getRandomValues(new Uint8Array(32));
       const meta={name:'vault_key.v1',parents:['appDataFolder']};
       const body=JSON.stringify({k:btoa(String.fromCharCode.apply(null,raw))});
       const bnd='ccb'+Date.now();
       await api('/upload/drive/v3/files?uploadType=multipart',{method:'POST',
         headers:{'Content-Type':'multipart/related; boundary='+bnd},
         body:'--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+bnd+'\r\nContent-Type: application/json\r\n\r\n'+body+'\r\n--'+bnd+'--'});
+      arr.push(await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']));
     }
-    _key=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']);
-    return _key;
+    _keysArr=arr;return arr;
   }
-  async function enc(bytes){ // Uint8Array → iv(12)+ct
-    const k=await vaultKey();const iv=crypto.getRandomValues(new Uint8Array(12));
-    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},k,bytes));
+  async function enc(bytes){ // Uint8Array → iv(12)+ct — 항상 첫(가장 오래된) 열쇠로 잠금: 모든 기기 동일
+    const ks=await vaultKeys();const iv=crypto.getRandomValues(new Uint8Array(12));
+    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},ks[0],bytes));
     const out=new Uint8Array(12+ct.length);out.set(iv);out.set(ct,12);return out;
   }
-  async function dec(bytes){
-    const k=await vaultKey();
-    return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12)},k,bytes.slice(12)));
+  async function dec(bytes){ // 모든 열쇠로 차례 시도 — 과거 어떤 열쇠로 잠겼어도 열림
+    const ks=await vaultKeys();const iv=bytes.slice(0,12),ct=bytes.slice(12);
+    for(const k of ks){
+      try{return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));}catch(_e){}
+    }
+    throw new Error('dec-nokey');
   }
   /* ── 폴더 ID 획득 (캐시에 없는 새 폴더면 지도 재구성 1회 — 자가치유) ── */
   async function folderId(folderKey){
@@ -5427,6 +5440,7 @@ function cdcGuide(){ccvGuide('cdcGuideM','비공개 문서함,<br>이렇게 쓰�
  ['안심하세요','파일은 회사 서버를 <b style="color:#fff">거치지 않고</b> 폰에서 회원님 드라이브로 직접 갑니다. 저희는 파일도, 열쇠도 갖고 있지 않습니다.'],
  ['자주 묻는 것','<b style="color:#D8DCE8">Q. 용량은?</b> 회원님 구글 계정 용량(기본 15GB)을 사용해요.<br><b style="color:#D8DCE8">Q. 드라이브에서 지우면?</b> 목록에서 열리지 않게 돼요 — 삭제는 이 화면에서 하는 걸 권해요.<br><b style="color:#D8DCE8">Q. 폰을 바꾸면?</b> 구글 재연결이면 전부 그대로.']]);}
 
+window.ccAssetView=ccAssetView;window.ccCalView=ccCalView;window.ccPwdView=ccPwdView;window.ccDocsView=ccDocsView; // [다시 시도] 버튼용 전역 노출
 /* ★ 기기 간 배경 동기화 수신 — 다른 기기 변경분이 도착하면 열려 있는 보관함 화면 자동 갱신 */
 document.addEventListener('ccv-sync',ev=>{
   try{
