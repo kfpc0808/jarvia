@@ -739,7 +739,7 @@ a{color:inherit;text-decoration:none}
       </button>
 
       <!-- 1.2 나의 장소 (My Places) -->
-      <button type="button" class="mpEntry" onclick="myPlacesOpen()" aria-label="나의 장소 열기" style="position:relative;display:flex;align-items:center;gap:13px;background:linear-gradient(135deg,#FBF6EA 0%,#FFFDF8 100%);border:1px solid #EAD9B4;border-radius:14px;padding:16px 15px;margin-bottom:12px;box-shadow:0 5px 16px rgba(168,133,47,.1);cursor:pointer;text-align:left;width:100%;font-family:inherit">
+      <button type="button" class="mpEntry" onclick="ccRequirePin().then(function(p){if(p)myPlacesOpen();})" aria-label="나의 장소 열기" style="position:relative;display:flex;align-items:center;gap:13px;background:linear-gradient(135deg,#FBF6EA 0%,#FFFDF8 100%);border:1px solid #EAD9B4;border-radius:14px;padding:16px 15px;margin-bottom:12px;box-shadow:0 5px 16px rgba(168,133,47,.1);cursor:pointer;text-align:left;width:100%;font-family:inherit">
         <span style="position:absolute;top:-9px;left:16px;background:#fff;color:#9C7C3C;font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:20px;border:1px solid #EAD9B4">＋ 새 코너</span>
         <span style="width:48px;height:48px;border-radius:14px;flex:none;background:linear-gradient(135deg,#C9A96E,#A8852F);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 6px 14px rgba(168,133,47,.34)">📍</span>
         <span style="flex:1;min-width:0">
@@ -2076,6 +2076,7 @@ async function init(){
         try{const _need=((fcData&&fcData.loginId)||'').toLowerCase();if(_need&&fcData.loginIdLower!==_need){updateDoc(doc(db,'users',fcUid),{loginIdLower:_need}).catch(()=>{});}}catch(_e){}
         loadFcAdminSection();
         fcNotifyStart();
+        try{ccInjectVaultZone();}catch(_e){} // ★ 컨설턴트 소유자뷰: 나만의 보관함 렌더 (본인만 — 관문이 방문자 차단)
         const _eb=$('ownerEditBtn'); if(_eb)_eb.style.display='inline-flex';
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
         // 📇 고객 알림·등록 패널 바인딩 (2026-06-11)
@@ -4222,6 +4223,7 @@ document.addEventListener('click',function(ev){
 function ccGetPin(slug){try{return localStorage.getItem('cc_pin_'+slug)||'';}catch(_e){return '';}}
 function ccRequirePin(slug){
   slug=slug||window._ccSlug;
+  if(!slug&&isOwnerView&&loginId){return Promise.resolve('fc:'+loginId);} // ★ 컨설턴트 소유자뷰: 로그인이 곧 소유자 — PIN 없이 통과
   return new Promise(res=>{
     if(!slug){res(null);return;}
     const c=ccGetPin(slug);
@@ -4408,9 +4410,11 @@ const GD_CLIENT_ID='388025068900-njpkb225pte14fphelubl1i2h0nab8lj.apps.googleuse
 const GD_SCOPES='https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata';
 const CC_ROOT='내 홈페이지 금고';
 const CC_FOLDERS=['문서함','문서함/보험·증권','문서함/계약서','문서함/신분증·증명','문서함/세금·영수증','문서함/건강·의료','문서함/가족','문서함/기타','자산관리','머니캘린더','비밀번호금고','나의 장소','대화저장'];
+/* ★ 채널 식별자 — 고객: 슬러그 / 컨설턴트 소유자뷰: fc:{loginId} (로그인=소유자). 2026-07 */
+function ccVaultId(){return window._ccSlug||((isOwnerView&&loginId)?('fc:'+loginId):'');}
 window.ccStorage=(function(){
   let _tok='',_exp=0,_key=null,_folders=null;
-  const slug=()=>window._ccSlug||'';
+  const slug=()=>ccVaultId();
   const pin=()=>{try{return localStorage.getItem('cc_pin_'+slug())||'';}catch(_e){return '';}};
   const connected=()=>{try{return localStorage.getItem('cc_gd_'+slug())==='1';}catch(_e){return false;}};
   /* ── 접근토큰 (서버가 리프레시로 발급 — 재로그인 없음) ── */
@@ -4685,8 +4689,8 @@ async function ccVaultUI(next){
   if(offBtn)offBtn.onclick=async()=>{
     if(!confirm('나만의 보관함 연결을 해제할까요?\n드라이브의 자료는 그대로 남고, 다시 연결하면 복원됩니다.'))return;
     const pin=await ccRequirePin();if(!pin)return;
-    try{await httpsCallable(fns,'gdDisconnect')({slug:window._ccSlug,pin:pin});}catch(_e){}
-    try{localStorage.removeItem('cc_gd_'+window._ccSlug);localStorage.removeItem('cc_gdf_'+window._ccSlug);}catch(_e){}
+    try{await httpsCallable(fns,'gdDisconnect')({slug:ccVaultId(),pin:pin});}catch(_e){}
+    try{localStorage.removeItem('cc_gd_'+ccVaultId());localStorage.removeItem('cc_gdf_'+ccVaultId());}catch(_e){}
     m.remove();toast('연결이 해제되었습니다','info');
   };
 }
@@ -4719,7 +4723,7 @@ function ccFormBadges(tries){
   if(links[1])mk('ccFbR','전문위원',links[1].href,'right');
 }
 function ccInjectVaultZone(){
-  if(!window._ccSlug||document.getElementById('ccVaultZone'))return;
+  if((!window._ccSlug&&!(isOwnerView&&loginId))||document.getElementById('ccVaultZone'))return; // ★ 고객 채널 또는 컨설턴트 소유자뷰
   const dl=document.getElementById('cardDailyLink');if(!dl||!dl.parentNode)return;
   // 재무대시보드 삭제 + 아침독서 풀폭 (AI 재무건강검진은 자산관리로 흡수)
   const db=document.getElementById('cardDashboard');if(db)db.style.setProperty('display','none','important');
