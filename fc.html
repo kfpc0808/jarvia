@@ -2349,6 +2349,12 @@ async function loadFcResources(){
       const fd=document.getElementById('formDivider');
       if(fd&&fd.parentNode)fd.parentNode.insertBefore(z,fd); // 맨 아래(재무진단 폼 바로 위)
       else document.querySelector('.wrap,body').appendChild(z);
+      try{ // ★ 새 자료 1회 알림 (본 적 없는 자료가 생기면 상단 배너)
+        const seen=JSON.parse(localStorage.getItem('cc_res_seen_'+window._ccSlug)||'[]');
+        const fresh=items.filter(r=>seen.indexOf(r.id)<0);
+        localStorage.setItem('cc_res_seen_'+window._ccSlug,JSON.stringify(items.map(r=>r.id)));
+        if(fresh.length&&seen.length!==0&&window.ccNotifBar)ccNotifBar('📬 담당 전문가의 새 자료 '+fresh.length+'건이 도착했어요');
+      }catch(_e){}
       return;
     }
     // ── 컨설턴트 채널: 기존 자료실 (기간 필터만 동일 적용) ──
@@ -3809,9 +3815,80 @@ function applyClientBrand(){
       try{ccEnsureGear();}catch(_e){}
       try{ccInjectVaultZone();}catch(_e){}
       try{ccFormBadges();}catch(_e){}
+      try{ccTaxCardMerge();}catch(_e){}
+      try{ccNotifBar();}catch(_e){}
     }
   }catch(_e){}
 }
+/* ★ 세무 캘린더 카드에 '내 일정' 병합 (기기 캐시 기반 — 30일 내 임박순 3건) + [＋내 일정] */
+function ccTaxCardMerge(){
+  const card=document.getElementById('cardCalendar');
+  if(!card||document.getElementById('ccMyEvtStrip'))return;
+  let data=null;try{data=JSON.parse(localStorage.getItem('cc_v_'+window._ccSlug+'_일정')||'null');}catch(_e){}
+  const items=(data&&data.items)||[];
+  const now=new Date();const list=[];
+  for(let off=0;off<2;off++){ // 이번달+다음달
+    const y=now.getFullYear()+(now.getMonth()+off>11?1:0), mo=(now.getMonth()+off)%12+1;
+    items.forEach(it=>{try{cclOcc(it,y,mo).forEach(d=>{
+      const dt=new Date(y,mo-1,d);const dd=Math.floor((dt-new Date(now.getFullYear(),now.getMonth(),now.getDate()))/86400000);
+      const done=!!(it.done&&it.done[y+'-'+String(mo).padStart(2,'0')+'-'+d]);
+      if(dd>=0&&dd<=30&&!done)list.push({it,dd,mo,d});});}catch(_e){}});
+  }
+  list.sort((a,b)=>a.dd-b.dd);
+  const top=list.slice(0,3);
+  const strip=document.createElement('div');strip.id='ccMyEvtStrip';
+  strip.style.cssText='margin-top:10px;border-top:1px dashed #E6E2D9;padding-top:9px';
+  strip.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:10.5px;color:#6b5a33">🔒 내 일정</b>'
+    +'<button id="ccMyEvtAdd" style="border:1px solid #C9A96E;background:#FDFBF5;color:#8B6914;border-radius:999px;padding:3px 10px;font-size:9.5px;font-weight:800">＋ 내 일정</button></div>'
+    +(top.length?('<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">'
+      +top.map(x=>'<div data-open-cal="1" style="display:flex;align-items:center;gap:7px;font-size:11px;cursor:pointer">'
+        +'<span style="flex-shrink:0;font-size:8.5px;font-weight:800;border-radius:5px;padding:2px 6px;background:'+(x.dd<=3?'#FCEBEB;color:#A32D2D':'#F1EFE8;color:#5F5E5A')+'">'+(x.dd===0?'오늘':'D-'+x.dd)+'</span>'
+        +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#1B2430">'+(x.it.kind==='evt'?'📌 ':'')+ccvEsc(x.it.name)+'</span>'
+        +'<span style="flex-shrink:0;font-size:9px;color:#8a877f">'+x.mo+'/'+x.d+(x.it.time?' '+x.it.time:'')+'</span></div>').join('')+'</div>')
+      :'<div style="margin-top:6px;font-size:10px;color:#8a877f">등록한 일정이 여기 함께 보여요 — 생신·계약갱신·회사 일정까지</div>');
+  card.appendChild(strip);
+  strip.addEventListener('click',ev=>{
+    if(ev.target.closest('#ccMyEvtAdd')){ccVaultGate(()=>cclEdit(null,null,null));return;}
+    if(ev.target.closest('[data-open-cal]'))ccVaultGate(()=>ccCalView());
+  });
+}
+/* ★ 상단 알림 배너 — 오늘·임박 일정(알림 설정 기준) + 새 자료 (하루 1회 닫기) */
+function ccNotifBar(extra){
+  const slug=window._ccSlug;if(!slug)return;
+  const todayKey=new Date().toISOString().slice(0,10);
+  try{if(localStorage.getItem('cc_nb_'+slug)===todayKey&&!extra)return;}catch(_e){} // 오늘 닫음
+  let data=null;try{data=JSON.parse(localStorage.getItem('cc_v_'+slug+'_일정')||'null');}catch(_e){}
+  const items=(data&&data.items)||[];
+  const ALARM={'당일':0,'1일 전':1,'3일 전':3,'7일 전':7};
+  const now=new Date();const alerts=[];
+  for(let off=0;off<2;off++){
+    const y=now.getFullYear()+(now.getMonth()+off>11?1:0), mo=(now.getMonth()+off)%12+1;
+    items.forEach(it=>{try{cclOcc(it,y,mo).forEach(d=>{
+      const dd=Math.floor((new Date(y,mo-1,d)-new Date(now.getFullYear(),now.getMonth(),now.getDate()))/86400000);
+      const done=!!(it.done&&it.done[y+'-'+String(mo).padStart(2,'0')+'-'+d]);
+      const lim=ALARM[it.alarm]!==undefined?ALARM[it.alarm]:0;
+      if(dd>=0&&dd<=lim&&!done)alerts.push({name:(it.kind==='evt'?'📌 ':'')+it.name,dd,time:it.time||''});
+    });}catch(_e){}});
+  }
+  alerts.sort((a,b)=>a.dd-b.dd);
+  const msgs=alerts.slice(0,2).map(a=>(a.dd===0?'오늘':'D-'+a.dd)+' · '+a.name+(a.time?' '+a.time:''));
+  if(extra)msgs.unshift(extra);
+  if(!msgs.length)return;
+  let bar=document.getElementById('ccNbar');if(bar)bar.remove();
+  bar=document.createElement('div');bar.id='ccNbar';
+  bar.style.cssText='margin:10px 0 2px;background:linear-gradient(135deg,#FDF8EC,#FBF2DC);border:1px solid rgba(201,169,110,.55);border-radius:12px;padding:9px 11px;display:flex;align-items:center;gap:9px';
+  bar.innerHTML='<span style="font-size:15px;flex-shrink:0">🔔</span>'
+    +'<div data-nb-open="1" style="flex:1;min-width:0;cursor:pointer">'
+    +msgs.map(t=>'<div style="font-size:11px;font-weight:700;color:#6b5a33;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.6">'+ccvEsc(t)+'</div>').join('')
+    +'</div><button id="ccNbX" style="border:0;background:none;color:#B49A64;font-size:14px;padding:2px 4px;flex-shrink:0">✕</button>';
+  const dl=document.getElementById('cardDailyLink');
+  if(dl&&dl.parentNode)dl.parentNode.insertBefore(bar,dl);
+  bar.addEventListener('click',ev=>{
+    if(ev.target.closest('#ccNbX')){bar.remove();try{localStorage.setItem('cc_nb_'+slug,todayKey);}catch(_e){}return;}
+    if(ev.target.closest('[data-nb-open]')){if(extra&&document.getElementById('ccResZone')){document.getElementById('ccResZone').scrollIntoView({behavior:'smooth'});}else ccVaultGate(()=>ccCalView());}
+  });
+}
+window.ccNotifBar=ccNotifBar;
 /* ── 가입 배너·모달 (컨설턴트 channelV2===true 일 때만 노출) ── */
 let _ccVerifiedPhone='';
 function ccInjectJoinUI(){
@@ -4490,19 +4567,18 @@ function ccInjectVaultZone(){
   const mo=document.getElementById('cardMorning');
   if(mo){ // ★ 아침독서 → 위아래 네이비 카드와 어울리는 프리미엄 배너 (링크·추적 동작은 원형 유지)
     mo.style.gridColumn='1 / -1';
-    mo.style.cssText+=';display:flex;align-items:center;gap:13px;background:linear-gradient(135deg,#0F1B33,#1B3A6B);border:1px solid rgba(201,169,110,.45);border-radius:16px;padding:14px 15px;box-shadow:0 4px 14px rgba(15,27,51,.25);text-decoration:none';
-    mo.innerHTML='<span style="width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#C9A96E,#E8C97A);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;box-shadow:0 2px 8px rgba(201,169,110,.45)">🌅</span>'
-      +'<span style="flex:1;min-width:0;text-align:left"><small style="display:block;font-size:8.5px;letter-spacing:2.5px;color:#C9A96E;font-weight:800">MORNING READING</small>'
-      +'<b style="display:block;font-size:15px;color:#fff;margin-top:1px">아침독서</b>'
-      +'<small style="display:block;font-size:10px;color:#9AA3B8;margin-top:1px">매주 월요일 · 분야별 한 권씩, 5분이면 충분해요</small></span>'
-      +'<span style="flex-shrink:0;border:1px solid rgba(201,169,110,.55);color:#E8C97A;border-radius:999px;padding:5px 11px;font-size:10px;font-weight:800;white-space:nowrap">읽으러 가기 ›</span>';
+    mo.style.cssText+=';display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;background:linear-gradient(135deg,#0F1B33,#1B3A6B);border:1px solid rgba(201,169,110,.45);border-radius:14px;padding:9px 12px;box-shadow:0 3px 10px rgba(15,27,51,.22);text-decoration:none;text-align:left;min-height:0';
+    mo.innerHTML='<span style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#C9A96E,#E8C97A);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">🌅</span>'
+      +'<span style="flex:1;min-width:0;text-align:left"><b style="display:block;font-size:13px;color:#fff;line-height:1.2">아침독서 <small style="font-size:8px;letter-spacing:1.5px;color:#C9A96E;font-weight:800;margin-left:3px">MORNING READING</small></b>'
+      +'<small style="display:block;font-size:9px;color:#9AA3B8;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">매주 월요일 · 분야별 한 권씩, 5분이면 충분해요</small></span>'
+      +'<span style="flex-shrink:0;border:1px solid rgba(201,169,110,.55);color:#E8C97A;border-radius:999px;padding:3px 9px;font-size:9px;font-weight:800;white-space:nowrap">읽기 ›</span>';
   }
   const z=document.createElement('div');z.id='ccVaultZone';
   const card=(k,ic,t,d)=>'<div data-vk="'+k+'" style="background:#fff;border:1px solid #E6E2D9;border-radius:16px;padding:13px 12px;cursor:pointer;position:relative"><span style="font-size:19px">'+ic+'</span><b style="display:block;font-size:12.5px;margin-top:5px;color:#0F1B33">'+t+'</b><small style="display:block;font-size:9px;color:#8a877f;margin-top:2px;line-height:1.4">'+d+'</small></div>';
   z.innerHTML='<div style="display:flex;align-items:baseline;gap:6px;margin:16px 2px 8px"><b style="font-size:11px;letter-spacing:.5px;color:#6b5a33">🔒 나만의 보관함</b><small style="font-size:9px;color:#8a877f">내 폰과 내 구글드라이브에만 저장돼요 · 회사 서버 미저장</small></div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">'
     +card('asset','💰','My 자산관리','순자산 한 화면 · 자동 합산')
-    +card('cal','📅','머니 캘린더','낼 돈·들어올 돈 D-day')
+    +card('cal','📅','캘린더(머니/일정)','돈과 일정을 D-day로')
     +card('pwd','🔐','비밀번호 금고','이 기기에서만 암호화')
     +card('docs','📁','비공개 문서함','100% 내 드라이브 저장')
     +'</div>';
@@ -4806,7 +4882,7 @@ function cclOcc(it,y,m){ // 해당 월 발생일 배열 [day,...]
   return [];
 }
 async function ccCalView(){
-  const ov=ccvShell('cclView','📅','머니 캘린더','🔒 내 기기 + 내 드라이브 저장 · 회사 서버 미저장');
+  const ov=ccvShell('cclView','📅','캘린더(머니/일정)','🔒 내 기기 + 내 드라이브 저장 · 회사 서버 미저장');
   ov.querySelector('[data-cv="guide"]').onclick=cclGuide;
   ov.querySelector('[data-cv="add"]').onclick=()=>cclEdit(null);
   if(!_cclYM){const n=new Date();_cclYM=[n.getFullYear(),n.getMonth()+1];}
@@ -4827,7 +4903,7 @@ function cclRender(){
   const rows=[];let exp=0,inc=0;
   items.forEach(it=>{cclOcc(it,y,m).forEach(d=>{
     const v=Number(it.amt)||0;const done=!!(it.done&&it.done[monthKey+'-'+d]);
-    if(it.kind==='inc')inc+=v;else exp+=v;
+    if(it.kind==='inc')inc+=v;else if(it.kind!=='evt')exp+=v;
     rows.push({it,d,done,v});});});
   rows.sort((a,b)=>a.d-b.d);
   ov.querySelector('[data-cv="sum"]').innerHTML=
@@ -4839,7 +4915,7 @@ function cclRender(){
   document.getElementById('cclPrev').onclick=()=>{_cclYM=m===1?[y-1,12]:[y,m-1];cclRender();};
   document.getElementById('cclNext').onclick=()=>{_cclYM=m===12?[y+1,1]:[y,m+1];cclRender();};
   const chips=ov.querySelector('[data-cv="chips"]');
-  chips.innerHTML=ccvChip('all','전체',_cclFilter==='all')+ccvChip('exp','지출',_cclFilter==='exp')+ccvChip('inc','수입',_cclFilter==='inc')+CCL_CATS.map(c=>ccvChip(c,c,_cclFilter===c)).join('');
+  chips.innerHTML=ccvChip('all','전체',_cclFilter==='all')+ccvChip('exp','지출',_cclFilter==='exp')+ccvChip('inc','수입',_cclFilter==='inc')+ccvChip('evt','📌 일정',_cclFilter==='evt')+CCL_CATS.map(c=>ccvChip(c,c,_cclFilter===c)).join('');
   chips.onclick=ev=>{const b=ev.target.closest('[data-f]');if(b){_cclFilter=b.dataset.f;cclRender();}};
   const body=ov.querySelector('[data-cv="body"]');
   const qq=_cclQ.toLowerCase();
@@ -4855,10 +4931,12 @@ function cclRender(){
     const ddb=(dd===null||r.done)?'':(dd<0?'':(dd===0?'<span style="font-size:8px;border-radius:4px;padding:1px 5px;font-weight:800;background:#FCEBEB;color:#A32D2D">오늘</span>':(dd<=7?'<span style="font-size:8px;border-radius:4px;padding:1px 5px;font-weight:800;background:'+(dd<=3?'#FCEBEB;color:#A32D2D':'#F1EFE8;color:#5F5E5A')+'">D-'+dd+'</span>':'')));
     h+='<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-top:1px solid #F1EFE8">'
       +'<span data-chk="'+it.id+'|'+r.d+'" style="font-size:19px;cursor:pointer;padding:4px 6px;margin:-4px -2px;color:'+(r.done?'#0F6E56':'#8a877f')+'">'+(r.done?'☑':'☐')+'</span>'
-      +'<div data-row="'+it.id+'" style="flex:1;min-width:0;cursor:pointer"><b style="font-size:11.5px;color:#1B2430;'+(r.done?'text-decoration:line-through;color:#B9B5AA':'')+'">'+ccvEsc(it.name)+(REP[it.repeat]?' <span style="font-size:7.5px;background:#E6F1FB;color:#185FA5;border-radius:3px;padding:0 4px;font-weight:700">'+REP[it.repeat]+'</span>':'')+'</b>'
-      +'<small style="display:block;font-size:8.5px;color:#8a877f">'+[it.cat,it.alarm?('알림 '+it.alarm):''].filter(Boolean).join(' · ')+'</small></div>'
+      +'<div data-row="'+it.id+'" style="flex:1;min-width:0;cursor:pointer"><b style="font-size:11.5px;color:#1B2430;'+(r.done?'text-decoration:line-through;color:#B9B5AA':'')+'">'+(it.kind==='evt'?'📌 ':'')+ccvEsc(it.name)+(REP[it.repeat]?' <span style="font-size:7.5px;background:#E6F1FB;color:#185FA5;border-radius:3px;padding:0 4px;font-weight:700">'+REP[it.repeat]+'</span>':'')+'</b>'
+      +'<small style="display:block;font-size:8.5px;color:#8a877f">'+[it.cat,it.kind==='evt'&&it.memo?it.memo:'',it.alarm?('알림 '+it.alarm):''].filter(Boolean).join(' · ')+'</small></div>'
       +'<span style="white-space:nowrap;color:#5F5E5A">'+m+'/'+r.d+'</span> '+ddb
-      +'<b style="white-space:nowrap;font-size:11.5px;color:'+(it.kind==='inc'?'#0F6E56':'#993C1D')+';'+(r.done?'opacity:.4':'')+'">'+(it.kind==='inc'?'+':'-')+ccaFmt(r.v)+'</b>'
+      +(it.kind==='evt'
+        ?'<b style="white-space:nowrap;font-size:10.5px;color:#1B3A6B;'+(r.done?'opacity:.4':'')+'">'+(it.time?'⏰'+it.time:'종일')+'</b>'
+        :'<b style="white-space:nowrap;font-size:11.5px;color:'+(it.kind==='inc'?'#0F6E56':'#993C1D')+';'+(r.done?'opacity:.4':'')+'">'+(it.kind==='inc'?'+':'-')+ccaFmt(r.v)+'</b>')
       +ccvEditBtn('data-row="'+it.id+'"')+'</div>';
   });
   h+='<div style="display:flex;justify-content:space-between;background:#0F1B33;color:#fff;padding:9px 11px;font-weight:800;font-size:11px"><span>'+m+'월 차액</span><span style="color:#E8C97A">'+(inc-exp>=0?'+':'')+ccaFmt(inc-exp)+'</span></div></div>'+cclTplRow();
@@ -4874,23 +4952,37 @@ function cclRender(){
 }
 function cclTplRow(){
   const t=(k,l,hot)=>'<button data-tpl="'+k+'" style="flex-shrink:0;border:1px '+(hot?'solid #C9A96E;background:#FDFBF5;color:#8B6914':'solid #D9D5CA;background:#fff;color:#5F5E5A')+';border-radius:14px;padding:5px 11px;font-size:10.5px;white-space:nowrap;font-weight:700">＋'+l+'</button>';
-  return '<div style="display:flex;gap:5px;overflow-x:auto;padding:10px 2px 0">'+t('card','카드값')+t('ins','보험료')+t('rent','월세')+t('sub','구독')+t('save','적금만기')+t('ptax','재산세',1)+t('ctax','자동차세',1)+t('etc','직접입력')+'</div>';
+  return '<div style="display:flex;gap:5px;overflow-x:auto;padding:10px 2px 0">'+t('evt','📌 일정',1)+t('card','카드값')+t('ins','보험료')+t('rent','월세')+t('sub','구독')+t('save','적금만기')+t('ptax','재산세',1)+t('ctax','자동차세',1)+t('etc','직접입력')+'</div>';
 }
-function cclEdit(item,tpl){
+const EVT_CATS=['회사','가족','건강','기념일','기타'];
+function cclEdit(item,tpl,kindPre){
   const now=new Date();const pad=n=>String(n).padStart(2,'0');
+  // ★ 신규 + 템플릿 아님 + 종류 미지정 → 첫 질문: 무엇을 넣을까요?
+  if(!item&&!tpl&&!kindPre){
+    const m0=ccvSheet('cclKindM','어떤 걸 넣을까요?',
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:14px">'
+      +[['exp','💸','나갈 돈'],['inc','💰','들어올 돈'],['evt','📌','일정']].map(k=>'<button data-k="'+k[0]+'" style="border:1px solid #D9D5CA;background:#fff;border-radius:12px;padding:14px 4px;font-size:11px;font-weight:700;color:#1B2430"><span style="display:block;font-size:20px;margin-bottom:4px">'+k[1]+'</span>'+k[2]+'</button>').join('')
+      +'</div><button id="clKindX" type="button" style="width:100%;border:0;background:none;color:#8a877f;font-size:11.5px;margin-top:12px">취소</button>');
+    m0.addEventListener('click',ev=>{const b=ev.target.closest('[data-k]');if(b){const k=b.dataset.k;m0.remove();cclEdit(null,null,k);}});
+    document.getElementById('clKindX').onclick=()=>m0.remove();
+    return;
+  }
   const TPL={card:{name:'카드값',cat:'카드',repeat:'monthly',day:25},ins:{name:'보험료',cat:'보험',repeat:'monthly',day:8},
     rent:{name:'월세',cat:'월세',repeat:'monthly',day:1},sub:{name:'구독료',cat:'구독',repeat:'monthly',day:1},
     save:{name:'적금 만기',cat:'적금만기',kind:'inc',repeat:'once'},ptax:{name:'재산세',cat:'세금',repeat:'yearly',month:7,day:16},
-    ctax:{name:'자동차세',cat:'세금',repeat:'yearly',month:6,day:16},etc:{}}[tpl]||{};
+    ctax:{name:'자동차세',cat:'세금',repeat:'yearly',month:6,day:16},evt:{kind:'evt',cat:'기타',repeat:'once'},etc:{}}[tpl]||{};
   const isNew=!item;
-  const it=item||Object.assign({id:'c'+Date.now(),name:'',cat:'기타',kind:'exp',amt:'',repeat:'monthly',day:now.getDate(),weekday:1,month:now.getMonth()+1,date:now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate()),start:cclYMs(now),end:'',alarm:'',done:{}},TPL);
+  const it=item||Object.assign({id:'c'+Date.now(),name:'',cat:kindPre==='evt'?'기타':'기타',kind:kindPre||'exp',amt:'',time:'',memo:'',repeat:kindPre==='evt'?'once':'monthly',day:now.getDate(),weekday:1,month:now.getMonth()+1,date:now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate()),start:cclYMs(now),end:'',alarm:'',done:{}},TPL);
+  const isEvt=it.kind==='evt';
   const sel={kind:it.kind,repeat:it.repeat,cat:it.cat,alarm:it.alarm||'당일'};
   const REPS=['once','weekly','monthly','2mo','quarterly','yearly'];const REPL={once:'1회',weekly:'매주',monthly:'매월','2mo':'2개월',quarterly:'분기',yearly:'매년'};
-  const m=ccvSheet('cclEditM',isNew?'일정 추가':'일정 편집',
-    '<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:10px">수입 / 지출</small>'+ccvChipRow('kind',['지출','수입'],it.kind==='inc'?'수입':'지출',2)
-    +ccvField('clName','이름',it.name,'예: 카드값, 재산세')
-    +ccvField('clAmt','금액 (원)',it.amt,'650,000','won')
-    +'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">분류</small>'+ccvChipRow('cat',CCL_CATS,sel.cat,4)
+  const m=ccvSheet('cclEditM',isNew?(isEvt?'📌 일정 추가':'추가'):(isEvt?'📌 일정 편집':'편집'),
+    (isEvt?''
+      :'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:10px">수입 / 지출</small>'+ccvChipRow('kind',['지출','수입'],it.kind==='inc'?'수입':'지출',2))
+    +ccvField('clName',isEvt?'제목':'이름',it.name,isEvt?'예: 사업자 등록 갱신, 어머니 생신':'예: 카드값, 재산세')
+    +(isEvt?'':ccvField('clAmt','금액 (원)',it.amt,'650,000','won'))
+    +(isEvt?ccvField('clTime','⏰ 시간 (선택)',it.time,'','time')+ccvField('clMemo','내용 (선택)',it.memo,'메모를 남겨두면 그날 함께 보여요'):'')
+    +'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">분류</small>'+ccvChipRow('cat',isEvt?EVT_CATS:CCL_CATS,(isEvt?EVT_CATS:CCL_CATS).indexOf(sel.cat)>=0?sel.cat:(isEvt?'기타':sel.cat),isEvt?5:4)
     +'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">반복</small>'+'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:3px">'+REPS.map(r=>'<button type="button" data-g="repeat" data-v="'+r+'" style="border:'+(sel.repeat===r?'2px solid #1B3A6B;background:#F0F4FA;font-weight:800':'1px solid #D9D5CA;background:#fff')+';border-radius:8px;padding:6px 0;font-size:10px;color:#1B2430">'+REPL[r]+'</button>').join('')+'</div>'
     +'<div id="clWhen"></div>'
     +ccvField('clEnd','종료 (선택, YYYY-MM)',it.end,'2027-12')
@@ -4916,8 +5008,9 @@ function cclEdit(item,tpl){
   document.getElementById('clSave').onclick=()=>{
     it.name=document.getElementById('clName').value.trim();
     if(!it.name){toast('이름을 입력해주세요','warn');return;}
-    it.amt=ccNumVal('clAmt');
-    it.kind=sel.kind==='수입'?'inc':'exp';it.cat=sel.cat;it.repeat=sel.repeat;it.alarm=sel.alarm;
+    if(!isEvt)it.amt=ccNumVal('clAmt');
+    if(isEvt){it.time=(document.getElementById('clTime')||{}).value||'';it.memo=(document.getElementById('clMemo')||{}).value||'';}
+    it.kind=isEvt?'evt':(sel.kind==='수입'?'inc':'exp');it.cat=sel.cat;it.repeat=sel.repeat;it.alarm=sel.alarm;
     it.end=(document.getElementById('clEnd').value||'').trim();
     if(sel.repeat==='once'){it.date=document.getElementById('clDate').value;}
     else if(sel.repeat==='weekly'){it.weekday=['일','월','화','수','목','금','토'].indexOf(sel.weekday||'월');if(it.weekday<0)it.weekday=1;}
@@ -4930,8 +5023,8 @@ function cclEdit(item,tpl){
 async function cclSave(){cclRender();
   try{await ccStorage.saveJson('머니캘린더','일정',_cclData);toast('저장됨 · 내 드라이브 동기화 완료','info');}
   catch(_e){toast('기기에 저장됨 · 드라이브 동기화는 다음에 재시도','warn');}}
-function cclGuide(){ccvGuide('cclGuideM','머니 캘린더,<br>이렇게 쓰세요',[
- ['이 공간은 무엇인가요','카드값·보험료·월세부터 재산세·자동차세, 적금 만기까지 — <b style="color:#E8C97A">나갈 돈과 들어올 돈</b>을 달력처럼 모아 D-day로 챙겨주는 나만의 돈 달력입니다.'],
+function cclGuide(){ccvGuide('cclGuideM','캘린더(머니/일정),<br>이렇게 쓰세요',[
+ ['이 공간은 무엇인가요','카드값·재산세 같은 <b style="color:#E8C97A">나갈 돈·들어올 돈</b>에 더해, 가족 생신·계약 갱신·회사 일정 같은 <b style="color:#E8C97A">📌 중요한 일정</b>까지 — 전부 D-day로 챙겨주는 나만의 달력입니다. ＋를 누르면 셋 중 무엇을 넣을지 먼저 물어봐요.'],
  ['처음 30초 — 템플릿으로','목록 아래 <b style="color:#fff">＋카드값, ＋재산세</b> 같은 버튼을 누르면 반쯤 채워진 채로 시작돼요. 금액만 넣고 저장 — 매월·매년 반복은 자동으로 다음 달에도 나타납니다.'],
  ['이런 것도 됩니다','· 낸 뒤에는 <b style="color:#fff">☐ 체크</b> — 완료 표시로 이달 남은 것만 한눈에<br>· <b style="color:#fff">‹ ›</b>로 다음 달·지난 달 이동, 위에는 이달 차액 자동 계산<br>· 반복은 매주부터 매년까지, 끝나는 달(종료)도 지정'],
  ['안심하세요','일정과 금액은 <b style="color:#fff">이 폰과 회원님의 구글드라이브에만</b> 암호화되어 저장됩니다. 회사 서버에는 저장되지 않아요.'],
@@ -5239,7 +5332,7 @@ function cdcEdit(f){
     if(newExp&&newExp!==f.expiry){f.expiry=newExp;
       try{ // 머니캘린더 자동 등록
         if(!_cclData)_cclData=(await ccStorage.loadJson('머니캘린더','일정'))||{items:[]};
-        _cclData.items.push({id:'c'+Date.now(),name:'📄 '+f.name.replace(/\.[^.]+$/,'')+' 만기',cat:'기타',kind:'exp',amt:0,repeat:'once',date:newExp,alarm:'7일 전',done:{}});
+        _cclData.items.push({id:'c'+Date.now(),name:f.name.replace(/\.[^.]+$/,'')+' 만기',cat:'기타',kind:'evt',amt:0,time:'',memo:'비공개 문서함에서 자동 등록',repeat:'once',date:newExp,alarm:'7일 전',done:{}});
         await ccStorage.saveJson('머니캘린더','일정',_cclData);
         toast('만기일이 머니캘린더에 등록됐어요','info');
       }catch(_e){}
