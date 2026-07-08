@@ -7377,7 +7377,7 @@ window.ccToggleCustDetail=async function(slug,title){
 };
 
 /* ★ channelV2: 연결 고객 홈페이지 현황 로드 (consultants.channelV2===true 컨설턴트 전용) — 2026-07 */
-let _ccMyId='';
+let _ccMyId='';let _ccRowsAll=[];
 async function ccLoadCustomers(myId){
   const card=document.getElementById('ccCustCard');if(!card||!myId)return;
   _ccMyId=myId;
@@ -7397,6 +7397,7 @@ async function ccLoadCustomers(myId){
       seen:(v.lastSeenAt&&v.lastSeenAt.toDate)?v.lastSeenAt.toDate():null,
       prof:[v.ageGroup,(v.jobDetail||v.job)].filter(Boolean).join('·')});});
     rows.sort((a,b)=>(b.created?+b.created:0)-(a.created?+a.created:0)); // 최신 가입순 (복합 인덱스 불필요)
+    _ccRowsAll=rows; // ★ 계보 트리용 스냅샷
     const now=Date.now(),AD=30*86400000;
     const act=rows.filter(r=>r.seen&&(now-+r.seen)<AD).length;
     const t1=rows.filter(r=>r.tier===1).length;
@@ -7425,13 +7426,15 @@ async function ccLoadCustomers(myId){
         +(r.prof?'<span style="font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;background:#FBF3DC;color:#854F0B;white-space:nowrap">'+esc(r.prof)+'</span>':'')
         +'<span style="font-size:10px;font-weight:800;border-radius:4px;padding:2px 6px;'+(r.tier===1?'background:#E6F1FB;color:#185FA5':'background:#F1EFE8;color:#5F5E5A')+'" title="'+(r.tier===1?'내 링크로 직접 가입':(r.ref?'@'+esc(r.ref)+' 고객의 소개로 가입':'고객 공유로 가입 (소개자 기록 없음 — 이전 가입)'))+'">'+(r.tier===1?'직접':(r.ref?'소개:@'+esc(r.ref):'소개'))+'</span>'
         +((_d1(r.slug)||_d2(r.slug))?'<span style="font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;background:#EAF6EF;color:#1C7A4D;white-space:nowrap" title="이 고객이 소개해 연결된 하위 고객">하위 '+_d1(r.slug)+(_d2(r.slug)?'·'+_d2(r.slug):'')+'</span>':'')
+        +(_d1(r.slug)?'<button onclick="event.stopPropagation();ccToggleTree(\''+r.slug+'\')" style="border:1px solid #1C7A4D;background:#F0FAF4;color:#1C7A4D;border-radius:6px;padding:3px 9px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap" title="이 고객 아래로 이어진 전체 계보 펼치기">🌳 계보</button>':'')
         +'<span style="font-size:11px;color:#8a877f;white-space:nowrap">가입 '+fmt(r.created)+'</span>'
         +'<span style="font-size:11px;color:'+(on?'#0F6E56':'#8a877f')+';white-space:nowrap">방문 '+ago(r.seen)+'</span>'
         +'<button onclick="event.stopPropagation();window.open(\'/@'+encodeURIComponent(r.slug)+'\',\'_blank\')" style="border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:6px;padding:3px 9px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap">채널보기</button>'
         +'<button onclick="event.stopPropagation();ccDetachCust(\''+r.slug+'\')" style="border:1px solid #D9A0A0;background:#fff;color:#A32D2D;border-radius:6px;padding:3px 8px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap">해제</button>'
         +'<span id="ccCdArr_'+r.slug+'" style="color:#B9B5AA;font-size:11px">▸</span>'
       +'</div>'
-      +'<div id="ccCdWrap_'+r.slug+'" style="display:none;background:#FBFAF6;border:1px solid #EFECE3;border-radius:10px;margin:2px 0 8px 15px;padding:10px 12px;font-size:12px;max-height:260px;overflow-y:auto"></div>';}).join('')
+      +'<div id="ccCdWrap_'+r.slug+'" style="display:none;background:#FBFAF6;border:1px solid #EFECE3;border-radius:10px;margin:2px 0 8px 15px;padding:10px 12px;font-size:12px;max-height:260px;overflow-y:auto"></div>'
+      +'<div id="ccTreeWrap_'+r.slug+'" style="display:none;background:#0F1B33;border-radius:10px;margin:2px 0 8px 15px;padding:12px 14px;color:#D8DCE8;max-height:320px;overflow:auto"></div>';}).join('')
     :'<div style="padding:14px 4px;font-size:12.5px;color:#8a877f">아직 연결된 고객 홈페이지가 없습니다. 채널 링크를 고객에게 보내보세요.</div>';
   }catch(e){card.style.display='none';}
 }
@@ -7461,6 +7464,40 @@ async function ccSaveMax(){
   }catch(e){toast('저장 실패: '+(e.message||''),'error');}
 }
 window.ccSaveMax=ccSaveMax;
+/* ★ 🌳 계보 트리 — 해당 고객 아래로 이어진 전체 소개 라인 펼침 */
+function ccTreeRender(rootSlug){
+  const rows=_ccRowsAll||[];const by={};rows.forEach(r=>{by[r.slug]=r;});
+  const kids={};rows.forEach(r=>{if(r.ref){(kids[r.ref]=kids[r.ref]||[]).push(r.slug);}});
+  const esc=x=>String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmt=d=>d?(String(d.getFullYear()).slice(2)+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'—';
+  const now=Date.now(),AD=30*86400000;
+  let total=0;
+  function node(sl,pfx,last,depth){
+    const r=by[sl];if(!r)return '';total++;
+    const branch=depth===0?'':(pfx+(last?'└─&nbsp;':'├─&nbsp;'));
+    const ch=kids[sl]||[];
+    const on=r.seen&&(now-+r.seen)<AD;
+    let h='<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;font-size:12px">'+branch
+      +'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:'+(on?'#22A06B':'#5F6B85')+';margin:0 4px 1px 0"></span>'
+      +'<a href="/@'+encodeURIComponent(sl)+'" target="_blank" style="color:#E8C97A;font-weight:800;text-decoration:none">@'+esc(sl)+'</a>'
+      +' <span style="color:#B9C0D0">'+esc(r.title||'')+'</span>'
+      +' <small style="color:#8E97AB">· 가입 '+fmt(r.created)+(ch.length?' · <b style="color:#9CD08F">하위 '+ch.length+'명</b>':'')+'</small></div>';
+    const npfx=depth===0?'':(pfx+(last?'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;':'│&nbsp;&nbsp;&nbsp;&nbsp;'));
+    ch.forEach((c,i)=>{h+=node(c,npfx,i===ch.length-1,depth+1);});
+    return h;
+  }
+  const inner=node(rootSlug,'',true,0);
+  return '<div style="font-size:9px;letter-spacing:2px;color:#C9A96E;font-weight:800;margin-bottom:6px">REFERRAL TREE</div>'
+    +'<div style="font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.9">'+inner+'</div>'
+    +'<div style="margin-top:7px;font-size:10px;color:#8E97AB;border-top:1px solid rgba(255,255,255,.1);padding-top:6px">이 고객으로부터 이어진 연결 <b style="color:#E8C97A">'+(total-1)+'명</b> · 초록 점=30일 내 방문 · @아이디 클릭=채널 열기</div>';
+}
+function ccToggleTree(slug){
+  const w=document.getElementById('ccTreeWrap_'+slug);if(!w)return;
+  if(w.style.display!=='none'){w.style.display='none';return;}
+  w.innerHTML=ccTreeRender(slug);
+  w.style.display='block';
+}
+window.ccToggleTree=ccToggleTree;
 
 async function loadChannelData(){
   if(!me||!meData)return;
