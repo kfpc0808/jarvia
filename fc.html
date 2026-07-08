@@ -401,6 +401,7 @@ a{color:inherit;text-decoration:none}
 .fcBarBtn-tx{font-size:13px;letter-spacing:-.3px}
 .fcBarBtn--kakao{flex:1;background:var(--kakao);color:#3C1E1E}
 .fcBarBtn--sms{flex:1;background:#fff;color:var(--navy);border:.5px solid var(--border)}
+.fcBarBtn--chat{flex:1;background:#1B3A6B;color:#fff}
 .fcBarBtn--home{flex:1;background:#fff;color:var(--navy);border:.5px solid rgba(201,169,110,.55)}
 .fcBarBtn--diag{flex:1;font-size:14px;letter-spacing:-.3px;background:linear-gradient(135deg,#C9A96E,#A68B4B);color:#1B3A6B}
 .fcBarBtn--calc{flex:1;background:#fff;color:var(--navy);border:.5px solid rgba(21,41,74,.22)}
@@ -2141,7 +2142,8 @@ function renderHeader(){
   // 사진
   if(photo){const img=document.createElement('img');img.src=photo;img.alt=name;$('avatar').innerHTML='';$('avatar').appendChild(img);}else{$('avatar').textContent=(name||'?').charAt(0);}
   if(window._ccSlug)applyClientBrand(); // ★ channelV2: 헤더만 고객 브랜드로 덮어쓰기 (본문·영업요소는 컨설턴트 그대로)
-  if(window._ccSlug&&!ccGetPin(window._ccSlug)){setTimeout(()=>{try{ccRequirePin().then(p=>{if(p)toast('로그인되었습니다','info');});}catch(_e){}},800);} // ★ 열면 1회 로그인 (닫기=구경 모드)
+  if(window._ccSlug&&!ccGetPin(window._ccSlug)){setTimeout(()=>{try{ccRequirePin().then(p=>{if(p){toast('로그인되었습니다','info');try{scStartClientPresence();}catch(_e){}}});}catch(_e){}},800);} // ★ 열면 1회 로그인 (닫기=구경 모드)
+  else if(window._ccSlug){try{scStartClientPresence();}catch(_e){}} // ★ 이미 로그인된 고객 본인: 온라인 상태 등록
   setTimeout(()=>{try{window.ccMaybeShowJoin&&window.ccMaybeShowJoin();}catch(_e){}},1200); // ★ channelV2 가입 배너 (플래그 게이트)
   // 신뢰지표
   const s=stats;
@@ -2650,9 +2652,9 @@ function setupContactButtons(){
   const phone=consultantData?.phone||fcData.phone||'';
   if(phone){
     const phoneClean=phone.replace(/\D/g,'');
-    $('smsBtn').href=`sms:${phoneClean}`;
+    const _sb=$('smsBtn');if(_sb)_sb.href=`sms:${phoneClean}`;
   }else{
-    $('smsBtn').style.display='none';
+    const _sb=$('smsBtn');if(_sb)_sb.style.display='none';
     // SMS 버튼 숨김 시 그리드 1열로 변경 (좌측 비대칭 방지)
     const cf=document.querySelector('.contactFooter');
     if(cf)cf.style.gridTemplateColumns='1fr';
@@ -3078,6 +3080,7 @@ function lcStopOwnerP2P(){
 function lcInitOwnerP2P(){
   if(lcOwnerP2PStarted||!isOwnerView||!currentUser||currentUser.uid!==fcUid)return;
   lcOwnerP2PStarted=true;
+  try{scStartOwnerChatWatch();}catch(e){}
   lcSetOwnerP2PPresence(!document.hidden);
   lcOwnerP2PTimer=setInterval(()=>{if(isOwnerView)lcSetOwnerP2PPresence(!document.hidden);},25000);
   if(!lcOwnerP2PVisibilityBound){
@@ -3995,6 +3998,264 @@ async function ccBroadcast(){
   }
 }
 window.ccBroadcast=ccBroadcast;
+/* ── 🔒 보안채팅 (SS채팅 — 화면 골격. 실시간 P2P 통신·귀속목록은 다음 단계) 2026-07 ── */
+let _scPeer=null;
+function openSecureChat(){const o=document.getElementById('scOverlay');if(!o)return;scShowList();o.style.display='flex';document.body.style.overflow='hidden';}
+window.openSecureChat=openSecureChat;
+function closeSecureChat(){scTeardown();const o=document.getElementById('scOverlay');if(o)o.style.display='none';document.body.style.overflow='';}
+window.closeSecureChat=closeSecureChat;
+function scBack(){const cb=document.getElementById('scChatBody');if(cb&&cb.style.display!=='none'){scTeardown();scShowList();}else closeSecureChat();}
+window.scBack=scBack;
+function scShowList(){
+  const cb=document.getElementById('scChatBody'),ib=document.getElementById('scInputBar'),lb=document.getElementById('scListBody');
+  if(cb)cb.style.display='none';if(ib)ib.style.display='none';if(lb)lb.style.display='block';
+  const tt=document.getElementById('scTitle'),su=document.getElementById('scSub');
+  if(tt)tt.textContent='🔒 보안채팅';if(su)su.textContent='종단간 암호화 · 서버에 저장 안 됨';
+  if(lb)lb.innerHTML='<div style="text-align:center;color:#9CA3AF;font-size:11px;padding:24px">불러오는 중…</div>';
+  scLoadList();
+}
+window.scShowList=scShowList;
+async function scClientOnline(slug){
+  try{
+    const qs=await getDocs(query(collection(db,'p2p_presence'),where('slug','==',slug),where('online','==',true),limit(2)));
+    const now=Date.now();let on=false;
+    qs.forEach(d=>{const t=d.data().ts;const ms=(t&&t.toMillis)?t.toMillis():((t&&t.toDate)?t.toDate().getTime():0);if(now-ms<90000)on=true;});
+    return on;
+  }catch(_e){return false;}
+}
+function scRow(o){ // o: {type,name,sub,badge,knock,peerId,online}
+  const ini=ccvEsc(String(o.name||'?').slice(0,1));
+  const online=o.online===true;
+  const badge=o.badge?(' <span style="font-size:9px;font-weight:800;color:'+(o.badge==='직접'?'#185FA5;background:#E6F1FB':'#8B6914;background:#F3E4BC')+';border-radius:4px;padding:1px 5px;margin-left:2px">'+o.badge+'</span>'):'';
+  const bg=o.knock?'background:#FBF3DC;border:1px solid #EAD9B0;':(o.type==='fc'?'background:#FBF8EF;border:1px solid #EAD9B0;':'');
+  const av=o.type==='fc'?'#1B3A6B':(o.knock?'#8B6914':'#E7EBF2');
+  const avc=(o.type==='fc'||o.knock)?'#fff':'#5A6484';
+  const dot=online?'<span style="position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;background:#22C55E;border:2px solid #fff"></span>':'';
+  const sub=online?'<span style="color:#0F6E56;font-weight:700">● 온라인</span>'+(o.type==='client'&&o.badge==='직접'?' · 먼저 대화 가능':''):(o.knock?'🔔 새 대화를 시작했어요':ccvEsc(o.sub||'오프라인'));
+  const subColor=o.knock&&!online?'#A32D2D;font-weight:700':'#8a877f';
+  const knockBadge=o.knock?'<span style="font-size:10px;font-weight:800;color:#fff;background:#A32D2D;border-radius:999px;padding:2px 6px;flex-shrink:0">1</span>':'<span style="font-size:11px;color:#8A93A6;flex-shrink:0">›</span>';
+  return '<div onclick="scOpenChat(\''+ccvEsc(o.peerId)+'\',\''+ccvEsc(o.name)+'\',\''+(o.type)+'\')" style="display:flex;align-items:center;gap:10px;'+bg+'border-radius:12px;padding:10px 11px;margin-bottom:8px;cursor:pointer">'
+    +'<div style="position:relative;width:38px;height:38px;flex-shrink:0"><div style="width:38px;height:38px;border-radius:50%;background:'+av+';color:'+avc+';display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700">'+ini+'</div>'+dot+'</div>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:#1B2430;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(o.type==='fc'?'컨설턴트 ':'')+ccvEsc(o.name)+badge+'</div><div style="font-size:10.5px;color:'+subColor+'">'+sub+'</div></div>'
+    +knockBadge+'</div>';
+}
+async function scLoadList(){
+  const lb=document.getElementById('scListBody');if(!lb)return;
+  let html='';
+  try{
+    if(window._ccSlug){
+      const fcName=(fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자';
+      const fcOn=await lcFcOnline();
+      html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">담당 상담사</div>';
+      html+=scRow({type:'fc',peerId:loginId,name:fcName,sub:'탭하여 문의하기',online:fcOn});
+      let subs=[];
+      try{const qs=await getDocs(query(collection(db,'client_channels'),where('refSlug','==',window._ccSlug),limit(50)));qs.forEach(d=>{const c=d.data();subs.push({slug:d.id,name:(c.brand&&c.brand.title)||d.id});});}catch(_e){}
+      if(subs.length){
+        const ons=await Promise.all(subs.map(s=>scClientOnline(s.slug)));
+        html+='<div style="font-size:9px;font-weight:800;color:#8a877f;letter-spacing:1px;margin:14px 4px 6px">내가 소개한 사람</div>';
+        subs.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,online:ons[i]});});
+      }
+    } else if(isOwnerView && loginId){
+      let direct=[],knocks=[];
+      try{const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',loginId),limit(100)));qs.forEach(d=>{const c=d.data();if((c.tier||1)===1){if(c.nickByFc)_scNick[d.id]=c.nickByFc;direct.push({slug:d.id,name:c.nickByFc||(c.brand&&c.brand.title)||d.id});}});}catch(_e){}
+      try{const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),limit(50)));ks.forEach(d=>{const k=d.data();knocks.push({slug:k.fromSlug,name:k.fromName||k.fromSlug});});}catch(_e){}
+      if(direct.length){
+        const dons=await Promise.all(direct.map(s=>scClientOnline(s.slug)));
+        html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">내 직접 고객</div>';
+        direct.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i]});});
+      }
+      html+='<div style="font-size:9px;font-weight:800;color:#8a877f;letter-spacing:1px;margin:14px 4px 6px">소개로 연결 — 말을 걸어온 사람만</div>';
+      if(knocks.length){
+        const kons=await Promise.all(knocks.map(k=>scClientOnline(k.slug)));
+        knocks.forEach((k,i)=>{html+=scRow({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]});});
+      }
+      else{html+='<div style="text-align:center;color:#B9B5AA;font-size:10.5px;padding:14px 12px;line-height:1.6">소개로 연결된 분들은 먼저 말을 걸기 전까지<br>여기에 표시되지 않아요</div>';}
+    } else {
+      html='<div style="text-align:center;color:#9CA3AF;font-size:11px;padding:24px">대화 가능한 상대가 없습니다</div>';
+    }
+  }catch(_e){html='<div style="text-align:center;color:#9CA3AF;font-size:11px;padding:24px">목록을 불러오지 못했습니다</div>';}
+  lb.innerHTML=html;
+}
+async function scOpenChat(peerId,peerName,peerType){
+  scTeardown();
+  _scPeer={id:peerId,name:peerName,type:peerType||'client'};
+  const dispName=(isOwnerView&&_scPeer.type==='client'&&_scNick[peerId])?_scNick[peerId]:peerName;
+  _scPeer.name=dispName;
+  const lb=document.getElementById('scListBody'),cb=document.getElementById('scChatBody'),ib=document.getElementById('scInputBar');
+  if(lb)lb.style.display='none';if(cb)cb.style.display='flex';if(ib)ib.style.display='flex';
+  const tt=document.getElementById('scTitle'),su=document.getElementById('scSub');
+  const canRename=(isOwnerView&&_scPeer.type==='client');
+  if(tt){tt.textContent=(_scPeer.type==='fc'?'컨설턴트 ':'')+dispName+(canRename?' ✎':'');tt.style.cursor=canRename?'pointer':'default';tt.onclick=canRename?scRenamePeer:null;}
+  if(su)su.textContent='🔒 이 대화는 저장되지 않아요';
+  if(cb)cb.innerHTML='';
+  scSysMsg('🔒 종단간 · 서버에 대화 저장 안 됨');
+  if(window._ccSlug&&_scPeer.type==='fc'){
+    const on=await lcFcOnline();
+    if(on){scSetStatus('연결 중…');try{await scClientConnect(_scPeer.id);}catch(e){scSysMsg('연결을 시작하지 못했어요');}}
+    else{scSysMsg('담당자가 오프라인이에요.');const ok=await scKnock(_scPeer);scSysMsg(ok?'🔔 노크를 남겼어요. 상대가 온라인이 되면 대화가 시작돼요.':'노크를 남기지 못했어요.');}
+  }else if(isOwnerView&&_scPeer.type==='client'){
+    const pending=_scOwnerPending.get(_scPeer.id);
+    if(pending){scSetStatus('연결 중…');try{await scOwnerAnswer(pending.room,pending.data);_scOwnerPending.delete(_scPeer.id);}catch(e){scSysMsg('연결 실패');}}
+    else{const ok=await scKnock(_scPeer);scSysMsg(ok?'🔔 대화 요청(노크)을 보냈어요. 상대가 열면 연결돼요.':'노크를 보내지 못했어요.');}
+  }
+}
+window.scOpenChat=scOpenChat;
+function scSend(){
+  const inp=document.getElementById('scInput');if(!inp)return;const t=(inp.value||'').trim();if(!t)return;
+  const cb=document.getElementById('scChatBody');if(!cb)return;
+  if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open'){scSysMsg('아직 연결되지 않았어요. 상대가 온라인일 때 대화할 수 있어요.');return;}
+  try{_scConn.dc.send(JSON.stringify({t:'msg',x:t}));}catch(e){scSysMsg('전송 실패 — 연결을 확인해주세요');return;}
+  const b=document.createElement('div');b.style.cssText='align-self:flex-end;max-width:78%;background:#1B3A6B;color:#fff;border-radius:13px 13px 4px 13px;padding:8px 11px;font-size:12.5px;word-break:break-word';b.textContent=t;
+  cb.appendChild(b);inp.value='';cb.scrollTop=cb.scrollHeight;
+}
+window.scSend=scSend;
+/* ══════════════════════════════════════════════════════════════════
+   보안채팅 실시간 P2P 엔진 (텍스트) — lcSendFileP2P 검증 패턴 재사용
+   · 시그널링: chat_signals/{FC로그인ID}_{고객UID}  (대화 내용은 서버에 절대 안 씀)
+   · 온라인=P2P 실시간 대화 / 오프라인=노크(chat_knocks)
+   · TURN: window.__SC_TURN 주입 시 자동 활성화(교차 통신사 relay)
+   ══════════════════════════════════════════════════════════════════ */
+function scIceServers(){
+  const base=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+  // ★ TURN 자리 — 배포 시 window.__SC_TURN=[{urls:'turn:HOST:3478',username,credential}] 주입하면 즉시 relay 활성화
+  return (Array.isArray(window.__SC_TURN)&&window.__SC_TURN.length)?base.concat(window.__SC_TURN):base;
+}
+let _scConn=null;              // {pc,dc,room,sigUnsub,candUnsub,role}
+let _scOwnerPending=new Map(); // clientSlug -> {room,data}
+let _scOwnerWatchStarted=false;
+
+function scTeardown(){
+  const c=_scConn;_scConn=null;
+  if(!c)return;
+  try{c.sigUnsub&&c.sigUnsub();}catch(e){}
+  try{c.candUnsub&&c.candUnsub();}catch(e){}
+  try{c.dc&&c.dc.close();}catch(e){}
+  try{c.pc&&c.pc.close();}catch(e){}
+  (async()=>{try{const room=c.room;for(const sub of ['offerCandidates','answerCandidates']){const s=await getDocs(collection(db,'chat_signals',room,sub));for(const x of s.docs)await deleteDoc(x.ref);}await deleteDoc(doc(db,'chat_signals',room));}catch(e){}})();
+}
+function scSetStatus(txt){const su=document.getElementById('scSub');if(su)su.textContent=txt;}
+function scSysMsg(txt){
+  const cb=document.getElementById('scChatBody');if(!cb)return;
+  const d=document.createElement('div');d.style.cssText='align-self:center;background:#FEF6E7;border:1px solid #F0E2BE;color:#8B6914;font-size:10px;border-radius:999px;padding:4px 12px;margin:2px 0';d.textContent=txt;cb.appendChild(d);cb.scrollTop=cb.scrollHeight;
+}
+function scRecvBubble(txt){
+  const cb=document.getElementById('scChatBody');if(!cb)return;
+  const b=document.createElement('div');b.style.cssText='align-self:flex-start;max-width:78%;background:#fff;border:1px solid #E6EAF1;color:#1B2430;border-radius:13px 13px 13px 4px;padding:8px 11px;font-size:12.5px;word-break:break-word';b.textContent=txt;cb.appendChild(b);cb.scrollTop=cb.scrollHeight;
+}
+function scWireDc(dc){
+  dc.onopen=()=>scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');
+  dc.onmessage=ev=>{if(typeof ev.data==='string'){try{const m=JSON.parse(ev.data);if(m&&m.t==='msg')scRecvBubble(String(m.x||''));}catch(_e){}}};
+  dc.onclose=()=>scSetStatus('연결이 종료되었어요');
+  dc.onerror=()=>{};
+}
+/* 고객 → FC : 연결 개시(offer) */
+async function scClientConnect(fcLoginId){
+  const myUid=await lcEnsureAnonAuth();
+  const room=fcLoginId+'_'+myUid;
+  const pc=new RTCPeerConnection({iceServers:scIceServers()});
+  const dc=pc.createDataChannel('chat');
+  const conn={pc,dc,room,sigUnsub:null,candUnsub:null,role:'client'};_scConn=conn;
+  scWireDc(dc);
+  pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'offerCandidates'),e.candidate.toJSON()).catch(()=>{});};
+  const sigRef=doc(db,'chat_signals',room);
+  try{for(const sub of ['offerCandidates','answerCandidates']){const s=await getDocs(collection(db,'chat_signals',room,sub));for(const x of s.docs)await deleteDoc(x.ref);}}catch(e){}
+  const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+  await setDoc(sigRef,{from:'client',clientId:myUid,clientSlug:window._ccSlug||'',clientName:(window._ccBrand&&window._ccBrand.title)||window._ccSlug||'고객',fcAuthUid:fcUid,offer:{type:offer.type,sdp:offer.sdp},status:'pending',ts:serverTimestamp()});
+  conn.sigUnsub=onSnapshot(sigRef,snap=>{const d=snap.data();if(!d)return;if(d.answer&&pc&&!pc.currentRemoteDescription){pc.setRemoteDescription(new RTCSessionDescription(d.answer)).catch(()=>{});}},()=>{});
+  conn.candUnsub=onSnapshot(collection(db,'chat_signals',room,'answerCandidates'),snap=>{snap.docChanges().forEach(ch=>{if(ch.type==='added'&&pc)pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{});});},()=>{});
+  return conn;
+}
+/* FC → 고객 : offer에 응답(answer) */
+async function scOwnerAnswer(room,offerData){
+  const pc=new RTCPeerConnection({iceServers:scIceServers()});
+  const conn={pc,dc:null,room,sigUnsub:null,candUnsub:null,role:'fc'};_scConn=conn;
+  pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'answerCandidates'),e.candidate.toJSON()).catch(()=>{});};
+  pc.ondatachannel=e=>{const dc=e.channel;conn.dc=dc;scWireDc(dc);};
+  await pc.setRemoteDescription(new RTCSessionDescription(offerData.offer));
+  const answer=await pc.createAnswer();await pc.setLocalDescription(answer);
+  await setDoc(doc(db,'chat_signals',room),{answer:{type:answer.type,sdp:answer.sdp},status:'accepted',acceptedAt:serverTimestamp()},{merge:true});
+  conn.candUnsub=onSnapshot(collection(db,'chat_signals',room,'offerCandidates'),snap=>{snap.docChanges().forEach(ch=>{if(ch.type==='added')pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{});});},()=>{});
+  return conn;
+}
+/* 노크 남기기 (chat_knocks — 대화내용 없음, 규칙에서 message/body/text 차단) */
+async function scKnock(peer){
+  try{
+    const myUid=await lcEnsureAnonAuth();
+    if(peer.type==='fc'){
+      await addDoc(collection(db,'chat_knocks'),{fromUid:myUid,fromSlug:(window._ccSlug||''),fromName:(window._ccBrand&&window._ccBrand.title)||window._ccSlug||'고객',toType:'fc',toFcLoginId:peer.id,createdAt:serverTimestamp()});
+    }else{
+      const exp=new Date(Date.now()+7*86400000);
+      await addDoc(collection(db,'chat_knocks'),{fromUid:myUid,fromSlug:(window._ccSlug||loginId||'x'),fromName:(isOwnerView?((fcData&&fcData.name)||loginId):((window._ccBrand&&window._ccBrand.title)||'상대'))||'상대',toType:'client',toSlug:peer.id,expiresAt:exp,createdAt:serverTimestamp()});
+    }
+    return true;
+  }catch(e){console.warn('[sc-knock]',e.message);return false;}
+}
+/* FC 수신 리스너 — 채팅창 안 열고 있어도 고객 요청 감지 */
+function scStartOwnerChatWatch(){
+  if(_scOwnerWatchStarted||!isOwnerView||!currentUser||currentUser.uid!==fcUid)return;
+  _scOwnerWatchStarted=true;
+  const q=query(collection(db,'chat_signals'),where('fcAuthUid','==',currentUser.uid),limit(20));
+  onSnapshot(q,snap=>{
+    snap.docChanges().forEach(ch=>{
+      const d=ch.doc.data();const room=ch.doc.id;
+      if((ch.type==='added'||ch.type==='modified')&&d&&d.from==='client'&&d.status==='pending'&&d.offer){
+        const slug=d.clientSlug||'';
+        if(document.getElementById('scOverlay')&&document.getElementById('scOverlay').style.display!=='none'&&_scPeer&&_scPeer.type==='client'&&_scPeer.id===slug&&(!_scConn||_scConn.room!==room)){
+          scOwnerAnswer(room,d).catch(()=>{});
+        }else{
+          _scOwnerPending.set(slug,{room,data:d});
+          scOwnerChatNudge(slug,d.clientName||slug);
+        }
+      }else if(ch.type==='removed'){
+        const slug=(d&&d.clientSlug)||'';if(slug)_scOwnerPending.delete(slug);
+      }
+    });
+  },e=>console.warn('[sc-owner-watch]',e.message));
+}
+window.scStartOwnerChatWatch=scStartOwnerChatWatch;
+function scOwnerChatNudge(slug,name){
+  if(document.getElementById('scOwnerNudge_'+slug))return;
+  const div=document.createElement('div');div.id='scOwnerNudge_'+slug;
+  div.style.cssText='position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:13200;width:calc(100% - 32px);max-width:448px;background:#fff;border:1px solid #C9D8EE;border-left:4px solid #1B3A6B;border-radius:14px;padding:14px 16px;box-shadow:0 12px 36px rgba(15,27,51,.22)';
+  div.innerHTML='<div style="font-size:10px;font-weight:800;color:#A68B4B;letter-spacing:1px">보안채팅 요청</div><div style="font-size:14px;font-weight:900;color:#141B2D;margin-top:3px">🔒 '+ccvEsc(name)+'님이 대화를 요청했어요</div><div style="display:flex;gap:7px;margin-top:12px"><button type="button" class="scNudgeNo" style="flex:1;padding:10px;border:1px solid #DFE2EA;border-radius:9px;background:#fff;color:#5A6484;font-weight:700">나중에</button><button type="button" class="scNudgeYes" style="flex:1;padding:10px;border:none;border-radius:9px;background:#1B3A6B;color:#fff;font-weight:800">대화 시작</button></div>';
+  document.body.appendChild(div);
+  div.querySelector('.scNudgeNo').onclick=()=>div.remove();
+  div.querySelector('.scNudgeYes').onclick=()=>{div.remove();openSecureChat();scOpenChat(slug,name,'client');};
+}
+/* 별명(FC→고객) 저장 — 서버 보관, 기기 무관 유지 */
+async function scRenamePeer(){
+  if(!isOwnerView||!_scPeer||_scPeer.type!=='client'){toast&&toast('별명은 고객에게만 지정할 수 있어요','warning');return;}
+  const cur=(_scNick&&_scNick[_scPeer.id])||_scPeer.name||'';
+  const nv=(prompt('이 고객을 부를 이름을 입력하세요',cur)||'').trim().slice(0,30);
+  if(!nv)return;
+  try{
+    await setDoc(doc(db,'client_channels',_scPeer.id),{nickByFc:nv},{merge:true});
+    _scNick[_scPeer.id]=nv;_scPeer.name=nv;
+    const tt=document.getElementById('scTitle');if(tt)tt.textContent=nv;
+    toast&&toast('별명을 저장했어요','success');
+  }catch(e){toast&&toast('별명 저장 실패: '+e.message,'error');}
+}
+window.scRenamePeer=scRenamePeer;
+let _scNick={}; // slug -> 별명 (FC 목록 로드 시 채움)
+
+/* ── 고객 온라인 상태(presence) — 채팅 대상에게 온라인 표시용. 고객 본인만, 익명 UID로 규칙 통과 ── */
+let _scPresTimer=null;
+async function scClientPresence(on){
+  if(!window._ccSlug||!ccGetPin(window._ccSlug))return; // 고객 본인(로그인)만
+  try{
+    const uid=await lcEnsureAnonAuth();
+    const name=(window._ccBrand&&window._ccBrand.title)||window._ccSlug;
+    await setDoc(doc(db,'p2p_presence','cl_'+window._ccSlug+'_'+uid),{online:on===true,slug:window._ccSlug,uid:uid,name:name,role:'client',ts:serverTimestamp()},{merge:true});
+  }catch(_e){}
+}
+function scStartClientPresence(){
+  if(!window._ccSlug||_scPresTimer)return;
+  scClientPresence(true);
+  _scPresTimer=setInterval(()=>scClientPresence(!document.hidden),25000);
+  document.addEventListener('visibilitychange',()=>scClientPresence(!document.hidden));
+  window.addEventListener('beforeunload',()=>{try{if(window._ccSlug&&ccGetPin(window._ccSlug))scClientPresence(false);}catch(_e){}});
+}
+window.scStartClientPresence=scStartClientPresence;
 /* ── 가입 배너·모달 (컨설턴트 channelV2===true 일 때만 노출) ── */
 let _ccVerifiedPhone='';
 function ccInjectJoinUI(){
@@ -4747,7 +5008,11 @@ function ccInjectVaultZone(){
     +card('cal','📅','캘린더(머니/일정)','돈과 일정을 D-day로')
     +card('pwd','🔐','비밀번호 금고','이 기기에서만 암호화')
     +card('docs','📁','비공개 문서함','100% 내 드라이브 저장')
-    +'</div>';
+    +'</div>'
+    +'<div id="ccChatEntry" onclick="openSecureChat()" style="display:flex;align-items:center;gap:11px;background:linear-gradient(135deg,#0F1B33,#1B3A6B);border:1px solid rgba(201,169,110,.45);border-radius:14px;padding:13px 14px;margin-top:10px;cursor:pointer">'
+      +'<span style="width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0">🔒</span>'
+      +'<span style="flex:1;min-width:0"><b style="display:block;font-size:13px;color:#fff">보안채팅</b><small style="display:block;font-size:9.5px;color:#9AA3B8;margin-top:2px">담당자·지인과 안전하게 · 서버에 저장 안 됨</small></span>'
+      +'<span style="flex-shrink:0;border:1px solid rgba(201,169,110,.55);color:#E8C97A;border-radius:999px;padding:3px 10px;font-size:9px;font-weight:800">열기 ›</span></div>';
   dl.parentNode.insertBefore(z,dl.nextSibling);
   z.addEventListener('click',ev=>{
     const c=ev.target.closest('[data-vk]');if(!c)return;
@@ -5641,10 +5906,24 @@ init();
 <!-- ─── 하단 고정 액션 바 (공유·문자·홈추가·재무진단) — 2026-05 ─── -->
 <div id="fcBottomBar" class="fcBottomBar fcBottomBar--off">
   <a class="fcBarBtn fcBarBtn--kakao" id="kakaoShareBtn"><span class="fcBarBtn-ic">💬</span><span class="fcBarBtn-tx">공유</span></a>
-  <a class="fcBarBtn fcBarBtn--sms" id="smsBtn"><span class="fcBarBtn-ic">✉️</span><span class="fcBarBtn-tx">문자</span></a>
   <button class="fcBarBtn fcBarBtn--diag" id="barDiagnosisBtn" type="button">재무진단</button>
   <button class="fcBarBtn fcBarBtn--calc" id="barCalcBtn" type="button"><span class="fcBarBtn-ic">🧮</span><span class="fcBarBtn-tx">계산기</span></button>
+  <button class="fcBarBtn fcBarBtn--chat" id="barChatBtn" type="button" onclick="openSecureChat()"><span class="fcBarBtn-ic">🔒</span><span class="fcBarBtn-tx">보안채팅</span></button>
 </div>
+<!-- ════════════════ 🔒 보안채팅 (SS채팅 — P2P 휘발성) 2026-07 ════════════════ -->
+<div id="scOverlay" style="position:fixed;inset:0;z-index:1260;background:#F4F6FA;display:none;flex-direction:column;max-width:480px;margin:0 auto;font-family:inherit">
+  <div style="background:#0F1B33;padding:calc(13px + env(safe-area-inset-top)) 15px 13px;display:flex;align-items:center;gap:11px;flex:none">
+    <button id="scBack" onclick="scBack()" style="color:#fff;font-size:20px;background:none;border:none;cursor:pointer;line-height:1">‹</button>
+    <div style="flex:1;min-width:0"><div id="scTitle" style="color:#fff;font-size:15.5px;font-weight:800">🔒 보안채팅</div><div id="scSub" style="color:rgba(255,255,255,.5);font-size:10.5px">종단간 암호화 · 서버에 저장 안 됨</div></div>
+  </div>
+  <div id="scListBody" style="flex:1;overflow-y:auto;padding:12px"></div>
+  <div id="scChatBody" style="flex:1;overflow-y:auto;padding:14px;display:none;flex-direction:column;gap:9px;background:#F5F7FA"></div>
+  <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
+    <input id="scInput" placeholder="메시지 입력…" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
+    <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
+  </div>
+</div>
+
 <!-- ════════════════ 나의 장소 (My Places) — 자체완결 블록 2026-06 ════════════════ -->
 <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=1ada66397913195f6a7512567faa5fac&autoload=false&libraries=services"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
