@@ -4357,7 +4357,8 @@ window.ccStorage=(function(){
   }
   const esc=s=>String(s).replace(/'/g,"\\'");
   async function findOne(q,fields){
-    const r=await api('/drive/v3/files?q='+encodeURIComponent(q+" and trashed=false")+'&fields=files(id,name'+(fields?','+fields:'')+')&pageSize=1',{});
+    // ★ createdTime 오름차순 — 중복이 있어도 모든 기기가 '가장 오래된 원본'을 일관 선택
+    const r=await api('/drive/v3/files?q='+encodeURIComponent(q+" and trashed=false")+'&orderBy=createdTime&fields=files(id,name'+(fields?','+fields:'')+')&pageSize=1',{});
     const j=await r.json();return (j.files&&j.files[0])||null;
   }
   async function mkFolder(name,parent){
@@ -4410,6 +4411,12 @@ window.ccStorage=(function(){
     const k=await vaultKey();
     return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12)},k,bytes.slice(12)));
   }
+  /* ── 폴더 ID 획득 (캐시에 없는 새 폴더면 지도 재구성 1회 — 자가치유) ── */
+  async function folderId(folderKey){
+    let map=await ensureFolders();
+    if(!map[folderKey]){map=await ensureFolders(true);} // 낡은 캐시 → 드라이브 기준 재구성
+    return map[folderKey]||map.__root;
+  }
   /* ── 파일 업서트 · 다운로드 ── */
   async function uploadResumable(parent,name,data,mime,existingId){ // ★ 대용량: Blob 직송 (재개형)
     const t=await token();
@@ -4427,7 +4434,7 @@ window.ccStorage=(function(){
     return (await up.json()).id;
   }
   async function upsert(folderKey,name,bytes,mime){
-    const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+    const parent=await folderId(folderKey);
     const ex=await findOne("name='"+esc(name)+"' and '"+parent+"' in parents");
     const isBlob=bytes&&typeof bytes.arrayBuffer==='function';
     const size=isBlob?bytes.size:bytes.length;
@@ -4453,18 +4460,31 @@ window.ccStorage=(function(){
     return upsert(folderKey,name+'.safe',ct,'application/octet-stream');
   }
   async function loadJson(folderKey,name){
-    try{const c=localStorage.getItem('cc_v_'+slug()+'_'+name);if(c)return JSON.parse(c);}catch(_e){}
-    try{
-      const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+    let cached=null;
+    try{const c=localStorage.getItem('cc_v_'+slug()+'_'+name);if(c)cached=JSON.parse(c);}catch(_e){}
+    const fetchDrive=async()=>{ // 파일 없음=null / 통신·복호 오류=throw (0개로 위장 금지)
+      const parent=await folderId(folderKey);
       const f=await findOne("name='"+esc(name)+".safe' and '"+parent+"' in parents");
       if(!f)return null;
-      const obj=JSON.parse(new TextDecoder().decode(await dec(await download(f.id))));
-      try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(obj));}catch(_e){}
-      return obj;
-    }catch(_e){return null;}
+      return JSON.parse(new TextDecoder().decode(await dec(await download(f.id))));
+    };
+    if(cached){
+      (async()=>{ // ★ 배경 동기화 — 다른 기기에서 바뀐 내용을 이 기기 화면에 자동 반영
+        try{const fresh=await fetchDrive();
+          if(fresh&&JSON.stringify(fresh)!==JSON.stringify(cached)){
+            try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(fresh));}catch(_e){}
+            try{document.dispatchEvent(new CustomEvent('ccv-sync',{detail:{name:name,data:fresh}}));}catch(_e){}
+          }
+        }catch(_e){}
+      })();
+      return cached;
+    }
+    const fresh=await fetchDrive(); // 오류는 위로 던짐 — 뷰가 '재시도' 안내
+    if(fresh){try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(fresh));}catch(_e){}return fresh;}
+    return null;
   }
   async function listFiles(folderKey){
-    const map=await ensureFolders();const parent=map[folderKey]||map.__root;
+    const parent=await folderId(folderKey);
     const r=await api('/drive/v3/files?q='+encodeURIComponent("'"+parent+"' in parents and trashed=false")+'&fields=files(id,name,mimeType,size,createdTime,thumbnailLink)&pageSize=200&orderBy=createdTime desc',{});
     return (await r.json()).files||[];
   }
@@ -4672,13 +4692,16 @@ async function ccAssetView(){
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_ccaSort=b.dataset.s;ccaRender();}});
   if(!_ccaData){
     document.getElementById('ccaBody').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_ccaData=(await ccStorage.loadJson('자산관리','자산'))||{items:[]};}catch(_e){_ccaData={items:[]};}
+    try{_ccaData=(await ccStorage.loadJson('자산관리','자산'))||{items:[]};}
+    catch(_e){document.getElementById('ccaBody').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccAssetView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button></div>';return;}
   }
   // ★ 원 단위 전환 마이그레이션 (기존 만원 입력분 ×10,000 — 1회)
   if(_ccaData&&_ccaData.v!==2){
-    (_ccaData.items||[]).forEach(i=>{i.amt=(Number(i.amt)||0)*10000;const d=i.detail||{};
-      ['monthly','principal','year','buy'].forEach(k=>{const n=Number(String(d[k]||'').replace(/[^0-9]/g,''));if(n)d[k]=n*10000;});});
-    _ccaData.v=2;try{ccStorage.saveJson('자산관리','자산',_ccaData);}catch(_e){}
+    if((_ccaData.items||[]).length){
+      _ccaData.items.forEach(i=>{i.amt=(Number(i.amt)||0)*10000;const d=i.detail||{};
+        ['monthly','principal','year','buy'].forEach(k=>{const n=Number(String(d[k]||'').replace(/[^0-9]/g,''));if(n)d[k]=n*10000;});});
+      _ccaData.v=2;try{ccStorage.saveJson('자산관리','자산',_ccaData);}catch(_e){}
+    }else{_ccaData.v=2;} // ★ 빈 데이터는 저장하지 않음 — 드라이브 원본 보호
   }
   ccaRender();
   ccvOnceGuide('cc_g_asset',ccaGuideSheet);
@@ -4910,8 +4933,12 @@ async function ccCalView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cclQ=q.value.trim();cclRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cclOnly=!_cclOnly;cclRender();}});
   if(!_cclData){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cclData=(await ccStorage.loadJson('머니캘린더','일정'))||{items:[]};}catch(_e){_cclData={items:[]};}}
-  if(_cclData&&_cclData.v!==2){(_cclData.items||[]).forEach(i=>{i.amt=(Number(i.amt)||0)*10000;});_cclData.v=2;try{ccStorage.saveJson('머니캘린더','일정',_cclData);}catch(_e){}} // ★ 원 단위 전환
+    try{_cclData=(await ccStorage.loadJson('머니캘린더','일정'))||{items:[]};}
+    catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccCalView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button></div>';return;}}
+  if(_cclData&&_cclData.v!==2){
+    if((_cclData.items||[]).length){(_cclData.items||[]).forEach(i=>{i.amt=(Number(i.amt)||0)*10000;});_cclData.v=2;try{ccStorage.saveJson('머니캘린더','일정',_cclData);}catch(_e){}}
+    else{_cclData.v=2;} // ★ 빈 데이터 저장 금지 — 드라이브 원본 보호
+  }
   cclRender();
   ccvOnceGuide('cc_g_cal',cclGuide);
 }
@@ -5064,7 +5091,8 @@ async function ccPwdView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cpwQ=q.value.trim();cpwRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cpwSort=b.dataset.s;cpwRender();}});
   if(!_cpwData){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cpwData=(await ccStorage.loadJson('비밀번호금고','금고'))||{items:[]};}catch(_e){_cpwData={items:[]};}}
+    try{_cpwData=(await ccStorage.loadJson('비밀번호금고','금고'))||{items:[]};}
+    catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccPwdView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button></div>';return;}}
   cpwRender();
   ccvOnceGuide('cc_g_pwd',cpwGuide);
 }
@@ -5174,7 +5202,8 @@ async function ccDocsView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cdcQ=q.value.trim();cdcRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cdcSort=b.dataset.s;cdcRender();}});
   if(!_cdcIdx){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cdcIdx=(await ccStorage.loadJson('문서함','문서색인'))||{files:[]};}catch(_e){_cdcIdx={files:[]};}}
+    try{_cdcIdx=(await ccStorage.loadJson('문서함','문서색인'))||{files:[]};}
+    catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccDocsView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button></div>';return;}}
   cdcRender();
   ccvOnceGuide('cc_g_docs',cdcGuide);
 }
@@ -5397,6 +5426,17 @@ function cdcGuide(){ccvGuide('cdcGuideM','비공개 문서함,<br>이렇게 쓰�
  ['이런 것도 됩니다','· 문서·사진은 <b style="color:#fff">🔒 암호화</b>되어 저장 — 이 홈페이지에서만 열려요<br>· <b style="color:#fff">만기일</b>을 넣으면 머니캘린더에 자동 등록 (자동차보험·여권에 유용)<br>· ★ 중요 문서는 맨 위 고정 · [선택]으로 여러 개 한 번에 삭제<br>· 영상·음성은 원본 저장 — 탭하면 드라이브에서 바로 재생'],
  ['안심하세요','파일은 회사 서버를 <b style="color:#fff">거치지 않고</b> 폰에서 회원님 드라이브로 직접 갑니다. 저희는 파일도, 열쇠도 갖고 있지 않습니다.'],
  ['자주 묻는 것','<b style="color:#D8DCE8">Q. 용량은?</b> 회원님 구글 계정 용량(기본 15GB)을 사용해요.<br><b style="color:#D8DCE8">Q. 드라이브에서 지우면?</b> 목록에서 열리지 않게 돼요 — 삭제는 이 화면에서 하는 걸 권해요.<br><b style="color:#D8DCE8">Q. 폰을 바꾸면?</b> 구글 재연결이면 전부 그대로.']]);}
+
+/* ★ 기기 간 배경 동기화 수신 — 다른 기기 변경분이 도착하면 열려 있는 보관함 화면 자동 갱신 */
+document.addEventListener('ccv-sync',ev=>{
+  try{
+    const d=ev.detail||{};
+    if(d.name==='자산'){_ccaData=d.data;if(document.getElementById('ccaView'))ccaRender();}
+    else if(d.name==='일정'){_cclData=d.data;if(document.getElementById('cclView'))cclRender();}
+    else if(d.name==='금고'){_cpwData=d.data;if(document.getElementById('cpwView'))cpwRender();}
+    else if(d.name==='문서색인'){_cdcIdx=d.data;if(document.getElementById('cdcView'))cdcRender();}
+  }catch(_e){}
+});
 
 // ═══ 시작 ═══
 init();
