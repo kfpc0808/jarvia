@@ -564,7 +564,7 @@ body{
 <!-- ═══ Loading State ═══ -->
 <div id="loadingState" class="page-loading">
   <div class="spin"></div>
-  <p>브리핑을 불러오는 중...</p>
+  <p>오늘의 브리핑을 준비하고 있어요…<br><small style="font-size:11px;color:#B9B5AA">잠시만요, 금방 정리해 드릴게요</small></p>
 </div>
 
 <!-- ═══ Error State ═══ -->
@@ -862,6 +862,7 @@ let reportData=null;
 let prevIndicators=null; // ★ 전일 경제지표 (전일비 표시용)
 let spData=null; // ★ 컨설턴트 카톡 공유 설정 (fc_share_profiles)
 
+function _renderReport(){renderDateHero();renderAudio();renderShortClip();renderSections();renderCTA();}
 // ═══ Main Init ═══
 async function init(){
   try{
@@ -870,6 +871,25 @@ async function init(){
       showError('잘못된 접근이에요','링크를 다시 확인해주세요.');
       return;
     }
+
+    // ★ [속도개선 C] 당일 캐시 — 오늘 본 적 있으면 즉시(0초) 표시, 배경에서 최신 확인
+    try{
+      const _c=JSON.parse(localStorage.getItem('cdr_cache_'+fcId)||'null');
+      if(_c&&_c.day===fileDate&&_c.fc&&_c.rep){
+        fcData=_c.fc;reportData=_c.rep;prevIndicators=_c.prev||null;spData=_c.sp||null;
+        document.getElementById('loadingState').style.display='none';
+        document.getElementById('mainContent').style.display='block';
+        renderConsultant();_renderReport();
+        window._fromCache=String((_c.rep.date||(_c.rep.createdAt&&_c.rep.createdAt.seconds))||'1');
+      }
+    }catch(_e){}
+
+    // ★ [속도개선 B] 리포트 3종 조회를 지금 바로 출발 (프로필 확인과 동시 진행 — 왕복 1회 절약)
+    const _stage2P=Promise.allSettled([
+      getDoc(doc(db,'client_daily_reports',fileDate)),
+      getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(2))),
+      getDoc(doc(db,'fc_share_profiles',fcId))
+    ]);
 
     // ★ 1단계: 프로필 + 역할 체크 병렬 조회
     let fcSnap,userQ;
@@ -911,9 +931,11 @@ async function init(){
       return;
     }
 
-    // ★ 1단계 완료 → 프로필 먼저 표시
-    document.getElementById('loadingState').style.display='none';
-    document.getElementById('mainContent').style.display='block';
+    // ★ 1단계 완료 → 프로필 먼저 표시 (캐시로 이미 그렸으면 최신 데이터로 조용히 갱신)
+    if(!window._fromCache){
+      document.getElementById('loadingState').style.display='none';
+      document.getElementById('mainContent').style.display='block';
+    }
     renderConsultant();
     // ★ 소유자(컨설턴트 본인) 편집 버튼 — 로그인 사용자 uid가 채널 주인 uid와 일치할 때만 노출
     if(!userQ.empty){
@@ -927,12 +949,8 @@ async function init(){
       });
     }
 
-    // ★ 2단계: 리포트 + 전일지표 + 공유설정 병렬 조회
-    const [drResult,prevResult,spResult]=await Promise.allSettled([
-      getDoc(doc(db,'client_daily_reports',fileDate)),
-      getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(2))),
-      getDoc(doc(db,'fc_share_profiles',fcId))
-    ]);
+    // ★ 2단계: (이미 출발시켜 둔) 리포트 + 전일지표 + 공유설정 회수
+    const [drResult,prevResult,spResult]=await _stage2P;
 
     // 2-1. 리포트 처리
     const drSnap=(drResult.status==='fulfilled')?drResult.value:null;
@@ -962,12 +980,14 @@ async function init(){
     // 2-3. 카톡 공유 설정
     if(spResult.status==='fulfilled'&&spResult.value.exists()) spData=spResult.value.data();
 
-    // ★ 2단계 완료 → 나머지 렌더링
-    renderDateHero();
-    renderAudio();
-    renderShortClip();
-    renderSections();
-    renderCTA();
+    // ★ 2단계 완료 → 나머지 렌더링 (캐시 표시분과 동일하면 재렌더 생략 — 화면 흔들림 방지)
+    const _repKey=String((reportData.date||(reportData.createdAt&&reportData.createdAt.seconds))||'1');
+    if(!window._fromCache||window._fromCache!==_repKey){
+      _renderReport();
+    }
+    try{ // 당일 캐시 저장 (다음 진입 즉시 표시용)
+      localStorage.setItem('cdr_cache_'+fcId,JSON.stringify({day:fileDate,fc:fcData,rep:reportData,prev:prevIndicators,sp:spData}));
+    }catch(_e){}
 
     // 4. 아카이브 로드
     loadArchive();
@@ -994,6 +1014,7 @@ async function init(){
 }
 
 function showError(title,msg){
+  if(window._fromCache)return; // 캐시 화면이 떠 있으면 배경 오류로 덮지 않음
   document.getElementById('loadingState').style.display='none';
   const el=document.getElementById('errorState');
   el.innerHTML=`<h2>${esc(title)}</h2><p>${esc(msg)}</p><br><a href="https://jarvia.co.kr" style="color:var(--accent)">JARVIA 메인으로</a>`;
@@ -1015,12 +1036,10 @@ async function loadCuratedPicks(fcAuthUid){
     if(!picks.length){return;}
     // 콘텐츠 메타 조회: external은 자체 데이터, internal은 contents 컬렉션 조회
     const cMap={};
-    for(const p of picks){
-      if(p.external)continue;  // 외부 콘텐츠는 contents 조회 스킵
-      if(!p.contentId)continue;
-      const d=await getDoc(doc(db,'contents',p.contentId));
-      if(d.exists())cMap[p.contentId]=d.data();
-    }
+    // ★ [속도개선 A] 1건씩 순차 → 한 번에 병렬 조회
+    const _ids=picks.filter(p=>!p.external&&p.contentId).map(p=>p.contentId);
+    const _snaps=await Promise.all(_ids.map(id=>getDoc(doc(db,'contents',id)).catch(()=>null)));
+    _snaps.forEach((d,i)=>{if(d&&d.exists())cMap[_ids[i]]=d.data();});
     // 빌드: external은 그대로, internal은 _content 매핑
     _curPicks=picks.map(p=>{
       if(p.external)return p;  // external은 _content 불필요 (renderCuratedCard에서 p.external 직접 사용)
