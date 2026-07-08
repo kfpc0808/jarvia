@@ -1571,6 +1571,13 @@
           <span id="ccCustSummary" style="font-size:12px;color:#5A6484">불러오는 중…</span>
         </div>
         <p style="font-size:12px;color:#5A6484;margin:0 0 8px">내 채널 링크로 가입한 고객들의 개인 홈페이지 목록입니다. 초록 점 = 최근 30일 내 방문.</p>
+        <div id="ccBillStrip" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;background:#FBF8EF;border:1px solid #EAD9B0;border-radius:9px;padding:8px 11px;margin:0 0 8px;font-size:12px">
+          <span id="ccBillTxt" style="flex:1;min-width:220px;color:#6b5a33;line-height:1.55"></span>
+          <label style="font-size:11.5px;color:#5A6484;font-weight:600;white-space:nowrap">최대 연결</label>
+          <input id="ccMaxInp" type="number" min="1" max="10000" style="width:74px;padding:6px 8px;border:1px solid #D1D5DB;border-radius:7px;font-size:12.5px;text-align:center">
+          <span style="font-size:11.5px;color:#5A6484">명</span>
+          <button type="button" onclick="ccSaveMax()" style="border:0;background:#1B3A6B;color:#fff;border-radius:7px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer">저장</button>
+        </div>
         <div id="ccCustList" style="max-height:280px;overflow-y:auto"></div>
       </div>
 
@@ -7370,11 +7377,14 @@ window.ccToggleCustDetail=async function(slug,title){
 };
 
 /* ★ channelV2: 연결 고객 홈페이지 현황 로드 (consultants.channelV2===true 컨설턴트 전용) — 2026-07 */
+let _ccMyId='';
 async function ccLoadCustomers(myId){
   const card=document.getElementById('ccCustCard');if(!card||!myId)return;
+  _ccMyId=myId;
   try{
     const cs=await getDoc(doc(db,'consultants',myId));
     if(!cs.exists()||cs.data().channelV2!==true){card.style.display='none';return;}
+    const _maxC=Math.max(1,Number(cs.data().maxClients)||50);
     const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',myId)));
     card.style.display='block';
     const rows=[];
@@ -7390,6 +7400,14 @@ async function ccLoadCustomers(myId){
     const act=rows.filter(r=>r.seen&&(now-+r.seen)<AD).length;
     const t1=rows.filter(r=>r.tier===1).length;
     document.getElementById('ccCustSummary').innerHTML='연결 <b>'+rows.length+'명</b> · 30일 활성 <b style="color:#0F6E56">'+act+'명</b> · 직접 '+t1+' / 소개 '+(rows.length-t1);
+    // ★ 과금 표시 + 상한 설정 (무료 50명, 초과 1명당 월 200원 · 상한 도달 시 신규 가입은 본사 연결)
+    try{
+      const _bs=document.getElementById('ccBillStrip');_bs.style.display='flex';
+      const _n=rows.length,_extra=Math.max(0,_n-50),_fee=_extra*200;
+      document.getElementById('ccMaxInp').value=_maxC;
+      document.getElementById('ccBillTxt').innerHTML='무료 <b>50명</b> · 초과 1명당 <b>월 200원</b> — 현재 연결 <b>'+_n+'명</b> → 예상 월 과금 <b style="color:'+(_fee?'#A32D2D':'#0F6E56')+'">'+_fee.toLocaleString('ko-KR')+'원</b>'
+        +(_n>=_maxC?' <span style="font-size:10.5px;background:#FCEBEB;color:#A32D2D;border-radius:99px;padding:2px 8px;font-weight:800">상한 도달 — 신규 가입은 본사로 연결됩니다</span>':'');
+    }catch(_e){}
     const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const fmt=d=>d?(d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'—';
     const ago=d=>{if(!d)return '—';const dd=Math.floor((now-+d)/86400000);return dd<=0?'오늘':dd+'일 전';};
@@ -7404,12 +7422,39 @@ async function ccLoadCustomers(myId){
         +'<span style="font-size:11px;color:#8a877f;white-space:nowrap">가입 '+fmt(r.created)+'</span>'
         +'<span style="font-size:11px;color:'+(on?'#0F6E56':'#8a877f')+';white-space:nowrap">방문 '+ago(r.seen)+'</span>'
         +'<button onclick="event.stopPropagation();window.open(\'/@'+encodeURIComponent(r.slug)+'\',\'_blank\')" style="border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:6px;padding:3px 9px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap">채널보기</button>'
+        +'<button onclick="event.stopPropagation();ccDetachCust(\''+r.slug+'\')" style="border:1px solid #D9A0A0;background:#fff;color:#A32D2D;border-radius:6px;padding:3px 8px;font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap">해제</button>'
         +'<span id="ccCdArr_'+r.slug+'" style="color:#B9B5AA;font-size:11px">▸</span>'
       +'</div>'
       +'<div id="ccCdWrap_'+r.slug+'" style="display:none;background:#FBFAF6;border:1px solid #EFECE3;border-radius:10px;margin:2px 0 8px 15px;padding:10px 12px;font-size:12px;max-height:260px;overflow-y:auto"></div>';}).join('')
     :'<div style="padding:14px 4px;font-size:12.5px;color:#8a877f">아직 연결된 고객 홈페이지가 없습니다. 채널 링크를 고객에게 보내보세요.</div>';
   }catch(e){card.style.display='none';}
 }
+/* ★ 개별 연결 해제 — 해당 고객만 본사 귀속 (하위 소개 고객·고객 홈페이지는 그대로) */
+async function ccDetachCust(slug){
+  if(!confirm('@'+slug+' 고객과의 연결을 해제할까요?\n\n· 고객의 홈페이지와 자료는 그대로 유지됩니다\n· 이 고객의 소개로 연결된 다른 고객들은 계속 내 고객으로 남습니다\n· 해제된 고객은 본사 소속으로 전환됩니다'))return;
+  if(!confirm('정말 해제하시겠어요? (되돌리려면 본사에 재배정을 요청해야 합니다)'))return;
+  try{
+    const fn=httpsCallable(functions,'detachClientChannel');
+    await fn({slug});
+    toast('연결이 해제되었습니다 (본사 귀속)','success');
+    if(_ccMyId)ccLoadCustomers(_ccMyId);
+  }catch(e){toast('해제 실패: '+(e.message||''),'error');}
+}
+window.ccDetachCust=ccDetachCust;
+/* ★ 최대 연결 인원 저장 — 상향 = 초과분 월 과금 동의 */
+async function ccSaveMax(){
+  const v=Math.round(Number(document.getElementById('ccMaxInp').value));
+  if(!isFinite(v)||v<1){toast('1 이상의 숫자를 입력해주세요','warning');return;}
+  const _extra=Math.max(0,v-50);
+  if(!confirm('최대 연결을 '+v+'명으로 설정할까요?\n\n· 무료 50명 초과분은 1명당 월 200원이 과금됩니다\n· '+v+'명까지 차면 예상 월 과금 최대 '+( _extra*200).toLocaleString('ko-KR')+'원\n· 상한 도달 후 신규 가입 고객은 본사로 연결됩니다'))return;
+  try{
+    const fn=httpsCallable(functions,'setChannelMax');
+    await fn({max:v});
+    toast('최대 연결 인원이 저장되었습니다','success');
+    if(_ccMyId)ccLoadCustomers(_ccMyId);
+  }catch(e){toast('저장 실패: '+(e.message||''),'error');}
+}
+window.ccSaveMax=ccSaveMax;
 
 async function loadChannelData(){
   if(!me||!meData)return;
