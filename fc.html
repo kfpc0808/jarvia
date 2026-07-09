@@ -4034,10 +4034,11 @@ function scRow(o){ // o: {type,name,sub,badge,knock,peerId,online}
   const sub=online?'<span style="color:#0F6E56;font-weight:700">● 온라인</span>'+(o.type==='client'&&o.badge==='직접'?' · 먼저 대화 가능':''):(o.knock?'🔔 새 대화를 시작했어요':ccvEsc(o.sub||'오프라인'));
   const subColor=o.knock&&!online?'#A32D2D;font-weight:700':'#8a877f';
   const knockBadge=o.knock?'<span style="font-size:10px;font-weight:800;color:#fff;background:#A32D2D;border-radius:999px;padding:2px 6px;flex-shrink:0">1</span>':'<span style="font-size:11px;color:#8A93A6;flex-shrink:0">›</span>';
+  const delBtn=o.knock?'<button onclick="event.stopPropagation();scDeleteKnock(\''+ccvEsc(o.peerId)+'\')" title="대화방 삭제" style="width:24px;height:24px;border-radius:50%;border:none;background:#EAD9B0;color:#8B6914;font-size:11px;cursor:pointer;flex-shrink:0;margin-left:2px">✕</button>':'';
   return '<div onclick="scOpenChat(\''+ccvEsc(o.peerId)+'\',\''+ccvEsc(o.name)+'\',\''+(o.type)+'\')" style="display:flex;align-items:center;gap:10px;'+bg+'border-radius:12px;padding:10px 11px;margin-bottom:8px;cursor:pointer">'
     +'<div style="position:relative;width:38px;height:38px;flex-shrink:0"><div style="width:38px;height:38px;border-radius:50%;background:'+av+';color:'+avc+';display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700">'+ini+'</div>'+dot+'</div>'
     +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:#1B2430;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(o.type==='fc'?'컨설턴트 ':'')+ccvEsc(o.name)+badge+'</div><div style="font-size:10.5px;color:'+subColor+'">'+sub+'</div></div>'
-    +knockBadge+'</div>';
+    +knockBadge+delBtn+'</div>';
 }
 async function scLoadList(){
   const lb=document.getElementById('scListBody');if(!lb)return;
@@ -4058,7 +4059,7 @@ async function scLoadList(){
     } else if(isOwnerView && loginId){
       let direct=[],knocks=[];
       try{const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',loginId),limit(100)));qs.forEach(d=>{const c=d.data();if((c.tier||1)===1){if(c.nickByFc)_scNick[d.id]=c.nickByFc;direct.push({slug:d.id,name:c.nickByFc||(c.brand&&c.brand.title)||d.id});}});}catch(_e){}
-      try{const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),limit(50)));ks.forEach(d=>{const k=d.data();knocks.push({slug:k.fromSlug,name:k.fromName||k.fromSlug});});}catch(_e){}
+      try{const _kmap=new Map();const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),limit(50)));ks.forEach(d=>{const k=d.data();const sg=k.fromSlug;if(!sg)return;if(!_kmap.has(sg))_kmap.set(sg,{slug:sg,name:k.fromName||sg});});knocks=[..._kmap.values()];await Promise.all(knocks.map(async k=>{try{if(_scNick[k.slug]){k.name=_scNick[k.slug];return;}const cs=await getDoc(doc(db,'client_channels',k.slug));if(cs.exists()&&cs.data().nickByFc){_scNick[k.slug]=cs.data().nickByFc;k.name=cs.data().nickByFc;}}catch(_e){}}));}catch(_e){}
       if(direct.length){
         const dons=await Promise.all(direct.map(s=>scClientOnline(s.slug)));
         html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">내 직접 고객</div>';
@@ -4143,11 +4144,83 @@ function scRecvBubble(txt){
   const b=document.createElement('div');b.style.cssText='align-self:flex-start;max-width:78%;background:#fff;border:1px solid #E6EAF1;color:#1B2430;border-radius:13px 13px 13px 4px;padding:8px 11px;font-size:12.5px;word-break:break-word';b.textContent=txt;cb.appendChild(b);cb.scrollTop=cb.scrollHeight;
 }
 function scWireDc(dc){
+  dc.binaryType='arraybuffer';
   dc.onopen=()=>scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');
-  dc.onmessage=ev=>{if(typeof ev.data==='string'){try{const m=JSON.parse(ev.data);if(m&&m.t==='msg')scRecvBubble(String(m.x||''));}catch(_e){}}};
+  dc.onmessage=ev=>{
+    if(typeof ev.data==='string'){
+      try{const m=JSON.parse(ev.data);if(!m)return;
+        if(m.t==='msg'){scRecvBubble(String(m.x||''));}
+        else if(m.t==='file-start'){_scRx={id:m.id,name:String(m.name||'파일'),mime:m.mime||'application/octet-stream',size:m.size||0,received:0,chunks:[],bubble:scFileBubble('in','📎 '+String(m.name||'파일')+' 받는 중 0%')};}
+        else if(m.t==='file-end'){scFinishRx();}
+      }catch(_e){}
+    }else if(_scRx){
+      _scRx.chunks.push(ev.data);_scRx.received+=(ev.data.byteLength||0);
+      if(_scRx.bubble&&_scRx.size)_scRx.bubble.textContent='📎 '+_scRx.name+' 받는 중 '+Math.floor(_scRx.received/_scRx.size*100)+'%';
+    }
+  };
   dc.onclose=()=>scSetStatus('연결이 종료되었어요');
   dc.onerror=()=>{};
 }
+/* ══ 보안채팅 파일 전송 (같은 dataChannel · P2P 직전송, 서버 미경유) ══ */
+let _scRx=null; // 수신 중 파일 {id,name,mime,size,received,chunks,bubble}
+function scHumanSize(n){if(n<1024)return n+'B';if(n<1048576)return (n/1024).toFixed(1)+'KB';if(n<1073741824)return (n/1048576).toFixed(1)+'MB';return (n/1073741824).toFixed(2)+'GB';}
+function scFileBubble(side,label){
+  const cb=document.getElementById('scChatBody');if(!cb)return null;
+  const mine=(side==='out');
+  const b=document.createElement('div');
+  b.style.cssText='align-self:'+(mine?'flex-end':'flex-start')+';max-width:80%;background:'+(mine?'#1B3A6B':'#fff')+';color:'+(mine?'#fff':'#1B2430')+';border:'+(mine?'none':'1px solid #E6EAF1')+';border-radius:13px;padding:9px 12px;font-size:12px;word-break:break-word';
+  b.textContent=label;cb.appendChild(b);cb.scrollTop=cb.scrollHeight;return b;
+}
+function scPickFile(){const fi=document.getElementById('scFileInput');if(fi){fi.value='';fi.click();}}
+window.scPickFile=scPickFile;
+async function scSendFile(file){
+  if(!file)return;
+  if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open'){scSysMsg('아직 연결되지 않았어요. 상대가 온라인일 때 전송할 수 있어요.');return;}
+  const dc=_scConn.dc;
+  const id='f'+Date.now();
+  const name=String(file.name||'파일').slice(0,180);
+  const size=file.size;
+  const mime=file.type||'application/octet-stream';
+  const bub=scFileBubble('out','📎 '+name+' 보내는 중 0%');
+  try{
+    dc.send(JSON.stringify({t:'file-start',id:id,name:name,size:size,mime:mime}));
+    const ab=await file.arrayBuffer();
+    const total=ab.byteLength;let off=0;
+    await new Promise((res,rej)=>{
+      const pump=()=>{
+        if(dc.readyState!=='open'){rej(new Error('closed'));return;}
+        while(off<total){
+          if(dc.bufferedAmount>LC_P2P_CHUNK*8){setTimeout(pump,50);return;}
+          const end=Math.min(off+LC_P2P_CHUNK,total);
+          try{dc.send(ab.slice(off,end));}catch(e){rej(e);return;}
+          off=end;
+          if(bub)bub.textContent='📎 '+name+' 보내는 중 '+Math.floor(off/total*100)+'%';
+        }
+        try{dc.send(JSON.stringify({t:'file-end',id:id}));}catch(e){}
+        res();
+      };
+      pump();
+    });
+    if(bub)bub.textContent='📎 '+name+' 전송 완료 ✓';
+  }catch(e){if(bub)bub.textContent='📎 '+name+' 전송 실패';scSysMsg('파일 전송 실패 — 연결을 확인해주세요');}
+}
+window.scSendFile=scSendFile;
+function scFinishRx(){
+  const rx=_scRx;_scRx=null;if(!rx)return;
+  try{
+    const blob=new Blob(rx.chunks,{type:rx.mime});
+    const url=URL.createObjectURL(blob);
+    if(rx.bubble){
+      rx.bubble.textContent='';
+      const a=document.createElement('a');
+      a.href=url;a.download=rx.name;
+      a.textContent='📎 '+rx.name+' ('+scHumanSize(rx.size||blob.size)+') · 저장';
+      a.style.cssText='color:#1B3A6B;font-weight:800;text-decoration:underline;cursor:pointer;word-break:break-all';
+      rx.bubble.appendChild(a);
+    }
+  }catch(e){if(rx.bubble)rx.bubble.textContent='📎 '+(rx.name||'파일')+' 수신 실패';}
+}
+
 /* 고객 → FC : 연결 개시(offer) */
 async function scClientConnect(fcLoginId){
   const myUid=await lcEnsureAnonAuth();
@@ -4182,6 +4255,8 @@ async function scKnock(peer){
   try{
     const myUid=await lcEnsureAnonAuth();
     if(peer.type==='fc'){
+      const _dup=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',peer.id),where('toType','==','fc'),where('fromSlug','==',(window._ccSlug||'')),limit(1))).catch(()=>null);
+      if(_dup&&!_dup.empty)return true;
       await addDoc(collection(db,'chat_knocks'),{fromUid:myUid,fromSlug:(window._ccSlug||''),fromName:(window._ccBrand&&window._ccBrand.title)||window._ccSlug||'고객',toType:'fc',toFcLoginId:peer.id,createdAt:serverTimestamp()});
     }else{
       const exp=new Date(Date.now()+7*86400000);
@@ -4190,6 +4265,20 @@ async function scKnock(peer){
     return true;
   }catch(e){console.warn('[sc-knock]',e.message);return false;}
 }
+/* 대화방(노크) 삭제 — FC가 받은 노크 문서 제거 후 목록 갱신 */
+async function scDeleteKnock(slug){
+  if(!slug)return;
+  if(!confirm('이 대화방을 목록에서 삭제할까요?'))return;
+  try{
+    const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),where('fromSlug','==',slug),limit(50)));
+    for(const d of ks.docs){await deleteDoc(d.ref).catch(()=>{});}
+    _scOwnerPending.delete(slug);
+    const n=document.getElementById('scOwnerNudge_'+slug);if(n)n.remove();
+    scLoadList();
+    toast&&toast('대화방을 삭제했어요','success');
+  }catch(e){toast&&toast('삭제 실패: '+e.message,'error');}
+}
+window.scDeleteKnock=scDeleteKnock;
 /* FC 수신 리스너 — 채팅창 안 열고 있어도 고객 요청 감지 */
 function scStartOwnerChatWatch(){
   if(_scOwnerWatchStarted||!isOwnerView||!currentUser||currentUser.uid!==fcUid)return;
@@ -5919,6 +6008,8 @@ init();
   <div id="scListBody" style="flex:1;overflow-y:auto;padding:12px"></div>
   <div id="scChatBody" style="flex:1;overflow-y:auto;padding:14px;display:none;flex-direction:column;gap:9px;background:#F5F7FA"></div>
   <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
+    <input id="scFileInput" type="file" style="display:none" onchange="if(this.files&&this.files[0]){scSendFile(this.files[0]);this.value='';}">
+    <button onclick="scPickFile()" title="파일 첨부" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
     <input id="scInput" placeholder="메시지 입력…" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
     <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
   </div>
