@@ -350,6 +350,8 @@
   .gl2dots::after{content:'';animation:dots 1.4s steps(4,end) infinite;}
   .gl2sub{font-size:12.5px;color:var(--mute);text-align:center;}
   .gl2sub b{color:var(--navy);}
+  .gl2tip{margin-top:11px;font-size:12.5px;color:var(--navy);text-align:center;line-height:1.7;min-height:64px;display:flex;align-items:center;justify-content:center;background:var(--goldbg);border:1px solid #E8DBB6;border-radius:10px;padding:12px 15px;transition:opacity .45s ease;opacity:0;}
+  .gl2tip b{color:var(--gold);}
   .gendots::after{content:'';animation:dots 1.4s steps(4,end) infinite;}
   @keyframes dots{0%{content:'';}25%{content:'.';}50%{content:'..';}75%{content:'...';}}
   /* 시작 화면 */
@@ -1708,8 +1710,10 @@ function renderGenLoading(){const r=document.getElementById('deck');
     +'<div class="gl2head"><span class="gl2spin"></span>작성자가 <b>'+topic+'</b> 자료를 만들고 있습니다</div>'
     +'<div class="gl2term" id="genlog"></div>'
     +'<div class="gl2sub">실제 생성에는 <b>약 4~5분</b>이 걸립니다 · 창을 닫지 말고 잠시만 기다려 주세요</div>'
+    +'<div class="gl2tip" id="gentip"></div>'
     +'</div>';
   document.getElementById('count').textContent='생성 중…';
+  startGenTips();
   const logEl=document.getElementById('genlog');
   let i=0,tIdx=0,cursor=null,tailLine=null;
   function done(el){if(el){const d=el.querySelector('.gl2dots');if(d)d.outerHTML=' <span class="gl2chk">✓</span>';el.classList.remove('cur');el.classList.add('fin');}}
@@ -1723,7 +1727,26 @@ function renderGenLoading(){const r=document.getElementById('deck');
     }
   },11000);
 }
-function stopGenTimer(){clearInterval(window._genTimer);}
+// 생성 로딩 중 순환 도움말 — 한 번에 하나씩 보여주고(페이드), 읽을 시간을 준 뒤 다음으로 넘긴다.
+const GEN_TIPS=[
+  '자료가 완성되면 오른쪽 본 화면에서 글자와 정렬을 마음대로 고치실 수 있습니다. 이렇게 직접 수정하는 것은 아무런 비용이 들지 않으니 부담 없이 다듬어 보세요.',
+  '모든 슬라이드의 오른쪽 아래에는 노트 버튼이 있습니다. 이 버튼을 누르면 그 슬라이드의 내용을 반영한 발표 화법이 나오기 때문에, 상담할 때 무슨 말을 해야 할지 고민하지 않으셔도 됩니다.',
+  '왼쪽 진행자에게 부탁해 AI로 수정하거나 새 슬라이드를 만드는 것은 한 달에 열 번까지 무료이고, 그 뒤로는 한 건당 200원이 듭니다. 그래서 글자나 색을 바꾸는 간단한 작업은 오른쪽 화면에서 직접 하시는 편이 더 경제적입니다.',
+  '슬라이드에 라이브 시뮬레이터를 넣으면 고객 앞에서 숫자를 직접 움직여 보여 주며 상담하실 수 있습니다. 필요하면 시뮬레이터를 더 추가하실 수도 있습니다.',
+  '오른쪽 화면에서는 글자 수정과 글자 크기 확대, 색상 변경, 슬라이드 추가를 모두 자유롭게 하실 수 있습니다.'
+];
+function startGenTips(){
+  const el=document.getElementById('gentip'); if(!el)return;
+  let k=0;
+  function show(){
+    el.style.opacity='0';
+    setTimeout(function(){ if(!document.getElementById('gentip'))return; el.innerHTML=GEN_TIPS[k%GEN_TIPS.length]; el.style.opacity='1'; k++; },450);
+  }
+  show();
+  clearInterval(window._genTipTimer);
+  window._genTipTimer=setInterval(show,6500);   // 6.5초마다 다음 팁(페이드 0.45s 포함, 읽을 여유)
+}
+function stopGenTimer(){clearInterval(window._genTimer);clearInterval(window._genTipTimer);}
 function scrollToSlide(idx){const node=document.getElementById('deck').children[idx];if(node)node.scrollIntoView({behavior:'smooth',block:'center'});}
 
 /* ===== 진행자 메시지 ===== */
@@ -2113,7 +2136,7 @@ async function send(){
   const financialInputMode=!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||looksLikeFinancialFragment(t)||pendingFinancialData||confirmedFinancialData||(pendingGen&&/^financial/.test(String(pendingGen.field||''))));
   if(financialInputMode&&t.length>5000){toast('재무자료는 한 번에 최대 5,000자입니다. 여러 메시지로 나누어 입력해 주세요.',4200);return;}
   MSGS.push({who:'me',text:t});paint();inp.value='';autoGrow(inp,150);updateCmdCount();
-  if(!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||((pendingFinancialData||confirmedFinancialData)&&looksLikeFinancialFragment(t)))&&(!pendingGen||pendingGen.field==='interview')){
+  if(!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||((pendingFinancialData||confirmedFinancialData)&&looksLikeFinancialFragment(t)))&&(!pendingGen||pendingGen.field==='interview'||pendingGen.field==='wrapup')){
     pendingGen=null;interviewQueue=[];rawInput+='\n[추가 재무자료]\n'+t;
     aiReply('추가 재무자료를 구조화해 기존 추출값과 합친 뒤 다시 확인받겠습니다…');
     return beginFinancialExtraction(t,!!(pendingFinancialData||confirmedFinancialData));
@@ -2182,6 +2205,15 @@ async function send(){
       aiReply('네, <b>'+topic+'</b>(으)로 진행할게요.');
       interviewRound=0; _lastRoundAsked=false; totalAsked=0; interviewState.ready=false; askedQuestions=[];   // 정정된 분야로 새로 시작
       return startInterview();      // 확정 분야로 인터뷰 — lockTopic=true라 다시 안 물음
+    }
+    if(_f==='wrapup'){
+      if(/^\s*(더\s*입력|더\s*넣|추가로?\s*입력|아직|잠깐|기다)/.test(t)){ pendingGen={field:'wrapup'}; return aiReply('네, 편하게 입력해 주세요. 다 되시면 <b>“생성”</b>이라고 알려주세요.'); }
+      if(/^\s*(예|네|응|그래|좋아|좋습니다|ㅇㅇ|ok|오케이?)[\s,.!]*$|생성(해|해\s*주세요|해줘|하자|할게|해도)|만들어\s*(주세요|줘|도)|이대로\s*생성|지금\s*생성|바로\s*생성/i.test(t)){
+        // 정상 생성 경로 — 연금 필요자금 기준(basisAsk) 등 계산 필수 확인을 거친 뒤 생성한다(강제생성 아님).
+        preflightQueue=basisAsk(rawInput,topic); pendingGen=null; return askNext();
+      }
+      rawInput+='\n[상담 마무리 중 사용자 입력]\n'+t;
+      return askWrapupTurn();
     }
     if(_f==='interview'){
       const _corr=detectTopicCorrection(t);
@@ -2337,7 +2369,7 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
 let rawInput="", clientName="", companyName="", collectedParams={}, pendingGen=null, chosenBasis=null, origRequest="", selectedTopic="", topicLocked=false;
 let pendingFinancialData=null, confirmedFinancialData=null, financialSourceText="", financialSourceParts=[], financialValidation=[], financialTableDetected=false;
 let interviewState={coverageScore:0,missingCritical:[],missingUseful:[],answeredUnknown:[],activeIssueGroups:[],ready:false,readyReason:""};
-let interviewRound=0, _lastRoundAsked=false, totalAsked=0; const INTERVIEW_SAFETY_MAX_ROUNDS=8, INTERVIEW_SAFETY_MAX_QUESTIONS=24; // 품질 충족도 중심, 비정상 반복만 안전상한으로 차단
+let interviewRound=0, _lastRoundAsked=false, totalAsked=0; const INTERVIEW_SAFETY_MAX_ROUNDS=8, INTERVIEW_SAFETY_MAX_QUESTIONS=5; // 질문은 한 번에 1개씩, 가장 중요한 것부터 최대 5개. 라운드 상한은 비정상 반복만 차단
 function preflightAsk(text,topic){
   const t=text||'';
   if(topic==='연금설계'&&!/국민연금|노령연금|예상\s*연금|공적\s*연금|연금\s*수령|연금\s*가입/.test(t)){
@@ -2368,6 +2400,25 @@ let preflightQueue=[];
 function askNext(){ if(preflightQueue.length){const a=preflightQueue.shift();pendingGen={field:a.field};aiReply(a.q);} else generate(); }
 // 질문 그만 받고 즉시 생성 (말 입력·버튼 공통 경로)
 let _forceGen=false;   // ★ 즉시생성 버튼 신호 — generate()가 1회 읽고 초기화(기업 재무확인 게이트 강제 통과용)
+// 대화 마무리 모드 — 질문 5개 소진 또는 정보 충분(ready) 시 진입. 새 질문 없이 공을 사용자에게 넘긴다.
+function enterWrapup(msg){
+  interviewQueue=[]; preflightQueue=[]; _lastRoundAsked=false;
+  aiReply((msg||'여기까지 확인했어요.')+' 이대로 <b>생성</b>해 드릴까요? 더 넣고 싶은 내용이나 궁금한 점이 있으면 편하게 입력해 주세요.'+chipsHtml([{label:'예, 생성해 주세요'},{label:'더 입력할게요'}]));
+  pendingGen={field:'wrapup'};
+}
+// 대화 마무리 모드에서 사용자 입력 처리 — 새 질문 없이 답하거나 반영하고, 생성 버튼을 함께 제시.
+async function askWrapupTurn(){
+  showThinking();
+  let data=null;
+  try{
+    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[],collected:collectedParams,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[],phase:'wrapup'})});
+    data=await r.json();
+  }catch(_e){ data=null; }
+  if(data&&data.collected&&typeof data.collected==='object'){ collectedParams={...collectedParams,...data.collected}; }
+  const ans=(data&&data.note)?data.note:'말씀 반영했어요. 더 필요한 내용이 있으면 편하게 말씀해 주세요.';
+  aiReply(ans+chipsHtml([{label:'예, 생성해 주세요'},{label:'더 입력할게요'}]));
+  pendingGen={field:'wrapup'};
+}
 function forceGenerate(){
   if(deck.slides.length) return;   // 이미 생성됨 → 무시
   pendingGen=null; interviewQueue=[]; preflightQueue=[]; _lastRoundAsked=false;   // ★ 인터뷰·사전질문 모두 정리 — '질문 그만'이므로 basis 등 추가 질문 없이 즉시 생성(연금 basis 질문이 또 뜨던 문제 차단)
@@ -2411,10 +2462,9 @@ function wantsGenerateNow(t){
   return /그만|이\s*정도|이대로|이만(하|만|$)|바로\s*만들|이제\s*만들|지금\s*만들|생성\s*(해|하|줘|요|바|할)|만들어\s*(줘|주세요|달라|봐)|됐(어|다|어요|습니|네)|충분(해|히|합|함|하)|질문\s*(그만|끝|안)/.test(t);
 }
 async function startInterview(){
-  if(totalAsked>=INTERVIEW_SAFETY_MAX_QUESTIONS){aiReply('질문 안전상한에 도달해 현재 확인된 정보로 생성합니다. 빠진 핵심값은 자료에 <b>정밀 확인 필요</b>로 표시됩니다.');preflightQueue=basisAsk(rawInput,topic);return askNext();}
+  if(totalAsked>=INTERVIEW_SAFETY_MAX_QUESTIONS){return enterWrapup('필요한 질문은 여기까지예요.');}
   interviewRound++;   // 다회차: 라운드 증가
-  if(interviewRound===1) aiReply('좋은 자료를 위해 <b>꼭 필요한 내용</b>만 빠르게 확인할게요. (모르시는 항목은 “미반영”이라고 답하셔도 됩니다.)');
-  else aiReply('답변 감사합니다. 자료를 더 정확히 만들기 위해 <b>몇 가지만 더</b> 확인할게요.');
+  if(interviewRound===1) aiReply('좋은 자료를 위해 <b>꼭 필요한 것</b>부터 하나씩 여쭤볼게요. (모르시는 항목은 “미반영”이라고 답하셔도 됩니다.)');
   showThinking();
   let data=null;
   try{
@@ -2437,12 +2487,10 @@ async function startInterview(){
     return;   // 사용자 답을 기다림
   }
   const remaining=Math.max(0,INTERVIEW_SAFETY_MAX_QUESTIONS-totalAsked);
-  const qs = Array.isArray(data.questions) ? data.questions.slice(0,Math.min(5,remaining)) : [];
+  const qs = Array.isArray(data.questions) ? data.questions.slice(0,Math.min(1,remaining)) : [];   // 질문은 한 번에 1개씩 — 답을 받은 뒤 다음 질문을 새로 정하는 적응형
   if(data.note && qs.length) aiReply(data.note);
   if(data.ready&&!qs.length){
-    if(data.readyReason)aiReply('<span class="q">'+escHtml(data.readyReason)+'</span>');
-    preflightQueue=basisAsk(rawInput,topic);
-    return askNext();
+    return enterWrapup(data.readyReason||'필요한 핵심 정보가 충분히 모였어요.');
   }
   interviewQueue=qs;
   _lastRoundAsked = qs.length>0;
@@ -2465,11 +2513,8 @@ function askNextInterview(){
       _lastRoundAsked=false;
       return startInterview();
     }
-    if(!interviewState.ready&&(interviewRound>=INTERVIEW_SAFETY_MAX_ROUNDS||totalAsked>=INTERVIEW_SAFETY_MAX_QUESTIONS)){
-      aiReply('추가 질문이 길어져 현재 확인된 정보로 생성합니다. 빠진 핵심값은 자료에 <b>정밀 확인 필요</b>로 표시됩니다.');
-    }
-    preflightQueue=basisAsk(rawInput,topic);
-    askNext();
+    // 질문 소진/상한 → 생성으로 강행하지 않고 대화 마무리 모드로 공을 사용자에게 넘긴다(근거질문도 추가하지 않음).
+    return enterWrapup(totalAsked>=INTERVIEW_SAFETY_MAX_QUESTIONS?'필요한 질문은 여기까지예요.':'여기까지 확인했어요.');
   }
 }
 let MEMBER={name:'',tier:'',paid:false};
