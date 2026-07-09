@@ -4009,6 +4009,7 @@ window.scBack=scBack;
 function scShowList(){
   const cb=document.getElementById('scChatBody'),ib=document.getElementById('scInputBar'),lb=document.getElementById('scListBody');
   if(cb)cb.style.display='none';if(ib)ib.style.display='none';if(lb)lb.style.display='block';
+  scShowCallBtns(false);
   const tt=document.getElementById('scTitle'),su=document.getElementById('scSub');
   if(tt)tt.textContent='🔒 보안채팅';if(su)su.textContent='종단간 암호화 · 서버에 저장 안 됨';
   if(lb)lb.innerHTML='<div style="text-align:center;color:#9CA3AF;font-size:11px;padding:24px">불러오는 중…</div>';
@@ -4035,10 +4036,11 @@ function scRow(o){ // o: {type,name,sub,badge,knock,peerId,online}
   const subColor=o.knock&&!online?'#A32D2D;font-weight:700':'#8a877f';
   const knockBadge=o.knock?'<span style="font-size:10px;font-weight:800;color:#fff;background:#A32D2D;border-radius:999px;padding:2px 6px;flex-shrink:0">1</span>':'<span style="font-size:11px;color:#8A93A6;flex-shrink:0">›</span>';
   const delBtn=o.knock?'<button onclick="event.stopPropagation();scDeleteKnock(\''+ccvEsc(o.peerId)+'\')" title="대화방 삭제" style="width:24px;height:24px;border-radius:50%;border:none;background:#EAD9B0;color:#8B6914;font-size:11px;cursor:pointer;flex-shrink:0;margin-left:2px">✕</button>':'';
+  const knockFlag=(o.hasKnock&&!o.knock)?'<span title="새 대화 요청" style="font-size:13px;flex-shrink:0">🔔</span>':'';
   return '<div onclick="scOpenChat(\''+ccvEsc(o.peerId)+'\',\''+ccvEsc(o.name)+'\',\''+(o.type)+'\')" style="display:flex;align-items:center;gap:10px;'+bg+'border-radius:12px;padding:10px 11px;margin-bottom:8px;cursor:pointer">'
     +'<div style="position:relative;width:38px;height:38px;flex-shrink:0"><div style="width:38px;height:38px;border-radius:50%;background:'+av+';color:'+avc+';display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700">'+ini+'</div>'+dot+'</div>'
     +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:#1B2430;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(o.type==='fc'?'컨설턴트 ':'')+ccvEsc(o.name)+badge+'</div><div style="font-size:10.5px;color:'+subColor+'">'+sub+'</div></div>'
-    +knockBadge+delBtn+'</div>';
+    +knockFlag+knockBadge+delBtn+'</div>';
 }
 async function scLoadList(){
   const lb=document.getElementById('scListBody');if(!lb)return;
@@ -4060,15 +4062,18 @@ async function scLoadList(){
       let direct=[],knocks=[];
       try{const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',loginId),limit(100)));qs.forEach(d=>{const c=d.data();if((c.tier||1)===1){if(c.nickByFc)_scNick[d.id]=c.nickByFc;direct.push({slug:d.id,name:c.nickByFc||(c.brand&&c.brand.title)||d.id});}});}catch(_e){}
       try{const _kmap=new Map();const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),limit(50)));ks.forEach(d=>{const k=d.data();const sg=k.fromSlug;if(!sg)return;if(!_kmap.has(sg))_kmap.set(sg,{slug:sg,name:k.fromName||sg});});knocks=[..._kmap.values()];await Promise.all(knocks.map(async k=>{try{if(_scNick[k.slug]){k.name=_scNick[k.slug];return;}const cs=await getDoc(doc(db,'client_channels',k.slug));if(cs.exists()&&cs.data().nickByFc){_scNick[k.slug]=cs.data().nickByFc;k.name=cs.data().nickByFc;}}catch(_e){}}));}catch(_e){}
+      const _dirSlugs=new Set(direct.map(d=>d.slug));
+      const _knSlugs=new Set(knocks.map(k=>k.slug));
+      const knocksF=knocks.filter(k=>!_dirSlugs.has(k.slug));
       if(direct.length){
         const dons=await Promise.all(direct.map(s=>scClientOnline(s.slug)));
         html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">내 직접 고객</div>';
-        direct.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i]});});
+        direct.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i],hasKnock:_knSlugs.has(s.slug)});});
       }
       html+='<div style="font-size:9px;font-weight:800;color:#8a877f;letter-spacing:1px;margin:14px 4px 6px">소개로 연결 — 말을 걸어온 사람만</div>';
-      if(knocks.length){
-        const kons=await Promise.all(knocks.map(k=>scClientOnline(k.slug)));
-        knocks.forEach((k,i)=>{html+=scRow({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]});});
+      if(knocksF.length){
+        const kons=await Promise.all(knocksF.map(k=>scClientOnline(k.slug)));
+        knocksF.forEach((k,i)=>{html+=scRow({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]});});
       }
       else{html+='<div style="text-align:center;color:#B9B5AA;font-size:10.5px;padding:14px 12px;line-height:1.6">소개로 연결된 분들은 먼저 말을 걸기 전까지<br>여기에 표시되지 않아요</div>';}
     } else {
@@ -4084,6 +4089,7 @@ async function scOpenChat(peerId,peerName,peerType){
   _scPeer.name=dispName;
   const lb=document.getElementById('scListBody'),cb=document.getElementById('scChatBody'),ib=document.getElementById('scInputBar');
   if(lb)lb.style.display='none';if(cb)cb.style.display='flex';if(ib)ib.style.display='flex';
+  scShowCallBtns(true);_scRelay=false;scUpdateCallButtons();
   const tt=document.getElementById('scTitle'),su=document.getElementById('scSub');
   const canRename=(isOwnerView&&_scPeer.type==='client');
   if(tt){tt.textContent=(_scPeer.type==='fc'?'컨설턴트 ':'')+dispName+(canRename?' ✎':'');tt.style.cursor=canRename?'pointer':'default';tt.onclick=canRename?scRenamePeer:null;}
@@ -4105,11 +4111,122 @@ function scSend(){
   const inp=document.getElementById('scInput');if(!inp)return;const t=(inp.value||'').trim();if(!t)return;
   const cb=document.getElementById('scChatBody');if(!cb)return;
   if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open'){scSysMsg('아직 연결되지 않았어요. 상대가 온라인일 때 대화할 수 있어요.');return;}
-  try{_scConn.dc.send(JSON.stringify({t:'msg',x:t}));}catch(e){scSysMsg('전송 실패 — 연결을 확인해주세요');return;}
-  const b=document.createElement('div');b.style.cssText='align-self:flex-end;max-width:78%;background:#1B3A6B;color:#fff;border-radius:13px 13px 4px 13px;padding:8px 11px;font-size:12.5px;word-break:break-word';b.textContent=t;
+  const mid='m'+(++_scMsgSeq);
+  try{_scConn.dc.send(JSON.stringify({t:'msg',x:t,id:mid}));}catch(e){scSysMsg('전송 실패 — 연결을 확인해주세요');return;}
+  const b=document.createElement('div');b.style.cssText='align-self:flex-end;max-width:78%;background:#1B3A6B;color:#fff;border-radius:13px 13px 4px 13px;padding:8px 11px;font-size:12.5px;word-break:break-word';
+  const tx=document.createElement('span');tx.textContent=t;b.appendChild(tx);
+  const ck=document.createElement('span');ck.textContent=' ⋯';ck.style.cssText='font-size:10px;opacity:.55;margin-left:2px';b.appendChild(ck);_scPending[mid]=ck;
   cb.appendChild(b);inp.value='';cb.scrollTop=cb.scrollHeight;
+  try{_scConn.dc.send(JSON.stringify({t:'typing',on:false}));}catch(_e){}
 }
 window.scSend=scSend;
+/* ══ 입력중·전송확인·통화(음성/영상)·연결감지 — 기존 chat dataChannel을 시그널링으로 재사용 ══ */
+let _scMsgSeq=0; const _scPending={};
+function scMarkDelivered(id){const el=_scPending[id];if(el){el.textContent=' ✓';el.style.opacity='.85';delete _scPending[id];}}
+/* 입력 중 표시 */
+let _scTypingT=null,_scTypingHideT=null;
+function scOnInputTyping(){
+  if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open')return;
+  try{_scConn.dc.send(JSON.stringify({t:'typing',on:true}));}catch(_e){}
+  if(_scTypingT)clearTimeout(_scTypingT);
+  _scTypingT=setTimeout(()=>{try{_scConn.dc.send(JSON.stringify({t:'typing',on:false}));}catch(_e){}},1500);
+}
+window.scOnInputTyping=scOnInputTyping;
+function scShowTyping(on){
+  const su=document.getElementById('scSub');if(!su)return;
+  if(on){if(!su.dataset.base)su.dataset.base=su.textContent;su.textContent='입력 중…';if(_scTypingHideT)clearTimeout(_scTypingHideT);_scTypingHideT=setTimeout(()=>scShowTyping(false),4000);}
+  else{su.textContent=su.dataset.base||'🔒 이 대화는 저장되지 않아요';su.dataset.base='';}
+}
+/* 연결 상태 감지 + relay(TURN 경유) 판별 */
+function scWirePc(pc){
+  pc.oniceconnectionstatechange=()=>{
+    const st=pc.iceConnectionState;
+    if(st==='disconnected')scSetStatus('연결이 불안정해요…');
+    else if(st==='failed'||st==='closed')scSetStatus('연결이 끊어졌어요');
+    else if(st==='connected'||st==='completed'){scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');scCheckRelay();}
+  };
+}
+let _scRelay=false;
+async function scCheckRelay(){
+  try{
+    if(!_scConn||!_scConn.pc)return;
+    const stats=await _scConn.pc.getStats();
+    const typeById={};
+    stats.forEach(r=>{if(r.type==='local-candidate'||r.type==='remote-candidate')typeById[r.id]=r.candidateType;});
+    let relay=false;
+    stats.forEach(r=>{if(r.type==='candidate-pair'&&(r.state==='succeeded'||r.nominated)){if(typeById[r.localCandidateId]==='relay'||typeById[r.remoteCandidateId]==='relay')relay=true;}});
+    _scRelay=relay;scUpdateCallButtons();
+  }catch(_e){}
+}
+function scUpdateCallButtons(){
+  const vb=document.getElementById('scCallVideoBtn');if(!vb)return;
+  if(_scRelay){vb.style.opacity='.35';vb.title='현재 연결에선 음성만 가능 (교차망 비용 절약)';vb.dataset.locked='1';}
+  else{vb.style.opacity='1';vb.title='영상 통화';vb.dataset.locked='';}
+}
+function scShowCallBtns(show){const g=document.getElementById('scCallBtns');if(g)g.style.display=show?'flex':'none';}
+/* ── 통화 (같은 dataChannel로 offer/answer/ICE 시그널링, 미디어는 별도 P2P) ── */
+let _scCall=null;
+async function scStartCall(kind){
+  if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open'){toast&&toast('연결된 상대가 없어요','warning');return;}
+  if(_scCall){toast&&toast('이미 통화 중이에요','info');return;}
+  if(kind==='video'&&_scRelay){toast&&toast('현재 연결에선 음성 통화만 가능해요','warning');return;}
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia(kind==='video'?{audio:true,video:{width:640,height:480}}:{audio:true});
+    const pc=new RTCPeerConnection({iceServers:scIceServers()});
+    _scCall={pc:pc,stream:stream,kind:kind,role:'caller'};
+    stream.getTracks().forEach(tr=>pc.addTrack(tr,stream));
+    pc.onicecandidate=e=>{if(e.candidate&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-ice',cand:e.candidate.toJSON()}));}catch(_e){}}};
+    pc.ontrack=e=>scAttachRemote(e.streams[0]);
+    scShowCallUI(kind,stream);
+    const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+    _scConn.dc.send(JSON.stringify({t:'call-offer',sdp:offer.sdp,kind:kind}));
+  }catch(e){toast&&toast('통화를 시작할 수 없어요: '+(e.message||e.name),'error');scEndCall(false);}
+}
+window.scStartCall=scStartCall;
+async function scOnCallOffer(m){
+  if(_scCall){try{_scConn.dc.send(JSON.stringify({t:'call-end'}));}catch(_e){}return;}
+  const kind=(m.kind==='video')?'video':'audio';
+  if(!confirm((kind==='video'?'영상':'음성')+' 통화 요청이 왔어요. 받을까요?')){try{_scConn.dc.send(JSON.stringify({t:'call-end'}));}catch(_e){}return;}
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia(kind==='video'?{audio:true,video:{width:640,height:480}}:{audio:true});
+    const pc=new RTCPeerConnection({iceServers:scIceServers()});
+    _scCall={pc:pc,stream:stream,kind:kind,role:'callee'};
+    stream.getTracks().forEach(tr=>pc.addTrack(tr,stream));
+    pc.onicecandidate=e=>{if(e.candidate&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-ice',cand:e.candidate.toJSON()}));}catch(_e){}}};
+    pc.ontrack=e=>scAttachRemote(e.streams[0]);
+    scShowCallUI(kind,stream);
+    await pc.setRemoteDescription(new RTCSessionDescription({type:'offer',sdp:m.sdp}));
+    const ans=await pc.createAnswer();await pc.setLocalDescription(ans);
+    _scConn.dc.send(JSON.stringify({t:'call-answer',sdp:ans.sdp}));
+  }catch(e){toast&&toast('통화 연결 실패: '+(e.message||e.name),'error');scEndCall(true);}
+}
+async function scOnCallAnswer(m){if(_scCall&&_scCall.pc){try{await _scCall.pc.setRemoteDescription(new RTCSessionDescription({type:'answer',sdp:m.sdp}));}catch(_e){}}}
+async function scOnCallIce(m){if(_scCall&&_scCall.pc&&m.cand){try{await _scCall.pc.addIceCandidate(new RTCIceCandidate(m.cand));}catch(_e){}}}
+function scEndCall(notify){
+  if(notify&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-end'}));}catch(_e){}}
+  const c=_scCall;_scCall=null;
+  if(c){try{c.stream&&c.stream.getTracks().forEach(t=>t.stop());}catch(_e){}try{c.pc&&c.pc.close();}catch(_e){}}
+  scHideCallUI();
+}
+window.scEndCall=scEndCall;
+function scAttachRemote(stream){const rv=document.getElementById('scCallRemote');if(rv){rv.srcObject=stream;const p=rv.play&&rv.play();if(p&&p.catch)p.catch(()=>{});}}
+function scShowCallUI(kind,localStream){
+  scHideCallUI();
+  const ov=document.createElement('div');ov.id='scCallOverlay';
+  ov.style.cssText='position:fixed;inset:0;z-index:14500;background:#0B111E;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px';
+  const isV=(kind==='video');
+  ov.innerHTML=(isV
+      ?'<video id="scCallRemote" autoplay playsinline style="width:100%;max-width:440px;max-height:60vh;background:#000;border-radius:12px;object-fit:cover"></video>'
+       +'<video id="scCallLocal" autoplay playsinline muted style="position:fixed;right:16px;top:calc(16px + env(safe-area-inset-top));width:96px;height:128px;background:#000;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,.3)"></video>'
+      :'<audio id="scCallRemote" autoplay style="display:none"></audio><div style="font-size:56px">🔒📞</div>')
+    +'<div style="color:#fff;font-size:15px;font-weight:800">'+(isV?'영상':'음성')+' 통화 · 종단간</div>'
+    +'<div style="color:rgba(255,255,255,.55);font-size:11px">서버를 거치지 않는 P2P 통화예요</div>'
+    +'<button onclick="scEndCall(true)" style="margin-top:8px;width:60px;height:60px;border-radius:50%;background:#E0322D;color:#fff;border:none;font-size:24px;cursor:pointer">✕</button>';
+  document.body.appendChild(ov);
+  if(isV){const lv=document.getElementById('scCallLocal');if(lv&&localStream){lv.srcObject=localStream;const p=lv.play&&lv.play();if(p&&p.catch)p.catch(()=>{});}}
+}
+function scHideCallUI(){const ov=document.getElementById('scCallOverlay');if(ov)ov.remove();}
+
 /* ══════════════════════════════════════════════════════════════════
    보안채팅 실시간 P2P 엔진 (텍스트) — lcSendFileP2P 검증 패턴 재사용
    · 시그널링: chat_signals/{FC로그인ID}_{고객UID}  (대화 내용은 서버에 절대 안 씀)
@@ -4126,6 +4243,8 @@ let _scOwnerPending=new Map(); // clientSlug -> {room,data}
 let _scOwnerWatchStarted=false;
 
 function scTeardown(){
+  try{if(_scCall)scEndCall(false);}catch(e){}
+  _scRelay=false;
   const c=_scConn;_scConn=null;
   if(!c)return;
   try{c.sigUnsub&&c.sigUnsub();}catch(e){}
@@ -4149,7 +4268,13 @@ function scWireDc(dc){
   dc.onmessage=ev=>{
     if(typeof ev.data==='string'){
       try{const m=JSON.parse(ev.data);if(!m)return;
-        if(m.t==='msg'){scRecvBubble(String(m.x||''));}
+        if(m.t==='msg'){scRecvBubble(String(m.x||''));if(m.id&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'ack',id:m.id}));}catch(_e){}}}
+        else if(m.t==='ack'){scMarkDelivered(m.id);}
+        else if(m.t==='typing'){scShowTyping(m.on===true);}
+        else if(m.t==='call-offer'){scOnCallOffer(m);}
+        else if(m.t==='call-answer'){scOnCallAnswer(m);}
+        else if(m.t==='call-ice'){scOnCallIce(m);}
+        else if(m.t==='call-end'){scEndCall(false);}
         else if(m.t==='file-start'){_scRx={id:m.id,name:String(m.name||'파일'),mime:m.mime||'application/octet-stream',size:m.size||0,received:0,chunks:[],bubble:scFileBubble('in','📎 '+String(m.name||'파일')+' 받는 중 0%')};}
         else if(m.t==='file-end'){scFinishRx();}
       }catch(_e){}
@@ -4201,7 +4326,21 @@ async function scSendFile(file){
       };
       pump();
     });
-    if(bub)bub.textContent='📎 '+name+' 전송 완료 ✓';
+    if(bub){
+      if(/^image\//.test(mime)){
+        try{
+          const surl=URL.createObjectURL(file);
+          bub.textContent='';
+          const img=document.createElement('img');img.src=surl;img.alt=name;
+          img.style.cssText='max-width:240px;max-height:240px;border-radius:9px;display:block;cursor:pointer';
+          img.onclick=()=>scViewImage(surl,name);
+          bub.appendChild(img);
+          const cap=document.createElement('div');cap.textContent='📎 '+name+' 전송 완료 ✓';
+          cap.style.cssText='font-size:10px;color:#D3DEEE;margin-top:5px;word-break:break-all';
+          bub.appendChild(cap);
+        }catch(_e){bub.textContent='📎 '+name+' 전송 완료 ✓';}
+      }else{bub.textContent='📎 '+name+' 전송 완료 ✓';}
+    }
   }catch(e){if(bub)bub.textContent='📎 '+name+' 전송 실패';scSysMsg('파일 전송 실패 — 연결을 확인해주세요');}
 }
 window.scSendFile=scSendFile;
@@ -4210,8 +4349,22 @@ function scFinishRx(){
   try{
     const blob=new Blob(rx.chunks,{type:rx.mime});
     const url=URL.createObjectURL(blob);
-    if(rx.bubble){
-      rx.bubble.textContent='';
+    if(!rx.bubble)return;
+    rx.bubble.textContent='';
+    if(/^image\//.test(rx.mime||'')){
+      const img=document.createElement('img');
+      img.src=url;img.alt=rx.name;
+      img.style.cssText='max-width:240px;max-height:240px;border-radius:9px;display:block;cursor:pointer';
+      img.onclick=()=>scViewImage(url,rx.name);
+      rx.bubble.appendChild(img);
+      const cap=document.createElement('div');
+      cap.style.cssText='font-size:10px;color:#5A6484;margin-top:5px;word-break:break-all';
+      cap.textContent='📎 '+rx.name+' ('+scHumanSize(rx.size||blob.size)+') ';
+      const dl=document.createElement('a');
+      dl.href=url;dl.download=rx.name;dl.textContent='저장';
+      dl.style.cssText='color:#1B3A6B;font-weight:800;text-decoration:underline;cursor:pointer';
+      cap.appendChild(dl);rx.bubble.appendChild(cap);
+    }else{
       const a=document.createElement('a');
       a.href=url;a.download=rx.name;
       a.textContent='📎 '+rx.name+' ('+scHumanSize(rx.size||blob.size)+') · 저장';
@@ -4220,6 +4373,17 @@ function scFinishRx(){
     }
   }catch(e){if(rx.bubble)rx.bubble.textContent='📎 '+(rx.name||'파일')+' 수신 실패';}
 }
+/* 이미지 전체화면 보기 */
+function scViewImage(url,name){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;z-index:14000;background:rgba(10,15,26,.92);display:flex;align-items:center;justify-content:center;padding:16px;cursor:zoom-out';
+  ov.onclick=()=>ov.remove();
+  const img=document.createElement('img');
+  img.src=url;img.alt=name||'';
+  img.style.cssText='max-width:100%;max-height:100%;border-radius:8px;object-fit:contain';
+  ov.appendChild(img);document.body.appendChild(ov);
+}
+window.scViewImage=scViewImage;
 
 /* 고객 → FC : 연결 개시(offer) */
 async function scClientConnect(fcLoginId){
@@ -4228,6 +4392,7 @@ async function scClientConnect(fcLoginId){
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
   const dc=pc.createDataChannel('chat');
   const conn={pc,dc,room,sigUnsub:null,candUnsub:null,role:'client'};_scConn=conn;
+  scWirePc(pc);
   scWireDc(dc);
   pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'offerCandidates'),e.candidate.toJSON()).catch(()=>{});};
   const sigRef=doc(db,'chat_signals',room);
@@ -4242,6 +4407,7 @@ async function scClientConnect(fcLoginId){
 async function scOwnerAnswer(room,offerData){
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
   const conn={pc,dc:null,room,sigUnsub:null,candUnsub:null,role:'fc'};_scConn=conn;
+  scWirePc(pc);
   pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'answerCandidates'),e.candidate.toJSON()).catch(()=>{});};
   pc.ondatachannel=e=>{const dc=e.channel;conn.dc=dc;scWireDc(dc);};
   await pc.setRemoteDescription(new RTCSessionDescription(offerData.offer));
@@ -6004,13 +6170,17 @@ init();
   <div style="background:#0F1B33;padding:calc(13px + env(safe-area-inset-top)) 15px 13px;display:flex;align-items:center;gap:11px;flex:none">
     <button id="scBack" onclick="scBack()" style="color:#fff;font-size:20px;background:none;border:none;cursor:pointer;line-height:1">‹</button>
     <div style="flex:1;min-width:0"><div id="scTitle" style="color:#fff;font-size:15.5px;font-weight:800">🔒 보안채팅</div><div id="scSub" style="color:rgba(255,255,255,.5);font-size:10.5px">종단간 암호화 · 서버에 저장 안 됨</div></div>
+    <div id="scCallBtns" style="display:none;gap:8px;align-items:center;flex:none">
+      <button id="scCallAudioBtn" onclick="scStartCall('audio')" title="음성 통화" style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;border:none;font-size:15px;cursor:pointer">📞</button>
+      <button id="scCallVideoBtn" onclick="scStartCall('video')" title="영상 통화" style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;border:none;font-size:15px;cursor:pointer">📹</button>
+    </div>
   </div>
   <div id="scListBody" style="flex:1;overflow-y:auto;padding:12px"></div>
   <div id="scChatBody" style="flex:1;overflow-y:auto;padding:14px;display:none;flex-direction:column;gap:9px;background:#F5F7FA"></div>
   <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
     <input id="scFileInput" type="file" style="display:none" onchange="if(this.files&&this.files[0]){scSendFile(this.files[0]);this.value='';}">
     <button onclick="scPickFile()" title="파일 첨부" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
-    <input id="scInput" placeholder="메시지 입력…" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
+    <input id="scInput" placeholder="메시지 입력…" oninput="scOnInputTyping()" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
     <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
   </div>
 </div>
