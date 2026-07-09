@@ -4035,10 +4035,11 @@ function scRow(o){ // o: {type,name,sub,badge,knock,peerId,online}
   const subColor=o.knock&&!online?'#A32D2D;font-weight:700':'#8a877f';
   const knockBadge=o.knock?'<span style="font-size:10px;font-weight:800;color:#fff;background:#A32D2D;border-radius:999px;padding:2px 6px;flex-shrink:0">1</span>':'<span style="font-size:11px;color:#8A93A6;flex-shrink:0">›</span>';
   const delBtn=o.knock?'<button onclick="event.stopPropagation();scDeleteKnock(\''+ccvEsc(o.peerId)+'\')" title="대화방 삭제" style="width:24px;height:24px;border-radius:50%;border:none;background:#EAD9B0;color:#8B6914;font-size:11px;cursor:pointer;flex-shrink:0;margin-left:2px">✕</button>':'';
+  const knockFlag=(o.hasKnock&&!o.knock)?'<span title="새 대화 요청" style="font-size:13px;flex-shrink:0">🔔</span>':'';
   return '<div onclick="scOpenChat(\''+ccvEsc(o.peerId)+'\',\''+ccvEsc(o.name)+'\',\''+(o.type)+'\')" style="display:flex;align-items:center;gap:10px;'+bg+'border-radius:12px;padding:10px 11px;margin-bottom:8px;cursor:pointer">'
     +'<div style="position:relative;width:38px;height:38px;flex-shrink:0"><div style="width:38px;height:38px;border-radius:50%;background:'+av+';color:'+avc+';display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700">'+ini+'</div>'+dot+'</div>'
     +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:#1B2430;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(o.type==='fc'?'컨설턴트 ':'')+ccvEsc(o.name)+badge+'</div><div style="font-size:10.5px;color:'+subColor+'">'+sub+'</div></div>'
-    +knockBadge+delBtn+'</div>';
+    +knockFlag+knockBadge+delBtn+'</div>';
 }
 async function scLoadList(){
   const lb=document.getElementById('scListBody');if(!lb)return;
@@ -4047,7 +4048,7 @@ async function scLoadList(){
     if(window._ccSlug){
       const fcName=(fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자';
       const fcOn=await lcFcOnline();
-      html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">담당 상담사</div>';
+      html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">담당 컨설턴트</div>';
       html+=scRow({type:'fc',peerId:loginId,name:fcName,sub:'탭하여 문의하기',online:fcOn});
       let subs=[];
       try{const qs=await getDocs(query(collection(db,'client_channels'),where('refSlug','==',window._ccSlug),limit(50)));qs.forEach(d=>{const c=d.data();subs.push({slug:d.id,name:(c.brand&&c.brand.title)||d.id});});}catch(_e){}
@@ -4060,15 +4061,18 @@ async function scLoadList(){
       let direct=[],knocks=[];
       try{const qs=await getDocs(query(collection(db,'client_channels'),where('fcLoginId','==',loginId),limit(100)));qs.forEach(d=>{const c=d.data();if((c.tier||1)===1){if(c.nickByFc)_scNick[d.id]=c.nickByFc;direct.push({slug:d.id,name:c.nickByFc||(c.brand&&c.brand.title)||d.id});}});}catch(_e){}
       try{const _kmap=new Map();const ks=await getDocs(query(collection(db,'chat_knocks'),where('toFcLoginId','==',loginId),where('toType','==','fc'),limit(50)));ks.forEach(d=>{const k=d.data();const sg=k.fromSlug;if(!sg)return;if(!_kmap.has(sg))_kmap.set(sg,{slug:sg,name:k.fromName||sg});});knocks=[..._kmap.values()];await Promise.all(knocks.map(async k=>{try{if(_scNick[k.slug]){k.name=_scNick[k.slug];return;}const cs=await getDoc(doc(db,'client_channels',k.slug));if(cs.exists()&&cs.data().nickByFc){_scNick[k.slug]=cs.data().nickByFc;k.name=cs.data().nickByFc;}}catch(_e){}}));}catch(_e){}
+      const _dirSlugs=new Set(direct.map(d=>d.slug));
+      const _knSlugs=new Set(knocks.map(k=>k.slug));
+      const knocksF=knocks.filter(k=>!_dirSlugs.has(k.slug));
       if(direct.length){
         const dons=await Promise.all(direct.map(s=>scClientOnline(s.slug)));
         html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">내 직접 고객</div>';
-        direct.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i]});});
+        direct.forEach((s,i)=>{html+=scRow({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i],hasKnock:_knSlugs.has(s.slug)});});
       }
       html+='<div style="font-size:9px;font-weight:800;color:#8a877f;letter-spacing:1px;margin:14px 4px 6px">소개로 연결 — 말을 걸어온 사람만</div>';
-      if(knocks.length){
-        const kons=await Promise.all(knocks.map(k=>scClientOnline(k.slug)));
-        knocks.forEach((k,i)=>{html+=scRow({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]});});
+      if(knocksF.length){
+        const kons=await Promise.all(knocksF.map(k=>scClientOnline(k.slug)));
+        knocksF.forEach((k,i)=>{html+=scRow({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]});});
       }
       else{html+='<div style="text-align:center;color:#B9B5AA;font-size:10.5px;padding:14px 12px;line-height:1.6">소개로 연결된 분들은 먼저 말을 걸기 전까지<br>여기에 표시되지 않아요</div>';}
     } else {
@@ -4105,17 +4109,57 @@ function scSend(){
   const inp=document.getElementById('scInput');if(!inp)return;const t=(inp.value||'').trim();if(!t)return;
   const cb=document.getElementById('scChatBody');if(!cb)return;
   if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open'){scSysMsg('아직 연결되지 않았어요. 상대가 온라인일 때 대화할 수 있어요.');return;}
-  try{_scConn.dc.send(JSON.stringify({t:'msg',x:t}));}catch(e){scSysMsg('전송 실패 — 연결을 확인해주세요');return;}
-  const b=document.createElement('div');b.style.cssText='align-self:flex-end;max-width:78%;background:#1B3A6B;color:#fff;border-radius:13px 13px 4px 13px;padding:8px 11px;font-size:12.5px;word-break:break-word';b.textContent=t;
+  const mid='m'+(++_scMsgSeq);
+  try{_scConn.dc.send(JSON.stringify({t:'msg',x:t,id:mid}));}catch(e){scSysMsg('전송 실패 — 연결을 확인해주세요');return;}
+  const b=document.createElement('div');b.style.cssText='align-self:flex-end;max-width:78%;background:#1B3A6B;color:#fff;border-radius:13px 13px 4px 13px;padding:8px 11px;font-size:12.5px;word-break:break-word';
+  const tx=document.createElement('span');tx.textContent=t;b.appendChild(tx);
+  const ck=document.createElement('span');ck.textContent=' ⋯';ck.style.cssText='font-size:10px;opacity:.55;margin-left:2px';b.appendChild(ck);_scPending[mid]=ck;
   cb.appendChild(b);inp.value='';cb.scrollTop=cb.scrollHeight;
+  try{_scConn.dc.send(JSON.stringify({t:'typing',on:false}));}catch(_e){}
 }
 window.scSend=scSend;
+/* ══ 입력중·전송확인·통화(음성/영상)·연결감지 — 기존 chat dataChannel을 시그널링으로 재사용 ══ */
+let _scMsgSeq=0; const _scPending={};
+function scMarkDelivered(id){const el=_scPending[id];if(el){el.textContent=' ✓';el.style.opacity='.85';delete _scPending[id];}}
+/* 입력 중 표시 */
+let _scTypingT=null,_scTypingHideT=null;
+function scOnInputTyping(){
+  if(!_scConn||!_scConn.dc||_scConn.dc.readyState!=='open')return;
+  try{_scConn.dc.send(JSON.stringify({t:'typing',on:true}));}catch(_e){}
+  if(_scTypingT)clearTimeout(_scTypingT);
+  _scTypingT=setTimeout(()=>{try{_scConn.dc.send(JSON.stringify({t:'typing',on:false}));}catch(_e){}},1500);
+}
+window.scOnInputTyping=scOnInputTyping;
+function scShowTyping(on){
+  const su=document.getElementById('scSub');if(!su)return;
+  if(on){if(!su.dataset.base)su.dataset.base=su.textContent;su.textContent='입력 중…';if(_scTypingHideT)clearTimeout(_scTypingHideT);_scTypingHideT=setTimeout(()=>scShowTyping(false),4000);}
+  else{su.textContent=su.dataset.base||'🔒 이 대화는 저장되지 않아요';su.dataset.base='';}
+}
+/* 연결 상태 감지 + relay(TURN 경유) 판별 */
+function scWirePc(pc){
+  pc.oniceconnectionstatechange=()=>{
+    const st=pc.iceConnectionState;
+    if(st==='disconnected')scSetStatus('연결이 불안정해요…');
+    else if(st==='failed'||st==='closed')scSetStatus('연결이 끊어졌어요');
+    else if(st==='connected'||st==='completed'){scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');}
+  };
+}
+
+
 /* ══════════════════════════════════════════════════════════════════
    보안채팅 실시간 P2P 엔진 (텍스트) — lcSendFileP2P 검증 패턴 재사용
    · 시그널링: chat_signals/{FC로그인ID}_{고객UID}  (대화 내용은 서버에 절대 안 씀)
    · 온라인=P2P 실시간 대화 / 오프라인=노크(chat_knocks)
    · TURN: window.__SC_TURN 주입 시 자동 활성화(교차 통신사 relay)
    ══════════════════════════════════════════════════════════════════ */
+/* ===== [metered TURN — jarvia 전용] ===== */
+window.__SC_TURN=[
+  {urls:'turn:global.relay.metered.ca:80',username:'c44187831136865ad7ff84fe',credential:'eoMn4d6grCCw2UNQ'},
+  {urls:'turn:global.relay.metered.ca:80?transport=tcp',username:'c44187831136865ad7ff84fe',credential:'eoMn4d6grCCw2UNQ'},
+  {urls:'turn:global.relay.metered.ca:443',username:'c44187831136865ad7ff84fe',credential:'eoMn4d6grCCw2UNQ'},
+  {urls:'turns:global.relay.metered.ca:443?transport=tcp',username:'c44187831136865ad7ff84fe',credential:'eoMn4d6grCCw2UNQ'}
+];
+/* ===================================== */
 function scIceServers(){
   const base=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
   // ★ TURN 자리 — 배포 시 window.__SC_TURN=[{urls:'turn:HOST:3478',username,credential}] 주입하면 즉시 relay 활성화
@@ -4149,7 +4193,9 @@ function scWireDc(dc){
   dc.onmessage=ev=>{
     if(typeof ev.data==='string'){
       try{const m=JSON.parse(ev.data);if(!m)return;
-        if(m.t==='msg'){scRecvBubble(String(m.x||''));}
+        if(m.t==='msg'){scRecvBubble(String(m.x||''));if(m.id&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'ack',id:m.id}));}catch(_e){}}}
+        else if(m.t==='ack'){scMarkDelivered(m.id);}
+        else if(m.t==='typing'){scShowTyping(m.on===true);}
         else if(m.t==='file-start'){_scRx={id:m.id,name:String(m.name||'파일'),mime:m.mime||'application/octet-stream',size:m.size||0,received:0,chunks:[],bubble:scFileBubble('in','📎 '+String(m.name||'파일')+' 받는 중 0%')};}
         else if(m.t==='file-end'){scFinishRx();}
       }catch(_e){}
@@ -4267,6 +4313,7 @@ async function scClientConnect(fcLoginId){
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
   const dc=pc.createDataChannel('chat');
   const conn={pc,dc,room,sigUnsub:null,candUnsub:null,role:'client'};_scConn=conn;
+  scWirePc(pc);
   scWireDc(dc);
   pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'offerCandidates'),e.candidate.toJSON()).catch(()=>{});};
   const sigRef=doc(db,'chat_signals',room);
@@ -4281,6 +4328,7 @@ async function scClientConnect(fcLoginId){
 async function scOwnerAnswer(room,offerData){
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
   const conn={pc,dc:null,room,sigUnsub:null,candUnsub:null,role:'fc'};_scConn=conn;
+  scWirePc(pc);
   pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'chat_signals',room,'answerCandidates'),e.candidate.toJSON()).catch(()=>{});};
   pc.ondatachannel=e=>{const dc=e.channel;conn.dc=dc;scWireDc(dc);};
   await pc.setRemoteDescription(new RTCSessionDescription(offerData.offer));
@@ -4557,16 +4605,16 @@ function ccOpenProfileUI(opt){
   m=document.createElement('div');m.id='ccProfModal';
   m.style.cssText='position:fixed;inset:0;z-index:9750;background:rgba(0,0,0,.45)';
   m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,360px);background:#fff;border-radius:18px;padding:20px 18px">'
-    +'<div style="font-size:16px;font-weight:800;color:#0F1B33">🎯 맞춤 정보'+(opt.signup?' <span style="font-size:11px;font-weight:600;color:#8a877f">(선택 — 건너뛰어도 돼요)</span>':' 설정')+'</div>'
-    +'<div style="background:#F0F4FA;border-radius:10px;padding:9px 11px;margin:10px 0 14px;font-size:10.5px;line-height:1.6;color:#3f66a0">이 정보는 <b>고객님께 맞춤형 콘텐츠를 제공해 드리고, 담당 컨설턴트가 맞춤형 상담을 진행할 수 있도록</b> 하기 위한 것입니다. 이름·연락처와 연결되지 않으며 언제든 변경할 수 있어요.</div>'
+    +'<div style="font-size:16px;font-weight:800;color:#0F1B33">🎯 맞춤 정보'+(opt.signup?' <span style="font-size:11px;font-weight:700;color:#A32D2D">(필수)</span>':' 설정')+'</div>'
+    +'<div style="background:#F0F4FA;border-radius:10px;padding:9px 11px;margin:10px 0 14px;font-size:10.5px;line-height:1.6;color:#3f66a0">1. 아래는 <b>고객님께 맞춤형 콘텐츠를 제공</b>해 드리는데 사용됩니다.<br>2. 담당 컨설턴트가 향후 <b>맞춤형 상담</b>을 진행할 때 사용됩니다.<br> 3. 이름·연락처는 서버에 저장되지 않습니다.<label style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #DCE4F0;cursor:pointer"><span style="font-weight:800;color:#1B3A6B">*정보제공·메시지 수신에 동의합니다 <span style="color:#A32D2D">(필수)</span></span><input id="ccAgree" type="checkbox" '+(opt.signup?'':'checked')+' style="width:19px;height:19px;flex-shrink:0;accent-color:#1B3A6B"></label></div>'
     +'<div style="font-size:11px;color:#5F5E5A;margin-bottom:5px">연령대</div>'
     +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+AGES.map(v=>chip('ageGroup',v,sel.ageGroup===v)).join('')+'</div>'
     +'<div style="font-size:11px;color:#5F5E5A;margin:14px 0 5px">직업</div>'
     +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+JOBS.map(v=>chip('job',v,sel.job===v)).join('')+'</div>'
     +'<div id="ccJobDetailRow" style="display:'+((sel.job==='전문직'||sel.job==='직접입력')?'block':'none')+';margin-top:8px">'
     +'<input id="ccJobDetail" maxlength="20" style="width:100%;border:1.5px solid #1B3A6B;border-radius:10px;padding:9px 10px;font-size:13px;box-sizing:border-box" placeholder="'+(sel.job==='전문직'?'예: 의사, 변호사, 회계사':'직업을 입력해주세요')+'" value=""></div>'
-    +'<button id="ccPSave" type="button" style="width:100%;border:0;border-radius:12px;padding:13px;background:#1B3A6B;color:#fff;font-size:14px;font-weight:800;margin-top:16px">'+(opt.signup?'저장하고 계속':'저장하기')+'</button>'
-    +'<button id="ccPCancel" type="button" style="width:100%;border:0;background:none;color:#8a877f;font-size:12px;margin-top:8px">'+(opt.signup?'건너뛰기':'취소')+'</button></div>';
+    +'<button id="ccPSave" type="button" '+(opt.signup?'disabled':'')+' style="width:100%;border:0;border-radius:12px;padding:13px;background:#1B3A6B;color:#fff;font-size:14px;font-weight:800;margin-top:16px;opacity:'+(opt.signup?'.45':'1')+'">'+(opt.signup?'저장하고 계속':'저장하기')+'</button>'
+    +(opt.signup?'':'<button id="ccPCancel" type="button" style="width:100%;border:0;background:none;color:#8a877f;font-size:12px;margin-top:8px">취소</button>')+'</div>';
   document.body.appendChild(m);
   const di=document.getElementById('ccJobDetail');di.value=sel.detail;
   m.addEventListener('click',ev=>{
@@ -4585,8 +4633,15 @@ function ccOpenProfileUI(opt){
     }
   });
   const close=()=>{m.remove();if(opt.onDone)opt.onDone();};
-  document.getElementById('ccPCancel').onclick=close;
+  const _cc=document.getElementById('ccPCancel');if(_cc)_cc.onclick=close;
+  const _agree=document.getElementById('ccAgree'),_save=document.getElementById('ccPSave');
+  if(opt.signup&&_agree&&_save){_agree.addEventListener('change',()=>{_save.disabled=!_agree.checked;_save.style.opacity=_agree.checked?'1':'.45';});}
   document.getElementById('ccPSave').onclick=async()=>{
+    if(opt.signup){
+      const ag=document.getElementById('ccAgree');
+      if(!ag||!ag.checked){toast('필수 동의에 체크해주세요','warning');return;}
+      if(!sel.ageGroup){toast('연령대를 선택해주세요','warning');return;}
+    }
     const btn=document.getElementById('ccPSave');btn.disabled=true;btn.textContent='저장 중…';
     try{
       const jobBase=(sel.job==='직접입력')?'기타':sel.job;
@@ -6049,7 +6104,7 @@ init();
   <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
     <input id="scFileInput" type="file" style="display:none" onchange="if(this.files&&this.files[0]){scSendFile(this.files[0]);this.value='';}">
     <button onclick="scPickFile()" title="파일 첨부" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
-    <input id="scInput" placeholder="메시지 입력…" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
+    <input id="scInput" placeholder="메시지 입력…" oninput="scOnInputTyping()" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;min-width:0;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
     <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
   </div>
 </div>
