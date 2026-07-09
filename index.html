@@ -3831,6 +3831,10 @@ const storage=getStorage(app);
 // ── Helpers ──
 const $=id=>document.getElementById(id);
 const gid=()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9);
+/* ===== [임시 진단 — 세션 로그아웃 추적. 원인 확정 후 제거] ===== */
+function __sdiag(msg){try{let b=document.getElementById('__sdiagBox');if(!b){b=document.createElement('div');b.id='__sdiagBox';b.style.cssText='position:fixed;left:0;right:0;top:0;z-index:999999;background:rgba(10,15,30,.92);color:#7FE0A0;font:11px/1.5 monospace;padding:6px 10px;max-height:45vh;overflow:auto;white-space:pre-wrap';document.body.appendChild(b);}const t=new Date().toLocaleTimeString();b.textContent=('['+t+'] '+msg+'\n')+b.textContent;}catch(_e){}}
+window.__sdiag=__sdiag;
+/* ============================================================= */
 const fmt=n=>(n||0).toLocaleString('ko-KR');
 const fdate=t=>{if(!t)return'-';const d=t.toDate?t.toDate():new Date(t);return d.toLocaleDateString('ko-KR');};
 const fdatetime=t=>{if(!t)return'-';const d=t.toDate?t.toDate():new Date(t);return d.toLocaleDateString('ko-KR')+' '+d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});};
@@ -4181,7 +4185,7 @@ async function doWithdraw(){
   }
 }
 
-async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
+async function doLogout(){__sdiag('③ doLogout() 실행 — 여기서 로그아웃됨');if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
@@ -4387,11 +4391,13 @@ onAuthStateChanged(auth,async u=>{
             await doLogout();nav('login');return;
           }
         }
+        __sdiag('① 로그인 세션기록 → activeSessionId='+_sid.slice(-8)+' (내 jarvia_session)');
         await setDoc(doc(db,'users',u.uid),{activeSessionId:_sid,sessionUpdatedAt:serverTimestamp()},{merge:true});
         if(sessionUnsub){try{sessionUnsub();}catch(_e){}}
         sessionUnsub=onSnapshot(doc(db,'users',u.uid),s=>{
           if(!s.exists())return;
           const cur=s.data().activeSessionId;
+          __sdiag('② 감시 발동 → 서버 activeSessionId='+(cur?cur.slice(-8):'∅')+' / 내='+((localStorage.getItem('jarvia_session')||'∅').slice(-8))+(cur&&cur!==localStorage.getItem('jarvia_session')?'  ⚠️불일치→로그아웃!':'  ✅일치'));
           if(cur&&cur!==localStorage.getItem('jarvia_session')){
             if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}
             alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
