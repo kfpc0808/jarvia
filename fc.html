@@ -4049,7 +4049,7 @@ async function scLoadList(){
     if(window._ccSlug){
       const fcName=(fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자';
       const fcOn=await lcFcOnline();
-      html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">담당 상담사</div>';
+      html+='<div style="font-size:9px;font-weight:800;color:#B49A64;letter-spacing:1px;margin:2px 4px 6px">담당 컨설턴트</div>';
       html+=scRow({type:'fc',peerId:loginId,name:fcName,sub:'탭하여 문의하기',online:fcOn});
       let subs=[];
       try{const qs=await getDocs(query(collection(db,'client_channels'),where('refSlug','==',window._ccSlug),limit(50)));qs.forEach(d=>{const c=d.data();subs.push({slug:d.id,name:(c.brand&&c.brand.title)||d.id});});}catch(_e){}
@@ -4173,7 +4173,8 @@ async function scStartCall(kind){
   try{
     const stream=await navigator.mediaDevices.getUserMedia(kind==='video'?{audio:true,video:{width:640,height:480}}:{audio:true});
     const pc=new RTCPeerConnection({iceServers:scIceServers()});
-    _scCall={pc:pc,stream:stream,kind:kind,role:'caller'};
+    _scCall={pc:pc,stream:stream,kind:kind,role:'caller',pendingCands:[]};
+    pc.oniceconnectionstatechange=()=>scCallStatus(pc.iceConnectionState);
     stream.getTracks().forEach(tr=>pc.addTrack(tr,stream));
     pc.onicecandidate=e=>{if(e.candidate&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-ice',cand:e.candidate.toJSON()}));}catch(_e){}}};
     pc.ontrack=e=>scAttachRemote(e.streams[0]);
@@ -4190,18 +4191,25 @@ async function scOnCallOffer(m){
   try{
     const stream=await navigator.mediaDevices.getUserMedia(kind==='video'?{audio:true,video:{width:640,height:480}}:{audio:true});
     const pc=new RTCPeerConnection({iceServers:scIceServers()});
-    _scCall={pc:pc,stream:stream,kind:kind,role:'callee'};
+    _scCall={pc:pc,stream:stream,kind:kind,role:'callee',pendingCands:[]};
+    pc.oniceconnectionstatechange=()=>scCallStatus(pc.iceConnectionState);
     stream.getTracks().forEach(tr=>pc.addTrack(tr,stream));
     pc.onicecandidate=e=>{if(e.candidate&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-ice',cand:e.candidate.toJSON()}));}catch(_e){}}};
     pc.ontrack=e=>scAttachRemote(e.streams[0]);
     scShowCallUI(kind,stream);
     await pc.setRemoteDescription(new RTCSessionDescription({type:'offer',sdp:m.sdp}));
+    scFlushCallIce();
     const ans=await pc.createAnswer();await pc.setLocalDescription(ans);
     _scConn.dc.send(JSON.stringify({t:'call-answer',sdp:ans.sdp}));
   }catch(e){toast&&toast('통화 연결 실패: '+(e.message||e.name),'error');scEndCall(true);}
 }
-async function scOnCallAnswer(m){if(_scCall&&_scCall.pc){try{await _scCall.pc.setRemoteDescription(new RTCSessionDescription({type:'answer',sdp:m.sdp}));}catch(_e){}}}
-async function scOnCallIce(m){if(_scCall&&_scCall.pc&&m.cand){try{await _scCall.pc.addIceCandidate(new RTCIceCandidate(m.cand));}catch(_e){}}}
+async function scOnCallAnswer(m){if(_scCall&&_scCall.pc){try{await _scCall.pc.setRemoteDescription(new RTCSessionDescription({type:'answer',sdp:m.sdp}));scFlushCallIce();}catch(_e){}}}
+async function scOnCallIce(m){
+  if(!_scCall||!_scCall.pc||!m.cand)return;
+  if(_scCall.pc.remoteDescription&&_scCall.pc.remoteDescription.type){try{await _scCall.pc.addIceCandidate(new RTCIceCandidate(m.cand));}catch(_e){}}
+  else{(_scCall.pendingCands=_scCall.pendingCands||[]).push(m.cand);}
+}
+function scFlushCallIce(){if(!_scCall||!_scCall.pc||!_scCall.pendingCands)return;const cs=_scCall.pendingCands;_scCall.pendingCands=[];cs.forEach(c=>{try{_scCall.pc.addIceCandidate(new RTCIceCandidate(c));}catch(_e){}});}
 function scEndCall(notify){
   if(notify&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'call-end'}));}catch(_e){}}
   const c=_scCall;_scCall=null;
@@ -4209,7 +4217,31 @@ function scEndCall(notify){
   scHideCallUI();
 }
 window.scEndCall=scEndCall;
-function scAttachRemote(stream){const rv=document.getElementById('scCallRemote');if(rv){rv.srcObject=stream;const p=rv.play&&rv.play();if(p&&p.catch)p.catch(()=>{});}}
+function scAttachRemote(stream){
+  if(_scCall)_scCall.remoteStream=stream;
+  const rv=document.getElementById('scCallRemote');
+  if(!rv)return;
+  try{rv.srcObject=stream;}catch(_e){}
+  rv.muted=false;
+  const p=rv.play&&rv.play();
+  if(p&&p.then)p.then(()=>{const b=document.getElementById('scTapPlay');if(b)b.remove();}).catch(()=>{
+    if(rv.tagName==='VIDEO'){rv.muted=true;const p2=rv.play&&rv.play();if(p2&&p2.catch)p2.catch(()=>{});scShowTapToPlay(true);}
+    else{scShowTapToPlay(false);}
+  });
+}
+function scShowTapToPlay(unmuteOnly){
+  const ov=document.getElementById('scCallOverlay');if(!ov||document.getElementById('scTapPlay'))return;
+  const btn=document.createElement('button');btn.id='scTapPlay';btn.type='button';
+  btn.textContent=unmuteOnly?'🔊 탭하여 소리 켜기':'▶ 탭하여 통화 시작';
+  btn.style.cssText='position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);z-index:6;padding:14px 22px;border-radius:999px;background:#1B3A6B;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4)';
+  btn.onclick=()=>{const rv=document.getElementById('scCallRemote');if(rv){rv.muted=false;const p=rv.play&&rv.play();if(p&&p.catch)p.catch(()=>{});}btn.remove();};
+  ov.appendChild(btn);
+}
+function scCallStatus(st){
+  const el=document.getElementById('scCallStatus');if(!el)return;
+  const map={'new':'준비 중…','checking':'연결 중…','connected':'연결됨','completed':'연결됨','disconnected':'연결 불안정…','failed':'연결 실패','closed':'통화 종료'};
+  el.textContent='· '+(map[st]||st)+' ·';
+}
 function scShowCallUI(kind,localStream){
   scHideCallUI();
   const ov=document.createElement('div');ov.id='scCallOverlay';
@@ -4221,9 +4253,11 @@ function scShowCallUI(kind,localStream){
       :'<audio id="scCallRemote" autoplay style="display:none"></audio><div style="font-size:56px">🔒📞</div>')
     +'<div style="color:#fff;font-size:15px;font-weight:800">'+(isV?'영상':'음성')+' 통화 · 종단간</div>'
     +'<div style="color:rgba(255,255,255,.55);font-size:11px">서버를 거치지 않는 P2P 통화예요</div>'
+    +'<div id="scCallStatus" style="color:#7FD4A6;font-size:11px;font-weight:700">· 연결 중… ·</div>'
     +'<button onclick="scEndCall(true)" style="margin-top:8px;width:60px;height:60px;border-radius:50%;background:#E0322D;color:#fff;border:none;font-size:24px;cursor:pointer">✕</button>';
   document.body.appendChild(ov);
   if(isV){const lv=document.getElementById('scCallLocal');if(lv&&localStream){lv.srcObject=localStream;const p=lv.play&&lv.play();if(p&&p.catch)p.catch(()=>{});}}
+  if(_scCall&&_scCall.remoteStream)scAttachRemote(_scCall.remoteStream);
 }
 function scHideCallUI(){const ov=document.getElementById('scCallOverlay');if(ov)ov.remove();}
 
@@ -4685,7 +4719,7 @@ function ccOpenProfileUI(opt){
   m.style.cssText='position:fixed;inset:0;z-index:9750;background:rgba(0,0,0,.45)';
   m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,360px);background:#fff;border-radius:18px;padding:20px 18px">'
     +'<div style="font-size:16px;font-weight:800;color:#0F1B33">🎯 맞춤 정보'+(opt.signup?' <span style="font-size:11px;font-weight:600;color:#8a877f">(선택 — 건너뛰어도 돼요)</span>':' 설정')+'</div>'
-    +'<div style="background:#F0F4FA;border-radius:10px;padding:9px 11px;margin:10px 0 14px;font-size:10.5px;line-height:1.6;color:#3f66a0">이 정보는 <b>고객님께 맞춤형 콘텐츠를 제공해 드리고, 담당 컨설턴트가 맞춤형 상담을 진행할 수 있도록</b> 하기 위한 것입니다. 이름·연락처와 연결되지 않으며 언제든 변경할 수 있어요.</div>'
+    +'<div style="background:#F0F4FA;border-radius:10px;padding:9px 11px;margin:10px 0 14px;font-size:10.5px;line-height:1.6;color:#3f66a0">1. 이 정보는 <b>고객님께 맞춤형 콘텐츠를 제공</b>해 드리는데 사용됩니다.<br>2. 담당 컨설턴트가 향후 <b>맞춤형 상담</b>을 진행할 때 사용됩니다.<br> 3. 이름·연락처는 서버에 저장되지 않습니다.<br>*아래 정보제공과 메세지 수신에 동의합니다.</div>'
     +'<div style="font-size:11px;color:#5F5E5A;margin-bottom:5px">연령대</div>'
     +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+AGES.map(v=>chip('ageGroup',v,sel.ageGroup===v)).join('')+'</div>'
     +'<div style="font-size:11px;color:#5F5E5A;margin:14px 0 5px">직업</div>'
@@ -6180,7 +6214,7 @@ init();
   <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
     <input id="scFileInput" type="file" style="display:none" onchange="if(this.files&&this.files[0]){scSendFile(this.files[0]);this.value='';}">
     <button onclick="scPickFile()" title="파일 첨부" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
-    <input id="scInput" placeholder="메시지 입력…" oninput="scOnInputTyping()" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
+    <input id="scInput" placeholder="메시지 입력…" oninput="scOnInputTyping()" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;min-width:0;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
     <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
   </div>
 </div>
