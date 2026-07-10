@@ -3801,7 +3801,7 @@ document.addEventListener('DOMContentLoaded', function(){
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,setPersistence,browserLocalPersistence,updatePassword,reauthenticateWithCredential,EmailAuthProvider}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
-import{getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField,onSnapshot}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,collection,doc,getDoc,getDocFromServer,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField,onSnapshot}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getStorage,ref as stRef,uploadBytes,uploadString,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
@@ -3815,6 +3815,10 @@ const storage=getStorage(app);
 // ── Helpers ──
 const $=id=>document.getElementById(id);
 const gid=()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9);
+/* ===== [임시 진단 — 로그아웃 경로 추적. 원인 확정 후 제거] ===== */
+function __sdiag(msg){try{let b=document.getElementById('__sdiagBox');if(!b){b=document.createElement('div');b.id='__sdiagBox';b.style.cssText='position:fixed;left:0;right:0;top:0;z-index:999999;background:rgba(20,6,6,.94);color:#ffb3b3;font:11px/1.5 monospace;padding:6px 10px;max-height:50vh;overflow:auto;white-space:pre-wrap';document.body.appendChild(b);}const t=new Date().toLocaleTimeString();b.textContent=('['+t+'] '+msg+'\n')+b.textContent;}catch(_e){}}
+window.__sdiag=__sdiag;
+/* ============================================================= */
 const fmt=n=>(n||0).toLocaleString('ko-KR');
 const fdate=t=>{if(!t)return'-';const d=t.toDate?t.toDate():new Date(t);return d.toLocaleDateString('ko-KR');};
 const fdatetime=t=>{if(!t)return'-';const d=t.toDate?t.toDate():new Date(t);return d.toLocaleDateString('ko-KR')+' '+d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});};
@@ -4330,6 +4334,7 @@ async function setupPlatformPWA(){
 }
 
 onAuthStateChanged(auth,async u=>{
+  __sdiag('인증콜백: '+(u?('로그인 uid…'+u.uid.slice(-6)+' anon='+u.isAnonymous):'null(로그아웃 상태)'));
   if(u){
     me=u;window.me=u;window.meData=null;
     // 관리자가 사용자페이지를 직접 열었을 때: 리다이렉트하지 않고 열람 모드로 진입
@@ -4355,20 +4360,27 @@ onAuthStateChanged(auth,async u=>{
     // ★ users 문서 조회 견고화 — 일시적 실패/전파지연으로 정상 회원을 로그아웃시키지 않도록 최대 3회 재시도 (전역 _authWait 경쟁 제거)
     let d=null,_readErr=false;
     for(let _try=0;_try<3;_try++){
-      try{d=await getDoc(doc(db,'users',u.uid));if(d.exists())break;_readErr=false;}
-      catch(_e){_readErr=true;}
+      try{
+        d=await getDocFromServer(doc(db,'users',u.uid));
+        if(d.exists()){_readErr=false;break;}
+        _readErr=false;
+      }catch(_e){
+        _readErr=true;
+        try{const _c=await getDoc(doc(db,'users',u.uid));if(_c.exists()){d=_c;_readErr=false;break;}}catch(_e2){}
+      }
       if(_try<2)await new Promise(r=>setTimeout(r,1200));
     }
+    __sdiag('users조회 결과: exists='+(d&&d.exists())+' _readErr='+_readErr+' (uid…'+u.uid.slice(-6)+' anon='+u.isAnonymous+')');
     if(d&&d.exists()){
       meData=d.data();window.meData=meData;
-      if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
+      if(meData.status==='suspended'){__sdiag('⚠️로그아웃[A: 계정정지 suspended]');toast('정지된 계정입니다.','error');doLogout();return;}
       // ── 단일 세션(중복 로그인 차단): 로그인 확인 + 같은 브라우저 탭 허용 ──
       try{
         let _sid=localStorage.getItem('jarvia_session');
         if(!_sid){_sid=gid();localStorage.setItem('jarvia_session',_sid);}
         if(meData.activeSessionId && meData.activeSessionId!==_sid){
           if(!confirm('다른 기기에서 로그인되어 사용 중입니다.\n\n계속 로그인하면 그 기기는 자동으로 로그아웃됩니다.\n로그인하시겠습니까?')){
-            await doLogout();nav('login');return;
+            __sdiag('⚠️로그아웃[B: 다른기기 확인창 거부]');await doLogout();nav('login');return;
           }
         }
         await setDoc(doc(db,'users',u.uid),{activeSessionId:_sid,sessionUpdatedAt:serverTimestamp()},{merge:true});
@@ -4378,7 +4390,7 @@ onAuthStateChanged(auth,async u=>{
           const cur=s.data().activeSessionId;
           if(cur&&cur!==localStorage.getItem('jarvia_session')){
             if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}
-            alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
+            __sdiag('⚠️로그아웃[C: 단일세션 감시발동 — activeSessionId 변경됨]');alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
             doLogout().then(()=>nav('login'));
           }
         });
@@ -4481,6 +4493,7 @@ onAuthStateChanged(auth,async u=>{
         return;
       }
       // ★ 인증은 됐지만 users에 없는 경우 (익명인증 등) → 로그아웃 후 로그인 페이지
+      __sdiag('⚠️로그아웃[D: users문서 없음 — anon='+u.isAnonymous+']');
       console.warn('인증 유저가 users에 없음 (uid:'+u.uid+', isAnonymous:'+u.isAnonymous+') — 로그아웃 처리');
       me=null;meData=null;
       try{await signOut(auth);}catch(e){}
