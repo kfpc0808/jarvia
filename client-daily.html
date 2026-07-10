@@ -672,11 +672,11 @@ body{
   <!-- Dynamic Sections Container -->
   <div id="sectionsContainer"></div>
 
-  <!-- ▼ 📌 Curated Section (컨설턴트가 고른 콘텐츠) -->
+  <!-- ▼ 📂 함께 보면 좋은 자료 (dr_resources) -->
   <div class="wrap">
     <div class="curated-section" id="curatedSection" style="display:none">
       <div class="curated-head">
-        <div class="curated-title">📌 컨설턴트가 고른 콘텐츠</div>
+        <div class="curated-title">📂 함께 보면 좋은 자료</div>
         <div class="curated-pageinfo"><span class="cur-now" id="curatedPageNow">1</span><span class="cur-sep"> / </span><span id="curatedPageTotal">1</span></div>
       </div>
       <div class="curated-viewport" id="curatedViewport">
@@ -995,10 +995,10 @@ async function init(){
     // 5. 하단 공유바 표시
     document.getElementById('shareBar').style.display='flex';
 
-    // 6. 📌 컨설턴트 큐레이션 로드 (loginId → uid 매핑 후 onSnapshot)
+    // 6. 📂 함께 보면 좋은 자료 로드 (dr_resources — loginId → uid 매핑)
     if(!userQ.empty){
       const _fcAuthUid=userQ.docs[0].id;
-      loadCuratedPicks(_fcAuthUid);
+      loadDrResources(_fcAuthUid);
     }
 
     // 7. 샘플 프로필 안내 팝업 (consultants 미등록 시)
@@ -1021,36 +1021,29 @@ function showError(title,msg){
   el.style.display='block';
 }
 
-// ═══ 📌 Curated Picks (컨설턴트 추천 콘텐츠) ═══
-let _curPicks=[];        // [{pickId, contentId, message, order, _content}]
+// ═══ 📂 함께 보면 좋은 자료 (dr_resources) ═══
+let _curPicks=[];        // [{title, url, type, desc, startDate, endDate, order}]
 let _curPageIdx=0;       // 현재 페이지 인덱스 (0-based)
 
-async function loadCuratedPicks(fcAuthUid){
+async function loadDrResources(fcAuthUid){
   try{
-    const pickSnap=await getDocs(query(
-      collection(db,'curated_picks'),
-      where('userId','==',fcAuthUid),
+    const rSnap=await getDocs(query(
+      collection(db,'dr_resources'),
+      where('fcAuthUid','==',fcAuthUid),
       orderBy('order')
     ));
-    const picks=pickSnap.docs.map(d=>d.data());
-    if(!picks.length){return;}
-    // 콘텐츠 메타 조회: external은 자체 데이터, internal은 contents 컬렉션 조회
-    const cMap={};
-    // ★ [속도개선 A] 1건씩 순차 → 한 번에 병렬 조회
-    const _ids=picks.filter(p=>!p.external&&p.contentId).map(p=>p.contentId);
-    const _snaps=await Promise.all(_ids.map(id=>getDoc(doc(db,'contents',id)).catch(()=>null)));
-    _snaps.forEach((d,i)=>{if(d&&d.exists())cMap[_ids[i]]=d.data();});
-    // 빌드: external은 그대로, internal은 _content 매핑
-    _curPicks=picks.map(p=>{
-      if(p.external)return p;  // external은 _content 불필요 (renderCuratedCard에서 p.external 직접 사용)
-      const c=cMap[p.contentId];
-      if(!c)return null;  // 자비아 콘텐츠 메타 없으면 스킵
-      return {...p,_content:c};
-    }).filter(Boolean);
+    // 게시 기간 필터 — 게시 중인 자료만 노출 (시작일 미도래·종료일 경과 제외)
+    const _d=new Date();
+    const today=`${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
+    _curPicks=rSnap.docs.map(d=>d.data()).filter(r=>{
+      if(r.startDate&&r.startDate>today)return false;
+      if(r.endDate&&r.endDate<today)return false;
+      return true;
+    });
     if(!_curPicks.length){return;}
     renderCuratedSection();
   }catch(e){
-    console.warn('loadCuratedPicks fail:',e);
+    console.warn('loadDrResources fail:',e);
   }
 }
 
@@ -1085,65 +1078,37 @@ function renderCuratedSection(){
   setupCuratedSwipe();
 }
 
-function renderCuratedCard(p){
-  const isExt=!!p.external;
-  const title=esc((isExt?p.external.title:p._content?.title)||'(제목 없음)');
-  // URL 결정 (external이면 external.url, 아니면 자비아 contents URL)
-  const url=isExt?(p.external.url||'#'):buildContentUrl(p._content||{});
-  // 카테고리 태그
-  const tags=isExt?(p.external.tags||[]):getCuratedTags(p._content||{});
-  const tagsHtml=tags.length
-    ?tags.map((t,i)=>`<span class="curated-card-tag${i%2?' gold':''}">${esc(t)}</span>`).join('')
+function renderCuratedCard(r){
+  const title=esc(r.title||'(제목 없음)');
+  const url=r.url||'#';
+  const type=r.type||'other';
+  // 종류별 태그 라벨 / 보기 버튼 텍스트 / 카드 좌측 보더 색상 (시각 차별화)
+  const _typeLabel={pdf:'PDF',doc:'문서',video:'영상',other:'자료'};
+  const _viewBtnText={pdf:'📄 자료 보기',doc:'📃 문서 보기',video:'📹 영상 보기',other:'🔗 열어보기'};
+  const _borderColor={pdf:'#DC2626',doc:'#43A047',video:'#E53935',other:'#7B7F8E'};
+  const tagsHtml=`<span class="curated-card-tag">${esc(_typeLabel[type]||'자료')}</span>`;
+  const msgHtml=r.desc
+    ?`<div class="curated-card-msg">💬 "${esc(r.desc)}"</div>`
     :'';
-  const msgHtml=p.message
-    ?`<div class="curated-card-msg">💬 "${esc(p.message)}"</div>`
-    :'';
-  // external 종류별 보기 버튼 텍스트
-  const _viewBtnIcons={youtube:'📹 영상 보기',blog:'📝 블로그 보기',instagram:'📷 인스타 보기',other:'🔗 콘텐츠 보기'};
-  const viewBtnText=isExt
-    ?(_viewBtnIcons[p.external.type]||'🔗 콘텐츠 보기')
-    :'📖 콘텐츠 보기';
-  // external 종류별 카드 좌측 보더 색상 (시각 차별화)
-  const _extBorderColor={youtube:'#E53935',blog:'#43A047',instagram:'#E1306C',other:'#7B7F8E'};
-  const cardStyle=isExt
-    ?` style="border-left-color:${_extBorderColor[p.external.type]||'#7B7F8E'}"`
-    :'';
+  const cardStyle=` style="border-left-color:${_borderColor[type]||'#7B7F8E'}"`;
   // 컨택 버튼: SMS(문자)로만 연결 — 1:1 상담 채널 보장
-  // 오픈채팅(fc.kakaoUrl)은 공지방송용이라 큐레이션 카드 1:1 상담에는 부적합
   const fc=fcData||{};
-  const prefillMsg=`안녕하세요, '${title.slice(0,40)}' 콘텐츠 보고 연락드렸습니다.`;
+  const prefillMsg=`안녕하세요, '${title.slice(0,40)}' 자료 보고 연락드렸습니다.`;
   let contactBtnHtml='';
   if(fc.phone){
     const smsHref=`sms:${esc(fc.phone)}?body=${encodeURIComponent(prefillMsg)}`;
     contactBtnHtml=`<a class="curated-card-btn kakao" href="${smsHref}">📱 문자로 상담받기</a>`;
   }
-  // 전화번호 없으면 컨택 버튼 미표시 (콘텐츠 보기 버튼만 노출)
+  // 전화번호 없으면 컨택 버튼 미표시 (자료 보기 버튼만 노출)
   return `<div class="curated-card"${cardStyle}>
     <div class="curated-card-tags">${tagsHtml}</div>
     <div class="curated-card-title">${title}</div>
     ${msgHtml}
     <div class="curated-card-actions">
-      <a class="curated-card-btn view" href="${esc(url)}" target="_blank" rel="noopener">${viewBtnText}</a>
+      <a class="curated-card-btn view" href="${esc(url)}" target="_blank" rel="noopener">${_viewBtnText[type]||'🔗 열어보기'}</a>
       ${contactBtnHtml}
     </div>
   </div>`;
-}
-
-function getCuratedTags(c){
-  // c.type, c.categoryId, c.subType 등에서 카테고리 추론
-  const tags=[];
-  const _typeMap={daily_report:'데일리리포트',weekly_lecture:'토요특강',tax_weekly:'택스컨설팅',medical_weekly:'메디컬',brief:'이슈브리핑',report:'특급보고서',video:'영상',audio:'오디오',closing:'클로징',html:'HTML'};
-  if(c.type&&_typeMap[c.type])tags.push(_typeMap[c.type]);
-  else if(c.categoryId==='daily_report')tags.push('데일리리포트');
-  if(c.subType)tags.push(c.subType);
-  if(!tags.length)tags.push('자비아');
-  return tags.slice(0,2);
-}
-
-function buildContentUrl(c){
-  // 콘텐츠 종류별 URL 생성
-  if(c.url)return c.url;
-  return `https://jarvia.co.kr/?cid=${encodeURIComponent(c.contentId||'')}`;
 }
 
 window.copyMsgAndOpen=function(ev,a){
