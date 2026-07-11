@@ -3219,15 +3219,17 @@ function calcNetProfitValue(params) {
   const weightedNetIncome = (incomes[0] * 3 + incomes[1] * 2 + incomes[2] * 1) / 6;
 
   // 1주당 순손익액 → 환원율로 나누어 1주당 순손익가치 산출
+  // ★ 상증세법상 1주당 순손익가치가 0 이하이면 0으로 본다. 음수를 그대로 쓰지 않는다.
   const perShareNetIncome = weightedNetIncome / shares;
-  const perShareValue     = perShareNetIncome / rate;
+  const rawPerShareValue  = perShareNetIncome / rate;
+  const perShareValue     = Math.max(0, rawPerShareValue);
 
   // 회사 전체 순손익가치 (= calcUnlistedStockValue 의 earningsValue 입력값)
   const earningsValue = perShareValue * shares;
 
   const warnings = [];
   if (weightedNetIncome <= 0) {
-    warnings.push('가중평균 순손익액이 0 이하입니다. 이 경우 순손익가치를 0으로 보고 순자산가치만으로 평가해야 할 수 있으므로 세무 전문가 확인이 필요합니다.');
+    warnings.push('가중평균 순손익액이 0 이하이므로 1주당 순손익가치를 0으로 처리했습니다(상증세법상 순손익가치는 음수가 될 수 없음). 이 경우 순자산가치 80% 하한이 적용되며, 세무 전문가 확인이 필요합니다.');
   }
   if (incomes.some(value => value < 0)) {
     warnings.push('결손 사업연도가 포함되어 있습니다. 상증세법상 순손익액은 각 사업연도 소득금액을 기준으로 세무조정하므로 실제 값과 달라질 수 있습니다.');
@@ -3242,7 +3244,9 @@ function calcNetProfitValue(params) {
     weightedNetIncome: Math.round(weightedNetIncome),   // 가중평균 순손익액 (원)
     perShareNetIncome: Math.round(perShareNetIncome),   // 1주당 순손익액 (원)
     capRate: rate,                                      // 순손익가치환원율
-    perShareValue: Math.round(perShareValue),           // 1주당 순손익가치 (원)
+    perShareValue: Math.round(perShareValue),           // 1주당 순손익가치 (원, 0 이하이면 0)
+    rawPerShareValue: Math.round(rawPerShareValue),     // 0 처리 전 원값 (음수일 수 있음 — 참고용)
+    flooredToZero: rawPerShareValue < 0,                // 0으로 처리되었는가
     earningsValue: Math.round(earningsValue),           // ★ 회사 전체 순손익가치 (원)
     totalShares: shares,
     estimateOnly: true,
