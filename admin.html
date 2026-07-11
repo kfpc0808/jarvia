@@ -13191,8 +13191,15 @@ async function loadLegalRefs(){
     lrRender();
     lrRenderLogs();
 
-    // 진행 중이면 자동갱신 유지, 끝났으면 해제
-    if($('lr-auto').checked&&((d.jobs.pending||0)+(d.jobs.running||0))===0){
+    // 자동갱신 상태를 여기서 '단일 관리' 한다 (체크박스만 믿으면 안 된다)
+    //  · 패널을 나갔다 오면 lrStopAuto() 로 타이머가 죽는데 체크박스는 켜진 채 남는다
+    //  · 페이지를 새로고침하면 체크박스가 꺼져서 수집 중인데도 갱신이 멈춘다
+    //  → 수집이 진행 중이면 무조건 타이머를 보장하고, 끝나면 해제한다
+    const _busy=(d.jobs.pending||0)+(d.jobs.running||0)>0;
+    if(_busy){
+      $('lr-auto').checked=true;
+      if(!_lrTimer)_lrTimer=setInterval(loadLegalRefs,30000);   // 죽어 있으면 되살린다
+    }else{
       lrStopAuto();$('lr-auto').checked=false;
     }
   }catch(e){
@@ -13261,9 +13268,8 @@ async function lrEnqueue(opt){
     const res=await fetch(`${LR_BASE}/triggerLegalRefBatch?${qs}`);
     const d=await res.json();
     if(!d.ok)throw new Error(d.error||'투입 실패');
-    alert(`큐에 ${d.enqueued}건 투입했습니다.${d.skipped?` (건너뜀 ${d.skipped}건)`:''}\n\n워커가 2분마다 1건씩 처리합니다. 자동갱신을 켜두시면 진행상황이 보입니다.`);
-    if(d.enqueued&&!$('lr-auto').checked){$('lr-auto').checked=true;lrToggleAuto();}
-    loadLegalRefs();
+    alert(`큐에 ${d.enqueued}건 투입했습니다.${d.skipped?` (건너뜀 ${d.skipped}건)`:''}\n\n워커가 2분마다 1건씩 처리합니다. 자동갱신이 켜져 진행상황이 표시됩니다.`);
+    loadLegalRefs();   // ★ 여기서 수집중을 감지해 자동갱신을 알아서 켠다
   }catch(e){alert('실패: '+e.message);}
 }
 
@@ -13302,8 +13308,11 @@ function lrDetail(slug){
 function lrCloseDetail(){$('mdl-lr').classList.add('hidden');}
 
 function lrToggleAuto(){
-  if($('lr-auto').checked){lrStopAuto();_lrTimer=setInterval(loadLegalRefs,30000);}
-  else lrStopAuto();
+  if($('lr-auto').checked){
+    lrStopAuto();
+    _lrTimer=setInterval(loadLegalRefs,30000);
+    loadLegalRefs();          // ★ 켜자마자 1회 갱신 — 30초를 기다리게 하지 않는다
+  }else lrStopAuto();
 }
 function lrStopAuto(){if(_lrTimer){clearInterval(_lrTimer);_lrTimer=null;}}
 
