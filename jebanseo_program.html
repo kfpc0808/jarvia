@@ -90,14 +90,20 @@
   /* 🧮 계산기 버튼 (슬라이드 내장) */
   .calcbtnwrap{margin-top:8px;}
   /* 📎 근거 링크 카드 (법령·예규·판례) — 계산기 버튼과 동일 계열, 클릭 시 원문 새 창 */
-  .refwrap{margin-top:8px;display:flex;flex-direction:column;gap:7px;}
+  /* ★ 근거 카드 2열 배치 — 한 장에 6개가 세로로 쌓이면 슬라이드를 다 잡아먹는다.
+     · 카드가 1개뿐이면 1열(전폭)로 둔다 — 반쪽짜리 카드는 어색하다
+     · 하단 안내문(refnote)은 두 칸을 가로지른다 */
+  .refwrap{margin-top:8px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;align-items:stretch;}
+  .refwrap.one{grid-template-columns:1fr;}
+  .refwrap .refnote{grid-column:1 / -1;}
+  @media (max-width:640px){ .refwrap{grid-template-columns:1fr;} }
   .refbtn{display:flex;align-items:center;gap:12px;text-decoration:none;background:linear-gradient(135deg,#1B2A4A,#24375f);border:1px solid rgba(200,167,90,.45);border-radius:12px;padding:11px 15px;transition:border-color .15s,box-shadow .15s,transform .1s;}
   .refbtn:hover{border-color:var(--gold);box-shadow:0 5px 18px rgba(0,0,0,.22);transform:translateY(-1px);}
   .refbtn .rbic{font-size:19px;flex:none;}
   .refbtn .rbtx{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
-  .refbtn .rbtx b{color:#fff;font-size:13.5px;font-weight:700;line-height:1.4;word-break:keep-all;}
-  .refbtn .rbsub{color:#AEB6C2;font-size:11.5px;line-height:1.4;}
-  .refbtn .rbgo{flex:none;color:var(--gold);font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .refbtn .rbtx b{color:#fff;font-size:13px;font-weight:700;line-height:1.4;word-break:keep-all;}
+  .refbtn .rbsub{color:#AEB6C2;font-size:11px;line-height:1.4;word-break:keep-all;}
+  .refbtn .rbgo{flex:none;color:var(--gold);font-size:12px;font-weight:700;white-space:nowrap;}
   .refnote{font-size:11px;color:#8896A8;line-height:1.5;margin-top:3px;word-break:keep-all;}
   .calcbtn{display:flex;align-items:center;gap:13px;text-decoration:none;background:linear-gradient(135deg,#1B2A4A,#24375f);border:1px solid rgba(200,167,90,.45);border-radius:12px;padding:14px 17px;transition:border-color .15s,box-shadow .15s,transform .1s;}
   .calcbtn:hover{border-color:var(--gold);box-shadow:0 5px 18px rgba(0,0,0,.22);transform:translateY(-1px);}
@@ -1509,27 +1515,83 @@ function _refKind(x){
   if(/법원|대법|구합|누\d|두\d|판례/.test(hay))                   return {ic:'⚖', label:'법원 판례'};
   return {ic:'⚖', label:'원문 보기'};
 }
+
+/* ★ 문서번호는 재고 원본(docNo)에서만 뽑는다 — 제목은 믿지 않는다.
+   실측: 카드 제목엔 "서울고등법원 판례 —" 라고 적혀 있는데 문서번호는 수원지방법원-2022-구합-1266 이었다.
+         AI 가 라벨을 지어낸 것이다. 상담사가 "서울고등법원" 으로 인용하면 틀린 말을 하게 된다.
+   → 문서번호가 유일한 진실이고, 법원명도 거기서 뽑는다.
+   저장 형태 예)
+     법원 판례  "대법원-2025-두-35468"
+     심판       "심판 | 양도 | 조심-2025-서-2191 | 등록일자 : … | 생산일자 : …"
+     예규       "질의 | 양도 | 서면-2014-법령해석재산-22136 | 등록일자 : …"
+   → 표시 형태  "대법원 2025두35468" / "조심 2025서2191" / "서면-2014-법령해석재산-22136" */
+function _refNo(x){
+  var s=String(x.docNo||'');
+  var m=s.match(/(대법원|헌법재판소|[가-힣]{2,6}(?:고등법원|행정법원|지방법원|가정법원))[-\s]?(\d{4})[-\s]?([가-힣]{1,3})[-\s]?(\d+)/);
+  if(m) return m[1]+' '+m[2]+m[3]+m[4];                       // 대법원 2025두35468
+  var t=s.match(/(조심)[-\s]?(\d{4})[-\s]?([가-힣]{1,3})[-\s]?(\d+)/);
+  if(t) return t[1]+' '+t[2]+t[3]+t[4];                       // 조심 2025서2191
+  var r=s.match(/심사[가-힣]*\d{4}[-\s]?\d+/);
+  if(r) return r[0];
+  var e=s.match(/서면[-\s][^|]+?(?=\s*\||$)/);
+  if(e) return e[0].trim();                                   // 서면-2014-법령해석재산-22136
+  var g=s.match(/[가-힣]+세과[-\s]?\d+/);
+  if(g) return g[0];
+  var parts=s.split('|').map(function(p){return p.trim();})   // 그 외 — 날짜가 아닌 첫 번호 조각
+    .filter(function(p){ return /\d/.test(p) && !/일자/.test(p); });
+  return parts[0]||'';
+}
+/* ★ 선고·생산 연도 — 세 군데를 순서대로 본다
+   ① date 필드 (백엔드가 넘겨주면 최우선)
+   ② URL — 새 판례 링크에 판결일자가 박혀 있다  /판례/(2025두35468,20260212)
+   ③ docNo — 예규·심판은 "생산일자 : 2014.08.19." 가 들어있다
+              (등록일자보다 생산일자가 실제 발령 시점이므로 먼저 본다) */
+function _refYear(x){
+  var m=String(x.date||'').match(/(19|20)\d{2}/);
+  if(m) return m[0];
+
+  var u=String(x.url||'');
+  try{ u=decodeURIComponent(u); }catch(e){}
+  var p=u.match(/\/판례\/\([^,)]+,((?:19|20)\d{2})\d{4}\)/);
+  if(p) return p[1];
+
+  var s=String(x.docNo||'');
+  var prod=s.match(/생산일자\s*:?\s*((?:19|20)\d{2})/);
+  if(prod) return prod[1];
+  var reg=s.match(/(?:등록일자|선고)\s*:?\s*((?:19|20)\d{2})/);
+  return reg?reg[1]:'';
+}
+/* ★ AI 가 제목 앞에 붙인 출처 라벨을 떼어낸다 ("대법원 판례 — 비상장주식 …" → "비상장주식 …")
+   출처는 아래 부제(문서번호·종류·연도)가 정확하게 표시하므로 제목에 중복·오기될 이유가 없다. */
+function _refTitle(x){
+  var t=String(x.title||'').trim();
+  t=t.replace(/^\s*(?:대법원|헌법재판소|[가-힣]{2,6}(?:고등법원|행정법원|지방법원|가정법원)|조세심판원|국세청)\s*(?:판례|결정례|예규|해석례)?\s*[—–\-:]\s*/,'');
+  return t||'근거자료';
+}
 function renderRefCard(it){
   var items=(it&&Array.isArray(it.items))?it.items:[];
   var ok=items.filter(function(x){ return x && /^https?:\/\//i.test(String(x.url||'')); });
   if(!ok.length)return null;                      // 링크 있는 항목이 하나도 없으면 카드 자체를 만들지 않음
 
-  var w=elt('div','refwrap');
+  var w=elt('div','refwrap'+(ok.length===1?' one':''));   // ★ 1건이면 전폭, 2건 이상이면 2열
   var html='';
   ok.forEach(function(x){
     var isLaw=(x.kind==='law');
-    var ic, sub;
+    var ic, sub, title;
     if(isLaw){
       ic='📎';
+      title=_scAttr(x.title||'근거자료');
       sub='국가법령정보센터'+(x.docNo?(' · '+x.docNo):'');
     }else{
       var k=_refKind(x);
       ic=k.ic;
-      sub=(x.docNo?(x.docNo+' · '):'')+k.label;
+      title=_scAttr(_refTitle(x));                       // ★ AI 가 지어낸 출처 라벨 제거
+      sub=[ _refNo(x), k.label, _refYear(x) ]            // ★ 문서번호(진짜 법원명) · 종류 · 연도
+        .filter(Boolean).join(' · ');
     }
     html+='<a class="refbtn" href="'+_scAttr(x.url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+
       '<span class="rbic">'+ic+'</span>'+
-      '<span class="rbtx"><b>'+_scAttr(x.title||'근거자료')+'</b><span class="rbsub">'+_scAttr(sub)+'</span></span>'+
+      '<span class="rbtx"><b>'+title+'</b><span class="rbsub">'+_scAttr(sub)+'</span></span>'+
       '<span class="rbgo">열기 →</span></a>';
   });
   html+='<div class="refnote">※ 참고 목적의 자료이며, 개별 사안에 따라 결론이 달라질 수 있습니다.</div>';
