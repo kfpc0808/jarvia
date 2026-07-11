@@ -196,6 +196,7 @@
     <a class="sn" data-p="p-finance-dash" onclick="goPanel(this)">📊 재무 대시보드</a>
     <a class="sn" data-p="p-access-stats" onclick="goPanel(this)">📊 접속통계</a>
     <a class="sn" data-p="p-ai-proposal-stats" onclick="goPanel(this)">📈 제안서 현황</a>
+    <a class="sn" data-p="p-legal-refs" onclick="goPanel(this)">⚖ 근거자료 재고</a>
   </nav></aside>
   <main class="adm-main">
     <div id="p-dash" class="panel"><h2>대시보드</h2><div class="dash-row"><div class="dash-c"><span>오늘 가입</span><strong id="d-signup">0</strong></div><div class="dash-c"><span>오늘 열람</span><strong id="d-views">0</strong></div><div class="dash-c"><span>오늘 매출</span><strong id="d-rev">0</strong><em>원</em></div><div class="dash-c"><span>전체 회원</span><strong id="d-total">0</strong></div></div><div class="dash-row"><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 생성</span><strong id="d-pptgen">0</strong><em>건</em></div><div class="dash-c" style="border-left-color:#E65100"><span>오늘 PPT 매출</span><strong id="d-pptrev">0</strong><em>원</em></div></div></div>
@@ -1972,6 +1973,77 @@
     <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th style="width:50px">순위</th><th>회원</th><th style="width:120px">생성 건수</th><th style="width:120px">슬라이드</th><th style="width:140px">차감액</th></tr></thead><tbody id="aps-ranking"><tr><td colspan="5" class="tc" style="color:#999">로딩 중…</td></tr></tbody></table></div>
   </div>
 
+  <!-- ⚖ 근거자료 재고 (제안서AI 법령·예규·판례 링크) -->
+  <div id="p-legal-refs" class="panel hidden">
+    <h2>⚖ 근거자료 재고 <span style="font-size:13px;font-weight:400;color:var(--text-lt)">— 제안서에 붙는 법령·예규·판례 링크 (TaxNavi 수집)</span></h2>
+    <div class="toolbar">
+      <button class="btn" onclick="loadLegalRefs()">🔄 새로고침</button>
+      <button class="btn btn-sec" onclick="lrEnqueue({all:true})" title="54개 주제 전체를 다시 수집합니다 (약 2시간, 워커가 2분마다 1건씩)">📥 전체 재수집</button>
+      <button class="btn btn-sec" onclick="lrEnqueue({failed:true})" title="3회 시도 후 실패한 주제만 다시 큐에 넣습니다">♻ 실패건만 재시도</button>
+      <span id="lr-updated" style="font-size:12px;color:var(--text-lt);align-self:center"></span>
+      <label style="margin-left:auto;font-size:12px;color:var(--text-lt);display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+        <input type="checkbox" id="lr-auto" onchange="lrToggleAuto()" style="width:15px;height:15px;cursor:pointer">진행 중 자동갱신(30초)
+      </label>
+    </div>
+
+    <!-- ① 요약 카드 -->
+    <div class="dash-row mt">
+      <div class="dash-c"><span>수집 완료</span><strong id="lr-done">-</strong><em>/ 54 주제</em></div>
+      <div class="dash-c"><span>대기·처리중</span><strong id="lr-pending">-</strong><em>건</em></div>
+      <div class="dash-c" style="border-left-color:#C62828"><span>실패</span><strong id="lr-failed">-</strong><em>건</em></div>
+      <div class="dash-c" style="border-left-color:#1B3A5C"><span>법령</span><strong id="lr-laws">-</strong><em>건</em></div>
+      <div class="dash-c" style="border-left-color:#B8943E"><span>예규·판례</span><strong id="lr-cases">-</strong><em>건</em></div>
+    </div>
+
+    <!-- ② 경보 -->
+    <div id="lr-alert" style="display:none;margin-top:14px;padding:11px 14px;background:#FDECEA;border-left:3px solid #C62828;border-radius:6px;font-size:13px;line-height:1.7;color:#7a1f1f"></div>
+
+    <!-- ③ 진행 바 -->
+    <div style="margin-top:16px;background:#e6e6e6;height:8px;border-radius:4px;overflow:hidden">
+      <div id="lr-bar" style="background:linear-gradient(90deg,#1B3A5C,#B8943E);height:100%;width:0%;transition:width .5s"></div>
+    </div>
+
+    <!-- ④ 주제별 상세 -->
+    <h3 style="margin-top:22px">📋 주제별 재고 (54)</h3>
+    <div class="toolbar">
+      <select id="lr-dom" onchange="lrRender()">
+        <option value="">전체 도메인</option>
+        <option value="기업컨설팅">기업컨설팅</option>
+        <option value="자산관리">자산관리</option>
+        <option value="연금설계">연금설계</option>
+        <option value="보험설계">보험설계</option>
+      </select>
+      <select id="lr-filter" onchange="lrRender()">
+        <option value="">전체 상태</option>
+        <option value="problem">⚠ 문제 있는 것만 (실패·근거0건)</option>
+        <option value="off">🚫 노출중지된 것만</option>
+      </select>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="width:110px">도메인</th><th>주제</th>
+          <th style="width:60px;text-align:right">법령</th>
+          <th style="width:80px;text-align:right">예규·판례</th>
+          <th style="width:90px">근거강도</th>
+          <th style="width:90px">상태</th>
+          <th style="width:120px">최종수집</th>
+          <th style="width:200px">관리</th>
+        </tr></thead>
+        <tbody id="lr-tbody"><tr><td colspan="8" class="tc" style="color:#999">로딩 중…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- ⑤ 변경 이력 -->
+    <h3 style="margin-top:22px">📝 변경 이력 (최근 40건)</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th style="width:150px">시각</th><th style="width:110px">구분</th><th>내용</th></tr></thead>
+        <tbody id="lr-logs"><tr><td colspan="3" class="tc" style="color:#999">로딩 중…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   </main>
 </div>
 <div id="mdl-member" class="modal hidden"><div class="mdl-bg" onclick="closeM('mdl-member')"></div><div class="mdl-box mdl-lg"><button class="mdl-x" onclick="closeM('mdl-member')">×</button><div id="member-inner"></div></div></div>
@@ -1983,6 +2055,14 @@
     <button class="btn" onclick="doWithdrawnLookup()">조회</button>
   </div>
   <div id="wl-result" style="font-size:13px;color:var(--text)"></div>
+</div></div>
+
+<!-- ⚖ 근거자료 상세 모달 -->
+<div id="mdl-lr" class="modal hidden"><div class="mdl-bg" onclick="lrCloseDetail()"></div><div class="mdl-box mdl-lg" style="max-width:760px"><button class="mdl-x" onclick="lrCloseDetail()">×</button>
+  <h3 id="lr-d-title" style="margin-bottom:4px">근거자료 상세</h3>
+  <div id="lr-d-sub" style="font-size:12px;color:#666;margin-bottom:14px"></div>
+  <div id="lr-d-body" style="font-size:13px;line-height:1.65"></div>
+  <div style="margin-top:14px;font-size:11px;color:#999">링크를 눌러 원문이 정상적으로 열리는지 확인하세요. 열리지 않으면 해당 주제를 재수집하거나 노출을 중지하세요.</div>
 </div></div>
 
 <!-- 마스터가이드 진행상황 모달 -->
@@ -2206,11 +2286,14 @@ function goPanel(el){
     if(prevActive==='p-master-guide'&&el.dataset.p!=='p-master-guide'){
       try{stopMgAutoRefresh?.();}catch(_){}
     }
+    if(prevActive==='p-legal-refs'&&el.dataset.p!=='p-legal-refs'){
+      try{lrStopAuto?.();}catch(_){}
+    }
   }catch(_){}
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
   document.querySelector('.sidebar').classList.remove('show');
-  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-withdrawn':loadWithdrawn,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-trial-req':loadTrialReqs,'p-morning-reading':loadMorningReading,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-distributors':loadDistributors,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-hq-clients':loadHqClients,'p-membership':loadMembership,'p-recurring':loadRecurring,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-case-report':loadCaseReports,'p-master-guide':loadMasterGuides,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':()=>{loadMedicalWeekly();startMwAutoRefresh?.();},'p-hospital-db':loadHospitalDb,'p-new-hospital':loadNewHospital,'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash,'p-access-stats':()=>{initAsDates();loadAccessStats();},'p-ai-proposal-stats':loadAiProposalStats};
+  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-withdrawn':loadWithdrawn,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-trial-req':loadTrialReqs,'p-morning-reading':loadMorningReading,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-distributors':loadDistributors,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-pptgen':loadPptGenAdmin,'p-hq-clients':loadHqClients,'p-membership':loadMembership,'p-recurring':loadRecurring,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-case-report':loadCaseReports,'p-master-guide':loadMasterGuides,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':()=>{loadMedicalWeekly();startMwAutoRefresh?.();},'p-hospital-db':loadHospitalDb,'p-new-hospital':loadNewHospital,'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash,'p-access-stats':()=>{initAsDates();loadAccessStats();},'p-ai-proposal-stats':loadAiProposalStats,'p-legal-refs':loadLegalRefs};
   if(ld[el.dataset.p])ld[el.dataset.p]();
 }
 
@@ -13054,6 +13137,168 @@ async function loadAiProposalRanking(){
   }
 }
 window.loadAiProposalStats=loadAiProposalStats;window.loadAiProposalRanking=loadAiProposalRanking;window.setApsRankRange=setApsRankRange;window.loadAccessStats=loadAccessStats;window.renderAccessPage=renderAccessPage;window.setAsRange=setAsRange;window.toggleAccessDetail=toggleAccessDetail;window.exportAccessCSV=exportAccessCSV;window.initAsDates=initAsDates;
+
+/* ═══════════════════════════════════════════════════════════
+   ⚖ 근거자료 재고 (legalRefs) — 제안서에 붙는 법령·예규·판례 링크
+   · 조회: legalRefStatus / 조작: triggerLegalRefBatch
+   · 인증: INTERNAL_API_KEY (MW/TCW 패턴 동일)
+   ═══════════════════════════════════════════════════════════ */
+const LR_BASE='https://asia-northeast3-jarvia-platform.cloudfunctions.net';
+const LR_KEY='tcw-jarvia-2026-kfpc';   // functions의 INTERNAL_API_KEY와 동일
+let _lrData=null, _lrTimer=null;
+
+const LR_STRENGTH={max:['근거 강함','#1B7A4B'],ruling:['예규','#B8943E'],court:['판례','#1B3A5C'],ref:['참고','#888']};
+const LR_STATUS={done:['완료','#1B7A4B'],pending:['대기','#B8943E'],running:['수집중','#1B5FA5'],failed:['실패','#C62828'],none:['미수집','#999']};
+
+function lrTime(ms){
+  if(!ms)return '-';
+  const d=new Date(ms);
+  const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadLegalRefs(){
+  const tb=$('lr-tbody');
+  try{
+    const res=await fetch(`${LR_BASE}/legalRefStatus?key=${encodeURIComponent(LR_KEY)}`);
+    if(!res.ok)throw new Error(`HTTP ${res.status}`);
+    const d=await res.json();
+    if(!d.ok)throw new Error(d.error||'조회 실패');
+    _lrData=d;
+
+    // 요약
+    $('lr-done').textContent=d.jobs.done||0;
+    $('lr-pending').textContent=(d.jobs.pending||0)+(d.jobs.running||0);
+    $('lr-failed').textContent=d.jobs.failed||0;
+    $('lr-laws').textContent=d.stock.laws||0;
+    $('lr-cases').textContent=d.stock.cases||0;
+    $('lr-updated').textContent='갱신: '+lrTime(Date.now());
+    $('lr-bar').style.width=Math.round((d.jobs.done||0)/(d.total||54)*100)+'%';
+
+    // 경보
+    const al=$('lr-alert');
+    const msgs=[];
+    if((d.failed||[]).length)msgs.push(`❌ <b>실패 ${d.failed.length}건</b> — ${d.failed.map(f=>esc(f.slug)).join(', ')} · [♻ 실패건만 재시도]를 누르세요.`);
+    if((d.emptyTopics||[]).length)msgs.push(`⚠️ <b>근거 0건 ${d.emptyTopics.length}개 주제</b> — ${d.emptyTopics.map(esc).join(', ')} · 검색 키워드 조정이 필요합니다.`);
+    if(msgs.length){al.innerHTML=msgs.join('<br>');al.style.display='block';}else{al.style.display='none';}
+
+    lrRender();
+    lrRenderLogs();
+
+    // 진행 중이면 자동갱신 유지, 끝났으면 해제
+    if($('lr-auto').checked&&((d.jobs.pending||0)+(d.jobs.running||0))===0){
+      lrStopAuto();$('lr-auto').checked=false;
+    }
+  }catch(e){
+    console.error('근거재고 로드 실패:',e);
+    tb.innerHTML='<tr><td colspan="8" class="tc" style="color:var(--danger)">로드 실패: '+esc(e.message)+'</td></tr>';
+  }
+}
+
+function lrRender(){
+  if(!_lrData)return;
+  const dom=$('lr-dom').value, flt=$('lr-filter').value;
+  const rows=[];
+  for(const t of (_lrData.topics||[])){
+    if(dom&&t.domain!==dom)continue;
+    const problem=(t.status==='failed')||(t.status==='done'&&!t.lawCount&&!t.caseCount);
+    if(flt==='problem'&&!problem)continue;
+    if(flt==='off'&&t.approved)continue;
+
+    const st=LR_STATUS[t.status]||LR_STATUS.none;
+    const sg=LR_STRENGTH[t.crossStrength]||['-','#ccc'];
+    const has=(t.lawCount||t.caseCount);
+    rows.push(`<tr${problem?' style="background:#FFF6F6"':''}>
+      <td style="font-size:12px;color:var(--text-lt)">${esc(t.domain)}</td>
+      <td><b>${esc(t.title)}</b>${!t.approved?' <span style="font-size:11px;color:#C62828">🚫 노출중지</span>':''}
+        <div style="font-size:11px;color:#999">${esc((t.keywords||[]).join(' / '))}</div>
+        ${t.lastError?`<div style="font-size:11px;color:#C62828">${esc(t.lastError)}</div>`:''}</td>
+      <td style="text-align:right">${t.lawCount||0}</td>
+      <td style="text-align:right;font-weight:${t.caseCount?'700':'400'}">${t.caseCount||0}</td>
+      <td><span style="font-size:11px;font-weight:700;color:${sg[1]}">${sg[0]}</span></td>
+      <td><span style="font-size:11px;font-weight:700;color:${st[1]}">${st[0]}</span></td>
+      <td style="font-size:11px;color:var(--text-lt)">${lrTime(t.fetchedAt)}</td>
+      <td>
+        <button class="btn btn-sec" style="padding:3px 8px;font-size:11px" onclick="lrDetail('${t.slug}')" ${has?'':'disabled'}>상세</button>
+        <button class="btn btn-sec" style="padding:3px 8px;font-size:11px" onclick="lrEnqueue({slug:'${t.slug}'})">재수집</button>
+        <button class="btn btn-sec" style="padding:3px 8px;font-size:11px" onclick="lrApprove('${t.slug}',${!t.approved})" ${has?'':'disabled'}>${t.approved?'노출중지':'노출'}</button>
+      </td></tr>`);
+  }
+  $('lr-tbody').innerHTML=rows.join('')||'<tr><td colspan="8" class="tc" style="color:#999">해당 조건의 주제가 없습니다.</td></tr>';
+}
+
+function lrRenderLogs(){
+  const LT={enqueue:['📥 투입','#1B5FA5'],done:['✅ 완료','#1B7A4B'],failed:['❌ 실패','#C62828'],weekly:['📅 주간적립','#B8943E'],approve:['🔁 노출변경','#666']};
+  const rows=(_lrData.logs||[]).map(l=>{
+    const t=LT[l.type]||[esc(l.type),'#666'];
+    return `<tr><td style="font-size:12px;color:var(--text-lt)">${lrTime(l.at)}</td>
+      <td><span style="font-size:11px;font-weight:700;color:${t[1]}">${t[0]}</span></td>
+      <td style="font-size:12px">${esc(l.message)}</td></tr>`;
+  });
+  $('lr-logs').innerHTML=rows.join('')||'<tr><td colspan="3" class="tc" style="color:#999">이력이 없습니다.</td></tr>';
+}
+
+async function lrEnqueue(opt){
+  const o=opt||{};
+  let msg, qs=`key=${encodeURIComponent(LR_KEY)}`;
+  if(o.all){msg='54개 주제를 전체 재수집합니다.\n\n워커가 2분마다 1건씩 처리하므로 약 2시간이 걸립니다.\n기존 재고는 수집이 끝날 때까지 그대로 유지됩니다.\n\n진행할까요?';qs+='&force=true';}
+  else if(o.failed){msg='실패한 주제만 다시 큐에 넣습니다. 진행할까요?';qs+='&failed=true';}
+  else if(o.slug){msg=`"${o.slug}" 주제를 재수집합니다. 진행할까요?`;qs+=`&slug=${encodeURIComponent(o.slug)}&force=true`;}
+  else return;
+
+  if(!confirm(msg))return;
+  try{
+    const res=await fetch(`${LR_BASE}/triggerLegalRefBatch?${qs}`);
+    const d=await res.json();
+    if(!d.ok)throw new Error(d.error||'투입 실패');
+    alert(`큐에 ${d.enqueued}건 투입했습니다.${d.skipped?` (건너뜀 ${d.skipped}건)`:''}\n\n워커가 2분마다 1건씩 처리합니다. 자동갱신을 켜두시면 진행상황이 보입니다.`);
+    if(d.enqueued&&!$('lr-auto').checked){$('lr-auto').checked=true;lrToggleAuto();}
+    loadLegalRefs();
+  }catch(e){alert('실패: '+e.message);}
+}
+
+async function lrApprove(slug,val){
+  if(!confirm(val?`"${slug}" 근거자료를 제안서에 다시 노출합니다.`:`"${slug}" 근거자료를 제안서에서 숨깁니다.\n(재고는 남고, 제안서에만 안 붙습니다)`))return;
+  try{
+    const res=await fetch(`${LR_BASE}/triggerLegalRefBatch?key=${encodeURIComponent(LR_KEY)}&approve=${encodeURIComponent(slug)}&value=${val}`);
+    const d=await res.json();
+    if(!d.ok)throw new Error(d.error||'변경 실패');
+    loadLegalRefs();
+  }catch(e){alert('실패: '+e.message);}
+}
+
+function lrDetail(slug){
+  const t=(_lrData?.topics||[]).find(x=>x.slug===slug);
+  if(!t)return;
+  $('lr-d-title').textContent=t.title;
+  $('lr-d-sub').textContent=`${t.domain} · ${slug} · 최종수집 ${lrTime(t.fetchedAt)}`;
+  let h='';
+  if((t.laws||[]).length){
+    h+='<h4 style="margin:6px 0 6px">📎 법령 ('+t.laws.length+')</h4>';
+    h+=t.laws.map(l=>`<div style="padding:8px 10px;border:1px solid #eee;border-radius:6px;margin-bottom:6px">
+      <b>${esc(l.citation||'')}</b>${l.effectiveDate?` <span style="font-size:11px;color:#999">시행 ${esc(l.effectiveDate)}</span>`:''}<br>
+      <a href="${esc(l.url||'')}" target="_blank" rel="noopener" style="font-size:12px;color:#1B5FA5;word-break:break-all">${esc(l.url||'')}</a></div>`).join('');
+  }
+  if((t.cases||[]).length){
+    h+='<h4 style="margin:14px 0 6px">⚖ 예규·판례 ('+t.cases.length+')</h4>';
+    h+=t.cases.map(c=>`<div style="padding:8px 10px;border:1px solid #eee;border-radius:6px;margin-bottom:6px">
+      <b>${esc(c.title||'')}</b><br>
+      <span style="font-size:11px;color:#666">${esc(c.category||'')}${c.docNo?' · '+esc(c.docNo):''} · ${c.sourceType==='court'?'판례':'예규'}</span><br>
+      <a href="${esc(c.href||'')}" target="_blank" rel="noopener" style="font-size:12px;color:#1B5FA5;word-break:break-all">${esc(c.href||'')}</a></div>`).join('');
+  }
+  $('lr-d-body').innerHTML=h||'<div style="color:#999">근거자료가 없습니다.</div>';
+  $('mdl-lr').classList.remove('hidden');
+}
+function lrCloseDetail(){$('mdl-lr').classList.add('hidden');}
+
+function lrToggleAuto(){
+  if($('lr-auto').checked){lrStopAuto();_lrTimer=setInterval(loadLegalRefs,30000);}
+  else lrStopAuto();
+}
+function lrStopAuto(){if(_lrTimer){clearInterval(_lrTimer);_lrTimer=null;}}
+
+window.loadLegalRefs=loadLegalRefs;window.lrRender=lrRender;window.lrEnqueue=lrEnqueue;window.lrApprove=lrApprove;window.lrDetail=lrDetail;window.lrCloseDetail=lrCloseDetail;window.lrToggleAuto=lrToggleAuto;window.lrStopAuto=lrStopAuto;
+
 
 </script>
 
