@@ -419,6 +419,11 @@
   #start .fincard .fc-acts{margin-top:10px;display:flex;gap:7px;flex-wrap:wrap;}
   #start .fincard .fc-acts button{padding:6px 12px;border:1px solid #D5CEBE;border-radius:8px;background:#fff;color:var(--slate);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;}
   #start .fincard .fc-acts button:hover{border-color:var(--navy);color:var(--navy);}
+  #start .fincard .fc-stmt{margin-top:9px;padding:8px 10px;border-radius:8px;background:#F7F4EA;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;}
+  #start .fincard .fc-stmt span{font-weight:800;color:var(--navy);}
+  #start .fincard .fc-stmt button{padding:3px 12px;border:1px solid #D5CEBE;border-radius:7px;background:#fff;color:#8A857A;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;}
+  #start .fincard .fc-stmt button.on{background:var(--navy);border-color:var(--navy);color:#fff;}
+  #start .fincard .fc-stmt em{flex:1 1 100%;font-style:normal;color:#8A857A;font-size:11.5px;}
   .fconfirm{border:1px solid rgba(200,167,90,.55);background:rgba(200,167,90,.10);border-radius:11px;padding:12px 13px;margin:2px 0;font-size:13px;line-height:1.58;}
   .fconfirm .ft{font-weight:800;color:#fff;margin-bottom:7px;}
   .fconfirm .fgrid{display:grid;grid-template-columns:minmax(95px,.72fr) minmax(0,1.28fr);gap:5px 10px;margin:8px 0;}
@@ -2442,7 +2447,7 @@ function updateFinancialUI(){const h=document.getElementById('finhelp');if(h)h.c
         파일은 서버로 전송되지 않는다(브라우저 내 처리).
    지원: NICE 기업분석보고서(nicebizline) / KODATA KCR2
    ══════════════════════════════════════════════════════════════ */
-const FIN={data:null,calc:null,risks:null,checks:null,src:'',fileName:''};
+const FIN={data:null,calc:null,risks:null,checks:null,src:'',fileName:'',stmtType:'별도'};
 const FIN_PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const FIN_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const FIN_CMAP='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/';
@@ -2536,7 +2541,10 @@ function finParse(pages,fmt){
   const BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
   const IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
   const SH=fmt==='NICE'?pick(/주요주주/,/지분율/):pick(/주주현황/,/소유주식수|지분율/);
-  const IN=fmt==='NICE'?pick(/기업개요/,/종업원수/):pick(/기 업 명|기업명/,/설 립 일 자|설립일자/);
+  /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이라 값이 오염된다.
+       10p '08.기업현황'(주요주주와 같은 페이지)은 단일 컬럼이므로 그쪽을 쓴다. */
+  const IN=fmt==='NICE'?(pick(/주요주주/,/종업원수/,/표준산업분류/)||pick(/기업개요/,/종업원수/))
+                       :pick(/기 업 명|기업명/,/설 립 일 자|설립일자/);
   if(!BS)throw new Error('재무상태표를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
   if(!IS)throw new Error('손익계산서를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
 
@@ -2581,12 +2589,14 @@ function finParse(pages,fmt){
   for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
     if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
 
-  const g=(t,rx,i)=>{const m=(t||'').match(rx);return m?m[i||1].trim():null;};
-  D.회사명=g(IN,/업체명\s*(.+?)\s*(?:설립|$)/m)||g(IN,/기\s*업\s*명\s*(\S+)/)||'';
+  const g=(t,rx,i)=>{const m=(t||'').match(rx);return m?String(m[i||1]).trim():null;};
+  D.회사명=g(IN,/업체명\s*(.+?)\s*설립일자/)||g(IN,/기\s*업\s*명\s*(\S+)/)||g(IN,/업체명\s*(\S+)/)||'';
   D.대표자=g(IN,/대표자\s*(?:명)?\s*[:：]?\s*(\S+)/)||g(IN,/대\s*표\s*자\s+(\S+)/)||'';
-  D.업종=g(IN,/\((?:[A-Z]\d{4,5})\)\s*(.+?)$/m)||'';
-  D.종업원=parseInt(g(IN,/(?:종업원수|상\s*시\s*종\s*업\s*원)\s*[:：]?\s*([\d,]+)/)||'0'.replace(/,/g,''))||0;
-  const est=g(IN,/설립\s*일자\s*[:：]?\s*(\d{4})/); D.설립년=est?parseInt(est):0;
+  D.업종=g(IN,/표준산업분류\s*\([A-Z]\d+\)\s*(.+?)\s*$/m)
+       ||g(IN,/업\s*종\s*분\s*류\s*\([A-Z]\d+\)\s*(.+?)\s*$/m)
+       ||g(IN,/\([A-Z]\d{4,6}\)\s*([가-힣][^\n]{2,40})/)||'';
+  D.종업원=parseInt((g(IN,/종업원수\s*([\d,]+)\s*명?/)||g(IN,/상\s*시\s*종\s*업\s*원\s*([\d,]+)/)||'0').replace(/,/g,''))||0;
+  D.설립년=parseInt(g(IN,/설립\s*일\s*자\s*[:：]?\s*(\d{4})/)||'0')||0;
 
   /* 주주 */
   D.주주=[];D.총주식=0;D.액면=0;
@@ -2814,65 +2824,95 @@ function finRender(){
     ?`<div class="fc-chk ng">⚠ 검산 ${FIN.checks.length}건 중 ${bad.length}건 확인 필요<ul>${bad.map(x=>`<li>${esc(x.n)} — ${esc(x.d)}</li>`).join('')}</ul></div>`
     :`<div class="fc-chk ok">✅ 회계 항등식 검산 ${FIN.checks.length}건 전건 통과 — 수치를 신뢰할 수 있습니다.</div>`;
 
+  /* 별도/연결은 보고서에 표기되지 않는다. 사용자가 확정해야 한다. */
+  h+=`<div class="fc-stmt">
+    <span>재무제표 구분</span>
+    <button type="button" class="${FIN.stmtType==='별도'?'on':''}" onclick="finSetStmt('별도')">별도</button>
+    <button type="button" class="${FIN.stmtType==='연결'?'on':''}" onclick="finSetStmt('연결')">연결</button>
+    <em>보고서에 표기가 없어 기본값은 별도입니다. 연결재무제표라면 바꿔 주세요.</em>
+  </div>`;
+
   h+=`<div class="fc-acts"><button type="button" onclick="finClearPdf()">✕ 첨부 해제</button><button type="button" onclick="finCopyToInput()">↓ 입력창에 붙여넣기(직접 수정)</button></div>`;
   c.innerHTML=h; c.classList.add('on');
 }
 
-/* ── 제안서 입력용 텍스트 ── */
+function finSetStmt(t){ FIN.stmtType=(t==='연결')?'연결':'별도'; finRender(); }
+
+/* ── 제안서 입력용 텍스트 ──
+   ★ 기존 clientFinancialValidation() 이 요구하는 4개 메타를 반드시 포함해야 한다:
+      기준연도 / 비교연도 / 별도·연결 / 금액 단위.
+      한 줄이라도 빠지면 "아직 확인이 필요한 항목이 있습니다" 무한 반복에 빠진다.
+      또한 항목명은 기존 추출 프롬프트가 인식하는 명칭을 그대로 쓴다. */
 function finToText(){
   if(!FIN.data)return '';
   const D=FIN.data,K=finPick(FIN.calc),Y=D.years;
+  const ST=FIN.stmtType||'별도';
   const L=[];
-  L.push('─── 첨부 재무보고서 자동 추출 (출처: '+FIN.src+' · 회계 항등식 검산 완료) ───');
-  L.push(`■ ${D.회사명||''} · ${D.업종||''}${D.설립년?' · 설립 '+D.설립년+'년('+(new Date().getFullYear()-D.설립년)+'년차)':''}${D.종업원?' · 직원 '+D.종업원+'명':''}`);
-  L.push(`■ 대표 ${D.대표자||''} · 지분 ${D.대표지분}%${D.대표주식?` (${D.대표주식.toLocaleString()}주 / 총 ${D.총주식.toLocaleString()}주, 액면 ${D.액면.toLocaleString()}원)`:''}`);
+  const P=(k,a)=>{ if(!a)return; L.push(`- ${k}: ${Y[0]}년 ${a[0].toLocaleString()} / ${Y[1]}년 ${a[1].toLocaleString()} / ${Y[2]}년 ${a[2].toLocaleString()}`); };
+
+  L.push(`법인 기업컨설팅. ${D.회사명||''}${D.업종?' ('+D.업종+')':''}.`);
+  L.push(`대표 ${D.대표자||''}, 지분 ${D.대표지분}%${D.대표주식?` (${D.대표주식.toLocaleString()}주 / 총 발행 ${D.총주식.toLocaleString()}주, 1주당 액면가 ${D.액면.toLocaleString()}원)`:''}.`
+        +`${D.설립년?` 설립 ${D.설립년}년(${new Date().getFullYear()-D.설립년}년차).`:''}${D.종업원?` 상시종업원 ${D.종업원}명.`:''}`);
   L.push('');
-  L.push(`[재무 3개년 · 단위 백만원]  ${Y[0]} / ${Y[1]} / ${Y[2]}`);
-  const P=(k,a)=>{if(a)L.push('  '+k+' '+a.map(v=>v.toLocaleString()).join(' / '));};
-  P('매출액',D.매출액);P('매출원가',D.매출원가);P('영업이익',D.영업이익);P('당기순이익',D.순이익);
-  P('영업활동현금흐름',D.영업현금);P('자산총계',D.자산총계);P('부채총계',D.부채총계);
-  P('자본총계',D.자본총계);P('자본금',D.자본금);P('이익잉여금',D.이익잉여금);P('총차입금',D.차입금);
-  P('이자비용',D.이자비용);P('매출채권',D.매출채권);P('재고자산',D.재고자산);
-  P('퇴직급여충당부채',D.퇴직충당);P('가지급금(단기대여금)',D.가지급금);
+  /* ★★ 이 한 줄이 기준연도·비교연도·별도/연결·단위를 모두 확정한다. 절대 형식 변경 금지 ★★ */
+  L.push(`[재무 현황 — ${ST} 재무제표, 단위 백만원, 기준연도 ${Y[0]} / 비교연도 ${Y[1]}]`);
+  L.push(`(출처: ${FIN.src} 재무보고서 PDF 자동추출 · 회계 항등식 검산 완료)`);
+  P('연매출',D.매출액);
+  P('매출원가',D.매출원가);
+  P('영업이익',D.영업이익);
+  P('당기순이익',D.순이익);
+  P('자산총계',D.자산총계);
+  P('부채총계',D.부채총계);
+  P('자본총계',D.자본총계);
+  P('자본금',D.자본금);
+  P('미처분이익잉여금',D.이익잉여금);
+  P('현금및현금성자산',D.현금);
+  P('차입금(borrowings)',D.차입금);
+  P('이자비용',D.이자비용);
+  P('매출채권',D.매출채권);
+  P('재고자산',D.재고자산);
+  P('유동자산',D.유동자산);
+  P('유동부채',D.유동부채);
+  P('퇴직급여충당부채',D.퇴직충당);
+  if(D.영업현금)P('영업활동현금흐름',D.영업현금);
+  if(D.가지급금&&D.가지급금[0]>0){
+    L.push('');
+    L.push('[가지급금]');
+    L.push(`- 대표 가지급금(단기대여금) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}백만원 / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}백만원`);
+  }
   L.push('');
-  L.push('[계산기 산출 — JARVIA 계산기(상증세법·법인세법 산식) 결과. 아래 수치를 그대로 인용할 것. 재계산·반올림·환산 금지]');
-  if(K.부채비율!=null)L.push(`  부채비율 ${K.부채비율.toFixed(1)}%`);
-  if(K.유동비율!=null)L.push(`  유동비율 ${K.유동비율.toFixed(1)}%`);
-  if(K.차입금의존도!=null)L.push(`  차입금의존도 ${K.차입금의존도.toFixed(1)}%`);
-  if(K.이자보상!=null)L.push(`  이자보상배율 ${K.이자보상.toFixed(2)}배`);
+  L.push('[계산기 산출 결과 — JARVIA 계산기(상증세법·법인세법 산식) 확정값. 그대로 인용할 것. 재계산·반올림·환산 금지]');
+  if(K.부채비율!=null)L.push(`- 부채비율 ${K.부채비율.toFixed(1)}%`);
+  if(K.유동비율!=null)L.push(`- 유동비율 ${K.유동비율.toFixed(1)}%`);
+  if(K.차입금의존도!=null)L.push(`- 차입금의존도 ${K.차입금의존도.toFixed(1)}%`);
+  if(K.이자보상!=null)L.push(`- 이자보상배율 ${K.이자보상.toFixed(2)}배`);
   if(K.주당){
     const N=FIN.calc&&FIN.calc.npv;
-    if(N)L.push(`  1주당 순손익가치 ${N.perShareValue.toLocaleString()}원 (calcNetProfitValue · 상증세법 시행령 §56, 3개년 순손익 3:2:1 가중평균 ÷ 환원율 ${(N.capRate*100).toFixed(0)}%)`);
-    L.push(`  1주당 평가액 ${K.주당.toLocaleString()}원 (calcUnlistedStockValue · 상증세법 시행령 §54, 순손익가치 3 : 순자산가치 2)`);
-    L.push(`  대표 지분가치 ${(K.대표지분가치/1e8).toFixed(2)}억`);
-    if(K.상속세!=null)L.push(`  예상 상속세(주식분) ${(K.상속세/1e8).toFixed(2)}억 (calcInheritanceTax · 배우자 있음·자녀 1인 가정)`);
+    if(N)L.push(`- 1주당 순손익가치 ${N.perShareValue.toLocaleString()}원 (calcNetProfitValue · 상증세법 시행령 §56, 3개년 순손익 3:2:1 가중평균 ÷ 환원율 ${(N.capRate*100).toFixed(0)}%)`);
+    L.push(`- 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (calcUnlistedStockValue · 상증세법 시행령 §54, 순손익가치 3 : 순자산가치 2)`);
+    L.push(`- 대표 보유지분 평가액 ${(K.대표지분가치/1e8).toFixed(2)}억원`);
+    if(K.상속세!=null)L.push(`- 대표 유고 시 주식분 예상 상속세 ${(K.상속세/1e8).toFixed(2)}억원 (calcInheritanceTax · 배우자 있음·자녀 1인 가정)`);
   }
-  L.push('');
   if(FIN.risks&&FIN.risks.length){
-    L.push('[탐지 리스크 — 금액 × CEO 미인지 확률 기준 우선순위]');
-    FIN.risks.forEach((r,i)=>L.push(`  ${i+1}. [${r.lv}] ${r.t} — ${r.d}`));
     L.push('');
+    L.push('[탐지 리스크 — 금액 × CEO 미인지 확률 기준 우선순위]');
+    FIN.risks.forEach((r,i)=>L.push(`${i+1}. [${r.lv}] ${r.t} — ${r.d}`));
   }
   const 미확인=[];
-  if(!D.퇴직충당||D.퇴직충당[0]===0)미확인.push('대표 급여·퇴직금 규정(정관 배수)');
+  if(!D.퇴직충당||D.퇴직충당[0]===0)미확인.push('대표 급여·임원 퇴직금 규정(정관 배수)');
   if(!D.가지급금||D.가지급금[0]===0)미확인.push('가지급금');
-  미확인.push('개인 부동산·금융자산','사전증여 이력','후계자 유무','부동산과다보유법인 해당 여부');
+  미확인.push('대표 나이','가족관계(배우자·자녀 수)','후계자 유무','개인 부동산·금융자산','사전증여 이력');
+  L.push('');
   L.push('[미확인 — 추측하지 말 것. 필요 시 "CEO 확인 필요"로 표기]');
-  L.push('  '+미확인.join(' / '));
+  L.push('- '+미확인.join(' / '));
+  L.push('');
+  L.push('[주의사항 — 단정적 서술 금지]');
+  L.push(`- 재무제표 구분은 ${ST}로 가정했습니다. 연결재무제표이면 사용자가 정정해야 합니다.`);
   const W=(FIN.calc&&FIN.calc.warns)||[];
-  if(W.length){
-    L.push('');
-    L.push('[계산기 경고 — 단정적 표현 금지]');
-    W.slice(0,6).forEach(w=>L.push('  · '+w));
-  }
+  W.slice(0,6).forEach(w=>L.push('- '+w));
   const bad=FIN.checks.filter(x=>!x.ok);
-  if(bad.length){
-    L.push('');
-    L.push('[검산 경고 — 아래 항목은 신뢰도가 낮으니 단정적 서술 금지]');
-    bad.forEach(x=>L.push(`  · ${x.n} — ${x.d}`));
-    if(D.대표지분===0)L.push('  ※ 대표 지분 0% → 상속·가업승계·주식가치 논점은 다루지 말 것.');
-  }
-  L.push('───────────────────────────────────────');
+  bad.forEach(x=>L.push(`- 검산 경고: ${x.n} — ${x.d}`));
+  if(D.대표지분===0)L.push('- ※ 대표 지분 0% → 상속·가업승계·주식가치 논점은 다루지 말 것.');
   return L.join('\n');
 }
 
