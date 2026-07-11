@@ -2456,13 +2456,14 @@ const FIN_FONTS='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts
 function finPdfPick(){const i=document.getElementById('finPdfInput');if(i){i.value='';i.click();}}
 function finStat(msg,err){const s=document.getElementById('finPdfStat');if(!s)return;s.textContent=msg||'';s.className='fpdf-stat'+(err?' err':'');}
 
-/* ── PDF → 페이지별 텍스트 (y좌표로 줄 재구성) ── */
+/* ── PDF → 페이지별 "아이템 배열" (좌표 보존) ──
+   ★ 텍스트로 뭉개지 않는다. 표는 좌표가 곧 의미다.
+      y로만 줄을 묶으면 2단 레이아웃(옆 칸)이 끼어들어 값이 오염된다. */
 async function finExtractPages(file){
   if(!window.pdfjsLib){await jbLoadScript(FIN_PDFJS);}
   if(!window.pdfjsLib)throw new Error('PDF 리더를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');
   pdfjsLib.GlobalWorkerOptions.workerSrc=FIN_WORKER;
-  /* ★ 한글(CJK) PDF는 CID 폰트를 쓰므로 cMap을 함께 로드해야 글자를 해독할 수 있다.
-       이 옵션이 없으면 한글이 통째로 빈 문자열로 나온다. */
+  /* 한글(CJK) PDF는 CID 폰트를 쓰므로 cMap이 없으면 글자가 통째로 비어 나온다. */
   const doc=await pdfjsLib.getDocument({
     data:await file.arrayBuffer(),
     cMapUrl:FIN_CMAP, cMapPacked:true, standardFontDataUrl:FIN_FONTS
@@ -2470,27 +2471,44 @@ async function finExtractPages(file){
   const pages=[];
   for(let p=1;p<=doc.numPages;p++){
     const tc=await (await doc.getPage(p)).getTextContent();
-    const rows=new Map();
-    tc.items.forEach(it=>{
-      const s=(it.str||'');if(!s.trim())return;
-      const y=Math.round(it.transform[5]/2)*2;                 // 2pt 허용오차로 같은 줄 묶기
-      if(!rows.has(y))rows.set(y,[]);
-      rows.get(y).push({x:it.transform[4],s});
-    });
-    const lines=[...rows.entries()].sort((a,b)=>b[0]-a[0])     // 위→아래
-      .map(([,its])=>its.sort((a,b)=>a.x-b.x).map(i=>i.s).join(' ').replace(/\s{2,}/g,' ').trim());
-    pages.push(lines.join('\n'));
+    let items=tc.items.filter(i=>i.str&&i.str.trim()).map(i=>({
+      s:i.str.trim(),
+      x:Math.round(i.transform[4]),
+      y:Math.round(i.transform[5]),
+      w:Math.round(i.width||0)
+    })).sort((a,b)=>b.y-a.y||a.x-b.x);
+    items=finMerge(items);                              // ★ 자간이 벌어진 라벨 병합
+    items.text=items.map(i=>i.s).join(' ');             // 페이지 탐색(정규식)용 평문
+    pages.push(items);
   }
-  /* 텍스트 레이어가 없는 PDF(스캔본·이미지형·글리프 렌더링)는 브라우저에서 읽을 수 없다.
-     NICE 기업분석보고서가 여기 해당한다. 원인을 숨기지 말고 정확히 알린다. */
-  if(pages.join('').replace(/\s/g,'').length<200)
-    throw new Error('이 PDF는 글자가 텍스트가 아닌 이미지로 저장되어 있어 읽을 수 없습니다. (스캔본·사진 촬영본이 이에 해당합니다) 보고서의 재무상태표·손익계산서·주주현황 부분을 복사해 아래 입력창에 붙여넣어 주세요.');
+  if(pages.reduce((n,p)=>n+p.length,0)<30)
+    throw new Error('이 PDF는 글자가 텍스트가 아닌 이미지로 저장되어 있어 읽을 수 없습니다. (스캔본·사진 촬영본) 보고서의 재무상태표·손익계산서·주주현황 부분을 복사해 아래 입력창에 붙여넣어 주세요.');
   return pages;
+}
+
+/** 인접 글자 병합 — KODATA는 '대 표 자'처럼 라벨이 한 글자씩 쪼개져 나온다.
+    ★ 조건을 '한 글자 아이템'으로 좁힌다. 넓히면 '업체명'+'(주)하이테커'가 붙어 값이 사라진다.
+    ★ 숫자는 절대 병합하지 않는다. (11,011 과 100% 가 붙으면 값이 파괴된다) */
+function finMerge(items){
+  const isNum=s=>/^\(?-?[\d,]+(\.\d+)?\)?\s*%?$/.test(String(s).trim())||String(s).trim()==='-';
+  const out=[];
+  for(const it of items){
+    const p=out[out.length-1];
+    const gap=p?(it.x-(p.x+p.w)):999;
+    if(p && it.s.length===1 && (p._m||p.s.length===1)
+       && Math.abs(p.y-it.y)<=2 && !isNum(p.s) && !isNum(it.s)
+       && gap<=20 && gap>=-3){
+      p.s+=it.s; p.w=(it.x+it.w)-p.x; p._m=true;
+      continue;
+    }
+    out.push({...it});
+  }
+  return out;
 }
 
 /* ── 포맷 자동 판별 ── */
 function finDetect(pages){
-  const all=pages.join('\n');
+  const all=pages.map(p=>p.text).join('\n');
   if(/nicebizline|NICE평가정보/i.test(all))return 'NICE';
   /* KODATA(한국평가데이터, 구 한국기업데이터) — KCR2·CRETOP·REALTOP 등 동일사 제품군 */
   if(/KODATA|한국평가데이터|한국기업데이터|KCR2|CRETOP|크레탑/i.test(all))return 'KODATA';
@@ -2498,50 +2516,90 @@ function finDetect(pages){
   return null;
 }
 
-/* ── 숫자 유틸 ── */
-function finNum(s){s=String(s).trim().replace(/,/g,'');return (s==='-'||s==='')?0:(parseFloat(s)||0);}
-/* 라벨 뒤 '금액' 3개만 추출 — 구성비(%·소수)는 버린다 */
-function finRow(txt,labels){
+/* ══════ 좌표 기반 셀 추출 — 이 4개가 파서의 전부다 ══════ */
+const FIN_ROW_TOL=4;                                    // 같은 행으로 볼 y 허용오차(pt)
+
+/** 라벨 아이템 찾기 (정확 일치 우선 → 접두 일치) */
+function finFind(items,label){
+  const key=String(label).replace(/\s+/g,'');
+  let hit=items.find(i=>i.s.replace(/\s+/g,'')===key);
+  if(hit)return hit;
+  return items.find(i=>i.s.replace(/\s+/g,'').startsWith(key))||null;
+}
+/** 라벨 오른쪽 · 같은 행의 아이템들 (x 오름차순) */
+function finRowAfter(items,L){
+  if(!L)return [];
+  return items.filter(i=>i!==L&&Math.abs(i.y-L.y)<=FIN_ROW_TOL&&i.x>=L.x+Math.max(L.w,6)-2)
+              .sort((a,b)=>a.x-b.x);
+}
+/** 값이 아니라 '라벨'로 보이는가 — 숫자/기호가 아닌 문자를 포함하면 라벨 */
+function finIsLabelLike(s){
+  const t=String(s).trim();
+  if(/^-$/.test(t))return false;                        // '-' 는 0 을 뜻하는 값
+  if(/^\(?-?[\d,]+(\.\d+)?\)?\s*%?$/.test(t))return false;
+  if(/^\d{4}[.\-]\d{2}[.\-]\d{2}$/.test(t))return false;
+  return /[가-힣A-Za-zⅠ-Ⅹ]/.test(t);
+}
+/** 숫자 행 — 라벨 오른쪽에서 금액 n개. 구성비(%·소수)는 버리고, 라벨을 만나면 중단 */
+function finCells(items,labels,n){
   const arr=Array.isArray(labels)?labels:[labels];
-  for(const raw of txt.split('\n')){
-    const ln=raw.trim();
-    for(const lb of arr){
-      const norm=ln.replace(/\s+/g,'');
-      const key=lb.replace(/\s+/g,'');
-      if(!norm.startsWith(key)&&!norm.includes(key))continue;
-      const i=ln.replace(/\s+/g,' ').indexOf(lb.replace(/\s+/g,' '));
-      const rest=(i>=0?ln.slice(i+lb.length):ln.slice(ln.indexOf(lb.charAt(0))+lb.length));
-      const toks=rest.match(/-?[\d,]+\.\d+|-?[\d,]+|%|-/g)||[];
-      const vals=[];
-      for(let k=0;k<toks.length&&vals.length<3;k++){
-        const t=toks[k];
-        if(t==='%')continue;
-        if(t.includes('.'))continue;                            // 소수 = 구성비 → 버림
-        if(toks[k+1]==='%'){k++;continue;}                      // '숫자 %' = 구성비 → 버림
-        vals.push(finNum(t));                                   // 나머지 = 금액
-      }
-      if(vals.length===3)return vals;
+  for(const lb of arr){
+    const L=finFind(items,lb); if(!L)continue;
+    const vals=[];
+    for(const it of finRowAfter(items,L)){
+      const t=it.s.replace(/\s/g,'');
+      if(/%$/.test(t))continue;                          // 구성비
+      if(/^-?[\d,]+\.\d+$/.test(t))continue;             // 소수 = 구성비
+      if(t==='-'){vals.push(0);continue;}                // '-' = 0
+      if(/^-?[\d,]+$/.test(t)){vals.push(parseFloat(t.replace(/,/g,'')));continue;}
+      break;                                             // 다음 라벨 → 종료 (좌우 2열 침범 차단)
     }
+    if(vals.length>=(n||3))return vals.slice(0,n||3);
   }
   return null;
 }
-/* 결산연도 3개 추출 → 최신순 여부 판정 */
-function finYears(txt){
-  const m=txt.match(/(20\d{2})[.\-]\s?12[.\-]\s?31/g);
+/** 텍스트 셀 — 라벨 오른쪽에서 '다음 라벨(stop)'을 만나기 전까지.
+    ★ 값 자체가 한글이므로 라벨 자동판정을 쓸 수 없다. 같은 표의 라벨 목록을 명시적으로 넘긴다. */
+function finText(items,labels,stop){
+  const arr=Array.isArray(labels)?labels:[labels];
+  const norm=t=>String(t).replace(/\s+/g,'');
+  const stops=(stop||[]).map(norm);
+  for(const lb of arr){
+    const L=finFind(items,lb); if(!L)continue;
+    const out=[];
+    for(const it of finRowAfter(items,L)){
+      if(stops.some(sp=>norm(it.s)===sp||norm(it.s).startsWith(sp)))break;
+      out.push(it.s);
+    }
+    const v=out.join(' ').trim();
+    if(v)return v;
+  }
+  return '';
+}
+/** 기업개요 표의 라벨 목록 — finText 의 stop 으로 쓴다 */
+const FIN_INFO_LABELS=['업체명','기업명','기 업 명','설립일자','설 립 일 자','사업자번호','법인번호','법인(주민)번호',
+  '대표자','대 표 자','대표자명','홈페이지','홈 페 이 지','종업원수','상시종업원','상 시 종 업 원','기업규모',
+  '기업형태','기 업 형 태','상장일자','본사주소','본 사 주 소','공장주소','영업소주소','전화번호','팩스번호',
+  '표준산업분류','업종분류','업 종 분 류','업종','주요제품명','주요상품','주 요 제 품 명','계열명','주력업체',
+  '소속계열','주거래은행','주 거 래 은 행','당좌거래은행','결산월','경영규모','신용등급','평가일'];
+
+/** 결산연도 3개 (헤더에서) → 최신순 여부 판정 */
+function finYears(items){
+  const m=(items.text||'').match(/(20\d{2})[.\-]\s?\d{2}[.\-]\s?\d{2}/g);
   if(!m||m.length<3)return null;
   const ys=m.slice(0,3).map(x=>parseInt(x.slice(0,4)));
   return {years:ys,desc:ys[0]>ys[2]};
 }
 
-/* ── 본 파서 ── */
+/* ── 본 파서 (좌표 기반) ── */
 function finParse(pages,fmt){
-  /* 표 제목만으로 찾으면 오탐한다(예: 연구개발비 표에도 '손익계산서'라는 행이 있다).
-     반드시 그 표에만 있는 항목들을 함께 만족하는 페이지를 고른다. */
-  const pick=(...rxs)=>{for(const p of pages)if(rxs.every(r=>r.test(p)))return p;return '';};
+  /* 표 제목만으로 페이지를 고르면 오탐한다(연구개발비 표에도 '손익계산서'라는 행이 있다).
+     그 표에만 있는 항목을 함께 만족하는 페이지를 고른다. */
+  const pick=(...rxs)=>pages.find(p=>rxs.every(r=>r.test(p.text)))||null;
   const BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
   const IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
   const SH=fmt==='NICE'?pick(/주요주주/,/지분율/):pick(/주주현황/,/소유주식수|지분율/);
-  /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이라 값이 오염된다.
+  /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이다.
        10p '08.기업현황'(주요주주와 같은 페이지)은 단일 컬럼이므로 그쪽을 쓴다. */
   const IN=fmt==='NICE'?(pick(/주요주주/,/종업원수/,/표준산업분류/)||pick(/기업개요/,/종업원수/))
                        :pick(/기 업 명|기업명/,/설 립 일 자|설립일자/);
@@ -2549,71 +2607,80 @@ function finParse(pages,fmt){
   if(!IS)throw new Error('손익계산서를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
 
   const yr=finYears(BS)||{years:[0,0,0],desc:true};
-  const ord=a=>a?(yr.desc?a:[...a].reverse()):null;             // 항상 [최신,직전,전전]
-  if(!yr.desc)yr.years=[...yr.years].reverse();                 // 연도 라벨도 데이터와 동일하게 최신순
+  const ord=a=>a?(yr.desc?a:[...a].reverse()):null;      // 항상 [최신,직전,전전]
+  if(!yr.desc)yr.years=[...yr.years].reverse();
 
   const P=fmt==='NICE'?{
-    자본금:'자본금',이익잉여금:'이익잉여금',단기차입금:'단기차입금',장기차입금:'장기차입금',
-    매출채권:['(매출채권, 공사/영업미수금)','매출채권'],현금:['(현금 및 현금등가물)','현금'],
-    매출액:'매출액',영업이익:['영업이익(손실)','영업이익'],순이익:['당기순이익(손실)','당기순이익'],
-    이자비용:['(이자비용)','이자비용'],영업현금:['영업활동조달현금'],
-    퇴직충당:['퇴직급여충당부채'],가지급금:['단기대여금','(단기대여금)'],사채:['사채','(장기사채)'],
-    유동자산:['유동자산'],유동부채:['유동부채'],재고자산:['재고자산'],
-    매입채무:['(매입채무)','매입채무'],매출원가:['매출원가'],인건비:['(인건비)','인건비']
+    자본금:'자본금',이익잉여금:'이익잉여금',단기차입금:'(단기차입금)',장기차입금:'(장기차입금)',
+    사채:'(장기사채)',매출채권:'(매출채권, 공사/영업미수금)',현금:'(현금 및 현금등가물)',
+    유동자산:'유동자산',유동부채:'유동부채',재고자산:'재고자산',매입채무:'(매입채무)',
+    매출액:'매출액',매출원가:'매출원가',영업이익:'영업이익(손실)',순이익:'당기순이익(손실)',
+    이자비용:'(이자비용)',인건비:'(인건비)',영업현금:'영업활동조달현금',
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금'
   }:{
     자본금:['Ⅰ. 자본금(*)','자본금(*)'],이익잉여금:['Ⅴ. 이익잉여금(*)','이익잉여금(*)'],
-    단기차입금:['단기차입금(*)'],장기차입금:['장기차입금(*)'],매출채권:['매출채권(*)'],
-    현금:['현금 및 현금성자산(*)'],매출액:['Ⅰ. 매출액(*)'],영업이익:['Ⅴ. 영업이익(손실)'],
-    순이익:['ⅩⅡ. 당기순이익(순손실)','당기순이익(순손실)'],이자비용:['이자비용'],
-    영업현금:['4.영업활동후의 현금흐름액'],퇴직충당:['퇴직급여충당부채'],
-    가지급금:['단기대여금(*)'],사채:['사채(*)'],
-    유동자산:['Ⅰ. 유동자산(*)'],유동부채:['Ⅰ. 유동부채(*)'],재고자산:['2. 재고자산(*)'],
-    매입채무:['매입채무(*)'],매출원가:['Ⅱ. 매출원가(*)'],인건비:['급여(*)']
+    단기차입금:'단기차입금(*)',장기차입금:'장기차입금(*)',사채:'사채(*)',
+    매출채권:'매출채권(*)',현금:'현금 및 현금성자산(*)',
+    유동자산:'Ⅰ. 유동자산(*)',유동부채:'Ⅰ. 유동부채(*)',재고자산:'2. 재고자산(*)',
+    매입채무:'매입채무(*)',매출액:'Ⅰ. 매출액(*)',매출원가:'Ⅱ. 매출원가(*)',
+    영업이익:'Ⅴ. 영업이익(손실)',순이익:['ⅩⅡ. 당기순이익(순손실)','당기순이익(순손실)'],
+    이자비용:'이자비용',인건비:'급여(*)',영업현금:'4.영업활동후의 현금흐름액',
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금(*)'
   };
-
   const CF=pick(/영업활동후의 현금흐름액|영업활동조달현금/)||IS;
+
   const D={fmt,years:yr.years,
-    자산총계:ord(finRow(BS,'자산총계')),부채총계:ord(finRow(BS,'부채총계')),자본총계:ord(finRow(BS,'자본총계')),
-    자본금:ord(finRow(BS,P.자본금)),이익잉여금:ord(finRow(BS,P.이익잉여금)),
-    단기차입금:ord(finRow(BS,P.단기차입금)),장기차입금:ord(finRow(BS,P.장기차입금)),
-    사채:ord(finRow(BS,P.사채))||[0,0,0],
-    퇴직충당:ord(finRow(BS,P.퇴직충당)),가지급금:ord(finRow(BS,P.가지급금)),
-    매출채권:ord(finRow(BS,P.매출채권)),현금:ord(finRow(BS,P.현금)),
-    매출액:ord(finRow(IS,P.매출액)),영업이익:ord(finRow(IS,P.영업이익)),
-    순이익:ord(finRow(IS,P.순이익)),이자비용:ord(finRow(IS,P.이자비용)),
-    매출원가:ord(finRow(IS,P.매출원가)),인건비:ord(finRow(IS,P.인건비)),
-    유동자산:ord(finRow(BS,P.유동자산)),유동부채:ord(finRow(BS,P.유동부채)),
-    재고자산:ord(finRow(BS,P.재고자산)),매입채무:ord(finRow(BS,P.매입채무)),
-    영업현금:ord(finRow(CF,P.영업현금))
+    자산총계:ord(finCells(BS,'자산총계')), 부채총계:ord(finCells(BS,'부채총계')), 자본총계:ord(finCells(BS,'자본총계')),
+    자본금:ord(finCells(BS,P.자본금)), 이익잉여금:ord(finCells(BS,P.이익잉여금)),
+    단기차입금:ord(finCells(BS,P.단기차입금)), 장기차입금:ord(finCells(BS,P.장기차입금)),
+    사채:ord(finCells(BS,P.사채))||[0,0,0],
+    매출채권:ord(finCells(BS,P.매출채권)), 현금:ord(finCells(BS,P.현금)),
+    유동자산:ord(finCells(BS,P.유동자산)), 유동부채:ord(finCells(BS,P.유동부채)),
+    재고자산:ord(finCells(BS,P.재고자산)), 매입채무:ord(finCells(BS,P.매입채무)),
+    퇴직충당:ord(finCells(BS,P.퇴직충당)), 가지급금:ord(finCells(BS,P.가지급금)),
+    매출액:ord(finCells(IS,P.매출액)), 매출원가:ord(finCells(IS,P.매출원가)),
+    영업이익:ord(finCells(IS,P.영업이익)), 순이익:ord(finCells(IS,P.순이익)),
+    이자비용:ord(finCells(IS,P.이자비용)), 인건비:ord(finCells(IS,P.인건비)),
+    영업현금:ord(finCells(CF,P.영업현금))
   };
   for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
     if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
 
-  const g=(t,rx,i)=>{const m=(t||'').match(rx);return m?String(m[i||1]).trim():null;};
-  D.회사명=g(IN,/업체명\s*(.+?)\s*설립일자/)||g(IN,/기\s*업\s*명\s*(\S+)/)||g(IN,/업체명\s*(\S+)/)||'';
-  D.대표자=g(IN,/대표자\s*(?:명)?\s*[:：]?\s*(\S+)/)||g(IN,/대\s*표\s*자\s+(\S+)/)||'';
-  D.업종=g(IN,/표준산업분류\s*\([A-Z]\d+\)\s*(.+?)\s*$/m)
-       ||g(IN,/업\s*종\s*분\s*류\s*\([A-Z]\d+\)\s*(.+?)\s*$/m)
-       ||g(IN,/\([A-Z]\d{4,6}\)\s*([가-힣][^\n]{2,40})/)||'';
-  D.종업원=parseInt((g(IN,/종업원수\s*([\d,]+)\s*명?/)||g(IN,/상\s*시\s*종\s*업\s*원\s*([\d,]+)/)||'0').replace(/,/g,''))||0;
-  D.설립년=parseInt(g(IN,/설립\s*일\s*자\s*[:：]?\s*(\d{4})/)||'0')||0;
+  /* ── 기업개요 (좌표 기반 셀 + 명시적 stop 라벨) ── */
+  const S=FIN_INFO_LABELS;
+  D.회사명 = IN?finText(IN,['업체명','기 업 명','기업명'],S):'';
+  D.대표자 = (IN?finText(IN,['대표자명','대표자','대 표 자'],S):'').split(/\s+/)[0]||'';
+  const est = (IN?finText(IN,['설립일자','설 립 일 자'],S):'').match(/(\d{4})/);
+  D.설립년 = est?parseInt(est[1]):0;
+  const emp = (IN?finText(IN,['종업원수','상 시 종 업 원','상시종업원'],S):'').match(/([\d,]+)/);
+  D.종업원 = emp?parseInt(emp[1].replace(/,/g,'')):0;
+  const ind = IN?finText(IN,['표준산업분류','업 종 분 류','업종분류'],S):'';
+  D.업종 = ind.replace(/\([A-Z]\d+\)/g,'').replace(/\s+/g,' ').trim();
 
-  /* 주주 */
-  D.주주=[];D.총주식=0;D.액면=0;
-  if(fmt==='NICE'){
-    (SH.match(/^\s*(\S+)\s+([\d,]+)\s+([\d.]+)\s*%/gm)||[]).forEach(l=>{
-      const m=l.match(/^\s*(\S+)\s+([\d,]+)\s+([\d.]+)\s*%/);
-      if(m&&m[1]!=='합계')D.주주.push({명:m[1],주식:parseInt(m[2].replace(/,/g,'')),율:parseFloat(m[3])});
+  /* ── 주주 (행 단위 좌표 스캔) ── */
+  D.주주=[]; D.총주식=0; D.액면=0;
+  if(SH){
+    const rows=new Map();
+    SH.forEach(i=>{const k=Math.round(i.y/2)*2; if(!rows.has(k))rows.set(k,[]); rows.get(k).push(i);});
+    rows.forEach(r=>{
+      r.sort((a,b)=>a.x-b.x);
+      const nm=r[0]&&r[0].s;
+      if(!nm||nm==='합계'||finIsLabelLike(nm)===false)return;
+      const nums=r.slice(1).map(i=>i.s.replace(/\s|%/g,'')).filter(t=>/^[\d,]+(\.\d+)?$/.test(t));
+      if(nums.length<2)return;
+      const shares=parseInt(nums[0].replace(/,/g,''));
+      const rate=parseFloat(nums[1]);
+      if(!Number.isFinite(shares)||!Number.isFinite(rate)||rate<=0||rate>100)return;
+      if(shares<1)return;
+      D.주주.push({명:nm,주식:shares,율:rate});
     });
-    const tt=g(SH,/합계\s+([\d,]+)/); D.총주식=tt?parseInt(tt.replace(/,/g,'')):0;
-    D.액면=D.총주식?Math.round(D.자본금[0]*1e6/D.총주식):0;
-  }else{
-    (SH.match(/^\s*(\S+)\s+\S+\s+\S+\s+([\d,]+)\s+([\d.]+)\s*$/gm)||[]).forEach(l=>{
-      const m=l.match(/^\s*(\S+)\s+\S+\s+\S+\s+([\d,]+)\s+([\d.]+)\s*$/);
-      if(m&&m[1]!=='합계')D.주주.push({명:m[1],주식:parseInt(m[2].replace(/,/g,'')),율:parseFloat(m[3])});
-    });
-    D.액면=finNum(g(SH,/주당액면가\s*([\d,]+)\s*원/)||0);
-    D.총주식=parseInt((g(SH,/주식수\s*([\d,]+)\s*주/)||'0').replace(/,/g,''))||0;
+    const tot=(SH.text||'').match(/합계\s*([\d,]+)/);
+    const par=(SH.text||'').match(/주당액면가\s*([\d,]+)\s*원/);
+    const cnt=(SH.text||'').match(/주식수\s*([\d,]+)\s*주/);
+    D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
+    if(!D.총주식 && D.주주.length) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);
+    D.액면 = par?parseInt(par[1].replace(/,/g,''))
+                : (D.총주식?Math.round(D.자본금[0]*1e6/D.총주식):0);
   }
   const me=D.주주.find(s=>s.명===D.대표자);
   D.대표지분=me?me.율:0; D.대표주식=me?me.주식:0;
