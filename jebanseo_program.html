@@ -2833,11 +2833,17 @@ async function finPdfHandle(e){
     const pages=await finExtractPages(f);
     const fmt=finDetect(pages);
     if(!fmt)throw new Error('지원하지 않는 보고서입니다. 현재 CRETOP(크레탑)·KODATA·NICE 기업분석보고서를 지원합니다. 다른 양식은 아래 입력창에 직접 붙여넣어 주세요.');
-    finStat(`${fmt} 보고서 인식 · 수치 추출 중…`);
+    finStat('재무보고서 인식 · 수치 추출 중…');
     const D=finParse(pages,fmt);
     FIN.data=D; FIN.checks=finVerify(D); FIN.calc=finCalc(D); FIN.risks=finRisks(D,FIN.calc);
     FIN.src=fmt; FIN.fileName=f.name;
     const bad=FIN.checks.filter(c=>!c.ok).length;
+    /* 계산기(jarvia-calculators-browser.js)가 로드되지 않으면 주식평가·비율이 전부 비게 된다.
+       조용히 넘어가지 말고 명확히 알린다. */
+    if(!window.JarviaCalculators){
+      finStat('❌ 계산기 모듈(jarvia-calculators-browser.js)을 불러오지 못했습니다. 페이지를 새로고침(Ctrl+F5)하거나 관리자에게 문의해 주세요. 재무 수치는 읽었지만 주식평가·상속세는 계산할 수 없습니다.',1);
+      finRender(); return;
+    }
     finStat(`📄 ${f.name} · ${pages.length}쪽 중 필요한 부분만 읽었습니다.`);
     finRender();
     if(bad)toast('검산에서 '+bad+'건이 확인되었습니다. 내용을 확인해 주세요.',5000);
@@ -2862,7 +2868,7 @@ function finRender(){
   const row=(k,v,neg)=>`<tr><td>${esc(k)}</td><td class="v${neg?' neg':''}">${esc(v)}</td></tr>`;
   const bad=FIN.checks.filter(x=>!x.ok);
 
-  let h=`<div class="fc-h"><div class="fc-nm">${esc(D.회사명||'(회사명 미확인)')}</div><div class="fc-src">${esc(FIN.src)} · ${esc(FIN.fileName)}</div></div>`;
+  let h=`<div class="fc-h"><div class="fc-nm">${esc(D.회사명||'(회사명 미확인)')}</div><div class="fc-src">${esc(FIN.fileName)}</div></div>`;
   h+=`<div class="fc-sub">${esc(D.업종||'업종 미확인')}${D.설립년?' · 설립 '+(new Date().getFullYear()-D.설립년)+'년차':''}${D.종업원?' · 직원 '+D.종업원+'명':''} · 대표 ${esc(D.대표자||'—')}${D.대표지분?` (지분 ${D.대표지분}%)`:''}</div>`;
 
   h+=`<div class="fc-sec">재무 요약 · ${D.years[0]}년 결산</div><table>`;
@@ -2905,6 +2911,70 @@ function finRender(){
 
 function finSetStmt(t){ FIN.stmtType=(t==='연결')?'연결':'별도'; finRender(); }
 
+/* ── 화면 표시용 짧은 요약 (rawInput 에 덧붙임) ──
+   ★ 원시 재무수치(매출액·자산총계 등)는 절대 넣지 않는다. 넣으면 looksLikeFinancialTable 이
+     발동해 AI 재추출이 돌고, 5,000자 초과·응답 실패로 이어진다. */
+function finToBrief(){
+  if(!FIN.data)return '';
+  const D=FIN.data,K=finPick(FIN.calc),L=[];
+  L.push('[첨부 재무보고서 — 표에서 직접 추출 · 회계 항등식 검산 완료]');
+  L.push(`${D.회사명||''}${D.업종?' · '+D.업종:''}${D.설립년?' · 설립 '+D.설립년+'년('+(new Date().getFullYear()-D.설립년)+'년차)':''}${D.종업원?' · 상시종업원 '+D.종업원+'명':''}`);
+  L.push(`대표 ${D.대표자||''} · 지분 ${D.대표지분}%${D.대표주식?` (${D.대표주식.toLocaleString()}주 / 총 발행 ${D.총주식.toLocaleString()}주 · 1주당 액면가 ${D.액면.toLocaleString()}원)`:''}`);
+  L.push('');
+  L.push('[계산기 확정값 — 그대로 인용할 것. 재계산·환산 금지]');
+  if(K.부채비율!=null)L.push(`· 부채비율 ${K.부채비율.toFixed(1)}%`);
+  if(K.이자보상!=null)L.push(`· 이자보상배율 ${K.이자보상.toFixed(2)}배`);
+  if(K.주당){
+    const N=FIN.calc&&FIN.calc.npv;
+    if(N)L.push(`· 1주당 순손익가치 ${N.perShareValue.toLocaleString()}원 (상증령 §56, 3개년 3:2:1 가중평균 ÷ 환원율 10%)`);
+    L.push(`· 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (상증령 §54, 순손익 3 : 순자산 2)`);
+    L.push(`· 대표 보유지분 평가액 ${(K.대표지분가치/1e8).toFixed(2)}억원`);
+    if(K.상속세!=null)L.push(`· 대표 유고 시 주식분 예상 상속세 ${(K.상속세/1e8).toFixed(2)}억원 (배우자 있음·자녀 1인 가정, 주식만 반영)`);
+  }
+  if(FIN.risks&&FIN.risks.length){
+    L.push('');
+    L.push('[탐지 리스크 — 대화 권장 순서]');
+    FIN.risks.slice(0,4).forEach((r,i)=>L.push(`${i+1}. [${r.lv}] ${r.t} — ${r.d}`));
+  }
+  L.push('');
+  L.push('[미확인 — 추측 금지. 필요 시 "CEO 확인 필요"로 표기]');
+  L.push('· 대표 급여 / 임원 퇴직금 규정(정관 배수) / 대표 나이 / 가족관계 / 후계자 유무 / 개인 부동산·금융자산 / 사전증여 이력');
+  L.push('');
+  L.push('[주의 — 단정적 서술 금지]');
+  L.push(`· 재무제표 구분을 ${FIN.stmtType||'별도'}로 가정했습니다.`);
+  L.push('· 상속세는 대표 보유 주식만 반영한 추정입니다. 개인 부동산·금융자산이 더해지면 크게 늘어납니다.');
+  const bad=FIN.checks.filter(x=>!x.ok);
+  bad.forEach(x=>L.push(`· 검산 경고: ${x.n} — ${x.d}`));
+  if(D.대표지분===0)L.push('· ※ 대표 지분 0% → 상속·가업승계·주식가치 논점은 다루지 말 것.');
+  return L.join('\n');
+}
+
+/* ── 재무자료 객체 (AI 추출 우회) ──
+   기존 pendingFinancialData 형식으로 직접 만든다. extracted 의 금액 단위는 '만원'.
+   재무보고서는 백만원 단위이므로 ×100 하여 만원으로 환산한다. */
+function finToPending(){
+  if(!FIN.data)return null;
+  const D=FIN.data;
+  const M=a=>(a&&Number.isFinite(a[0]))?Math.round(a[0]*100):null;   // 백만원 → 만원
+  return {
+    baseYear:D.years[0], comparisonYear:D.years[1],
+    statementType:FIN.stmtType||'별도', unit:'백만원',
+    source:'첨부 재무보고서 PDF 자동추출(표 좌표 기반) · 회계 항등식 검산 완료',
+    extracted:{
+      revenue:            M(D.매출액),
+      operatingProfit:    M(D.영업이익),
+      netProfit:          M(D.순이익),
+      totalAssets:        M(D.자산총계),
+      totalLiabilities:   M(D.부채총계),
+      totalEquity:        M(D.자본총계),
+      retainedEarnings:   M(D.이익잉여금),
+      cashAndCashEquivalents: M(D.현금),
+      borrowings:         M(D.차입금),
+      loanAmount:         M(D.가지급금)
+    }
+  };
+}
+
 /* ── 제안서 입력용 텍스트 ──
    ★ 기존 clientFinancialValidation() 이 요구하는 4개 메타를 반드시 포함해야 한다:
       기준연도 / 비교연도 / 별도·연결 / 금액 단위.
@@ -2923,7 +2993,7 @@ function finToText(){
   L.push('');
   /* ★★ 이 한 줄이 기준연도·비교연도·별도/연결·단위를 모두 확정한다. 절대 형식 변경 금지 ★★ */
   L.push(`[재무 현황 — ${ST} 재무제표, 단위 백만원, 기준연도 ${Y[0]} / 비교연도 ${Y[1]}]`);
-  L.push(`(출처: ${FIN.src} 재무보고서 PDF 자동추출 · 회계 항등식 검산 완료)`);
+  L.push('(첨부 재무보고서 PDF에서 표 좌표 기준으로 직접 추출 · 회계 항등식 검산 완료)');
   P('연매출',D.매출액);
   P('매출원가',D.매출원가);
   P('영업이익',D.영업이익);
@@ -3123,6 +3193,14 @@ async function startInterview(){
   // ★ 인터뷰가 누적 추출한 구조화 값 모으기(매 라운드 전체 대화 기반) → 생성 때 params로 전달해 막판 단일 파싱 누락 보완
   if(data.collected && typeof data.collected==='object'){ collectedParams={...collectedParams, ...data.collected}; }
   if(data.confirmationRequired&&topic==='기업컨설팅'&&looksLikeFinancialTable(rawInput)){
+    /* ★ PDF 첨부로 이미 표에서 직접 추출·검산까지 끝난 상태라면 AI 재추출을 절대 하지 않는다.
+         (사용자가 요청사항에 "매출 117억…"처럼 숫자를 적으면 rawInput 이 재무표로 판정되어
+          여기로 들어오는데, 재추출하면 정확한 값을 AI 추정값으로 덮어쓰게 된다.) */
+    if(FIN.data && (pendingFinancialData||confirmedFinancialData)){
+      if(confirmedFinancialData) return startInterview();          // 이미 확인 완료 → 그대로 진행
+      pendingGen={field:'financialConfirm'};
+      return aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+    }
     return beginFinancialExtraction(financialSourceText||rawInput);
   }
   // 분야 불일치 → 임의로 안 바꾸고, 사용자에게 어느 분야인지 물어봄 (확정 상태면 안 물음)
@@ -3204,10 +3282,11 @@ async function startSession(){
   if(topic==='기업컨설팅' && !companyName){ toast('회사명을 입력해 주세요.'); var _c=document.getElementById('startcompany'); if(_c)_c.focus(); return; }
   rawInput=document.getElementById('startin').value.trim();
   if(rawInput.length>5000){toast('입력은 최대 5,000자입니다. 내용을 나누어 입력해 주세요.');return;}
-  // ★ 재무보고서 PDF 첨부분 병합 — 기업컨설팅에 한함. 사용자 입력 5,000자 한도와 별도로 뒤에 덧붙인다.
+  /* ★ 재무보고서 PDF 첨부 — 원시 재무수치는 pendingFinancialData 로 직접 주입되므로 여기서는
+       AI가 알아야 할 '요약'만 덧붙인다. (원시수치를 여기 또 넣으면 AI 재추출이 돌아 실패한다) */
   if(topic==='기업컨설팅' && FIN.data){
-    const _fin=finToText();
-    if(_fin) rawInput=(rawInput?rawInput+'\n\n':'')+_fin;
+    const _b=finToBrief();
+    if(_b) rawInput=(rawInput?rawInput+'\n\n':'')+_b;
   }
   origRequest=rawInput;
   // ★ 입구 잔액 하드 게이트 — 무료도 없고 포인트+잔액도 부족하면 진입(생성) 자체를 막고 충전 유도
@@ -3236,11 +3315,25 @@ async function startSession(){
     paint();
     interviewRound=0; _lastRoundAsked=false; totalAsked=0; collectedParams={};
     interviewState={coverageScore:0,missingCritical:[],missingUseful:[],answeredUnknown:[],activeIssueGroups:[],ready:false,readyReason:''};
-    pendingFinancialData=null;confirmedFinancialData=null;financialValidation=[];financialSourceText='';financialSourceParts=[];financialTableDetected=topic==='기업컨설팅'&&looksLikeFinancialTable(rawInput);
-    if(financialTableDetected){
-      aiReply('재무자료로 보이는 내용을 먼저 구조화해 보여드리겠습니다. 확인 전에는 계산이나 제안서에 반영하지 않습니다.');
-      beginFinancialExtraction(rawInput);
-    }else startInterview();
+    pendingFinancialData=null;confirmedFinancialData=null;financialValidation=[];financialSourceText='';financialSourceParts=[];
+    /* ★ PDF 첨부로 좌표 파서가 이미 정확히 추출했다면 AI 재추출을 하지 않는다.
+         AI에게 다시 읽히면 (1) 5,000자 제한에 걸리고 (2) 응답이 비면 실패하며 (3) 정확도가 떨어진다.
+         표에서 직접 읽은 값을 그대로 주입하는 것이 가장 정확하고 안전하다. */
+    if(topic==='기업컨설팅' && FIN.data){
+      pendingFinancialData=finToPending();
+      financialValidation=clientFinancialValidation(pendingFinancialData);
+      financialTableDetected=true;
+      financialSourceText=finToText(); financialSourceParts=[financialSourceText];
+      pendingGen={field:'financialConfirm'};
+      aiReply('첨부하신 <b>재무보고서</b>에서 수치를 <b>표에서 직접</b> 읽었습니다. (AI 추정이 아닙니다 · 회계 항등식 검산 '+FIN.checks.filter(c=>c.ok).length+'/'+FIN.checks.length+' 통과)');
+      aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+    }else{
+      financialTableDetected=topic==='기업컨설팅'&&looksLikeFinancialTable(rawInput);
+      if(financialTableDetected){
+        aiReply('재무자료로 보이는 내용을 먼저 구조화해 보여드리겠습니다. 확인 전에는 계산이나 제안서에 반영하지 않습니다.');
+        beginFinancialExtraction(rawInput);
+      }else startInterview();
+    }
   },400);
 }
 function fillChips(p){
