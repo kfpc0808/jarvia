@@ -89,6 +89,16 @@
   .ckrow .cksub{font-size:11px;font-weight:400;color:var(--slate);}
   /* 🧮 계산기 버튼 (슬라이드 내장) */
   .calcbtnwrap{margin-top:8px;}
+  /* 📎 근거 링크 카드 (법령·예규·판례) — 계산기 버튼과 동일 계열, 클릭 시 원문 새 창 */
+  .refwrap{margin-top:8px;display:flex;flex-direction:column;gap:7px;}
+  .refbtn{display:flex;align-items:center;gap:12px;text-decoration:none;background:linear-gradient(135deg,#1B2A4A,#24375f);border:1px solid rgba(200,167,90,.45);border-radius:12px;padding:11px 15px;transition:border-color .15s,box-shadow .15s,transform .1s;}
+  .refbtn:hover{border-color:var(--gold);box-shadow:0 5px 18px rgba(0,0,0,.22);transform:translateY(-1px);}
+  .refbtn .rbic{font-size:19px;flex:none;}
+  .refbtn .rbtx{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .refbtn .rbtx b{color:#fff;font-size:13.5px;font-weight:700;line-height:1.4;word-break:keep-all;}
+  .refbtn .rbsub{color:#AEB6C2;font-size:11.5px;line-height:1.4;}
+  .refbtn .rbgo{flex:none;color:var(--gold);font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .refnote{font-size:11px;color:#8896A8;line-height:1.5;margin-top:3px;word-break:keep-all;}
   .calcbtn{display:flex;align-items:center;gap:13px;text-decoration:none;background:linear-gradient(135deg,#1B2A4A,#24375f);border:1px solid rgba(200,167,90,.45);border-radius:12px;padding:14px 17px;transition:border-color .15s,box-shadow .15s,transform .1s;}
   .calcbtn:hover{border-color:var(--gold);box-shadow:0 5px 18px rgba(0,0,0,.22);transform:translateY(-1px);}
   .calcbtn .cbic{font-size:24px;flex:none;}
@@ -904,6 +914,7 @@ function renderContent(items,idx){
     else if(it&&it.type==='chart'){inner=renderChart(it);kind='blk';}
     else if(it&&it.type==='sim'){inner=renderSim(it);kind='blk';}
     else if(it&&it.type==='calc'){inner=renderCalcButton(it);kind='blk';}
+    else if(it&&it.type==='ref'){inner=renderRefCard(it);if(!inner)return;kind='blk';}
     else if(it&&it.type==='cmpsim'){inner=renderCompareSim(it);kind='blk';}
     else if(it&&it.type==='minisim'){inner=renderMiniSim(it);kind='blk';}
     else return;
@@ -1443,6 +1454,32 @@ function calcUrl(c){return CALC_BASE+encodeURI(c.file).replace(/#/g,'%23');}
 function calcById(id){return CALC_CATALOG.find(c=>c.id===id)||null;}
 function openCalcWindow(id){var c=calcById(id);if(!c)return;window.open(calcUrl(c),'_blank','noopener');}
 /* 슬라이드 콘텐츠 type:'calc' → 버튼 박스로 렌더 (다운로드 파일에도 남음) */
+/* ===== 📎 근거 링크 카드 (법령·예규·판례) — 백엔드 legal_refs 재고에서 온 항목만 렌더
+   · url 없는 항목은 표시하지 않는다 (링크 없는 근거 카드는 만들지 않는다)
+   · 다운로드 HTML·PDF 어디서든 눌러서 원문이 열린다 (PDF는 doc.link 로 좌표 링크 부착) */
+function renderRefCard(it){
+  var items=(it&&Array.isArray(it.items))?it.items:[];
+  var ok=items.filter(function(x){ return x && /^https?:\/\//i.test(String(x.url||'')); });
+  if(!ok.length)return null;                      // 링크 있는 항목이 하나도 없으면 카드 자체를 만들지 않음
+
+  var w=elt('div','refwrap');
+  var html='';
+  ok.forEach(function(x){
+    var isLaw=(x.kind==='law');
+    var ic=isLaw?'📎':'⚖';
+    var sub=isLaw
+      ? ('국가법령정보센터'+(x.docNo?(' · '+x.docNo):''))
+      : ((x.docNo?(x.docNo+' · '):'')+'원문 보기');
+    html+='<a class="refbtn" href="'+_scAttr(x.url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+
+      '<span class="rbic">'+ic+'</span>'+
+      '<span class="rbtx"><b>'+_scAttr(x.title||'근거자료')+'</b><span class="rbsub">'+_scAttr(sub)+'</span></span>'+
+      '<span class="rbgo">열기 →</span></a>';
+  });
+  html+='<div class="refnote">※ 참고 목적의 자료이며, 개별 사안에 따라 결론이 달라질 수 있습니다.</div>';
+  w.innerHTML=html;
+  ['mousedown','pointerdown','touchstart'].forEach(function(ev){w.addEventListener(ev,function(e){e.stopPropagation();});});
+  return w;
+}
 function renderCalcButton(it){
   var c=calcById(it.calcId)||{name:it.name||'계산기',id:it.calcId,file:it.file||''};
   var url=it.url||(c.file?calcUrl(c):'');
@@ -2812,10 +2849,10 @@ async function exportPDF(){
       const img=cv.toDataURL('image/jpeg',0.92);
       if(p)doc.addPage();
       doc.addImage(img,'JPEG',0,0,PW,PH,undefined,'FAST');
-      // 4) 🧮 계산기 버튼 → PDF에서 클릭 가능한 링크로
+      // 4) 🧮 계산기 버튼 + 📎 근거 링크(법령·예규·판례) → PDF에서 클릭 가능한 링크로
       const rp=pg.getBoundingClientRect();
       const k=PW/(pg.offsetWidth||1);
-      pg.querySelectorAll('a.calcbtn[href]').forEach(function(a){
+      pg.querySelectorAll('a.calcbtn[href], a.refbtn[href]').forEach(function(a){
         const url=a.getAttribute('href')||'';
         if(!/^https?:/i.test(url))return;
         const r=a.getBoundingClientRect();
