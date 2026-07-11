@@ -840,7 +840,7 @@ a{color:inherit;text-decoration:none}
             <div class="dtTitle">자가진단</div>
             <div class="dtSub">보장·은퇴·상속 3종</div>
           </button>
-          <button type="button" class="dualTile mpEntry" style="flex:1;position:relative" onclick="ccRequirePin().then(function(p){if(p)myPlacesOpen();})" aria-label="나의 장소 열기">
+          <button type="button" class="dualTile mpEntry" style="flex:1;position:relative" onclick="if(window.ccIsLocked&&window.ccIsLocked()){window.ccLockToast&&window.ccLockToast();return;}ccRequirePin().then(function(p){if(p)myPlacesOpen();})" aria-label="나의 장소 열기">
             <i class="ti ti-map-pin dtIc dtIc--teal"></i>
             <div class="dtTitle">나의 장소</div>
             <div class="dtSub">맛집·가볼 곳</div>
@@ -2113,8 +2113,9 @@ async function init(){
     onAuthStateChanged(auth,user=>{
       currentUser=user;
       isOwnerView=user&&user.uid===fcUid;
-      // ★ 컨설턴트 채널 방문자에겐 사적 영역(나의 장소) 숨김 — 컨설턴트 채널은 PIN 체계가 없어 소유자만 접근. 2026-07
-      if(!window._ccSlug&&!isOwnerView){try{const _mp=document.querySelector('.mpEntry');if(_mp)_mp.style.display='none';}catch(_e){}}
+      // ★ 2026-07: 구조 통일 — 컨설턴트 채널 방문자에게도 사적 영역(나의 장소·나만의 보관함)을 고객홈페이지와 동일하게 노출.
+      //   단 🔒 잠금 — 클릭 시 안내 토스트만 뜨고 내용에는 절대 접근 불가 (ccIsLocked 관문).
+      try{ccInjectVaultZone();ccApplyLockUI();}catch(_e){}
       if(isOwnerView&&!window._ccSlug){ // ★ channelV2: 고객 채널 화면에서는 컨설턴트 도구(편집·매뉴얼·⋮·새요청 알림바) 미표시
         // ★ 자가치유: loginIdLower 미보유/불일치 시 본인 users 문서에만 조용히 보강 (대소문자 무시 조회 완결 — 새 파일·관리자 작업 불필요)
         try{const _need=((fcData&&fcData.loginId)||'').toLowerCase();if(_need&&fcData.loginIdLower!==_need){updateDoc(doc(db,'users',fcUid),{loginIdLower:_need}).catch(()=>{});}}catch(_e){}
@@ -2203,6 +2204,7 @@ async function renderCatalog(){
   $('cardDashboard').href=`/client-finance.html?fc=${encodeURIComponent(loginId)}`;
   // ★ 아침독서 — consultants 컬렉션의 morningBookzipUrl (b값 자동 증가) 또는 morningReadingUrl 사용
   setupMorningCard();
+  applyDashboardRetire(); // ★ 2026-07: 재무 대시보드 서비스 종료 — 전면 숨김 + 아침독서 풀폭 승격
   // 큐레이션 + 자료실 + 후기 동시 로드
   await Promise.all([
     loadCuratedPicks(),
@@ -5106,6 +5108,7 @@ window.ccStorage=(function(){
    흐름: 로그인(기기 1회) → 미연결이면 연결 화면 자동 → 완료되면 원래 기능으로 자동 진입.
    연결은 계정당 최초 1회 — 이후 모든 금고 기능·나의 장소는 그냥 열림. */
 async function ccVaultGate(next){
+  if(ccIsLocked()){ccLockToast();return;}             // 0) ★ 컨설턴트 채널 방문자 — 내용 접근 차단 (2026-07)
   const pin=await ccRequirePin();if(!pin)return;      // 1) 내 홈페이지 로그인
   let con=false;try{con=ccStorage.connected();}catch(_e){}
   if(con){if(typeof next==='function')next();return;} // 2) 이미 연결 — 바로 진입
@@ -5209,13 +5212,53 @@ function ccFormBadges(tries){
   if(links[0])mk('ccFbL','🏠 홈',links[0].href,'left');
   if(links[1])mk('ccFbR','전문위원',links[1].href,'right');
 }
-function ccInjectVaultZone(){
-  if((!window._ccSlug&&!(isOwnerView&&loginId))||document.getElementById('ccVaultZone'))return; // ★ 고객 채널 또는 컨설턴트 소유자뷰
-  const dl=document.getElementById('cardDailyLink');if(!dl||!dl.parentNode)return;
-  // 재무대시보드 삭제 + 아침독서 풀폭 (AI 재무건강검진은 자산관리로 흡수)
-  const db=document.getElementById('cardDashboard');if(db)db.style.setProperty('display','none','important');
+/* ── 🔒 잠금 관문 — 컨설턴트 채널 방문자(고객 슬러그 없음 + 소유자 아님)는 사적 영역 접근 불가 ── */
+function ccIsLocked(){return !window._ccSlug&&!isOwnerView;}
+window.ccIsLocked=ccIsLocked;
+function ccLockToast(){try{toast('본인 홈페이지에서만 이용할 수 있습니다','info');}catch(_e){}}
+window.ccLockToast=ccLockToast;
+/* 🔒 배지 부착/해제 (보관함 4종 · 나의 장소) — ★ 가역(可逆): onAuthStateChanged가 재발화해
+   소유자로 승격되면 잠금이 자동 해제된다. 단방향이면 오너 화면에 🔒이 박제되므로 반드시 양방향. */
+function ccApplyLockUI(){
+  const locked=ccIsLocked();
+  const badge=el=>{
+    if(!el||el.dataset.ccLock)return;
+    el.dataset.ccLock='1';
+    if(getComputedStyle(el).position==='static')el.style.position='relative';
+    el.style.opacity='.62';
+    const b=document.createElement('span');
+    b.setAttribute('data-cclockbadge','1');
+    b.style.cssText='position:absolute;top:9px;right:9px;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#EEF1F6;color:#8A93A3;font-size:11px;pointer-events:none;z-index:2';
+    b.innerHTML='<i class="ti ti-lock"></i>';
+    el.appendChild(b);
+  };
+  const unbadge=el=>{
+    if(!el||!el.dataset.ccLock)return;
+    delete el.dataset.ccLock;
+    el.style.opacity='';
+    const b=el.querySelector('[data-cclockbadge]');if(b)b.remove();
+  };
+  const t=[];
+  const mp=document.querySelector('.mpEntry');if(mp)t.push(mp);
+  const z=document.getElementById('ccVaultZone');
+  if(z)z.querySelectorAll('[data-vk]').forEach(e=>t.push(e));
+  t.forEach(locked?badge:unbadge);
+}
+window.ccApplyLockUI=ccApplyLockUI;
+/* ── 📉 재무 대시보드 서비스 종료 — 전면 숨김 + 아침독서 풀폭 승격 (2026-07) ──
+   ⚠️ DOM은 유지(display:none만). renderCatalog의 $('cardDashboard').href 대입에 null 가드가 없어 제거 불가. */
+function applyDashboardRetire(){
+  const dbc=document.getElementById('cardDashboard');
   const mo=document.getElementById('cardMorning');
-  if(mo){ // ★ 아침독서 → 흰색 타일 (링크·추적 동작은 원형 유지)
+  const grid=(dbc&&dbc.parentElement)||(mo&&mo.parentElement)||null;
+  if(dbc)dbc.style.setProperty('display','none','important');
+  const moHidden=!mo||mo.style.display==='none';
+  if(grid){
+    grid.style.gridTemplateColumns='1fr';
+    if(moHidden)grid.style.setProperty('display','none','important'); // 대시보드·아침독서 모두 없음 → 빈 그리드 제거
+  }
+  if(!moHidden&&!mo.dataset.moFull){ // ★ 아침독서 → 골드 풀폭 타일 (링크·추적 동작은 원형 유지)
+    mo.dataset.moFull='1';
     mo.style.gridColumn='1 / -1';
     mo.style.cssText+=';display:flex;flex-direction:row;align-items:center;gap:11px;background:#FEFCF6;border:1px solid #EAD9B4;border-left:3px solid #C9A96E;border-radius:0 14px 14px 0;padding:13px 15px;box-shadow:none;text-decoration:none;text-align:left;min-height:0';
     mo.innerHTML='<span style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:#FBF1DD;color:#B08D4F;font-size:18px;flex-shrink:0"><i class="ti ti-book-2"></i></span>'
@@ -5223,6 +5266,11 @@ function ccInjectVaultZone(){
       +'<small style="display:block;font-size:11px;color:#B08D4F;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">매주 월요일 · 분야별 한 권씩</small></span>'
       +'<i class="ti ti-chevron-right" style="color:#C9A96E;font-size:16px;flex-shrink:0"></i>';
   }
+}
+window.applyDashboardRetire=applyDashboardRetire;
+function ccInjectVaultZone(){
+  if(document.getElementById('ccVaultZone'))return; // ★ 2026-07: 방문자 차단 해제 — 전원 노출(잠금은 ccVaultGate/ccApplyLockUI가 담당). 중복 주입만 방지.
+  const dl=document.getElementById('cardDailyLink');if(!dl||!dl.parentNode)return;
   const z=document.createElement('div');z.id='ccVaultZone';
   const card=(k,ic,t,d)=>'<div data-vk="'+k+'" style="background:var(--jv-card);border:1px solid var(--jv-card-bd);border-radius:13px;padding:12px 12px 11px;cursor:pointer;position:relative;box-shadow:0 1px 2px rgba(16,24,40,.045),0 1px 3px rgba(16,24,40,.03)"><span style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:#EBF0FA;color:#2D5DAE;font-size:18px"><i class="ti '+ic+'"></i></span><b style="display:block;font-size:13.5px;font-weight:600;margin-top:8px;color:var(--jv-ink);letter-spacing:-.2px">'+t+'</b><small style="display:block;font-size:11px;color:var(--jv-mute);margin-top:2px;line-height:1.4">'+d+'</small></div>';
   z.innerHTML='<div class="secLabel" style="margin-top:18px"><span class="slIc" style="background:#EBF0FA;color:#2D5DAE"><i class="ti ti-lock"></i></span><span class="slT">나만의 보관함</span><small class="slS">나만 보여요</small></div>'
@@ -5238,6 +5286,7 @@ function ccInjectVaultZone(){
     const k=c.dataset.vk;
     ccVaultGate(()=>{({asset:ccAssetView,cal:ccCalView,pwd:ccPwdView,docs:ccDocsView}[k]||ccAssetView)();});
   });
+  try{ccApplyLockUI();}catch(_e){} // ★ 방문자에겐 🔒 배지
 }
 /* ── 준비 중 시트 (캘린더·금고·문서함 — 순차 공개) ── */
 function ccComingSheet(k){
