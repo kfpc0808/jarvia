@@ -3179,6 +3179,78 @@ function calcDeemedInterest(params) {
 // ═══════════════════════════════════════════════════════════
 
 /**
+ * 1주당 순손익가치 산정 (상증세법 시행령 제56조)
+ *
+ * calcUnlistedStockValue 의 earningsValue 입력값을 만들어 주는 전처리 계산기.
+ * 최근 3개 사업연도 순손익액을 3:2:1 로 가중평균한 뒤 순손익가치환원율(기본 10%)로 나눈다.
+ *
+ * @param {Object}   params
+ * @param {number[]} params.netIncomes  - 최근 3개년 순손익액 [당기, 1년전, 2년전] (원)
+ * @param {number}   params.totalShares - 총 발행주식수
+ * @param {number}   [params.capRate=0.1] - 순손익가치환원율 (상증령 §56 ③, 기본 10%)
+ * @returns {Object} earningsValue(회사 전체 순손익가치) 및 산출 근거
+ */
+function calcNetProfitValue(params) {
+  const {
+    netIncomes = [],
+    totalShares = 0,
+    capRate = 0.1,
+  } = params || {};
+
+  const incomes = Array.isArray(netIncomes) ? netIncomes.slice(0, 3).map(Number) : [];
+
+  if (incomes.length < 3
+      || !incomes.every(Number.isFinite)
+      || !Number.isFinite(Number(totalShares)) || Number(totalShares) <= 0
+      || !Number.isFinite(Number(capRate)) || Number(capRate) <= 0) {
+    return {
+      calculated: false,
+      calculator: 'calcNetProfitValue',
+      missingInputs: [],
+      invalidInputs: ['input'],
+      warnings: ['최근 3개 사업연도 순손익액(3개)과 총 발행주식수를 확인해 주세요.'],
+    };
+  }
+
+  const shares = Number(totalShares);
+  const rate   = Number(capRate);
+
+  // 가중평균 순손익액 = (당기×3 + 1년전×2 + 2년전×1) ÷ 6
+  const weightedNetIncome = (incomes[0] * 3 + incomes[1] * 2 + incomes[2] * 1) / 6;
+
+  // 1주당 순손익액 → 환원율로 나누어 1주당 순손익가치 산출
+  const perShareNetIncome = weightedNetIncome / shares;
+  const perShareValue     = perShareNetIncome / rate;
+
+  // 회사 전체 순손익가치 (= calcUnlistedStockValue 의 earningsValue 입력값)
+  const earningsValue = perShareValue * shares;
+
+  const warnings = [];
+  if (weightedNetIncome <= 0) {
+    warnings.push('가중평균 순손익액이 0 이하입니다. 이 경우 순손익가치를 0으로 보고 순자산가치만으로 평가해야 할 수 있으므로 세무 전문가 확인이 필요합니다.');
+  }
+  if (incomes.some(value => value < 0)) {
+    warnings.push('결손 사업연도가 포함되어 있습니다. 상증세법상 순손익액은 각 사업연도 소득금액을 기준으로 세무조정하므로 실제 값과 달라질 수 있습니다.');
+  }
+  warnings.push('순손익액을 재무제표상 당기순이익으로 사용했습니다. 상증세법 시행령 제56조의 각 사업연도 소득금액 기준 세무조정(익금·손금 가산 항목)은 반영되지 않았습니다.');
+
+  return {
+    calculated: true,
+    calculator: 'calcNetProfitValue',
+    netIncomes: incomes,
+    weights: [3, 2, 1],
+    weightedNetIncome: Math.round(weightedNetIncome),   // 가중평균 순손익액 (원)
+    perShareNetIncome: Math.round(perShareNetIncome),   // 1주당 순손익액 (원)
+    capRate: rate,                                      // 순손익가치환원율
+    perShareValue: Math.round(perShareValue),           // 1주당 순손익가치 (원)
+    earningsValue: Math.round(earningsValue),           // ★ 회사 전체 순손익가치 (원)
+    totalShares: shares,
+    estimateOnly: true,
+    warnings,
+  };
+}
+
+/**
  * 비상장주식 순자산가치/순손익가치 가중평균 평가
  * @param {Object} params
  * @param {number} params.netAssets - 순자산가치 (회사 전체, 원)
@@ -3435,6 +3507,7 @@ const _Corp_exports = {
   calcDeemedInterest,
 
   // 비상장주식
+  calcNetProfitValue,
   calcUnlistedStockValue,
 
   // 급여 vs 배당
