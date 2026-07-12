@@ -979,12 +979,16 @@ function autoGrow(el,max){if(!el)return;el.style.height='auto';el.style.height=M
 function toast(msg,ms){const t=document.getElementById('jtoast');if(!t)return;t.textContent=msg;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),ms||3400);}
 const IS_MOBILE=!!(window.matchMedia&&window.matchMedia('(max-width:820px)').matches);
 function tidyHTML(h){return (h||'').replace(/<div>(?:\s|&nbsp;|<br\s*\/?>)*<\/div>/gi,'').replace(/(?:<br\s*\/?>\s*){2,}/gi,'<br>');}
-function setRich(el,val){val=val||'';if(/<\/?(?:b|i|u|span|font|br|div|strong|em|p)\b/i.test(val))el.innerHTML=tidyHTML(val);else el.textContent=val;}
+/* ★ N3 (2026-07-12): 슬라이드 텍스트 새니타이즈 — setRich/setLines는 AI 출력과 '저장 자료 열기'로
+   불러온 외부 파일의 문자열을 innerHTML로 넣는 유일한 두 관문이다. 조작된 공유 파일의
+   <img onerror=…>·javascript: 링크가 열기만으로 실행되는 것을 채팅과 동일한 필터로 차단한다.
+   (표·카드·스탯·노트는 textContent라 원래 안전 / 저장 파일은 정화된 DOM을 내보내므로 함께 안전해짐) */
+function setRich(el,val){val=val||'';if(/<\/?(?:b|i|u|span|font|br|div|strong|em|p)\b/i.test(val))el.innerHTML=sanitizeMessageHtml(tidyHTML(val));else el.textContent=val;}
 function cleanRich(el){let h=tidyHTML(el.innerHTML||'').trim();h=h.replace(/^(?:<br\s*\/?>|&nbsp;|\s)+/i,'').replace(/(?:<br\s*\/?>|&nbsp;|\s)+$/i,'');return h;}
 function setLines(el,val){val=val||'';
-  if(/<div/i.test(val)){el.innerHTML=tidyHTML(val);return;}
+  if(/<div/i.test(val)){el.innerHTML=sanitizeMessageHtml(tidyHTML(val));return;}
   if(val===''){el.innerHTML='<div><br></div>';return;}
-  el.innerHTML=String(val).split(/<br[^>]*>/i).map(function(l){return '<div>'+(l===''?'<br>':l)+'</div>';}).join('');
+  el.innerHTML=sanitizeMessageHtml(String(val).split(/<br[^>]*>/i).map(function(l){return '<div>'+(l===''?'<br>':l)+'</div>';}).join(''));
 }
 /* 글자 편집 툴바 */
 let edTarget=null;
@@ -2131,9 +2135,20 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
   if(txt.length>5000){aiReply('재무자료는 한 번에 최대 <b>5,000자</b>까지 처리할 수 있습니다. 내용을 나누어 입력해 주세요.');return false;}
   const _confirmedSnapshot=confirmedFinancialData;   // 실패 시 원복용 — 확정 상태를 무효화 전에 보관
   if(!appendMode)financialSourceParts=[];financialSourceParts.push(txt);financialSourceText=financialSourceParts.join('\n');financialTableDetected=true;confirmedFinancialData=null;
+  /* ★ F1 (2026-07-12): PDF 좌표 추출본(기계 생성 포맷)은 AI 없이 결정적 역파싱.
+     빈 응답 실패·환각·메타 지시문 충돌을 원천 차단한다. 실패 시 null → 아래 AI 경로 폴백. */
+  const _det=finTextToPending(txt);
+  if(_det){
+    pendingFinancialData=appendMode?mergeFinancialData(pendingFinancialData||confirmedFinancialData,_det,{correctionMode:!!correctionMode,sourceText:txt}):_det;
+    financialValidation=clientFinancialValidation(pendingFinancialData);
+    pendingGen={field:'financialConfirm'};
+    aiReply('붙여넣으신 <b>재무보고서 추출 텍스트</b>를 표 서식 그대로 읽었습니다. (AI 재추출 없음 · 입력창에서 수정하신 값 그대로 반영)');
+    aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+    return true;
+  }
   showThinking();
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'extractFinancial',topic:'기업컨설팅',text:txt})});
+    const r=await jbApi({action:'extractFinancial',topic:'기업컨설팅',text:txt});
     const data=await r.json();
     if(data.error||!data.pendingFinancialData)throw new Error(data.error||'재무자료 추출 실패');
     pendingFinancialData=appendMode?mergeFinancialData(pendingFinancialData||confirmedFinancialData,data.pendingFinancialData,{correctionMode:!!correctionMode,sourceText:txt}):data.pendingFinancialData;
@@ -2156,7 +2171,7 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
       return startInterview();   // 끊긴 인터뷰 흐름 재개 (askedQuestions 누적으로 중복 질문 방지됨)
     }else{
       financialValidation=[];pendingGen={field:'financialRetry'};
-      aiReply('재무자료 추출에 실패했어요. 표의 기준연도·단위·별도/연결 여부를 포함해 다시 붙여넣어 주세요. ('+(e.message||e)+')');
+      aiReply('재무자료 추출에 실패했어요. <b>재무보고서 PDF가 있다면 시작 화면에서 다시 첨부해 주세요 — 표에서 직접 읽어 가장 정확합니다(권장).</b> 텍스트로 하시려면 기준연도·단위·별도/연결 여부를 포함해 다시 붙여넣어 주세요. ('+friendlyErr(e)+')');
     }
     return false;
   }
@@ -2185,8 +2200,11 @@ const GUIDE_HTML='<div class="guidebox"><div class="gt">✨ 자료가 완성됐�
 +'<div class="gi"><i>4</i><span>상단 <b>💾 저장 / 📄 PDF</b>로 보관·출력. 더 자세한 건 왼쪽 위 <b>📖 이용가이드</b>를 눌러보세요.</span></div>'
 +'<div class="gtip" style="background:#f4fbf7;border-color:#5BB98C">🎚 아래 <b>🎚 시뮬레이터 추가</b> 버튼으로 이 분야에 맞는 <b>라이브 계산기</b>를 <b>원클릭</b>으로 넣어 자료를 더 완성도 있게 만들 수 있어요. (직접 편집이라 무료)</div>'
 +'<div class="gtip">💡 직접 편집은 무료, AI 수정은 비용이에요 — 할 수 있는 건 직접 하시면 비용이 절약됩니다.</div></div>';
+let _busyGen=false;   // ★ F2 (2026-07-12): 생성 재진입 가드 — 이중 실행 시 Opus 2회 병렬 호출(비용 2배) + 늦은 응답이 덱을 덮어쓰는 경합 차단
 async function generate(){
+  if(_busyGen){hideThinking();toast('이미 자료를 생성하고 있어요. 잠시만 기다려 주세요.',3000);return;}   // hideThinking: 인터뷰 thinking이 켜진 채 진입하는 이론적 경로에서도 입력 차단이 남지 않게
   if(TRIAL.on&&TRIAL.consumed){aiReply('무료체험 자료 생성은 <b>1회</b>까지예요. 지금 만든 자료는 계속 <b>직접 편집</b>하실 수 있고, 정식 이용은 자비아(jarvia.co.kr) 가입 후 가능합니다. 🙂');return;}
+  _busyGen=true;
   deck={slides:[]};auditFlags=[];qualityAudit=[];calcOmissions=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
@@ -2197,7 +2215,7 @@ async function generate(){
       if(confirmedFinancialData)genPayload.confirmedFinancialData=confirmedFinancialData;
     }
     _forceGen=false;   // ★ 1회성 신호 — 사용 후 즉시 초기화(이후 일반 생성에 영향 없음)
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(genPayload)});
+    const r=await jbApi(genPayload);
     const data=await r.json();
     if(r.status===409&&data&&data.error==='FINANCIAL_CONFIRMATION_REQUIRED'){
       stopGenTimer();renderDeck();
@@ -2237,7 +2255,9 @@ async function generate(){
     refreshQuota();
   }catch(e){
     stopGenTimer();
-    aiReply('자료 생성에 실패했어요. FUNCTION_URL이 올바른지, Cloud Function이 배포됐는지 확인해 주세요. ('+(e.message||e)+')');
+    aiReply('자료 생성에 실패했어요. 잠시 후 <b>"생성"</b>이라고 입력해 다시 시도해 주세요. 반복되면 새로고침 후 이어하기를 이용하시면 됩니다. ('+friendlyErr(e)+')');
+  }finally{
+    _busyGen=false;   // ★ F2: 성공·409 반려·실패 어느 경로로 끝나도 반드시 해제
   }
 }
 
@@ -2245,7 +2265,7 @@ async function generate(){
 function nums(t){const m=t.match(/\d+/g);return m?m.map(n=>parseInt(n)-1):[];}
 async function callWriter(slide,instruction){
   const ctx={...params}; if(clientName) ctx.clientName=clientName; if(companyName) ctx.companyName=companyName;
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'edit',slide,instruction,ctx,calc})});
+  const r=await jbApi({action:'edit',slide,instruction,ctx,calc});
   const data=await r.json();
   if(data.error||!data.slide) throw new Error(data.error||'편집 실패');
   auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];qualityAudit=Array.isArray(data.qualityAudit)?data.qualityAudit:[];calcOmissions=Array.isArray(data.calcOmissions)?data.calcOmissions:[];
@@ -2253,7 +2273,7 @@ async function callWriter(slide,instruction){
 }
 async function callAdd(instruction){
   const ctx={...params,...calc}; if(clientName) ctx.clientName=clientName; if(companyName) ctx.companyName=companyName;
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add',topic,instruction,ctx,calc})});
+  const r=await jbApi({action:'add',topic,instruction,ctx,calc});
   const data=await r.json();
   if(data.error||!data.slide) throw new Error(data.error||'추가 실패');
   auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];qualityAudit=Array.isArray(data.qualityAudit)?data.qualityAudit:[];calcOmissions=Array.isArray(data.calcOmissions)?data.calcOmissions:[];
@@ -2263,7 +2283,7 @@ async function callRoute(message){
   const slides=deck.slides.map((s,i)=>({n:i+1,title:s.title||''}));
   let recent=MSGS.filter(m=>!m.thinking).slice(-100).map(m=>(m.who==='me'?'사용자: ':'진행자: ')+(m.html||'').replace(/<[^>]+>/g,'')).join('\n');
   if(recent.length>9000)recent=recent.slice(-9000);
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interpret',message,slides,topic,clientName,recent,origReq:origRequest})});
+  const r=await jbApi({action:'interpret',message,slides,topic,clientName,recent,origReq:origRequest});
   const data=await r.json();
   if(data.error||!data.route) throw new Error(data.error||'해석 실패');
   return data.route;
@@ -2302,6 +2322,7 @@ function applyCoverEdit(idx,instr){
 }
 function flash(i){const nn=document.getElementById('deck').children[i];if(nn)nn.classList.add('flash');}
 async function send(){
+  if(MSGS.some(x=>x.thinking)){toast('처리 중입니다. 잠시만 기다려 주세요.',2400);return;}   // ★ F2 (2026-07-12): Enter 연타 가드 — 칩 버튼(fireChip)과 동일 조건. 인터뷰·추출·편집 fetch 중복 발사 차단
   const inp=document.getElementById('cmd');const t=inp.value.trim();if(!t)return;
   if(deck.slides.length && !_deckSaved){ inp.value=''; autoGrow(inp,150); updateCmdCount(); showSavePrompt(); aiReply(chargeFailMsg('NOT_SAVED')); return; }   // ★ 미저장 시 편집 명령 차단
   const financialInputMode=!deck.slides.length&&topic==='기업컨설팅'&&(looksLikeFinancialTable(t)||looksLikeFinancialFragment(t)||pendingFinancialData||confirmedFinancialData||(pendingGen&&/^financial/.test(String(pendingGen.field||''))));
@@ -2430,7 +2451,7 @@ async function send(){
   let route;
   showThinking();
   try{ route=await callRoute(t); }
-  catch(e){ return aiReply('이해하는 데 실패했어요. 잠시 후 다시 시도해 주세요. ('+(e.message||e)+')'); }
+  catch(e){ return aiReply('이해하는 데 실패했어요. 잠시 후 다시 시도해 주세요. ('+friendlyErr(e)+')'); }
   const op=route.op||'edit';
   let idx=route.index?route.index-1:selectedIdx;
 
@@ -2483,7 +2504,7 @@ async function runWriteSlide(idx,instr,speed,notice){
       if(qualityAudit.length) aiReply(qualityAuditWarnHtml(qualityAudit));
       if(calcOmissions.length) aiReply(calcOmissionWarnHtml(calcOmissions));
     }
-  }catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. <b>(실패 — 차감되지 않았어요)</b> ('+(e.message||e)+')');}
+  }catch(e){renderDeck();aiReply('편집에 실패했어요. 잠시 후 다시 시도해 주세요. <b>(실패 — 차감되지 않았어요)</b> ('+friendlyErr(e)+')');}
 }
 async function runAddSlide(pos,instr){
   const pre=await precheckSlideOp();
@@ -2502,7 +2523,7 @@ async function runAddSlide(pos,instr){
     if(qualityAudit.length) aiReply(qualityAuditWarnHtml(qualityAudit));
     if(calcOmissions.length) aiReply(calcOmissionWarnHtml(calcOmissions));
     return;
-  }catch(e){deck.slides.splice(pos,1);reseq();renderDeck();return aiReply('슬라이드 추가에 실패했어요. <b>(실패 — 차감되지 않았어요)</b> ('+(e.message||e)+')');}
+  }catch(e){deck.slides.splice(pos,1);reseq();renderDeck();return aiReply('슬라이드 추가에 실패했어요. <b>(실패 — 차감되지 않았어요)</b> ('+friendlyErr(e)+')');}
 }
 
 /* ===== 시작 ===== */
@@ -2524,6 +2545,15 @@ function updateFinancialUI(){const h=document.getElementById('finhelp');if(h)h.c
    지원: NICE 기업분석보고서(nicebizline) / KODATA KCR2
    ══════════════════════════════════════════════════════════════ */
 const FIN={data:null,calc:null,risks:null,checks:null,src:'',fileName:'',stmtType:'별도'};
+/* ★ C2 (2026-07-12): 재무보고서 금액 단위 — 포맷별 단일 진실 공급원.
+   기존엔 '백만원' 가정이 finToPending(×100)·finToText(헤더)·finCalc(×1e6) 세 곳에 흩어져 있어,
+   천원 단위를 쓰는 새 보고서 포맷을 추가하는 날 조용히 100배 오차가 나는 지뢰였다.
+   새 포맷 추가 시 이 표에 한 줄만 넣으면 세 곳이 함께 맞는다. 미등록 포맷은 백만원으로 가정. */
+const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원'};
+const FIN_UNIT_SCALE={'원':{man:0.0001,won:1},'천원':{man:0.1,won:1e3},'만원':{man:1,won:1e4},'백만원':{man:100,won:1e6},'억원':{man:10000,won:1e8}};
+function finUnit(){return FIN_FMT_UNIT[FIN.src]||'백만원';}
+function finUnitScale(){return FIN_UNIT_SCALE[finUnit()]||FIN_UNIT_SCALE['백만원'];}
+function finToEok(v){return (Number(v)||0)*finUnitScale().won/1e8;}   // 원문단위 → 억 (표시용)
 const FIN_PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const FIN_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const FIN_CMAP='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/';
@@ -2756,7 +2786,7 @@ function finParse(pages,fmt){
     D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
     if(!D.총주식 && D.주주.length) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);
     D.액면 = par?parseInt(par[1].replace(/,/g,''))
-                : (D.총주식?Math.round(D.자본금[0]*1e6/D.총주식):0);
+                : (D.총주식?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
   }
   const me=D.주주.find(s=>s.명===D.대표자);
   D.대표지분=me?me.율:0; D.대표주식=me?me.주식:0;
@@ -2772,8 +2802,8 @@ function finVerify(D){
     ok:near(D.자산총계[i],D.부채총계[i]+D.자본총계[i]),
     d:`${D.자산총계[i].toLocaleString()} vs ${(D.부채총계[i]+D.자본총계[i]).toLocaleString()}`}));
   if(D.총주식&&D.액면)C.push({n:'자본금 = 주식수 × 액면가',
-    ok:near(D.자본금[0]*1e6,D.총주식*D.액면,0.02),
-    d:`${(D.자본금[0]*1e6).toLocaleString()} vs ${(D.총주식*D.액면).toLocaleString()}`});
+    ok:near(D.자본금[0]*finUnitScale().won,D.총주식*D.액면,0.02),
+    d:`${(D.자본금[0]*finUnitScale().won).toLocaleString()} vs ${(D.총주식*D.액면).toLocaleString()}`});
   if(D.주주.length){const s=D.주주.reduce((a,b)=>a+b.율,0);
     C.push({n:'지분율 합계 = 100%',ok:near(s,100,0.02),d:s.toFixed(2)+'%'});}
   C.push({n:'대표자 지분 보유',ok:D.대표지분>0,
@@ -2782,10 +2812,10 @@ function finVerify(D){
 }
 
 /* ── 계산기 — JARVIA 기존 계산기(jarvia-calculators-browser.js) 호출.
-      자체 계산 금지. 재무제표는 백만원 단위이므로 원 단위로 환산해 넘긴다. ── */
+      자체 계산 금지. 재무제표 금액은 finUnitScale()로 원 단위 환산해 넘긴다(★C2 포맷별 단위표). ── */
 function finCalc(D){
   const J=window.JarviaCalculators;
-  const M=1e6, R={ratios:null,cashRisk:null,stock:null,inherit:null,warns:[]};
+  const M=finUnitScale().won, R={ratios:null,cashRisk:null,stock:null,inherit:null,warns:[]};   // ★ C2: 포맷별 단위표에서 원 환산배수
   const V=(a,i)=>(a&&Number.isFinite(a[i||0]))?a[i||0]*M:0;
   if(!J){R.warns.push('계산기 모듈이 로드되지 않았습니다.');return R;}
 
@@ -2867,8 +2897,8 @@ function finRisks(D,R){
   const K=finPick(R), L=[];
   if(D.영업현금&&D.순이익[0]>0&&D.영업현금[0]<0)
     L.push({lv:'위험',p:1.0,amt:Math.abs(D.영업현금[0])*1e6,
-      t:`흑자인데 영업현금흐름 ${(D.영업현금[0]/100).toFixed(1)}억`,
-      d:`순이익 +${(D.순이익[0]/100).toFixed(1)}억인데 영업활동 현금은 ${(D.영업현금[0]/100).toFixed(1)}억. 장부상 이익이 통장에 없습니다.`});
+      t:`흑자인데 영업현금흐름 ${(finToEok(D.영업현금[0])).toFixed(1)}억`,
+      d:`순이익 +${(finToEok(D.순이익[0])).toFixed(1)}억인데 영업활동 현금은 ${(finToEok(D.영업현금[0])).toFixed(1)}억. 장부상 이익이 통장에 없습니다.`});
   if(K.주당&&D.대표지분>0)
     L.push({lv:'위험',p:0.9,amt:K.대표지분가치,
       t:`액면 ${D.액면.toLocaleString()}원 주식이 ${K.주당.toLocaleString()}원`,
@@ -2877,24 +2907,24 @@ function finRisks(D,R){
   if(D.매출채권&&D.매출채권[1]>0&&D.매출채권[0]>D.매출채권[1]*2)
     L.push({lv:'위험',p:0.8,amt:(D.매출채권[0]-D.매출채권[1])*1e6,
       t:`매출채권 ${(D.매출채권[0]/D.매출채권[1]).toFixed(1)}배 급증`,
-      d:`${(D.매출채권[1]/100).toFixed(1)}억 → ${(D.매출채권[0]/100).toFixed(1)}억. 회수 지연 또는 결제조건 악화 가능성.`});
+      d:`${(finToEok(D.매출채권[1])).toFixed(1)}억 → ${(finToEok(D.매출채권[0])).toFixed(1)}억. 회수 지연 또는 결제조건 악화 가능성.`});
   if((!D.퇴직충당||D.퇴직충당[0]===0)&&D.설립년&&(new Date().getFullYear()-D.설립년)>=10)
     L.push({lv:'주의',p:0.8,amt:0,
       t:`설립 ${new Date().getFullYear()-D.설립년}년차 · 퇴직금 재원 미확인`,
       d:'퇴직급여충당부채·보험자산이 재무제표에 없습니다. 대표 급여·정관 배수 확인 후 퇴직금 재원 진단이 필요합니다.'});
   if(D.가지급금&&D.가지급금[0]>0)
-    L.push({lv:'주의',p:0.7,amt:D.가지급금[0]*1e6,
-      t:`가지급금(단기대여금) ${(D.가지급금[0]/100).toFixed(2)}억`,
+    L.push({lv:'주의',p:0.7,amt:D.가지급금[0]*finUnitScale().won,
+      t:`가지급금(단기대여금) ${(finToEok(D.가지급금[0])).toFixed(2)}억`,
       d:'인정이자 익금산입 대상. 매년 세금이 새고 있을 수 있습니다.'});
   if(K.이자보상!=null&&K.이자보상<3&&D.이자비용&&D.이자비용[0]>0)
-    L.push({lv:K.이자보상<1?'위험':'주의',p:0.3,amt:D.이자비용[0]*1e6,
+    L.push({lv:K.이자보상<1?'위험':'주의',p:0.3,amt:D.이자비용[0]*finUnitScale().won,
       t:`이자보상배율 ${K.이자보상.toFixed(2)}배`,
-      d:K.이자보상<1?`영업이익 ${(D.영업이익[0]/100).toFixed(1)}억으로 이자 ${(D.이자비용[0]/100).toFixed(1)}억을 못 갚습니다.`
+      d:K.이자보상<1?`영업이익 ${(finToEok(D.영업이익[0])).toFixed(1)}억으로 이자 ${(finToEok(D.이자비용[0])).toFixed(1)}억을 못 갚습니다.`
         :`영업이익의 ${(D.이자비용[0]/D.영업이익[0]*100).toFixed(0)}%가 이자로 나갑니다.`});
   if(K.부채비율!=null&&K.부채비율>200)
-    L.push({lv:'위험',p:0.2,amt:D.차입금[0]*1e6,
+    L.push({lv:'위험',p:0.2,amt:D.차입금[0]*finUnitScale().won,
       t:`부채비율 ${K.부채비율.toFixed(0)}%`,
-      d:`총차입금 ${(D.차입금[0]/100).toFixed(1)}억. (은행이 이미 지적했을 가능성이 높아 대화 후순위 권장)`});
+      d:`총차입금 ${(finToEok(D.차입금[0])).toFixed(1)}억. (은행이 이미 지적했을 가능성이 높아 대화 후순위 권장)`});
   L.forEach(r=>r.score=Math.log10(Math.max(r.amt,1e6))*r.p);
   return L.sort((a,b)=>b.score-a.score);
 }
@@ -2940,7 +2970,7 @@ function finRender(){
   const c=document.getElementById('finCard'); if(!c)return;
   if(!FIN.data){c.classList.remove('on');c.innerHTML='';return;}
   const D=FIN.data,K=finPick(FIN.calc),esc=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-  const 억=v=>(v/100).toFixed(1)+'억';
+  const 억=v=>finToEok(v).toFixed(1)+'억';   // ★ C2: 포맷별 단위표
   const row=(k,v,neg)=>`<tr><td>${esc(k)}</td><td class="v${neg?' neg':''}">${esc(v)}</td></tr>`;
   const bad=FIN.checks.filter(x=>!x.ok);
 
@@ -3027,11 +3057,11 @@ function finToBrief(){
 
 /* ── 재무자료 객체 (AI 추출 우회) ──
    기존 pendingFinancialData 형식으로 직접 만든다. extracted 의 금액 단위는 '만원'.
-   재무보고서는 백만원 단위이므로 ×100 하여 만원으로 환산한다. */
+   재무보고서 금액은 finUnitScale()로 만원 환산한다(★C2 포맷별 단위표). */
 function finToPending(){
   if(!FIN.data)return null;
   const D=FIN.data;
-  const M=a=>(a&&Number.isFinite(a[0]))?Math.round(a[0]*100):null;   // 백만원 → 만원
+  const M=a=>(a&&Number.isFinite(a[0]))?Math.round(a[0]*finUnitScale().man):null;   // ★ C2: 원문단위 → 만원 (포맷별 단위표)
   /* 재무보고서에 없어서 '0'인지 '미확인'인지 구분할 수 없는 항목은 uncertain 으로 넘긴다.
      → 서버가 숫자를 임의로 만들지 않고 '정밀산출 필요'로 표기한다.
      → UNCERTAIN_ 코드는 hardIssues 에서 제외되므로 확인 절차를 막지 않는다. */
@@ -3044,7 +3074,7 @@ function finToPending(){
   if((FIN.stmtType||'별도')==='별도')unc.push('재무제표를 별도로 가정함 — 연결재무제표이면 정정 필요');
   return {
     baseYear:D.years[0], comparisonYear:D.years[1],
-    statementType:FIN.stmtType||'별도', unit:'백만원',
+    statementType:FIN.stmtType||'별도', unit:finUnit(),
     source:'첨부 재무보고서 PDF 자동추출(표 좌표 기반) · 회계 항등식 검산 완료',
     uncertain:unc,
     extracted:{
@@ -3060,6 +3090,47 @@ function finToPending(){
       loanAmount:         M(D.가지급금)
     }
   };
+}
+
+/* ── finToText 역파싱 — AI 추출 우회 (2026-07-12 F1) ──
+   "↓ 클릭해서 위 입력창에 넣어주세요"로 옮긴 텍스트는 finToText()가 만든 기계 생성 포맷이다.
+   이걸 AI에게 다시 읽히면 (1) 5,000자 제한 (2) 빈 응답 실패 (3) 텍스트 속 메타 지시문
+   ("재계산·환산 금지")과 추출 프롬프트("백만원×100 환산하라")의 정면 충돌이 생긴다.
+   → [재무 현황 —] 헤더 서명이 있으면 정규식으로 결정적 복원한다. AI 호출 0회.
+     사용자가 입력창에서 숫자를 고쳤어도 고친 값을 그대로 읽는다(직접 수정 목적 유지).
+   복원 실패(핵심 재무 3개 미만)면 null → 기존 AI 추출 경로로 그대로 폴백. */
+function finTextToPending(text){
+  const s=String(text||'');
+  const head=s.match(/\[재무 현황 —\s*(별도|연결)\s*재무제표,\s*단위\s*(백만원|천원|만원|억원|원),\s*기준연도\s*(\d{4})(?:\s*\/\s*비교연도\s*(\d{4}))?\]/);
+  if(!head)return null;
+  const stmt=head[1],unit=head[2],baseYear=+head[3],compYear=head[4]?+head[4]:null;
+  const SCALE={'원':0.0001,'천원':0.1,'만원':1,'백만원':100,'억원':10000}[unit]||100;   // → 만원 환산배수
+  const num=v=>{const n=parseFloat(String(v).replace(/,/g,''));return Number.isFinite(n)?Math.round(n*SCALE):null;};
+  const KEYMAP={'연매출':'revenue','매출액':'revenue','영업이익':'operatingProfit','당기순이익':'netProfit','순이익':'netProfit','자산총계':'totalAssets','부채총계':'totalLiabilities','자본총계':'totalEquity','미처분이익잉여금':'retainedEarnings','이익잉여금':'retainedEarnings','현금및현금성자산':'cashAndCashEquivalents','차입금':'borrowings'};
+  const extracted={};
+  const re=/^-\s*([^:\n]+?)\s*:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)/gm;
+  let m;
+  while((m=re.exec(s))!==null){
+    const label=m[1].replace(/\(.*?\)/g,'').replace(/\s+/g,'');
+    const k=KEYMAP[label];
+    if(k&&extracted[k]==null){const v=num(m[2]);if(v!=null)extracted[k]=v;}
+  }
+  const g=s.match(/대표 가지급금\(단기대여금\) 잔액:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)/);
+  if(g){const v=num(g[1]);if(v!=null&&v>0)extracted.loanAmount=v;}
+  const core=['revenue','totalAssets','totalLiabilities','totalEquity'].filter(k=>extracted[k]!=null).length;
+  if(core<3)return null;
+  const unc=[];
+  if(extracted.loanAmount==null)unc.push('가지급금(주임종 단기대여금) — 재무보고서에서 확인되지 않음');
+  unc.push('대표 급여·임원 퇴직금 규정(정관 배수) — CEO 확인 필요');
+  unc.push('대표 나이·가족관계(배우자·자녀 수)·후계자 유무 — CEO 확인 필요');
+  unc.push('대표 개인 부동산·금융자산·사전증여 이력 — 상속세 산출에 필수');
+  if(stmt==='별도')unc.push('재무제표를 별도로 가정함 — 연결재무제표이면 정정 필요');
+  const out={baseYear:baseYear,statementType:stmt,unit:unit,
+    source:'재무보고서 추출 텍스트 결정적 역파싱(AI 미사용)',
+    uncertain:unc,extracted:extracted,
+    userConfirmed:false,confirmed:false,confirmationStatus:'pending'};
+  if(compYear)out.comparisonYear=compYear;
+  return out;
 }
 
 /* ── 제안서 입력용 텍스트 ──
@@ -3079,7 +3150,7 @@ function finToText(){
         +`${D.설립년?` 설립 ${D.설립년}년(${new Date().getFullYear()-D.설립년}년차).`:''}${D.종업원?` 상시종업원 ${D.종업원}명.`:''}`);
   L.push('');
   /* ★★ 이 한 줄이 기준연도·비교연도·별도/연결·단위를 모두 확정한다. 절대 형식 변경 금지 ★★ */
-  L.push(`[재무 현황 — ${ST} 재무제표, 단위 백만원, 기준연도 ${Y[0]} / 비교연도 ${Y[1]}]`);
+  L.push(`[재무 현황 — ${ST} 재무제표, 단위 ${finUnit()}, 기준연도 ${Y[0]} / 비교연도 ${Y[1]}]`);   // ★ C2: 포맷별 단위표
   L.push('(첨부 재무보고서 PDF에서 표 좌표 기준으로 직접 추출 · 회계 항등식 검산 완료)');
   P('연매출',D.매출액);
   P('매출원가',D.매출원가);
@@ -3102,7 +3173,7 @@ function finToText(){
   if(D.가지급금&&D.가지급금[0]>0){
     L.push('');
     L.push('[가지급금]');
-    L.push(`- 대표 가지급금(단기대여금) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}백만원 / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}백만원`);
+    L.push(`- 대표 가지급금(단기대여금) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}${finUnit()} / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}${finUnit()}`);
   }
   L.push('');
   L.push('[계산기 산출 결과 — JARVIA 계산기(상증세법·법인세법 산식) 확정값. 그대로 인용할 것. 재계산·반올림·환산 금지]');
@@ -3215,7 +3286,7 @@ async function askWrapupTurn(){
   showThinking();
   let data=null;
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[],collected:collectedParams,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[],phase:'wrapup'})});
+    const r=await jbApi({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[],collected:collectedParams,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[],phase:'wrapup'});
     data=await r.json();
   }catch(_e){ data=null; }
   if(data&&data.collected&&typeof data.collected==='object'){ collectedParams={...collectedParams,...data.collected}; }
@@ -3272,7 +3343,7 @@ async function startInterview(){
   showThinking();
   let data=null;
   try{
-    const r=await fetch(FUNCTION_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[],collected:collectedParams,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[]})});
+    const r=await jbApi({action:'interview',topic,text:rawInput,clientName,lockTopic:topicLocked,asked:askedQuestions,answeredUnknown:(interviewState&&interviewState.answeredUnknown)||[],collected:collectedParams,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[]});
     data=await r.json();
   }catch(_e){ data=null; }
   if(!data || data.error){ preflightQueue=preflightAsks(rawInput,topic); askNext(); return; }   // 인터뷰 실패 → 기존 방식 폴백(생성은 안 막음)
@@ -3481,7 +3552,10 @@ function toggleLeft(){var l=document.getElementById('left');var collapsed=l.clas
 /* ===== 저장 / 불러오기 / 내보내기 ===== */
 const LS='jebanseo_decks_v1';
 function loadStore(){try{return JSON.parse(localStorage.getItem(LS)||'{}');}catch(_){return {};}}
-function saveStore(o){try{localStorage.setItem(LS,JSON.stringify(o));}catch(_){}}
+let _storeWarned=false;   // ★ F4 (2026-07-12): 용량 초과 경고는 세션당 1회만 (연타 방지)
+function saveStore(o){try{localStorage.setItem(LS,JSON.stringify(o));_storeWarned=false;return true;}catch(_){
+  if(!_storeWarned){_storeWarned=true;toast('⚠ 브라우저 저장 공간이 가득 차 자동저장이 되지 않고 있습니다. 💾 저장(파일 다운로드)으로 보관하시거나, 붙여넣은 큰 이미지를 줄여 주세요.',6500);}
+  return false;}}
 function snapshot(){return {topic,params,calc,clientName,companyName,deck,ts:Date.now(),_saved:_deckSaved};}
 function autoSave(){if(!deck.slides.length)return;const o=loadStore();o.__last=snapshot();saveStore(o);}
 function saveDeck(){
@@ -3663,7 +3737,16 @@ async function exportPDF(){
     for(let p=0;p<pages.length;p++){
       jbPdfMask((p+1)+' / '+pages.length+' 쪽 처리 중…');
       const pg=pages[p];
-      const cv=await html2canvas(pg,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false,width:pg.offsetWidth,height:pg.offsetHeight,windowWidth:pg.offsetWidth,windowHeight:pg.offsetHeight,scrollX:0,scrollY:0});
+      /* ★ PDF 폴백 (2026-07-12): 슬라이드 20장+ 문서를 scale 2(고화질)로 찍으면 저사양 폰에서
+         캔버스 메모리 한계로 실패할 수 있다. 실패 시 scale 1.4로 낮춰 1회 재시도 —
+         "PDF가 안 나온다"보다 "조금 덜 선명한 PDF"가 실무에서 압도적으로 낫다. */
+      let cv;
+      try{
+        cv=await html2canvas(pg,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false,width:pg.offsetWidth,height:pg.offsetHeight,windowWidth:pg.offsetWidth,windowHeight:pg.offsetHeight,scrollX:0,scrollY:0});
+      }catch(_cvErr){
+        console.warn('[exportPDF] scale2 실패 → scale1.4 재시도:',(_cvErr&&_cvErr.message)||_cvErr);
+        cv=await html2canvas(pg,{scale:1.4,backgroundColor:'#ffffff',useCORS:true,logging:false,width:pg.offsetWidth,height:pg.offsetHeight,windowWidth:pg.offsetWidth,windowHeight:pg.offsetHeight,scrollX:0,scrollY:0});
+      }
       const img=cv.toDataURL('image/jpeg',0.92);
       if(p)doc.addPage();
       doc.addImage(img,'JPEG',0,0,PW,PH,undefined,'FAST');
@@ -3693,6 +3776,17 @@ async function exportPDF(){
 }
 /* ===== 내 컴퓨터에 파일로 저장(HTML) / 열기 ===== */
 function escHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+/* ★ F3 (2026-07-12): 오류 원문 정제 — jsonrepair 등 내부 영어 메시지를 컨설턴트용 한국어로 치환하고,
+   알 수 없는 오류는 escHtml 후 그대로 표시(디버깅 정보 보존). innerHTML 삽입 전 이스케이프 일원화. */
+function friendlyErr(e){
+  const raw=String((e&&e.message)||e||'');
+  if(/unexpected end of json|json at position|no json|jsonrepair/i.test(raw))return 'AI 응답이 비정상 형식이었습니다 · 잠시 후 재시도';
+  if(/failed to fetch|networkerror|load failed/i.test(raw))return '네트워크 연결이 불안정합니다 · 연결 확인 후 재시도';
+  if(/timeout|timed out|deadline/i.test(raw))return '응답 시간이 초과되었습니다 · 잠시 후 재시도';
+  if(/\b429\b|rate.?limit|overload|\b529\b/i.test(raw))return 'AI 사용량이 일시적으로 몰렸습니다 · 잠시 후 재시도';
+  if(/AUTH_REQUIRED|TOKEN_INVALID|NOT_LOGGED_IN|TRIAL_INVALID|401/i.test(raw))return '로그인 연결이 필요합니다 · 자비아(jarvia.co.kr)에 로그인한 뒤 "제안서 생성(대화형)"으로 다시 열어 주세요';
+  return escHtml(raw);
+}
 /* ===== 다운로드 HTML에 내장될 자족 뷰어 (발표 + A4 2-up 인쇄) ===== */
 const VIEWER_BAR='<div class="viewerbar"><button onclick="__present()">▶ 발표</button><button onclick="__printA4()">📄 A4 인쇄</button></div>';
 const VIEWER_OVERLAY='<div id="present"><div class="pstage"><button class="pnav" onclick="__pgo(-1)">‹</button><div id="pslide"></div><button class="pnav" onclick="__pgo(1)">›</button></div><div class="pnotes" id="pnotes"></div><div class="pbar"><button onclick="__pgo(-1)">← 이전</button><span id="pcount">1 / 1</span><button onclick="__pgo(1)">다음 →</button><button onclick="__pnotes()">🎤 노트</button><button onclick="__pend()">✕ 종료 (Esc)</button></div><div id="ptoclink">목차</div></div>';
@@ -3763,6 +3857,40 @@ const JB_TRUSTED_ORIGINS=(function(){const s=new Set();try{s.add(location.origin
   ['https://jarvia.co.kr','https://www.jarvia.co.kr'].forEach(function(o){s.add(o);});  // ★ 실제 JARVIA 도메인에 맞게 확인/수정
   return s;})();
 function jbParentOrigin(){try{if(document.referrer){var o=new URL(document.referrer).origin;if(JB_TRUSTED_ORIGINS.has(o))return o;}}catch(_){}return location.origin;}
+/* ── ★ B1 (2026-07-12): 백엔드 인증 — Firebase ID 토큰 첨부 ──
+   jebanseoApi가 이제 Bearer 토큰(또는 서버 등록된 체험 토큰)을 요구한다.
+   토큰은 부모창(JARVIA 플랫폼)에 jbAuthToken으로 요청해 받고 45분 캐시한다(ID토큰 수명 60분).
+   401이면 새 토큰으로 1회 재시도. 부모창이 없거나 미로그인 → 백엔드 401 → friendlyErr가 로그인 안내. */
+let _jbIdTok='',_jbIdTokExp=0;
+function jbRequestTokenFromOpener(){return new Promise(function(resolve){
+  if(!window.opener){resolve(null);return;}
+  var reqId='at'+Date.now()+Math.random().toString(36).slice(2,7);var done=false;
+  function onMsg(ev){if(!JB_TRUSTED_ORIGINS.has(ev.origin))return;var d=ev&&ev.data;if(!d||d.type!=='jbAuthTokenResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);resolve(d.ok?String(d.token||''):null);}
+  window.addEventListener('message',onMsg);
+  try{window.opener.postMessage({type:'jbAuthToken',reqId:reqId},jbParentOrigin());}
+  catch(_){window.removeEventListener('message',onMsg);resolve(null);return;}
+  setTimeout(function(){if(done)return;window.removeEventListener('message',onMsg);resolve(null);},4000);
+});}
+async function jbGetIdToken(force){
+  if(TRIAL.on)return null;                                   // 체험은 trialToken으로 인증(서버 등록분만 통과)
+  var now=Date.now();
+  if(!force&&_jbIdTok&&now<_jbIdTokExp)return _jbIdTok;
+  var t=await jbRequestTokenFromOpener();
+  if(t){_jbIdTok=t;_jbIdTokExp=now+45*60*1000;}
+  return t||null;
+}
+async function jbApi(payload){
+  payload=payload||{};
+  if(TRIAL.on&&TRIAL.token)payload.trialToken=TRIAL.token;
+  var tk=await jbGetIdToken(false);
+  var hd={'content-type':'application/json'};if(tk)hd.authorization='Bearer '+tk;
+  var r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload)});
+  if(r.status===401&&!TRIAL.on){                             // 토큰 만료·경합 → 재발급 1회 재시도
+    var tk2=await jbGetIdToken(true);
+    if(tk2&&tk2!==tk){hd.authorization='Bearer '+tk2;r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload)});}
+  }
+  return r;
+}
 // ── 개선 의견(피드백) → 플랫폼(opener)이 partner_proposals에 저장 ──
 function openFeedback(){var t=document.getElementById('fb-title');if(t)t.value='';var b=document.getElementById('fb-body');if(b)b.value='';var m=document.getElementById('fbmodal');if(m)m.classList.add('on');}
 function closeFeedback(){var m=document.getElementById('fbmodal');if(m)m.classList.remove('on');}

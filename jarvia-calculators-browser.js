@@ -1392,13 +1392,13 @@ function calcPersonalPPT(input) {
     currentAge, retireAge, lifeExpectancy,
     currentAsset: currentSaving, monthlyDeposit: monthlyInvestment, depositYears: yearsToRetire,
     accumRate: returnRateA, receiveRate: returnRateA * 0.7, inflationRate,
-    targetMonthlyExpense: monthlyExpense, pensionMonthly: ssMonthly, pensionBasis: 'indexed',
+    targetMonthlyExpense: retireMonthlyNeed, pensionMonthly: ssMonthly, pensionBasis: 'indexed',   // ★ 배선 교정(2026-07-12): needBasis 반영된 필요액 사용 — income 기준에서 도입부(소득×대체율)와 planA 명목 세트가 다른 필요액을 쓰던 모순 제거. expense 기준은 두 값 동일이라 회귀 없음.
   });
   const npB = calcPensionNominalPlan({
     currentAge, retireAge, lifeExpectancy,
     currentAsset: currentSaving, monthlyDeposit: monthlyInvestment, depositYears: yearsToRetire,
     accumRate: returnRateB, receiveRate: returnRateB * 0.7, inflationRate,
-    targetMonthlyExpense: monthlyExpense, pensionMonthly: ssMonthly, pensionBasis: 'indexed',
+    targetMonthlyExpense: retireMonthlyNeed, pensionMonthly: ssMonthly, pensionBasis: 'indexed',   // ★ 배선 교정(2026-07-12): needBasis 반영된 필요액 사용 — income 기준에서 도입부(소득×대체율)와 planA 명목 세트가 다른 필요액을 쓰던 모순 제거. expense 기준은 두 값 동일이라 회귀 없음.
   });
 
   // 6. 세액공제
