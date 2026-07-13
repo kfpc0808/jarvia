@@ -1140,6 +1140,7 @@
       <div id="crPending"></div>
       <button id="crGenBtn" onclick="crGenerate()" disabled>리포트 생성</button>
       <div id="crGenStat"></div>
+      <div id="crGenLog" style="display:none;margin-top:8px;background:#0F1B33;border-radius:9px;padding:10px 12px;max-height:172px;overflow-y:auto;font-size:10.5px;line-height:1.75;color:#C7CDDC;font-variant-numeric:tabular-nums"></div>
       <div class="cr-card cr-blkctl" id="crBlkCtl">
         <div class="ct">④ 블록 관리 <span style="font-weight:400;color:#8A8577">— 문장은 우측에서 직접 클릭 수정</span><span id="crRegenCnt" style="float:right;font-size:11px;font-weight:800;color:#96783C;background:#FBF3E1;border:1px solid #E2CFA0;border-radius:99px;padding:2px 10px">재생성 0/20</span></div>
         <div class="row"><b>② 헤드라인</b><button onclick="crRegen('b02_headline')">AI 재생성</button></div>
@@ -4712,6 +4713,21 @@ function crFmtPhone(v){var d=String(v||'').replace(/[^0-9]/g,'').slice(0,11);
   return d.replace(/^(\d{3})(\d{3,4})(\d{4})$/,'$1-$2-$3');}
 function crFmtComma(v){var d=String(v||'').replace(/[^0-9]/g,'');return d?Number(d).toLocaleString():'';}
 function crNum(v){var d=String(v==null?'':v).replace(/[^0-9.]/g,'');var n=Number(d);return d&&isFinite(n)?n:null;}
+var _crLogT0=0,_crHb=null;
+function crLogReset(){_crLogT0=Date.now();var b=document.getElementById('crGenLog');if(b){b.innerHTML='';b.style.display='block';}}
+function crLog(msg,cls){var b=document.getElementById('crGenLog');if(!b)return;
+  var t=((Date.now()-_crLogT0)/1000).toFixed(1);
+  var c=cls==='ok'?'#8FD49B':cls==='err'?'#F0A79D':cls==='dim'?'#7B849C':'#C7CDDC';
+  var d=document.createElement('div');d.style.color=c;d.textContent='['+String(t).padStart(5,' ')+'s] '+msg;
+  b.appendChild(d);b.scrollTop=b.scrollHeight;}
+function crLogHb(base){clearInterval(_crHb);var n=0;
+  _crHb=setInterval(function(){n++;var b=document.getElementById('crGenLog');if(!b)return;
+    var last=b.lastChild;
+    if(last&&last.dataset&&last.dataset.hb){last.textContent='['+(((Date.now()-_crLogT0)/1000).toFixed(1)).padStart(5,' ')+'s] '+base+' '+'·'.repeat((n%3)+1)+' ('+Math.round((Date.now()-_crLogT0)/1000)+'초 경과)';}
+    else{var d=document.createElement('div');d.style.color='#E0C98E';d.dataset.hb='1';d.textContent='';b.appendChild(d);}
+  },500);}
+function crLogHbStop(){clearInterval(_crHb);_crHb=null;var b=document.getElementById('crGenLog');
+  if(b&&b.lastChild&&b.lastChild.dataset&&b.lastChild.dataset.hb)b.removeChild(b.lastChild);}
 var CR_BASIS={txt:'이 평가는 제 의견이 아니라 <b>상속세 및 증여세법 시행령 제54조</b>가 정한 방식이며, 대법원도 적법성을 확인했습니다 (2023두52062).',
   href:'https://www.law.go.kr/판례/(2023두52062,20231130)'};  /* 실측 검증 링크 — legal_refs 재고 연동은 2차 */
 var CR_CALC_URL='https://jarvia.co.kr/calculators/Unlisted_Stock_Valuation_Calculator.html';
@@ -4978,27 +4994,42 @@ async function crGenerate(force){
   if(CEO_TRIAL&&TRIAL.consumed){toast('무료 체험 생성은 1회입니다 — 직접 편집·저장은 계속 가능해요. 계속 이용은 자비아 가입!');return;}
   var T=crTeaserApi();
   if(!T){toast('진단 엔진(계산기 번들)을 불러오지 못했습니다. 새로고침해 주세요.');return;}
+  crLogReset();
+  crLog('생성 시작 — '+(CEO.fields.company||'회사')+' · '+(FIN.src||'PDF')+' 재무제표');
   CEO.fields=crFields();
   var F=crEngineInput();
+  crLog('재무 수치 정규화 완료 (검산 '+((FIN.checks||[]).filter(function(c){return c.ok;}).length)+'건 통과)','ok');
   CEO.diag=T.diagnose(F);
-  if(!CEO.diag.topPattern){toast('발화된 스토리 패턴이 없습니다 — 재무 수치·추가 정보를 확인해 주세요.');return;}
+  if(!CEO.diag.topPattern){crLog('발화된 스토리 패턴 없음 — 중단','err');toast('발화된 스토리 패턴이 없습니다 — 재무 수치·추가 정보를 확인해 주세요.');return;}
+  var _fired=CEO.diag.signals.filter(function(x){return !x.pending;});
+  crLog('진단 엔진 판독 — 신호 '+_fired.length+'건 발화 · 스토리: '+CEO.diag.topPattern.name+' ('+CEO.diag.topPattern.score+'점)','ok');
+  _fired.slice(0,3).forEach(function(x){crLog('  · '+x.name+(x.detail?' — '+x.detail:''),'dim');});
   CEO.third=crThirdNumber(CEO.diag);
+  crLog('숫자 고정 — 지분평가·상속세·셋째 숫자'+(CEO.third?'('+CEO.third.label+')':'')+' 산출','ok');
   CEO.teaser=null;CEO.busy=true;crReadyCheck();
   crRender();  /* 골격 선행: 숫자·근거·봉인 즉시, 문장은 쉬머 */
   crPendingRender();
+  crLog('리포트 골격 렌더 — 숫자·법령 근거·봉인 항목 배치 완료','ok');
   var st=document.getElementById('crGenStat');
   st.textContent='화법 생성 중… (관계: '+CEO.rel+' · 진단: '+CEO.diag.topPattern.name+')';
   try{
     var payload=crBuildPayload();
+    crLog('AI 문장 생성 요청 — 관계 톤: '+({cold:'처음 접근',warm:'접점 있음',existing:'기존 고객'}[CEO.rel]||CEO.rel)+' · 회사명 익명화 적용');
+    crLogHb('AI가 앞면 11블록 + 뒷면 화법카드를 작성 중');
     var r=await crCallTeaser(payload);
+    crLogHbStop();
     CEO.teaser=r.teaser||null;CEO.modelUsed=r.modelUsed||'';CEO.degraded=!!r.degraded;
     if(!CEO.teaser)throw new Error('생성 결과가 비어 있습니다.');
+    crLog('응답 수신 — 모델 '+CEO.modelUsed+(CEO.degraded?' (표준 모델 대체)':''),'ok');
     CEO.quota=r.quota||null;CEO.paid=false;   /* 생성=무과금 · 저장=확정(차감) */
-    if(CEO_TRIAL){try{await window.jbTrialConsume(TRIAL.token);}catch(_){ }TRIAL.consumed=true;}   /* 체험 소진 확정 (번호당 1회) */
+    if(CEO_TRIAL){try{await window.jbTrialConsume(TRIAL.token);}catch(_){ }TRIAL.consumed=true;crLog('무료 체험 1회 사용 확정','dim');}
+    var _blk=Object.keys(CEO.teaser||{}).length;
+    crLog('문장 검증·조립 — 블록 '+_blk+'개 배치 완료','ok');
     st.textContent='완료'+(CEO.degraded?' — 표준 모델로 생성됨(재생성 가능)':'')+' · '+CEO.modelUsed+' · 저장 시 이용 확정';
     document.getElementById('crBlkCtl').classList.add('on');
+    crLog('✔ 생성 완료 — 총 '+((Date.now()-_crLogT0)/1000).toFixed(1)+'초. 저장하면 이용이 확정됩니다.','ok');
     crShowSavePrompt();   /* 무조건 저장 팝업 — 제안서 A안 동일 */
-  }catch(err){st.textContent='❌ '+(err.message||'생성 실패');toast('생성 실패 — 다시 시도해 주세요.');}
+  }catch(err){crLogHbStop();crLog('✖ 실패 — '+(err.message||'생성 실패'),'err');st.textContent='❌ '+(err.message||'생성 실패');toast('생성 실패 — 다시 시도해 주세요.');}
   finally{CEO.busy=false;crReadyCheck();crRender();}
 }
 async function crRegen(blockKey){
@@ -5007,13 +5038,16 @@ async function crRegen(blockKey){
   if(!crRequirePaid())return;
   if(CEO.regenN>=20){toast('이 리포트의 재생성 한도(20회)에 도달했어요 — 남은 다듬기는 본문을 직접 클릭해 수정해 주세요.');return;}
   CEO.busy=true;var st=document.getElementById('crGenStat');st.textContent=blockKey+' 재생성 중…';
+  crLog('블록 재생성 요청 — '+blockKey+' ('+(CEO.regenN+1)+'/20회차)');
+  crLogHb('AI가 새 문장을 작성 중');
   try{
     var payload=crBuildPayload();
     payload.regen={blockKey:blockKey,current:JSON.stringify(CEO.teaser[blockKey]||''),instruction:'같은 재료로 다른 각도의 문장'};
     var r=await crCallTeaser(payload);   /* 재생성은 서버 무과금 */
-    if(r.teaser&&r.teaser[blockKey]!=null){CEO.teaser[blockKey]=r.teaser[blockKey];CEO.regenN++;st.textContent='재생성 완료';}
+    crLogHbStop();
+    if(r.teaser&&r.teaser[blockKey]!=null){CEO.teaser[blockKey]=r.teaser[blockKey];CEO.regenN++;st.textContent='재생성 완료';crLog('재생성 완료 — '+blockKey,'ok');}
     else throw new Error('블록 결과 없음');
-  }catch(err){st.textContent='❌ '+(err.message||'재생성 실패');}
+  }catch(err){crLogHbStop();crLog('✖ 재생성 실패 — '+(err.message||''),'err');st.textContent='❌ '+(err.message||'재생성 실패');}
   finally{CEO.busy=false;crRender();}
 }
 /* teaser payload — 익명화: 실명은 {회사명}/{대표님} 토큰으로만 전송 (기획 §4.3) */
