@@ -1140,6 +1140,13 @@
           <div class="cr-fld"><label>배당 실시</label><select id="crfDiv" onchange="crBind()"><option value="">미확인</option><option value="no">최근 무배당</option><option value="yes">배당 있음</option></select></div>
           <div class="cr-fld"><label>최대주주 = 대표</label><select id="crfMajor" onchange="crBind()"><option value="">미확인</option><option value="yes">예</option><option value="no">아니오</option></select></div>
         </div>
+        <div id="crManualWrap" style="display:none">
+          <div class="cr-2col">
+            <div class="cr-fld" id="crShareFld" style="display:none"><label>대표 지분율(%) — 보고서에 없음</label><input id="crfShare" inputmode="decimal" placeholder="예: 80" oninput="crBind()"></div>
+            <div class="cr-fld" id="crParFld" style="display:none"><label>주당 액면가(원) — 보고서에 없음</label><input id="crfPar" inputmode="numeric" placeholder="예: 5,000" oninput="crFmtComma(this);crBind()"></div>
+          </div>
+          <p style="font-size:10.5px;color:#B4622D;margin:5px 2px 0;line-height:1.65">⚠ 이 보고서에는 주주·액면 정보가 없습니다 — 등기부·정관 또는 대표님께 확인해 입력하면 주식평가·상속세가 계산됩니다.</p>
+        </div>
       </div>
       <div class="cr-card">
         <div class="ct">③ 컨설턴트 · 연락 <span style="font-weight:400;color:#8A8577">— 리포트 발신자 정보</span></div>
@@ -4831,13 +4838,35 @@ function crFields(){
   var g=function(id){var e=document.getElementById(id);return e?e.value.trim():'';};
   return{company:g('crfCompany'),ceo:g('crfCeo'),age:g('crfAge'),tenure:g('crfTenure'),salary:g('crfSalary'),
     conName:g('crfConName'),conCompany:g('crfConCompany'),conTitle:g('crfConTitle'),
-    family:g('crfFamily'),div:g('crfDiv'),major:g('crfMajor'),phone:g('crfPhone'),hours:g('crfHours'),email:g('crfEmail')};
+    family:g('crfFamily'),div:g('crfDiv'),major:g('crfMajor'),phone:g('crfPhone'),hours:g('crfHours'),email:g('crfEmail'),
+    share:g('crfShare'),par:g('crfPar')};
+}
+/* ── 지분율·액면가 수동 보정 (P0-③) — 보고서 원값이 없을 때만 적용, 원값이 있으면 절대 간섭하지 않음 ── */
+function crApplyManual(){
+  var D=FIN.data; if(!D)return false;
+  if(D._share0==null){D._share0=D.대표지분||0;D._par0=D.액면||0;D._tot0=D.총주식||0;D._cs0=D.대표주식||0;}   /* PDF 원값 스냅샷 */
+  var f=CEO.fields||{};
+  var sh=parseFloat(String(f.share||'').replace(/[^0-9.]/g,''));
+  var pr=parseInt(String(f.par||'').replace(/[^0-9]/g,''),10);
+  var share=(D._share0>0)?D._share0:((sh>0&&sh<=100)?sh:0);                       /* 원값 우선 잠금 */
+  var par=(D._par0>0)?D._par0:((pr>0)?pr:0);
+  var tot=D._tot0;
+  if(!(tot>0)&&par>0&&D.자본금&&Number.isFinite(D.자본금[0])&&D.자본금[0]>0)
+    tot=Math.round(D.자본금[0]*finUnitScale().won/par);                           /* 총주식 = 자본금 ÷ 액면 역산 */
+  var cs=(D._cs0>0)?D._cs0:((tot>0&&share>0)?Math.round(tot*share/100):0);
+  if(share!==D.대표지분||par!==D.액면||tot!==D.총주식||cs!==D.대표주식){
+    D.대표지분=share;D.액면=par;D.총주식=tot;D.대표주식=cs;
+    FIN.checks=finVerify(D);FIN.calc=finCalc(D);
+    return true;
+  }
+  return false;
 }
 function crBind(){CEO.fields=crFields();
   var f=CEO.fields;
   if(f.conName)CEO.consultant.name=f.conName;
   if(f.conCompany)CEO.consultant.company=f.conCompany;
   if(f.conTitle)CEO.consultant.title=f.conTitle;
+  if(crApplyManual())crFinRender();
   crDiagPreview();crRender();crReadyCheck();}
 function crReadyCheck(){
   var f=CEO.fields, ok=!!(FIN.data&&FIN.calc&&FIN.calc.stock&&f.company&&f.ceo&&f.phone);
@@ -4900,6 +4929,16 @@ function crFinRender(){
     +'<table>'+rows+'</table>'
     +'<div id="crDiagPre"></div>'
     +'<button onclick="crFinBrief()" style="width:100%;margin-top:8px;border:1px solid #0F1B33;background:#fff;color:#0F1B33;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">📊 컨설턴트용 재무분석 브리핑 보기</button>';
+  /* 지분·액면 수동 입력 노출 — PDF 원값이 없을 때만 (P0-③) */
+  (function(){
+    var D=FIN.data,mw=document.getElementById('crManualWrap');if(!mw)return;
+    if(D&&D._share0==null){D._share0=D.대표지분||0;D._par0=D.액면||0;D._tot0=D.총주식||0;D._cs0=D.대표주식||0;}
+    var needS=!!(D&&!(D._share0>0));
+    var needP=!!(D&&!(D._par0>0)&&!(D._tot0>0));
+    document.getElementById('crShareFld').style.display=needS?'':'none';
+    document.getElementById('crParFld').style.display=needP?'':'none';
+    mw.style.display=(needS||needP)?'':'none';
+  })();
   crDiagPreview();
 }
 /* ── 컨설턴트용 재무분석 브리핑 (내부 참고용 · 새 탭 · 발송 금지) ──
@@ -5471,12 +5510,13 @@ async function crLoadFile(e){
     var T=crTeaserApi();
     crStart();
     var fd=d.fields||{};
-    ['Company','Ceo','Age','Tenure','Salary','Family','Phone','Hours','Email','ConName','ConCompany','ConTitle'].forEach(function(k){
+    ['Company','Ceo','Age','Tenure','Salary','Family','Phone','Hours','Email','ConName','ConCompany','ConTitle','Share','Par'].forEach(function(k){
       var el=document.getElementById('crf'+k);var key=k.charAt(0).toLowerCase()+k.slice(1);
       if(el&&fd[key]!=null)el.value=fd[key];});
     if(fd.div)document.getElementById('crfDiv').value=fd.div;
     if(fd.major)document.getElementById('crfMajor').value=fd.major;
     CEO.fields=crFields();
+    crApplyManual();   /* 저장 시점의 지분·액면 보정 재적용 (원값 있으면 무시됨) */
     if(T&&FIN.data){CEO.diag=T.diagnose(crEngineInput());CEO.third=crThirdNumber(CEO.diag);}
     crPickSkin(CEO.skin);crFinRender();crPendingRender();crReadyCheck();crRender();
     if(CEO.teaser)document.getElementById('crBlkCtl').classList.add('on');
