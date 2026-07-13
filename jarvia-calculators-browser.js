@@ -3487,6 +3487,373 @@ function calcCorpKeymanNeed(params) {
 }
 
 // [통합] 양쪽 환경 호환 export (PIIC + JARVIA + 브라우저 모두 지원)
+/* ═══════════════════════════════════════════════════════════
+   TEASER SIGNALS — 「대표님 리포트」 진단 엔진 (기획안 v1.4 §3 · 2026-07-13)
+   구조: 1층 시그널 조건식 17종 → 2.5층 스토리 패턴 8종 → 2층 스코어링
+   숫자불가침: 모든 수치는 아래 계산 함수 산출값만 사용. LLM은 문장만 만든다.
+   입력 단위: 만원 (jebanseo FIN 추출 규격) · 비율은 0~1 · 내부 세금 계산은 원 환산
+   입력 필드가 없으면 해당 시그널은 조용히 스킵한다(우아한 열화).
+   ═══════════════════════════════════════════════════════════ */
+
+function _tzNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+function _tzClamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function _tzEok(man) { return Math.round((man / 10000) * 100) / 100; }  // 만원 → 억 (소수 2자리)
+
+/* ── 계산 ①: 상속세 보수 추정 (주식만 · 기본공제 가정 명시형) ──
+   골든 검산: 22.15억 → 3.1428억 / 실효 14.22% (하이테커 목업 일치 확인 2026-07-13) */
+function calcInheritanceEstimate(params) {
+  const { stockValueMan, hasSpouse = true, applySurcharge = false } = params || {};
+  const sv = _tzNum(stockValueMan);
+  if (sv === null || sv <= 0) return { calculated: false, calculator: 'calcInheritanceEstimate', warnings: ['지분 평가액(만원)이 필요합니다.'] };
+  const r = calcInheritanceTax({
+    unlistedStock: sv * 10000,
+    isSMEUnlistedStock: !applySurcharge,      // 보수 기본값: 할증 미적용 (면책에 가정 명시)
+    majorShareholder: applySurcharge,
+    hasSpouse: hasSpouse,
+  });
+  if (!r || r.calculated === false) return { calculated: false, calculator: 'calcInheritanceEstimate', warnings: (r && r.warnings) || [] };
+  return {
+    calculated: true, calculator: 'calcInheritanceEstimate',
+    taxMan: Math.round(r.finalTax / 10000),
+    taxEok: _tzEok(r.finalTax / 10000),
+    effectiveRate: r.effectiveRate,
+    assumptions: ['주식분만 반영', '일괄공제·배우자공제 기본 가정' + (hasSpouse ? '' : '(배우자 없음)'), applySurcharge ? '최대주주 할증 20% 적용' : '최대주주 할증 미적용(보수 추정)'],
+  };
+}
+
+/* ── 계산 ②: 10년 뒤 상속세 추정 (봉인 미끼용 · 성장 가정 명시형) ── */
+function calcInheritanceFuture(params) {
+  const { stockValueMan, years = 10, growthRate = 0.05, hasSpouse = true, applySurcharge = false } = params || {};
+  const sv = _tzNum(stockValueMan);
+  const g = _tzClamp(_tzNum(growthRate) === null ? 0.05 : Number(growthRate), 0, 0.3);
+  if (sv === null || sv <= 0) return { calculated: false, calculator: 'calcInheritanceFuture', warnings: ['지분 평가액(만원)이 필요합니다.'] };
+  const now = calcInheritanceEstimate({ stockValueMan: sv, hasSpouse, applySurcharge });
+  const futureVal = sv * Math.pow(1 + g, years);
+  const fut = calcInheritanceEstimate({ stockValueMan: futureVal, hasSpouse, applySurcharge });
+  if (!now.calculated || !fut.calculated) return { calculated: false, calculator: 'calcInheritanceFuture', warnings: ['추정 실패'] };
+  return {
+    calculated: true, calculator: 'calcInheritanceFuture',
+    taxNowEok: now.taxEok, taxFutureEok: fut.taxEok,
+    futureValueEok: _tzEok(futureVal), years, growthRateAssumed: g,
+    assumptions: now.assumptions.concat(['연 ' + Math.round(g * 100) + '% 가치 성장 가정 · ' + years + '년']),
+  };
+}
+
+/* ── 계산 ③: 임원 퇴직금 갭 (예상액 vs 준비 재원) ──
+   예상액 = 연봉 × 1/10 × 근속연수 × 정관배수 (법인세법 §44 한도식 골격, 배수 기본 2) */
+function calcSeveranceGap(params) {
+  const { annualSalaryMan, serviceYears, multiple = 2, reserveMan = 0 } = params || {};
+  const sal = _tzNum(annualSalaryMan), yrs = _tzNum(serviceYears);
+  if (sal === null || sal <= 0 || yrs === null || yrs <= 0) return { calculated: false, calculator: 'calcSeveranceGap', warnings: ['연봉(만원)·근속연수가 필요합니다.'] };
+  const m = _tzClamp(_tzNum(multiple) === null ? 2 : Number(multiple), 1, 3);
+  const expected = sal * 0.1 * yrs * m;
+  const reserve = Math.max(0, _tzNum(reserveMan) === null ? 0 : Number(reserveMan));
+  return {
+    calculated: true, calculator: 'calcSeveranceGap',
+    expectedMan: Math.round(expected), expectedEok: _tzEok(expected),
+    reserveMan: Math.round(reserve), gapMan: Math.round(Math.max(0, expected - reserve)), gapEok: _tzEok(Math.max(0, expected - reserve)),
+    assumptions: ['정관 배수 ' + m + '배 가정', '연봉 × 1/10 × 근속 × 배수 산식'],
+  };
+}
+
+/* ── 1층: 시그널 카탈로그 17종 ──
+   각 시그널: req(필수 필드) 충족 시에만 판정. severity·talk(화법력)·urgency(시의성)는 0~1.
+   score = severity×0.5 + talk×0.3 + urgency×0.2 (×100) */
+const TEASER_SIGNALS = [
+  { id: 'S01', name: '이익잉여금 과다', line: '쌓인 이익이 주식가치를 밀어올린 규모',
+    req: ['retainedEarnings', 'capital'],
+    eval: (F) => {
+      if (F.capital <= 0) return null;
+      const ratio = F.retainedEarnings / F.capital;
+      if (ratio < 5) return null;
+      return { severity: _tzClamp(ratio / 25, 0.35, 1), talk: 0.9, urgency: 0.5, detail: '잉여금/자본금 ' + Math.round(ratio) + '배' };
+    } },
+  { id: 'S02', name: '이익-현금 괴리', line: '장부 이익과 반대로 가는 현금흐름',
+    req: ['netProfit', 'operatingCashFlow'],
+    eval: (F) => {
+      if (!(F.netProfit > 0 && F.operatingCashFlow < 0)) return null;
+      return { severity: _tzClamp(0.5 + Math.abs(F.operatingCashFlow) / Math.max(F.netProfit, 1) / 6, 0.5, 1), talk: 0.95, urgency: 0.7, detail: '순익 +' + _tzEok(F.netProfit) + '억 vs 영업CF ' + _tzEok(F.operatingCashFlow) + '억' };
+    } },
+  { id: 'S03', name: '매출채권 급증', line: '이익이 매출채권에 묶여 있는 정도',
+    req: ['receivables', 'receivablesPrev'],
+    eval: (F) => {
+      if (F.receivablesPrev <= 0) return null;
+      const growth = (F.receivables - F.receivablesPrev) / F.receivablesPrev;
+      if (growth < 0.5) return null;
+      return { severity: _tzClamp(growth / 3, 0.4, 1), talk: 0.7, urgency: 0.6, detail: '채권 ' + _tzEok(F.receivablesPrev) + '→' + _tzEok(F.receivables) + '억 (+' + Math.round(growth * 100) + '%)' };
+    } },
+  { id: 'S04', name: '차입 의존', line: '현금 대비 차입 부담',
+    req: ['borrowings', 'cash'],
+    eval: (F) => {
+      if (!(F.borrowings > F.cash * 2 && F.borrowings > 0)) return null;
+      return { severity: _tzClamp(F.borrowings / Math.max(F.cash, 1) / 10, 0.4, 1), talk: 0.6, urgency: 0.5, detail: '차입 ' + _tzEok(F.borrowings) + '억 vs 현금 ' + _tzEok(F.cash) + '억' };
+    } },
+  { id: 'S05', name: '이자보상 취약', line: '영업이익 대비 이자 부담',
+    req: ['operatingProfit', 'interestExpense'],
+    eval: (F) => {
+      if (!(F.interestExpense > 0 && F.operatingProfit / F.interestExpense < 2)) return null;
+      return { severity: 0.7, talk: 0.65, urgency: 0.6, detail: '이자보상배율 ' + (F.operatingProfit / F.interestExpense).toFixed(1) };
+    } },
+  { id: 'S06', name: '가지급금 부담', line: '가지급금이 매년 만드는 세금 비용',
+    req: ['advanceToCEO'],
+    eval: (F) => {
+      if (!(F.advanceToCEO > 0)) return null;
+      return { severity: _tzClamp(F.advanceToCEO / 100000, 0.35, 1), talk: 0.9, urgency: 0.55, detail: '가지급금 ' + _tzEok(F.advanceToCEO) + '억 · 인정이자 연 ' + Math.round(F.advanceToCEO * 0.046) + '만원' };
+    } },
+  { id: 'S07', name: '자본잠식 근접', line: '자본금을 갉아먹은 누적 손실',
+    req: ['totalEquity', 'capital'],
+    eval: (F) => {
+      if (!(F.totalEquity < F.capital)) return null;
+      return { severity: 0.9, talk: 0.5, urgency: 0.8, detail: '자본총계 < 자본금' };
+    } },
+  { id: 'S08', name: '장기 무배당', line: '한 번도 꺼내 쓰지 못한 이익',
+    req: ['retainedEarnings', 'capital'],
+    eval: (F) => {
+      const noDiv = (F.dividend === 0) || (F.noDividendYears !== null && F.noDividendYears >= 3);
+      if (!(noDiv && F.retainedEarnings >= F.capital * 3)) return null;
+      return { severity: 0.55, talk: 0.6, urgency: 0.4, detail: '무배당 · 잉여금 ' + _tzEok(F.retainedEarnings) + '억' };
+    } },
+  { id: 'S09', name: '승계 시계 가동', line: '대표님 연령이 정한 준비 마감',
+    req: ['ceoAge'],
+    eval: (F) => {
+      if (!(F.ceoAge >= 55)) return null;
+      return { severity: _tzClamp((F.ceoAge - 55) / 15 + 0.4, 0.4, 1), talk: 0.7, urgency: _tzClamp((F.ceoAge - 55) / 12 + 0.4, 0.4, 1), detail: '대표 ' + F.ceoAge + '세' };
+    } },
+  { id: 'S10', name: '장기 근속 퇴직금', line: '근속이 쌓아올린 퇴직금 규모',
+    req: ['ceoTenureYears'],
+    eval: (F) => {
+      if (!(F.ceoTenureYears >= 15)) return null;
+      return { severity: _tzClamp(F.ceoTenureYears / 30, 0.4, 1), talk: 0.6, urgency: 0.5, detail: '근속 ' + F.ceoTenureYears + '년' };
+    } },
+  { id: 'S11', name: '승계 미착수', line: '아직 시작되지 않은 지분 이전',
+    req: ['ceoAge'],
+    eval: (F) => {
+      if (!(F.ceoAge >= 55 && F.heirPrepared === false)) return null;
+      return { severity: 0.75, talk: 0.8, urgency: 0.8, detail: '승계 준비 미착수' };
+    } },
+  { id: 'S12', name: '부동산 과다 법인', line: '평가 가중치가 무거워지는 자산 구조',
+    req: ['realEstateRatio'],
+    eval: (F) => {
+      if (!(F.realEstateRatio >= 0.5)) return null;
+      return { severity: 0.6, talk: 0.5, urgency: 0.45, detail: '부동산 비중 ' + Math.round(F.realEstateRatio * 100) + '% (가중 2:3 전환)' };
+    } },
+  { id: 'S13', name: '지분 집중', line: '대표 한 사람에게 몰린 회사 가치',
+    req: ['ceoShareRatio'],
+    eval: (F) => {
+      if (!(F.ceoShareRatio >= 0.6)) return null;
+      return { severity: _tzClamp(F.ceoShareRatio, 0.5, 1), talk: 0.6, urgency: 0.4, detail: '대표 지분 ' + Math.round(F.ceoShareRatio * 100) + '%' };
+    } },
+  { id: 'S14', name: '최대주주 할증 미확정', line: '(확인 필요) 최대주주 여부에 따른 20% 할증',
+    req: ['stockValueMan'],
+    eval: (F) => {
+      if (!(F.largestShareholderIsCEO === null && F.stockValueMan > 0)) return null;
+      return { severity: 0.3, talk: 0.3, urgency: 0.3, pending: '최대주주=대표 여부 (할증 판정)', detail: '미확인 — 발송 전 확인 필수' };
+    } },
+  { id: 'S15', name: '실적 회복 국면', line: '위기를 지나 다시 오르는 이익',
+    req: ['netProfit', 'netProfitPrev'],
+    eval: (F) => {
+      const rebound = (F.netProfitPrev <= 0 && F.netProfit > 0) || (F.netProfitPrev > 0 && F.netProfit >= F.netProfitPrev * 1.5);
+      if (!rebound) return null;
+      return { severity: 0.55, talk: 0.7, urgency: 0.6, detail: '순익 ' + _tzEok(F.netProfitPrev) + '→' + _tzEok(F.netProfit) + '억' };
+    } },
+  { id: 'S16', name: '납세 재원 부재', line: '순자산 대비 바닥난 현금',
+    req: ['cash', 'totalEquity'],
+    eval: (F) => {
+      if (!(F.totalEquity > 0 && F.cash / F.totalEquity < 0.05)) return null;
+      return { severity: 0.7, talk: 0.75, urgency: 0.6, detail: '현금/순자산 ' + Math.round((F.cash / F.totalEquity) * 100) + '%' };
+    } },
+  { id: 'S17', name: '퇴직금 재원 갭', line: '받으실 퇴직금 vs 준비된 재원',
+    req: ['ceoTenureYears', 'annualSalaryMan'],
+    eval: (F) => {
+      if (!(F.ceoTenureYears >= 10 && F.annualSalaryMan > 0)) return null;
+      const g = calcSeveranceGap({ annualSalaryMan: F.annualSalaryMan, serviceYears: F.ceoTenureYears, reserveMan: F.severanceReserveMan || 0 });
+      if (!g.calculated || g.gapMan <= 0) return null;
+      return { severity: _tzClamp(g.gapMan / 100000, 0.4, 1), talk: 0.85, urgency: 0.6, detail: '예상 ' + g.expectedEok + '억 vs 재원 ' + _tzEok(g.reserveMan) + '억', gapCalc: g };
+    } },
+];
+
+/* ── 2.5층: 스토리 패턴 8종 (구성 시그널 + 헤드라인 앵글 + 클로징 앵글 + 제안 방향) ── */
+const TEASER_PATTERNS = [
+  { id: 'growth_paradox', name: '성장의 역설', weight: 1.05,
+    all: ['S01'], any: ['S02', 'S03'],
+    headlineAngle: '세금 고지서는 이미 쓰여 있는데, 낼 현금은 회사에 묶여 있다 — 이익이 쌓일수록 커지는 역설',
+    closingAngle: '이익이 쌓이는 회사는 기다리는 시간만큼 주식가치와 세금이 함께 자란다 — 같은 설계라도 올해와 3년 뒤의 비용이 다르다',
+    speechKeys: ['주식가치', '상속', '가지급금', '퇴직금'],
+    verdict: { conclusion: '과제는 절세가 아니라, 회사 밖에 세금 낼 현금을 미리 만드는 일',
+      directions: [ { t: '임원 퇴직금 규정·재원 정비', s: '인출 통로 확보' }, { t: '지분 이전 시점 설계', s: '가치가 더 오르기 전' }, { t: '유고 대비 납세 재원 분리', s: '회사 현금과 절연' } ] } },
+  { id: 'peak_value', name: '가치 정점', weight: 1.0,
+    all: ['S01', 'S08'], any: ['S15'],
+    headlineAngle: '위기를 이겨낸 대가로 주식가치가 사상 최고 — 성과가 곧 세금의 크기가 된 순간',
+    closingAngle: '실적이 회복 국면일수록 다음 평가는 더 높다 — 평가가 낮은 해가 이전의 적기',
+    speechKeys: ['주식가치', '가업승계', '배당'],
+    verdict: { conclusion: '지금의 기업가치를 인정하되, 그 가치가 세금으로 새지 않게 이전 경로를 먼저 정하는 일',
+      directions: [ { t: '주식 평가액 정기 점검 체계', s: '평가 시점 선택권 확보' }, { t: '이익 환원(배당·급여) 경로 설계', s: '잉여금 증가 속도 조절' }, { t: '승계·이전 로드맵 착수', s: '가치 정점 이전에' } ] } },
+  { id: 'succession_clock', name: '승계 시한폭탄', weight: 1.0,
+    all: ['S09'], any: ['S01', 'S13', 'S11'],
+    headlineAngle: '승계는 이벤트가 아니라 시계 — 요건과 세율이 대표님 나이와 함께 움직인다',
+    closingAngle: '가업승계 특례는 요건 충족에 수년이 걸린다 — 오늘 시작해야 쓸 수 있는 제도',
+    speechKeys: ['가업승계', '상속', '증여'],
+    verdict: { conclusion: '지금 필요한 것은 결정이 아니라, 선택지가 사라지기 전에 요건을 갖추는 일',
+      directions: [ { t: '승계 요건 충족 로드맵 수립', s: '재직·기간 요건 역산' }, { t: '지분 이전 순서 설계', s: '특례·일반 경로 비교' }, { t: '유고 대비 납세 재원 확보', s: '비상 경로 확보' } ] } },
+  { id: 'profit_leak', name: '이익 누수', weight: 1.0,
+    all: ['S06'], any: ['S04'],
+    headlineAngle: '회사 이익이 매년 조용히 새고 있다 — 가지급금이 만드는 이중 비용',
+    closingAngle: '가지급금은 시간이 지날수록 인정이자가 복리로 쌓인다 — 해소는 빠를수록 싸다',
+    speechKeys: ['가지급금', '퇴직금', '배당'],
+    verdict: { conclusion: '핵심은 가지급금의 합법적 해소 경로를 올해 안에 여는 일',
+      directions: [ { t: '가지급금 규모·발생 원인 확정', s: '해소 대상 특정' }, { t: '급여·배당·퇴직금 해소 조합 설계', s: '세부담 최소 경로' }, { t: '재발 방지 자금 흐름 정비', s: '구조적 차단' } ] } },
+  { id: 'bank_first', name: '은행 우선 구조', weight: 0.95,
+    all: ['S04'], any: ['S05', 'S16'],
+    headlineAngle: '회사가 벌어도 은행이 먼저 가져간다 — 유고 시 가장 먼저 움직이는 것도 은행이다',
+    closingAngle: '신용은 대표님 개인에 얹혀 있다 — 대표 유고 시 대출 회수가 회사를 먼저 흔든다',
+    speechKeys: ['키맨', '법인 자금', '리스크'],
+    verdict: { conclusion: '차입 구조에서 대표 개인 리스크를 분리하는 안전판을 먼저 세우는 일',
+      directions: [ { t: '대표 유고 시 자금 소요 산정', s: '리스크 계량화' }, { t: '경영 안정 재원 확보 설계', s: '은행과 절연된 재원' }, { t: '차입·상환 구조 재정렬', s: '이자 부담 경감' } ] } },
+  { id: 'unguarded_core', name: '알짜 무방비', weight: 0.95,
+    all: ['S13', 'S16'], any: ['S01'],
+    headlineAngle: '회사가 알짜일수록, 대표님 유고에는 무방비다 — 가치가 한 사람에게 몰려 있다',
+    closingAngle: '좋은 회사일수록 평가액이 높고, 높은 평가액은 곧 높은 세금이다 — 준비 없는 알짜가 가장 위험하다',
+    speechKeys: ['키맨', '주식가치', '상속'],
+    verdict: { conclusion: '회사의 가치를 지키는 일과 가족의 납세 재원을 만드는 일을 분리해 동시에 여는 것',
+      directions: [ { t: '유고 시 필요 자금 산정', s: '주식·운영 이중 소요' }, { t: '납세 재원의 회사 밖 분리', s: '가족 보호선' }, { t: '핵심 인물 리스크 헤지', s: '경영 연속성' } ] } },
+  { id: 'severance_void', name: '퇴직금 공백', weight: 1.0,
+    all: ['S10', 'S17'], any: [],
+    headlineAngle: '받으실 퇴직금은 이미 정해져 있다 — 준비된 재원이 없을 뿐',
+    closingAngle: '퇴직금은 지급 시점에 한꺼번에 회사 현금을 빼간다 — 적립은 미룰수록 무거워진다',
+    speechKeys: ['퇴직금', '법인 자금'],
+    verdict: { conclusion: '퇴직금을 받을 권리와 회사가 줄 능력 사이의 갭을 지금부터 메우는 일',
+      directions: [ { t: '임원 퇴직금 규정 정비', s: '지급 근거 확정' }, { t: '재원 적립 경로 설계', s: '손금 활용 구조' }, { t: '지급 시점 자금 계획', s: '유동성 충격 방지' } ] } },
+  { id: 'realty_weight', name: '부동산 무게', weight: 0.95,
+    all: ['S12'], any: ['S01', 'S09'],
+    headlineAngle: '부동산이 많은 법인은 평가부터 다르다 — 순자산 가중 2:3, 숫자가 더 무거워진다',
+    closingAngle: '부동산 가격과 평가 가중이 함께 오르는 구조 — 평가 시점을 고르는 것 자체가 절세다',
+    speechKeys: ['주식가치', '부동산', '상속'],
+    verdict: { conclusion: '자산 구성이 만든 평가 구조를 이해하고, 이전 시점과 방법을 먼저 정하는 일',
+      directions: [ { t: '부동산 과다 판정·평가 점검', s: '가중 전환 확인' }, { t: '자산 구성 재편 검토', s: '평가 구조 최적화' }, { t: '이전 시점·방법 설계', s: '세부담 비교' } ] } },
+];
+
+/* ── 입력 정규화 ── */
+function _tzNormalize(raw) {
+  const src = raw || {};
+  const pick = (keys) => { for (const k of keys) { const v = _tzNum(src[k]); if (v !== null) return v; } return null; };
+  return {
+    capital: pick(['capital', 'capitalStock']),
+    totalEquity: pick(['totalEquity']),
+    totalAssets: pick(['totalAssets', 'financialTotalAssets']),
+    totalLiabilities: pick(['totalLiabilities']),
+    retainedEarnings: pick(['retainedEarnings']),
+    netProfit: pick(['netProfit']),
+    netProfitPrev: pick(['netProfitPrev', 'netProfitPrior']),
+    operatingProfit: pick(['operatingProfit']),
+    operatingCashFlow: pick(['operatingCashFlow']),
+    revenue: pick(['revenue']),
+    receivables: pick(['receivables', 'tradeReceivables']),
+    receivablesPrev: pick(['receivablesPrev']),
+    cash: pick(['cash', 'cashAndCashEquivalents']),
+    borrowings: pick(['borrowings', 'loanAmount']),
+    interestExpense: pick(['interestExpense']),
+    advanceToCEO: pick(['advanceToCEO', 'advancePayment']),
+    dividend: pick(['dividend']),
+    noDividendYears: pick(['noDividendYears']),
+    realEstateRatio: pick(['realEstateRatio']),
+    ceoAge: pick(['ceoAge']),
+    ceoTenureYears: pick(['ceoTenureYears']),
+    ceoShareRatio: pick(['ceoShareRatio', 'shareRatio']),
+    annualSalaryMan: pick(['annualSalaryMan', 'annualSalary']),
+    severanceReserveMan: pick(['severanceReserveMan', 'severanceReserve']),
+    stockValueMan: pick(['stockValueMan', 'ceoShareValue']),
+    heirPrepared: (src.heirPrepared === true || src.heirPrepared === false) ? src.heirPrepared : null,
+    largestShareholderIsCEO: (src.largestShareholderIsCEO === true || src.largestShareholderIsCEO === false) ? src.largestShareholderIsCEO : null,
+  };
+}
+
+/* ── 1층 실행 ── */
+function evaluateTeaserSignals(rawF) {
+  const F = _tzNormalize(rawF);
+  const fired = [];
+  for (const s of TEASER_SIGNALS) {
+    if (s.req.some((k) => F[k] === null)) continue;      // 필수 입력 없으면 스킵
+    let r = null;
+    try { r = s.eval(F); } catch (_e) { r = null; }
+    if (!r) continue;
+    fired.push({
+      id: s.id, name: s.name, line: s.line, detail: r.detail || '',
+      severity: r.severity, talk: r.talk, urgency: r.urgency,
+      score: Math.round((r.severity * 0.5 + r.talk * 0.3 + r.urgency * 0.2) * 100),
+      pending: r.pending || null, gapCalc: r.gapCalc || null,
+    });
+  }
+  fired.sort((a, b) => b.score - a.score);
+  return { F, fired };
+}
+
+/* ── 2.5층 + 2층 실행 ── */
+function synthesizeTeaserPatterns(fired) {
+  const has = new Set(fired.map((s) => s.id));
+  const byId = Object.fromEntries(fired.map((s) => [s.id, s]));
+  const out = [];
+  for (const p of TEASER_PATTERNS) {
+    if (!p.all.every((id) => has.has(id))) continue;
+    const anyHits = p.any.filter((id) => has.has(id));
+    if (p.any.length && !anyHits.length) continue;
+    const parts = p.all.concat(anyHits).map((id) => byId[id]);
+    const base = parts.reduce((a, s) => a + s.score, 0) / parts.length;
+    out.push({
+      id: p.id, name: p.name,
+      score: Math.round(base * (1 + 0.08 * anyHits.length) * p.weight),
+      signals: parts.map((s) => s.id),
+      headlineAngle: p.headlineAngle, closingAngle: p.closingAngle,
+      speechKeys: p.speechKeys, verdict: p.verdict,
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+/* ── 봉인 3줄 + 미끼 (실계산값만 — 장식 금지) ── */
+function computeTeaserBaits(F, fired, topPattern) {
+  const core = new Set(topPattern ? topPattern.signals : []);
+  const candidates = fired.filter((s) => !s.pending && !core.has(s.id));
+  const pool = candidates.length >= 2 ? candidates : fired.filter((s) => !s.pending);
+  const sealed = [];
+  for (const s of pool) {
+    if (sealed.length >= 3) break;
+    let bait = null;
+    if (s.id === 'S17' && s.gapCalc) bait = { label: '차액', masked: '█.█억', realEok: s.gapCalc.gapEok, calc: 'calcSeveranceGap' };
+    else if ((s.id === 'S09' || s.id === 'S01' || s.id === 'S08') && F.stockValueMan) {
+      const f = calcInheritanceFuture({ stockValueMan: F.stockValueMan });
+      if (f.calculated) bait = { label: '10년 뒤', masked: f.taxNowEok + '억 → █.█억', realEok: f.taxFutureEok, calc: 'calcInheritanceFuture' };
+    } else if (s.id === 'S06' && F.advanceToCEO) {
+      bait = { label: '연간 비용', masked: '█,███만원', realEok: _tzEok(F.advanceToCEO * 0.046), calc: 'deemedInterest4.6' };
+    }
+    sealed.push({ signalId: s.id, title: s.line, bait });   // bait 없으면 먹줄만 (숫자 창작 금지)
+  }
+  return sealed;
+}
+
+/* ── 통합 진단 ── */
+function diagnoseTeaser(rawF) {
+  const { F, fired } = evaluateTeaserSignals(rawF);
+  const patterns = synthesizeTeaserPatterns(fired);
+  const top = patterns[0] || null;
+  return {
+    signals: fired,
+    patterns,
+    topPattern: top,
+    sealed: computeTeaserBaits(F, fired, top),
+    pendingConfirm: fired.filter((s) => s.pending).map((s) => s.pending),
+  };
+}
+
+const Teaser = {
+  SIGNALS: TEASER_SIGNALS, PATTERNS: TEASER_PATTERNS,
+  evaluateSignals: evaluateTeaserSignals,
+  synthesizePatterns: synthesizeTeaserPatterns,
+  diagnose: diagnoseTeaser,
+  calcInheritanceEstimate, calcInheritanceFuture, calcSeveranceGap,
+};
+/* ═══════════════ /TEASER SIGNALS ═══════════════ */
+
 const _Corp_exports = {
   // 세율 계산 유틸
   calcProgressiveTax,
@@ -3524,6 +3891,12 @@ const _Corp_exports = {
 
   // 키맨·CEO 유고 시 회사 운영자금
   calcCorpKeymanNeed,
+
+  // 대표님 리포트 진단 엔진 (TEASER SIGNALS)
+  Teaser,
+  calcInheritanceEstimate,
+  calcInheritanceFuture,
+  calcSeveranceGap,
 };
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -10436,4 +10809,5 @@ function req(id){
 }
 var api=req('./index');
 global.JarviaCalculators=api;
+try{global.JarviaTeaser=req('./corporate').Teaser;}catch(_e){}
 })(typeof window!=='undefined'?window:(typeof globalThis!=='undefined'?globalThis:this));
