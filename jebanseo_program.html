@@ -920,6 +920,9 @@
 .cr-sheet [data-ed]{outline:none;border-radius:3px}
 .cr-sheet [data-ed]:hover{background:rgba(150,120,60,.07);cursor:text}
 .cr-sheet [data-ed]:focus{background:rgba(150,120,60,.11);box-shadow:0 0 0 1px rgba(150,120,60,.5)}
+.cr-sheet.done [data-ed]{outline:1px dashed rgba(150,120,60,.42);outline-offset:3px}
+.cr-sheet.done [data-ed]:hover{outline-style:solid;outline-color:rgba(150,120,60,.75)}
+.cr-sheet.cr-shot [data-ed]{outline:none!important;background:none!important}
 .cr-shimmer{background:linear-gradient(90deg,#E8E3D6 25%,#F4F0E6 50%,#E8E3D6 75%);background-size:200% 100%;animation:crsh 1.2s infinite;color:transparent!important;border-radius:4px;user-select:none}
 @keyframes crsh{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .cr-regen{position:absolute;right:-4px;top:-4px;border:1px solid #C9C2AF;background:#fff;border-radius:999px;width:22px;height:22px;font-size:11px;cursor:pointer;line-height:1;color:#96783C;display:none}
@@ -1149,6 +1152,11 @@
     <div class="cr-right">
       <div class="cr-stage">
         <div class="cr-tag" id="crFrontTag">— 앞면 · CEO에게 전달되는 파일 —</div>
+        <div id="crDlRows" style="display:none;gap:7px;flex-wrap:wrap;justify-content:center">
+          <button onclick="crDlOne('front')" class="cr-dlbtn" style="border:1px solid #96783C;background:#fff;color:#0F1B33;border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">⬇ 리포트 HTML</button>
+          <button onclick="crDlOne('back')" class="cr-dlbtn" style="border:1px solid #96783C;background:#fff;color:#0F1B33;border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">⬇ 화법카드 HTML</button>
+          <button onclick="crDlOne('png')" class="cr-dlbtn" style="border:1px solid #96783C;background:#fff;color:#0F1B33;border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">⬇ 카톡 표지 PNG</button>
+        </div>
         <div id="crSheetWrap" style="width:100%;display:flex;justify-content:center"></div>
         <div class="cr-tag" style="display:none" id="crBackTag">— 뒷면 · 컨설턴트 전용 (별도 파일 · CEO 미전달) —</div>
         <div id="crBackWrap" style="width:100%;justify-content:center"></div>
@@ -4812,8 +4820,57 @@ function crFinRender(){
     +(bad.length?'<div class="ng">⚠ 검산 '+C.length+'건 중 '+bad.length+'건 확인 필요: '+escHtml(bad.map(function(b){return b.n;}).join(', '))+'</div>'
                 :'<div class="ok">✅ 회계 항등식 검산 '+C.length+'건 전건 통과</div>')
     +'<table>'+rows+'</table>'
-    +'<div id="crDiagPre"></div>';
+    +'<div id="crDiagPre"></div>'
+    +'<button onclick="crFinBrief()" style="width:100%;margin-top:8px;border:1px solid #0F1B33;background:#fff;color:#0F1B33;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">📊 컨설턴트용 재무분석 브리핑 보기</button>';
   crDiagPreview();
+}
+/* ── 컨설턴트용 재무분석 브리핑 (내부 참고용 · 새 탭 · 발송 금지) ──
+   파싱·계산이 이미 끝낸 재료(3개년 계정·비율·주식가치·진단 신호 전체)를 표로 정리 */
+function crFinBrief(){
+  if(!(FIN.data&&FIN.calc)){toast('재무제표를 먼저 첨부해 주세요.');return;}
+  var D=FIN.data,M=finUnitScale().won,pick=finPick(FIN.calc),f=CEO.fields||{};
+  var eok=function(arr,i){return (arr&&Number.isFinite(arr[i]))?(arr[i]*M/1e8).toFixed(2):'—';};
+  var acct=[['매출액','매출액'],['영업이익','영업이익'],['당기순이익','순이익'],['영업활동 현금흐름','영업현금'],
+    ['자산총계','자산총계'],['부채총계','부채총계'],['자본총계','자본총계'],['자본금','자본금'],['이익잉여금','이익잉여금'],
+    ['현금및현금성자산','현금'],['매출채권','매출채권'],['단기차입금','단기차입금'],['장기차입금','장기차입금'],['가지급금','가지급금']];
+  var rows3=acct.map(function(a){var arr=D[a[1]];if(arr==null)return'';
+    return '<tr><td>'+a[0]+'</td><td>'+eok(arr,0)+'</td><td>'+eok(arr,1)+'</td><td>'+eok(arr,2)+'</td></tr>';}).join('');
+  var st=(FIN.calc.ratios&&FIN.calc.ratios.stability)||{};
+  var rt=function(v,u){return Number.isFinite(v)?(Math.round(v*10)/10)+(u||''):'—';};
+  var checks=(FIN.checks||[]).map(function(c){return '<tr><td>'+escHtml(c.n)+'</td><td style="color:'+(c.ok?'#7FB77E':'#E58F86')+'">'+(c.ok?'통과':'확인 필요')+'</td></tr>';}).join('');
+  var T=crTeaserApi(),diagHtml='';
+  if(T){try{var dg=T.diagnose(crEngineInput());
+    diagHtml='<div class="bl">진단 신호 판독 — 발화 '+dg.signals.filter(function(x){return !x.pending;}).length+'건'+(dg.topPattern?' · 스토리: '+escHtml(dg.topPattern.name):'')+'</div><table>'
+      +dg.signals.map(function(x){return '<tr><td>'+escHtml(x.name)+(x.pending?' <span style=\"color:#E0B25E\">(확인 필요)</span>':'')+'</td><td>'+escHtml(x.detail||'')+'</td><td style=\"text-align:right\">'+x.score+'점</td></tr>';}).join('')
+      +'</table>'
+      +(dg.patterns&&dg.patterns.length?'<p style=\"font-size:11px;color:#B8B1A0;margin-top:6px\">패턴 순위: '+dg.patterns.map(function(p){return escHtml(p.name)+' '+p.score;}).join(' · ')+'</p>':'');
+  }catch(_e){}}
+  var html='<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>'+escHtml(f.company||D.회사명||'기업')+' 재무분석 브리핑</title>'
+    +'<link href=\"https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@700&family=Noto+Sans+KR:wght@400;700&display=swap\" rel=\"stylesheet\">'
+    +'<style>body{margin:0;background:#0B1120;color:#E7E3D7;font-family:Noto Sans KR,sans-serif;padding:26px 14px 60px;font-size:13px}'
+    +'.w{max-width:640px;margin:0 auto}.hd{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid rgba(231,227,215,.25);padding-bottom:10px}'
+    +'.hd b{font-family:Noto Serif KR,serif;font-size:18px}.hd span{font-size:9px;letter-spacing:.2em;color:#C9A85C;border:1px solid #C9A85C;padding:3px 9px}'
+    +'.bl{font-size:11px;letter-spacing:.14em;color:#C9A85C;font-weight:700;margin:22px 0 8px}'
+    +'table{width:100%;border-collapse:collapse}td{padding:6px 4px;border-bottom:1px solid rgba(231,227,215,.12);font-size:12.5px;line-height:1.5}'
+    +'td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}th{font-size:10.5px;color:#B8B1A0;text-align:right;padding:4px;font-weight:400}th:first-child{text-align:left}'
+    +'.ft{margin-top:26px;font-size:10px;color:rgba(231,227,215,.4);line-height:1.7;border-top:1px solid rgba(231,227,215,.14);padding-top:9px}'
+    +'@media print{body{background:#fff;color:#222}.hd span{color:#8a6a1f;border-color:#8a6a1f}.bl{color:#8a6a1f}td{border-color:#ddd}}</style></head><body><div class=\"w\">'
+    +'<div class=\"hd\"><b>'+escHtml(f.company||D.회사명||'기업')+' 재무분석 브리핑</b><span>CONSULTANT ONLY</span></div>'
+    +'<p style=\"font-size:11px;color:#B8B1A0;margin-top:7px\">'+escHtml(FIN.fileName||'')+' · '+escHtml(FIN.src||'')+' · 단위: 억원 · 열 순서: 당기/전기/전전기</p>'
+    +'<div class=\"bl\">주요 계정 3개년</div><table><tr><th>계정</th><th>당기</th><th>전기</th><th>전전기</th></tr>'+rows3+'</table>'
+    +'<div class=\"bl\">안정성 비율</div><table>'
+    +'<tr><td>부채비율</td><td>'+rt(st.debtRatio,'%')+'</td></tr><tr><td>이자보상배율</td><td>'+rt(st.interestCoverage,'배')+'</td></tr>'
+    +'<tr><td>차입금의존도</td><td>'+rt(st.borrowingDep,'%')+'</td></tr><tr><td>유동비율</td><td>'+rt(st.currentRatio,'%')+'</td></tr></table>'
+    +'<div class=\"bl\">주식가치 · 상속세 (상증령 §54)</div><table>'
+    +'<tr><td>1주 평가액</td><td>'+(pick.주당!=null?Math.round(pick.주당).toLocaleString()+'원':'—')+'</td></tr>'
+    +'<tr><td>대표 지분 평가'+(D.대표지분?' ('+D.대표지분+'%)':'')+'</td><td>'+(pick.대표지분가치!=null?(pick.대표지분가치/1e8).toFixed(2)+'억':'—')+'</td></tr>'
+    +'<tr><td>예상 상속세 (주식만·기본공제 가정)</td><td>'+(pick.상속세!=null?(pick.상속세/1e8).toFixed(2)+'억':'—')+'</td></tr></table>'
+    +'<div class=\"bl\">회계 항등식 검산</div><table>'+checks+'</table>'
+    +diagHtml
+    +'<p class=\"ft\">본 브리핑은 컨설턴트 내부 참고용입니다 — CEO에게 발송하지 마세요. 공개 신용정보 기준의 추정이며 정밀 수치는 정식 검토가 필요합니다. Ctrl+P로 인쇄·PDF 저장이 가능합니다.</p>'
+    +'</div></body></html>';
+  var w=window.open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank');
+  if(!w)toast('팝업이 차단됐습니다 — 팝업 허용 후 다시 눌러주세요.');
 }
 
 /* ── 진단 엔진 입력 조립 (만원) ── */
@@ -4979,6 +5036,9 @@ function crRender(){
   var st=document.getElementById('crStep1');if(!st.classList.contains('on'))return;
   CEO.fields=crFields();
   document.getElementById('crSheetWrap').innerHTML=crSheetHtml(crHasData()?crState():crDemoSkeleton(),CEO.skin,false);
+  var ft=document.getElementById('crFrontTag');
+  if(ft)ft.textContent=(CEO.teaser&&CEO.paid)?'— 앞면 · ✎ 점선 표시된 본문을 클릭하면 바로 수정됩니다 —'
+    :(CEO.teaser?'— 앞면 · 저장하면 편집이 열립니다 —':'— 앞면 · CEO에게 전달되는 파일 —');
   document.getElementById('crBackWrap').innerHTML=crBackHtml(crHasData()?crState():null);
   crWireEdit();
 }
@@ -5125,7 +5185,7 @@ function crSaveEdit(key,el){
 }
 
 /* ── 저장: 앞면 HTML(jebdata 내장) + 뒷면 HTML + 표지 PNG ── */
-function crExportFront(){
+function crExportFront(autoPrint){
   var body=crSheetHtml(crState(),CEO.skin,false).replace(/ data-ed="[^"]*"/g,'').replace(/<button class="cr-regen"[^>]*>↻<\/button>/g,'').replace(/ contenteditable="true"/g,'');
   var css=document.getElementById('ceoCss').textContent;
   var jd={app:'ceoReport',v:2,skin:CEO.skin,relationship:CEO.rel,paid:CEO.paid,reportUid:CEO.reportUid,consultant:CEO.consultant,fields:CEO.fields,
@@ -5141,7 +5201,9 @@ function crExportFront(){
     +'@media print{body{background:#fff;padding:0}.cr-sheet{width:100%;max-width:none;box-shadow:none;padding:0 1mm}.cr-skinA::after,.cr-wm{display:none}'
     +'.cr-idbar,.cr-dochead,.cr-topgrid,.cr-nums,.cr-basis,.cr-locked,.cr-relief,.cr-verdict,.cr-closing,.cr-cta,.cr-foot,.cr-h1,.cr-lede,.cr-eyebrow{break-inside:avoid;page-break-inside:avoid}}'
     +'</style></head><body>'+body
-    +'<script type="application/json" id="jebdata">'+JSON.stringify(jd).replace(/</g,'\\u003c')+'<\/script></body></html>';
+    +'<script type="application/json" id="jebdata">'+JSON.stringify(jd).replace(/</g,'\\u003c')+'<\/script>'
+    +(autoPrint?'<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},700);});<\/script>':'')
+    +'</body></html>';
 }
 function crExportBack(){
   var body=crBackHtml(crState()).replace(/ data-ed="[^"]*"/g,'').replace(/ contenteditable="true"/g,'');
@@ -5169,25 +5231,47 @@ async function crSave(){
                              :('이용 확정 · 이번 달 '+cr.freeUsed+'/'+cr.freeQuota+'회 (무료)'));
     }catch(e){toast('X 저장 확정 실패 — 네트워크를 확인해 주세요.');return;}
   }
+  var dl=document.getElementById('crDlRows'); if(dl)dl.style.display='flex';   /* 안전망: 개별 다운로드 상시 노출 */
+  toast('파일 3건을 내려받습니다 — 브라우저가 "여러 파일 다운로드 허용"을 물으면 허용을 눌러주세요.');
+  crDlOne('front');
+  setTimeout(function(){crDlOne('back');},700);
+  setTimeout(function(){crDlOne('png',true);},1500);
+}
+function crBaseName(){
   var d=new Date(),ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-  var base=(CEO.fields.ceo||'대표')+'_CEO리포트_'+ds;
-  crDownload(crExportFront(),base+'.html');
-  crDownload(crExportBack(),base+'_화법카드.html');
-  /* 표지 PNG — 카톡 전송 세트 (html2canvas · 로컬 처리, 데이터 무이탈) */
+  return (CEO.fields.ceo||'대표')+'_CEO리포트_'+ds;
+}
+/* 개별 다운로드 — 각 호출이 독립 방어 (실패 시 원인 토스트, 수동 버튼으로 재시도 가능) */
+async function crDlOne(kind,finalToast){
+  if(!CEO.teaser){toast('리포트를 먼저 생성해 주세요.');return;}
+  if(!crRequirePaid())return;
+  var base=crBaseName();
   try{
-    if(!window.html2canvas)await jbLoadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-    var sheet=document.getElementById('crFront');
-    var canvas=await html2canvas(sheet,{scale:2,backgroundColor:null,useCORS:true,
-      height:Math.min(sheet.scrollHeight, Math.round(sheet.offsetWidth*1.35)),windowWidth:document.documentElement.scrollWidth});
-    canvas.toBlob(function(bl){var a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download=base+'_표지.png';document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},800);},'image/png');
-    toast('저장 완료 — 카톡 전송: ①표지 이미지 → ②리포트 HTML → ③멘트 순서로 보내세요.');
-  }catch(e){toast('HTML 저장 완료 (표지 이미지는 생성 실패 — 다시 시도 가능)');}
+    if(kind==='front'){crDownload(crExportFront(),base+'.html');}
+    else if(kind==='back'){crDownload(crExportBack(),base+'_화법카드.html');}
+    else if(kind==='png'){
+      if(!window.html2canvas)await jbLoadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+      var sheet=document.getElementById('crFront');
+      sheet.classList.add('cr-shot');                      /* 캡처에는 편집 점선 제외 */
+      var canvas;
+      try{
+        canvas=await html2canvas(sheet,{scale:2,backgroundColor:null,useCORS:true,
+          height:Math.min(sheet.scrollHeight, Math.round(sheet.offsetWidth*1.35)),windowWidth:document.documentElement.scrollWidth});
+      }finally{sheet.classList.remove('cr-shot');}
+      canvas.toBlob(function(bl){var a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download=base+'_표지.png';document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},800);},'image/png');
+      if(finalToast)toast('저장 세트 완료 — 카톡 전송: ①표지 이미지 → ②리포트 HTML → ③멘트 순서. 안 받아진 파일은 위 ⬇ 버튼으로 개별 저장하세요.');
+    }
+  }catch(e){
+    console.error('[CEO리포트] '+kind+' 저장 실패:',e);
+    toast('❌ '+(kind==='png'?'표지 이미지':'파일')+' 저장 실패 — 위 ⬇ 버튼으로 다시 시도해 주세요.');
+  }
 }
 function crPrint(){
   if(!CEO.teaser){toast('리포트를 먼저 생성해 주세요.');return;}
   if(!crRequirePaid())return;
-  var w=window.open(URL.createObjectURL(new Blob([crExportFront()],{type:'text/html'})),'_blank');
-  if(w)toast('새 창에서 Ctrl+P → "PDF로 저장"을 선택하세요.');
+  var w=window.open(URL.createObjectURL(new Blob([crExportFront(true)],{type:'text/html'})),'_blank');
+  if(w)toast('인쇄창이 자동으로 열립니다 — 대상에서 "PDF로 저장"을 고르면 PDF 파일로 저장됩니다.');
+  else toast('팝업이 차단됐습니다 — 주소창의 팝업 허용 후 다시 눌러주세요.');
 }
 
 /* ── 파일 불러오기 (파일=저장소) ── */
