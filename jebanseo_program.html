@@ -2949,6 +2949,7 @@ async function finExtractPages(file){
       w:Math.round(i.width||0)
     })).sort((a,b)=>b.y-a.y||a.x-b.x);
     items=finMerge(items);                              // ★ 자간이 벌어진 라벨 병합
+    items=finGlue(items);                               // ★ 신형(2026 상세보고서) 숫자 조각 재조립
     items.text=items.map(i=>i.s).join(' ');             // 페이지 탐색(정규식)용 평문
     pages.push(items);
   }
@@ -2974,6 +2975,40 @@ function finMerge(items){
     }
     out.push({...it});
   }
+  return out;
+}
+
+/** 신형 NICE 상세보고서(2026~) 숫자 재조립 — 콤마·소수점이 커스텀 글리프라
+    폭 3pt 안팎의 '빈 아이템'으로 추출된다. [숫자][빈,w≤6][숫자]가 x로 밀착해 있으면
+    우측 조각이 3자리일 때 콤마, 그 외엔 소수점으로 이어 붙인다. (연도 2025.12.31 도 동일 복원)
+    ★ 구형 보고서에는 이런 빈 아이템이 없어 완전 무영향. NUL(\u0000) 잔재는 함께 제거. */
+function finGlue(items){
+  const out=[];
+  for(const raw of items){
+    let s=String(raw.s).replace(/\uE093/g,',').replace(/\uE094/g,'.')          /* 신형 폰트: 콤마·소수점 PUA 매핑 */
+                       .replace(/[\u0000-\u001F\uE000-\uF8FF]/g,'').trim();   /* 그 외 제어문자·PUA 제거 */
+    const p=out[out.length-1];
+    if(s===','||s==='.'){                                   /* 글루 확정형 — 코드포인트가 종류를 말해줌 */
+      if(p&&/\d$/.test(p.s)&&Math.abs(p.y-raw.y)<=2){p._glue=raw.x+raw.w;p._gc=s;}
+      continue;
+    }
+    if(!s){                                                 /* 미지 PUA — 폭·밀착 휴리스틱 글루 */
+      if(p&&/\d$/.test(p.s)&&raw.w<=6&&Math.abs(p.y-raw.y)<=2){p._glue=raw.x+raw.w;p._gc=null;}
+      continue;
+    }
+    if(p&&p._glue!=null&&/^\d+$/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-p._glue)<=4){
+      p.s+=(p._gc||(s.length===3?',':'.'))+s;               /* 확정 글루 우선, 없으면 3자리=콤마 휴리스틱 */
+      p.w=(raw.x+raw.w)-p.x; p._glue=null;
+      continue;
+    }
+    if(p)p._glue=null;
+    if(p&&p.s==='-'&&/^\d/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-(p.x+p.w))<=3){
+      p.s='-'+s; p.w=(raw.x+raw.w)-p.x;                     /* 음수 부호 결합 — 단독 '-'(값 없음 표기)는 gap이 커서 보존 */
+      continue;
+    }
+    out.push({...raw,s});
+  }
+  if(out.length)out[out.length-1]._glue=null;
   return out;
 }
 
@@ -3082,8 +3117,8 @@ function finParse(pages,fmt){
   if(!yr.desc)yr.years=[...yr.years].reverse();
 
   const P=fmt==='NICE'?{
-    자본금:'자본금',이익잉여금:'이익잉여금',단기차입금:'(단기차입금)',장기차입금:'(장기차입금)',
-    사채:'(장기사채)',매출채권:'(매출채권, 공사/영업미수금)',현금:'(현금 및 현금등가물)',
+    자본금:['자본금','(자본금)'],이익잉여금:'이익잉여금',단기차입금:['(단기차입금)','단기차입금'],장기차입금:['(장기차입금)','장기차입금'],
+    사채:['(장기사채)','단기사채'],매출채권:['(매출채권, 공사/영업미수금)','매출채권및기타채권','(매출채권)'],현금:['(현금 및 현금등가물)','현금및현금성자산'],
     유동자산:'유동자산',유동부채:'유동부채',재고자산:'재고자산',매입채무:'(매입채무)',
     매출액:'매출액',매출원가:'매출원가',영업이익:'영업이익(손실)',순이익:'당기순이익(손실)',
     이자비용:'(이자비용)',인건비:'(인건비)',영업현금:'영업활동조달현금',
@@ -3151,11 +3186,13 @@ function finParse(pages,fmt){
     D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
     if(!D.총주식 && D.주주.length) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);
     D.액면 = par?parseInt(par[1].replace(/,/g,''))
-                : (D.총주식?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
+                : ((D.총주식&&D.자본금)?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
   }
   const me=D.주주.find(s=>s.명===D.대표자);
   D.대표지분=me?me.율:0; D.대표주식=me?me.주식:0;
-  D.차입금=[0,1,2].map(i=>(D.단기차입금?D.단기차입금[i]:0)+(D.장기차입금?D.장기차입금[i]:0)+(D.사채[i]||0));
+  const _bwTot=BS?finCells(BS,'차입금총계'):null;   /* NICE-IFRS 차입금구조 표 (2026-07-14) */
+  D.차입금=_bwTot?ord(_bwTot)
+                :[0,1,2].map(i=>((D.단기차입금&&D.단기차입금[i])||0)+((D.장기차입금&&D.장기차입금[i])||0)+((D.사채&&D.사채[i])||0));
   return D;
 }
 
