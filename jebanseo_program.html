@@ -4766,7 +4766,7 @@ document.addEventListener('DOMContentLoaded',function(){
 });
 
 /* ── 상태 ── */
-var CEO={skin:'A',rel:'warm',fields:{},teaser:null,diag:null,third:null,modelUsed:'',degraded:false,busy:false,paid:false,reportUid:'',quota:null,regenN:0,
+var CEO={skin:'A',rel:'warm',fields:{},teaser:null,diag:null,third:null,modelUsed:'',degraded:false,busy:false,paid:false,reportUid:'',quota:null,regenN:0,pickedPattern:'',
   consultant:(function(){try{var q=new URLSearchParams(location.search);return{name:q.get('name')||'',company:q.get('company')||'',title:q.get('title')||'컨설턴트'};}catch(_){return{name:'',company:'',title:'컨설턴트'};}})()};
 function crFmtPhone(v){var d=String(v||'').replace(/[^0-9]/g,'').slice(0,11);
   if(d.length<4)return d;
@@ -4824,7 +4824,7 @@ function crTab(t,btn){document.getElementById('crStep1').setAttribute('data-tab'
   document.querySelectorAll('.cr-tabs button').forEach(function(b){b.classList.toggle('on',b===btn);});}
 function crNewUid(){return 'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);}
 function crStart(){
-  if(!CEO.reportUid){CEO.reportUid=crNewUid();CEO.paid=false;CEO.regenN=0;}
+  if(!CEO.reportUid){CEO.reportUid=crNewUid();CEO.paid=false;CEO.regenN=0;CEO.pickedPattern='';}
   [['crfConName',CEO.consultant.name],['crfConCompany',CEO.consultant.company],['crfConTitle',CEO.consultant.title]].forEach(function(p){
     var el=document.getElementById(p[0]); if(el&&!el.value&&p[1])el.value=p[1]; });
   document.getElementById('crStep0').style.display='none';
@@ -4869,13 +4869,13 @@ function crBind(){CEO.fields=crFields();
   if(crApplyManual())crFinRender();
   crDiagPreview();crRender();crReadyCheck();}
 function crReadyCheck(){
-  var f=CEO.fields, ok=!!(FIN.data&&FIN.calc&&FIN.calc.stock&&f.company&&f.ceo&&f.phone);
+  var f=CEO.fields, ok=!!(FIN.data&&FIN.calc&&f.company&&f.ceo&&f.phone);
   document.getElementById('crGenBtn').disabled=!ok||CEO.busy;
   var st=document.getElementById('crGenStat');
   if(!FIN.data)st.textContent='PDF를 첨부하면 숫자를 추출·검산합니다.';
-  else if(!(FIN.calc&&FIN.calc.stock))st.textContent='⚠ 주주현황(대표 지분)을 찾지 못해 주식평가를 계산할 수 없습니다.';
   else if(!ok)st.textContent='회사명·대표명·휴대전화를 채우면 생성할 수 있습니다.';
-  else if(!CEO.teaser)st.textContent='준비 완료 — 리포트를 생성하세요.';
+  else if(!CEO.teaser)st.textContent=(FIN.calc&&FIN.calc.stock)?'준비 완료 — 리포트를 생성하세요.'
+    :'준비 완료 — 지분 미확인 모드로 생성합니다. (지분율·액면가 입력 시 지분평가·상속세 정밀 산출)';
 }
 
 /* ── PDF 처리: 기존 FIN 체인 재사용 (finExtractPages→finDetect→finParse→finVerify→finCalc) ── */
@@ -4899,19 +4899,66 @@ async function crPdfHandle(e){
     toast('재무 수치 추출 완료');
   }catch(err){FIN.data=null;FIN.calc=null;p.innerHTML='<span class="ng">❌ '+escHtml(err.message||'PDF를 읽지 못했습니다.')+'</span>';crReadyCheck();}
 }
+/* ── 접점 후보 보강 합성 (P0-② 임계 보정 · 2026-07-14) ──
+   엔진의 정식 합성은 all 신호 전부 충족을 요구해, 강한 단독 신호(예: 이자보상 1.2배)가
+   후보 명단에도 못 오른다. 여기서 엔진이 내장한 8패턴 정의(T.PATTERNS — verdict·앵글 포함)를
+   그대로 가져와 '부분 충족 후보'를 추가한다. 점수 계수를 정식 합성보다 항상 낮게 잡아
+   기존 골든셋 순위(하이테커 등)는 절대 뒤집히지 않는다. 후보에는 partial 표기로 정직 표시. */
+function crAugmentPatterns(d){
+  try{
+    var T=crTeaserApi(); if(!(T&&T.PATTERNS&&d&&d.signals))return d;
+    var fired=d.signals.filter(function(x){return !x.pending;});
+    var has={}; fired.forEach(function(x){has[x.id]=x;});
+    var existing={}; (d.patterns||[]).forEach(function(p){existing[p.id]=1;});
+    var extra=[];
+    T.PATTERNS.forEach(function(p){
+      if(existing[p.id])return;
+      var req=(p.all||[]).concat(p.any||[]);
+      var parts=req.filter(function(id){return has[id];}).map(function(id){return has[id];});
+      if(!parts.length)return;
+      var maxS=parts.reduce(function(a,s){return Math.max(a,s.score);},0);
+      var avg=parts.reduce(function(a,s){return a+s.score;},0)/parts.length;
+      if(!(maxS>=60||(parts.length>=2&&avg>=50)))return;            /* 보강 임계: 강신호 1개 또는 중신호 2개 */
+      var need=(p.all||[]).length+((p.any&&p.any.length)?1:0);
+      var cover=Math.min(1,parts.length/Math.max(1,need));
+      var score=Math.round(avg*(0.55+0.35*cover)*(p.weight||1));    /* 완전 충족이어도 정식 합성보다 낮음 */
+      extra.push({id:p.id,name:p.name,score:score,signals:parts.map(function(s){return s.id;}),
+        headlineAngle:p.headlineAngle,closingAngle:p.closingAngle,speechKeys:p.speechKeys,verdict:p.verdict,partial:true});
+    });
+    if(extra.length){
+      d.patterns=(d.patterns||[]).concat(extra).sort(function(a,b){return b.score-a.score;});
+      if(!d.topPattern)d.topPattern=d.patterns[0]||null;            /* 정식 합성 0건이어도 문서 생성 가능 */
+    }
+  }catch(_e){}
+  return d;
+}
+function crPickPattern(id){CEO.pickedPattern=id;crReadyCheck();}
 function crDiagPreview(){
   var box=document.getElementById('crDiagPre');if(!box)return;
   var T=crTeaserApi();
-  if(!(T&&FIN.data&&FIN.calc&&FIN.calc.stock)){box.innerHTML='';return;}
+  if(!(T&&FIN.data&&FIN.calc)){box.innerHTML='';return;}
   try{
-    var d=T.diagnose(crEngineInput());
+    var d=crAugmentPatterns(T.diagnose(crEngineInput()));
     if(!d.topPattern){box.innerHTML='';return;}
-    var sigs=d.signals.filter(function(x){return !x.pending;}).slice(0,3);
-    box.innerHTML='<div style="margin-top:8px;padding:9px 11px;background:#F4F0E4;border-radius:9px;border:1px solid #E2D8BE">'
-      +'🔍 재무 신호 <b>'+d.signals.filter(function(x){return !x.pending;}).length+'건</b> 감지 · 예상 스토리: <b>'+escHtml(d.topPattern.name)+'</b>'
-      +'<div style="margin-top:4px;font-size:10.5px;color:#6A665C;line-height:1.6">'
-      +sigs.map(function(x){return '· '+escHtml(x.name)+(x.detail?' — '+escHtml(x.detail):'');}).join('<br>')
-      +'</div><div style="margin-top:4px;font-size:10px;color:#96783C">생성 시 이 신호들로 헤드라인·봉인 항목·화법이 구성됩니다.</div></div>';
+    var fired=d.signals.filter(function(x){return !x.pending;});
+    var tops=(d.patterns||[]).slice(0,3);
+    if(CEO.pickedPattern&&!tops.some(function(p){return p.id===CEO.pickedPattern;}))CEO.pickedPattern='';
+    var sel=CEO.pickedPattern||(tops[0]&&tops[0].id);
+    var cards=tops.map(function(p,i){
+      var core=fired.filter(function(x){return (p.signals||[]).indexOf(x.id)>=0;}).slice(0,2);
+      return '<label style="display:block;margin-top:7px;padding:9px 11px;background:#fff;border:1.5px solid '+(p.id===sel?'#96783C':'#E2D8BE')+';border-radius:9px;cursor:pointer">'
+        +'<div style="display:flex;align-items:center;gap:7px"><input type="radio" name="crMeet" '+(p.id===sel?'checked':'')+' onchange="crPickPattern(\''+p.id+'\');crDiagPreview()" style="accent-color:#96783C">'
+        +'<b style="font-size:12.5px">'+(i+1)+'. '+escHtml(p.name)+'</b>'
+        +(p.partial?'<span style="font-size:9px;color:#B4622D;border:1px solid #E2CFA0;border-radius:99px;padding:1px 7px;margin-left:6px">부분 신호</span>':'')
+        +'<span style="margin-left:auto;font-size:10px;color:#96783C">'+(p.score||'')+'점</span></div>'
+        +'<div style="margin:5px 0 0 21px;font-size:11px;color:#4A463C;line-height:1.65">'+escHtml(CR_MEET_HOOK[p.id]||'')+'</div>'
+        +(core.length?'<div style="margin:4px 0 0 21px;font-size:10px;color:#8A8577;line-height:1.6">'+core.map(function(x){return '근거: '+escHtml(x.name)+(x.detail?' — '+escHtml(x.detail):'');}).join('<br>')+'</div>':'')
+        +'</label>';
+    }).join('');
+    box.innerHTML='<div style="margin-top:8px;padding:10px 11px;background:#F4F0E4;border-radius:9px;border:1px solid #E2D8BE">'
+      +'<div style="font-size:11.5px"><b>🎯 AI가 찾은 접점 포인트 '+tops.length+'가지</b> <span style="color:#6A665C">(재무 신호 '+fired.length+'건 판독)</span></div>'
+      +'<div style="font-size:10px;color:#96783C;margin-top:2px">이 문서의 1차 목적은 만남 — 대표님과 대화를 열 축을 선택하세요. 문서 전체가 그 축으로 쓰입니다.</div>'
+      +cards+'</div>';
   }catch(_e){box.innerHTML='';}
 }
 function crFinRender(){
@@ -4962,6 +5009,16 @@ S14:{r:'최대주주 여부에 따라 주식평가액에 20% 할증이 붙어 �
 S15:{r:'실적 개선은 좋은 신호지만 주식가치 상승으로 직결됩니다 — 이전·증여 비용이 함께 오르는 중입니다.',c:'개선의 지속성(수주 잔고·거래처) · 차기 평가액 전망',a:'"가치가 더 오르기 전"이라는 시점 논리 — 지분 이전 설계의 최적 타이밍 근거입니다.'},
 S16:{r:'예상 상속세 대비 유동 재원이 부족합니다 — 납부 재원이 회사 지분뿐이면 지분 매각·물납으로 경영권 훼손까지 이어질 수 있습니다.',c:'대표 개인 금융자산 · 기존 보험 가입 현황 · 납부 재원 시나리오',a:'상속세 재원 마련의 정석 = 종신보험 설계 — 세액 규모가 곧 필요 보장액입니다.'},
 S17:{r:'예상 퇴직금 대비 적립 재원의 공백 — 퇴직 시점 법인 유동성 충격과 손금 인정 리스크가 함께 옵니다.',c:'정관 규정·배수 · 적립 수단(퇴직연금·보험) · 갭 규모',a:'CEO플랜 적립 설계 — 법인 비용처리와 대표 수령 구조를 함께 잡는 1순위 착수 지점입니다.'}};
+/* 접점 훅 — '이 이야기로 만나면 되는 이유' 한 문장 (미팅 명분 톤) */
+var CR_MEET_HOOK={
+growth_paradox:'순익은 쌓이는데 현금이 없다 — "세금 낼 돈" 이야기는 대표가 거절하기 어려운 만남 명분입니다.',
+peak_value:'회사 가치가 정점권 — "지금 평가액이 얼마인지 아십니까?" 질문 하나로 미팅이 열립니다.',
+succession_clock:'대표 연령 대비 승계 무준비 — "10년 단위로 세금이 달라진다"는 시간 이야기가 접점입니다.',
+profit_leak:'가지급금·이자로 이익이 샌다 — "세무조사 단골 항목 점검" 제안이 자연스러운 명분입니다.',
+bank_first:'영업이익 대부분이 이자로 — "회사의 1순위 수익자가 은행"이라는 한 문장이 대화를 엽니다.',
+unguarded_core:'알짜 회사인데 보호장치 공백 — "잘되는 회사일수록 유고 낙폭이 크다"는 역설이 접점입니다.',
+severance_void:'대표 퇴직금이 규정에도 재원에도 없음 — "퇴직금, 서류에 있습니까?" 질문이 만남을 만듭니다.',
+realty_weight:'부동산 중심 법인 — 평가·과점주주 취득세 쟁점 점검 제안이 전문가 미팅의 명분입니다.'};
 var CR_BRIEF_PATTERN={
 growth_paradox:'외형과 손익은 성장하는데 현금이 따라오지 못하는 전형적 「성장의 역설」 국면입니다. 성장이 만든 세금·평가액 증가와 그것을 감당할 현금의 부재가 동시에 진행 중 — 유동성 설계와 주식가치 관리가 같은 시급성으로 필요합니다.',
 peak_value:'실적과 평가액이 정점권입니다. 평가가 높을수록 이전 비용이 커지므로, 승계·증여의 「시점 설계」가 이 회사의 핵심 어젠다입니다.',
@@ -4977,7 +5034,7 @@ function crFinBrief(){
   if(!(FIN.data&&FIN.calc)){toast('재무제표를 먼저 첨부해 주세요.');return;}
   var D=FIN.data,M=finUnitScale().won,pick=finPick(FIN.calc),f=CEO.fields||{};
   var T=crTeaserApi(),dg=null;
-  if(T){try{dg=T.diagnose(crEngineInput());}catch(_e){}}
+  if(T){try{dg=crAugmentPatterns(T.diagnose(crEngineInput()));}catch(_e){}}
   var brief='';
   if(dg&&dg.topPattern){
     var fired=dg.signals.filter(function(x){return !x.pending;});
@@ -5101,10 +5158,15 @@ async function crGenerate(force){
   CEO.fields=crFields();
   var F=crEngineInput();
   crLog('재무 수치 정규화 완료 (검산 '+((FIN.checks||[]).filter(function(c){return c.ok;}).length)+'건 통과)','ok');
-  CEO.diag=T.diagnose(F);
+  CEO.diag=crAugmentPatterns(T.diagnose(F));
   if(!CEO.diag.topPattern){crLog('발화된 스토리 패턴 없음 — 중단','err');toast('발화된 스토리 패턴이 없습니다 — 재무 수치·추가 정보를 확인해 주세요.');return;}
+  if(CEO.pickedPattern){   /* 컨설턴트가 고른 접점 포인트를 문서의 축으로 (2026-07-14) */
+    var _pp=(CEO.diag.patterns||[]).find(function(x){return x.id===CEO.pickedPattern;});
+    if(_pp)CEO.diag.topPattern=_pp;
+  }
   var _fired=CEO.diag.signals.filter(function(x){return !x.pending;});
-  crLog('진단 엔진 판독 — 신호 '+_fired.length+'건 발화 · 스토리: '+CEO.diag.topPattern.name+' ('+CEO.diag.topPattern.score+'점)','ok');
+  crLog('진단 엔진 판독 — 신호 '+_fired.length+'건 발화','ok');
+  crLog('접점 포인트'+(CEO.pickedPattern?'(선택)':'(자동 1위)')+': '+CEO.diag.topPattern.name+' ('+CEO.diag.topPattern.score+'점)','ok');
   _fired.slice(0,3).forEach(function(x){crLog('  · '+x.name+(x.detail?' — '+x.detail:''),'dim');});
   CEO.third=crThirdNumber(CEO.diag);
   crLog('숫자 고정 — 지분평가·상속세·셋째 숫자'+(CEO.third?'('+CEO.third.label+')':'')+' 산출','ok');
@@ -5161,8 +5223,13 @@ function crBuildPayload(){
     pattern:{id:p.id,name:p.name,headlineAngle:p.headlineAngle,closingAngle:p.closingAngle},
     verdict:p.verdict,
     signals:d.signals.slice(0,6).map(function(s){return{id:s.id,name:s.name,detail:s.detail};}),
-    numbers:{'대표 지분 평가':eokTx(pick.대표지분가치/1e8),'예상 상속세(주식만)':eokTx(pick.상속세/1e8),
-             '셋째 숫자':CEO.third?(CEO.third.label+' '+CEO.third.valEok+'억'):null,'대표 지분율':FIN.data.대표지분?FIN.data.대표지분+'%':null},
+    numbers:(function(){var N={};
+      if(pick.대표지분가치!=null)N['대표 지분 평가']=eokTx(pick.대표지분가치/1e8);
+      if(pick.상속세!=null)N['예상 상속세(주식만)']=eokTx(pick.상속세/1e8);
+      if(CEO.third)N['셋째 숫자']=CEO.third.label+' '+CEO.third.valEok+'억';
+      if(FIN.data.대표지분)N['대표 지분율']=FIN.data.대표지분+'%';
+      if(pick.대표지분가치==null)N['지분 상태']='대표 지분율 미확인 — 지분평가·상속세 금액은 본문에서 절대 언급 금지(문서에 봉인 처리됨). 회사 재무 신호 축으로만 서술.';
+      return N;})(),
     family:f.family||null,pendingConfirm:d.pendingConfirm,
     consultant:{name:CEO.consultant.name,company:CEO.consultant.company,title:CEO.consultant.title}};
   var s=JSON.stringify(payload);
@@ -5220,14 +5287,27 @@ function crState(){
   var pick=FIN.calc?finPick(FIN.calc):{};
   var eok=function(v){return v==null?null:Math.round(v/1e8*100)/100;};
   return{fields:CEO.fields,consultant:{name:CEO.consultant.name||'',company:CEO.consultant.company||'',title:CEO.consultant.title||''},rel:CEO.rel,
-    nums:{n1:{label:'대표님 보유지분 평가'+(FIN.data&&FIN.data.대표지분?' ('+FIN.data.대표지분+'%)':''),
+    nums:(pick.대표지분가치!=null)?{
+      n1:{label:'대표님 보유지분 평가'+(FIN.data&&FIN.data.대표지분?' ('+FIN.data.대표지분+'%)':''),
           sub:(pick.주당!=null?'1주 '+Math.round(pick.주당).toLocaleString()+'원':'상증령 §54 가중평균'),valEok:eok(pick.대표지분가치)},
       n2:{label:'유고 시 예상 상속세 — 주식만',sub:'기본공제 가정 · 개인 자산 합산 시 증가',valEok:eok(pick.상속세)},
-      n3:CEO.third},
+      n3:CEO.third
+    }:{ /* 지분 미확인 모드 — 보고서가 준 값(순자산)과 진단 숫자로 재구성, 개인 몫은 봉인 */
+      n1:{label:'회사 순자산 — 재무제표 기준',sub:'상증법 §54 정밀 평가는 지분 확인 후',
+          valEok:(FIN.data&&FIN.data.자본총계&&Number.isFinite(FIN.data.자본총계[0]))?Math.round(FIN.data.자본총계[0]*finUnitScale().won/1e8*100)/100:null},
+      n2:{label:'유고 시 예상 상속세 — 주식만',sub:'대표님 지분율 확인 즉시 산출됩니다',sealedNum:true},
+      n3:CEO.third
+    },
     sealed:(CEO.diag&&CEO.diag.sealed)||[],teaser:CEO.teaser,demo:false};
+}
+function crDockLog(toRight){   /* 생성 로그를 우측 대기 화면으로/원위치로 이동 — 시선 흐름 (2026-07-14) */
+  var lg=document.getElementById('crGenLog');if(!lg)return;
+  if(toRight){var d=document.getElementById('crGenLogDock');if(d&&lg.parentNode!==d){d.appendChild(lg);}lg.style.maxHeight='300px';}
+  else{var an=document.getElementById('crGenStat');if(an&&lg.previousElementSibling!==an){an.parentNode.insertBefore(lg,an.nextSibling);}lg.style.maxHeight='172px';}
 }
 function crRender(){
   var st=document.getElementById('crStep1');if(!st.classList.contains('on'))return;
+  crDockLog(false);   /* 우측이 재렌더되기 전에 로그를 안전 회수 */
   CEO.fields=crFields();
   var wrap=document.getElementById('crSheetWrap');
   var rc=document.getElementById('crRegenCnt');
@@ -5237,8 +5317,10 @@ function crRender(){
     /* 제안서 방식 (2026-07-14): 완성 전에는 리포트를 그리지 않는다 — 빈 안내 ↔ 생성 진행 화면 */
     if(CEO.busy){
       wrap.innerHTML='<div class="cr-wait"><div class="cr-spin"></div><div class="t">AI가 대표님 리포트를 작성하고 있습니다</div>'
-        +'<div class="s">진단된 스토리'+(CEO.diag&&CEO.diag.topPattern?' 「'+escHtml(CEO.diag.topPattern.name)+'」':'')+'를 바탕으로 앞면 11블록과 화법 카드를 쓰는 중 — 좌측 로그에서 진행을 확인할 수 있어요.</div></div>';
+        +'<div class="s">접점 포인트'+(CEO.diag&&CEO.diag.topPattern?' 「'+escHtml(CEO.diag.topPattern.name)+'」':'')+'를 축으로 앞면 11블록과 화법 카드를 쓰는 중입니다.</div>'
+        +'<div id="crGenLogDock" style="width:100%;max-width:540px;text-align:left"></div></div>';
       if(ft)ft.textContent='— 리포트 생성 중 —';
+      crDockLog(true);
     }else{
       wrap.innerHTML='<div class="cr-wait"><div style="font-size:34px">📄</div><div class="t">대표님 리포트</div>'
         +'<div class="s">'+(crHasData()?'준비 완료 — <b>[리포트 생성]</b>을 누르면 이 자리에 1장 리포트가 완성됩니다.':'재무제표 PDF를 첨부하면 여기에 리포트가 만들어집니다.<br>완성 모습은 문서 유형 카드의 <b>[실물 샘플]</b>에서 미리 볼 수 있어요.')+'</div></div>';
@@ -5253,13 +5335,14 @@ function crRender(){
   document.getElementById('crBackWrap').innerHTML=crBackHtml(crState());
   crWireEdit();
 }
-function crHasData(){return !!(FIN.data&&FIN.calc&&FIN.calc.stock);}
+function crHasData(){return !!(FIN.data&&FIN.calc);}   /* 2026-07-14: 지분 미확인 모드 — stock 없이도 생성 (P0-③b) */
 function crDemoSkeleton(){   /* 2026-07-13: 첨부 전 = 데모 흔적 제로 — 일반 라벨 골격만 (완성 예시는 [실물 샘플] 버튼) */
   return{fields:CEO.fields,
     consultant:{name:CEO.consultant.name||'',company:CEO.consultant.company||'',title:CEO.consultant.title||''},rel:CEO.rel,
     nums:{n1:{mask:true,w:'42%',w2:'30%'},n2:{mask:true,w:'52%',w2:'24%'},n3:{mask:true,w:'34%',w2:'44%'}},
     sealed:[],teaser:null,skeleton:true,demo:true};}
 function crNumHtml(n,hot){
+  if(n&&n.sealedNum)return '<div class="cr-num"><div class="l">'+escHtml(n.label||'')+(n.sub?'<small>'+escHtml(n.sub)+'</small>':'')+'</div><div class="v" style="letter-spacing:3px">■.■<small>억</small> <span style="font-size:12px;vertical-align:middle">🔒</span></div></div>';
   if(n&&n.mask)return '<div class="cr-num"><div class="l"><span class="cr-shimmer" style="display:inline-block;width:'+(n.w||'46%')+'">&nbsp;</span><small><span class="cr-shimmer" style="display:inline-block;width:'+(n.w2||'30%')+'">&nbsp;</span></small></div><div class="v" style="color:#DCD5C3">—.—<small>억</small></div></div>';
   if(!n||n.valEok==null)return'';
   var v=n.valEok,neg=v<0,txt=(neg?'−':'')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:2});
@@ -5406,7 +5489,7 @@ function crSaveEdit(key,el){
 function crExportFront(autoPrint){
   var body=crSheetHtml(crState(),CEO.skin,false).replace(/ data-ed="[^"]*"/g,'').replace(/<button class="cr-regen"[^>]*>↻<\/button>/g,'').replace(/ contenteditable="true"/g,'');
   var css=document.getElementById('ceoCss').textContent;
-  var jd={app:'ceoReport',v:2,skin:CEO.skin,relationship:CEO.rel,paid:CEO.paid,reportUid:CEO.reportUid,regenN:CEO.regenN||0,consultant:CEO.consultant,fields:CEO.fields,
+  var jd={app:'ceoReport',v:2,skin:CEO.skin,relationship:CEO.rel,paid:CEO.paid,reportUid:CEO.reportUid,regenN:CEO.regenN||0,pickedPattern:CEO.pickedPattern||'',consultant:CEO.consultant,fields:CEO.fields,
     finData:FIN.data,finSrc:FIN.src,teaser:CEO.teaser,
     pattern:CEO.diag&&CEO.diag.topPattern?{id:CEO.diag.topPattern.id,name:CEO.diag.topPattern.name}:null,
     pendingConfirm:(CEO.diag&&CEO.diag.pendingConfirm)||[],model:CEO.modelUsed,savedAt:new Date().toISOString()};
@@ -5504,7 +5587,8 @@ async function crLoadFile(e){
     CEO.skin=d.skin||'A';CEO.rel=d.relationship||'warm';CEO.teaser=d.teaser||null;CEO.modelUsed=d.model||'';
     CEO.paid=(d.paid!==false);CEO.reportUid=d.reportUid||crNewUid();
     if(d.consultant)CEO.consultant=Object.assign({name:'',company:'',title:''},d.consultant);
-    CEO.regenN=Number(d.regenN)||0;   /* 저장 파일 = 이미 확정 — 제안서 _deckSaved 논리 동일 */
+    CEO.regenN=Number(d.regenN)||0;
+    CEO.pickedPattern=d.pickedPattern||'';   /* 저장 파일 = 이미 확정 — 제안서 _deckSaved 논리 동일 */
     FIN.data=d.finData||null;FIN.src=d.finSrc||'';FIN.fileName=f.name;
     if(FIN.data){FIN.checks=finVerify(FIN.data);FIN.calc=finCalc(FIN.data);}
     var T=crTeaserApi();
