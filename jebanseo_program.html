@@ -631,7 +631,7 @@
       <b>권장 2,000자 이내 · 최대 5,000자</b>이며, 길면 여러 메시지로 나누어 주세요. AI가 수치를 추출해 먼저 보여드리고, 사용자가 <b>“예”</b>라고 확인한 뒤에만 계산과 제안서에 반영합니다.
       <div class="fpdf">
         <div class="fpdf-t">📎 <b>재무보고서 PDF가 있으시면 첨부해 주세요</b> <span class="fpdf-rec">권장</span></div>
-        <div class="fpdf-d">CRETOP(크레탑)·KODATA·NICE 기업분석보고서 지원. 파일은 <b>서버로 전송되지 않고</b> 브라우저에서만 처리됩니다.<br>수치를 직접 읽어 오므로 오타가 없고, <b>자산＝부채＋자본 등 회계 항등식으로 자동 검산</b>합니다.</div>
+        <div class="fpdf-d">CRETOP(크레탑)·KODATA·NICE 기업분석보고서 지원. 파일은 <b>서버로 전송되지 않고</b> 브라우저에서만 처리됩니다.<br>수치를 직접 읽어 오므로 오타가 없고, <b>자산＝부채＋자본 등 회계 항등식으로 자동 검산</b>합니다.<br><b style="color:#C0392B">⚠ 반드시 텍스트형 PDF만 첨부해 주세요.</b> <span style="color:#C0392B">스캔·촬영·이미지로 저장된 PDF는 글자를 읽을 수 없습니다.</span></div>
         <button type="button" class="fpdf-btn" id="finPdfBtn" onclick="finPdfPick()">📄 재무보고서 PDF 첨부</button>
         <input type="file" id="finPdfInput" accept=".pdf,application/pdf" style="display:none" onchange="finPdfHandle(event)">
         <div class="fpdf-stat" id="finPdfStat"></div>
@@ -1144,7 +1144,7 @@
       <div class="cr-tabs"><button class="on" onclick="crTab('input',this)">입력</button><button onclick="crTab('preview',this)">미리보기</button></div>
       <div class="cr-card">
         <div class="ct">① 재무제표 PDF</div>
-        <div class="cr-pdfzone" onclick="document.getElementById('crPdf').click()">📎 <b>CRETOP · KODATA · NICE PDF</b>를 여기에<br><small>파일은 서버로 전송되지 않고 브라우저에서만 처리됩니다</small></div>
+        <div class="cr-pdfzone" onclick="document.getElementById('crPdf').click()">📎 <b>CRETOP · KODATA · NICE PDF</b>를 여기에<br><small>파일은 서버로 전송되지 않고 브라우저에서만 처리됩니다</small><br><small style="color:#C0392B;font-weight:700">⚠ 반드시 텍스트형 PDF만 첨부 — 스캔·촬영·이미지 저장본은 읽을 수 없습니다</small></div>
         <input type="file" id="crPdf" accept=".pdf,application/pdf" style="display:none" onchange="crPdfHandle(event)">
         <div id="crFinPanel" style="margin-top:9px"></div>
       </div>
@@ -2945,9 +2945,10 @@ const FIN={data:null,calc:null,risks:null,checks:null,src:'',fileName:'',stmtTyp
    기존엔 '백만원' 가정이 finToPending(×100)·finToText(헤더)·finCalc(×1e6) 세 곳에 흩어져 있어,
    천원 단위를 쓰는 새 보고서 포맷을 추가하는 날 조용히 100배 오차가 나는 지뢰였다.
    새 포맷 추가 시 이 표에 한 줄만 넣으면 세 곳이 함께 맞는다. 미등록 포맷은 백만원으로 가정. */
-const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원'};
+const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원',KODATA_WEB:'천원'};   /* KODATA_WEB: 웹출력 상세 재무제표는 천원 단위 (2026-07-14 실측) */
 const FIN_UNIT_SCALE={'원':{man:0.0001,won:1},'천원':{man:0.1,won:1e3},'만원':{man:1,won:1e4},'백만원':{man:100,won:1e6},'억원':{man:10000,won:1e8}};
 function finUnit(){return FIN_FMT_UNIT[FIN.src]||'백만원';}
+function finSrcLabel(){return FIN.src==='KODATA_WEB'?'CRETOP':FIN.src;}   /* 내부 포맷코드 → 표시명 (B2B2C: 코드 노출 금지) */
 function finUnitScale(){return FIN_UNIT_SCALE[finUnit()]||FIN_UNIT_SCALE['백만원'];}
 function finToEok(v){return (Number(v)||0)*finUnitScale().won/1e8;}   // 원문단위 → 억 (표시용)
 const FIN_PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -3043,6 +3044,35 @@ function finGlue(items){
   return out;
 }
 
+/** KODATA_WEB(웹출력 '기업 종합 보고서') 전용 — 숫자·날짜까지 1글자씩 분해되어 나온다.
+    ('6,448,141' → [6][,][4][4][8]…) 같은 행(y±2)·밀착(gap≤3pt) 숫자문자를 재조립한다.
+    ★ 열 사이 간격은 70pt 이상이라 열 침범 없음. 다른 포맷 경로에는 절대 적용하지 않는다(finMerge의 숫자 병합 금지 원칙 유지). */
+function finGlueChars(items){
+  const NUM=/^[\d,.\-%]+$/;   /* 1글자 조각뿐 아니라 finGlue가 먼저 만든 '6,4' 같은 다글자 조각도 대상 */
+  const out=[];
+  for(const it of items){
+    const p=out[out.length-1];
+    const gap=p?(it.x-(p.x+p.w)):999;
+    if(p&&NUM.test(it.s)&&NUM.test(p.s)
+       &&Math.abs(p.y-it.y)<=2&&gap<=3&&gap>=-2){
+      p.s+=it.s; p.w=(it.x+it.w)-p.x;
+      continue;
+    }
+    out.push({...it});
+  }
+  return out;
+}
+
+/** 연속 페이지를 한 장처럼 병합 — KODATA_WEB 상세 재무상태표는 3쪽에 걸쳐 있다.
+    페이지마다 y를 5000pt씩 내려 행 충돌(FIN_ROW_TOL)을 원천 차단한다. */
+function finConcatPages(pages,from,to){
+  const out=[];
+  for(let k=from;k<to;k++){const off=(k-from)*5000;pages[k].forEach(i=>out.push({...i,y:i.y-off}));}
+  out.sort((a,b)=>b.y-a.y||a.x-b.x);
+  out.text=out.map(i=>i.s).join(' ');
+  return out;
+}
+
 /* ── 포맷 자동 판별 ── */
 function finDetect(pages){
   const all=pages.map(p=>p.text).join('\n');
@@ -3050,6 +3080,9 @@ function finDetect(pages){
   /* KODATA(한국평가데이터, 구 한국기업데이터) — KCR2·CRETOP·REALTOP 등 동일사 제품군 */
   if(/KODATA|한국평가데이터|한국기업데이터|KCR2|CRETOP|크레탑/i.test(all))return 'KODATA';
   if(/기업신용평가서/.test(all))return 'KODATA';
+  /* KODATA 웹출력 '기업 종합 보고서'(CRETOP 조회화면 저장본) — 사명·CRETOP 로고가 전부 이미지라 텍스트에 없다.
+     병합 후 텍스트에 실존하는 제목 '기업종합보고서'와 저작권 문구 'KOREARATING&DATA'로 식별 (2026-07-14 실측) */
+  if(/기업\s*종합\s*보고서|KOREA\s*RATING\s*&\s*DATA/i.test(all))return 'KODATA_WEB';
   return null;
 }
 
@@ -3114,7 +3147,7 @@ function finText(items,labels,stop){
   return '';
 }
 /** 기업개요 표의 라벨 목록 — finText 의 stop 으로 쓴다 */
-const FIN_INFO_LABELS=['업체명','기업명','기 업 명','설립일자','설 립 일 자','사업자번호','법인번호','법인(주민)번호',
+const FIN_INFO_LABELS=['업체명','기업명','기 업 명','영문기업명','설립일자','설 립 일 자','설립년월','사업자번호','법인번호','법인(주민)번호',
   '대표자','대 표 자','대표자명','홈페이지','홈 페 이 지','종업원수','상시종업원','상 시 종 업 원','기업규모',
   '기업형태','기 업 형 태','상장일자','본사주소','본 사 주 소','공장주소','영업소주소','전화번호','팩스번호',
   '표준산업분류','업종분류','업 종 분 류','업종','주요제품명','주요상품','주 요 제 품 명','계열명','주력업체',
@@ -3130,20 +3163,41 @@ function finYears(items){
 
 /* ── 본 파서 (좌표 기반) ── */
 function finParse(pages,fmt){
+  /* KODATA_WEB: 숫자가 1글자씩 분해되어 나온다 — 파싱 전에 페이지별 재조립 (다른 포맷 무영향) */
+  if(fmt==='KODATA_WEB')pages=pages.map(pg=>{const m=finGlueChars(pg);m.text=m.map(i=>i.s).join(' ');return m;});
   /* 표 제목만으로 페이지를 고르면 오탐한다(연구개발비 표에도 '손익계산서'라는 행이 있다).
      그 표에만 있는 항목을 함께 만족하는 페이지를 고른다. */
   const pick=(...rxs)=>pages.find(p=>rxs.every(r=>r.test(p.text)))||null;
-  const BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
-  const IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
+  let BS,IS;
+  if(fmt==='KODATA_WEB'){
+    /* 상세 재무상태표(천원)가 여러 쪽에 걸쳐 있다 — '계정명' 헤더가 있는 상세 구간을 찾아 한 장으로 병합.
+       (요약표는 '구분' 헤더·백만원이라 단위가 섞이므로 쓰지 않는다) */
+    const bi=pages.findIndex(p=>/재무상태표/.test(p.text)&&/계정명/.test(p.text));
+    const ii=pages.findIndex(p=>/손익계산서/.test(p.text)&&/계정명/.test(p.text));
+    let ci=pages.findIndex((p,i)=>i>ii&&/현금흐름표/.test(p.text)&&/계정명/.test(p.text));
+    if(ci<0)ci=Math.min(ii+2,pages.length);
+    BS=(bi>=0&&ii>bi)?finConcatPages(pages,bi,ii):null;
+    IS=(ii>=0)?finConcatPages(pages,ii,ci):null;
+  }else{
+    BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
+    IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
+  }
   const SH=fmt==='NICE'?pick(/주요주주/,/지분율/):pick(/주주현황/,/소유주식수|지분율/);
   /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이다.
        10p '08.기업현황'(주요주주와 같은 페이지)은 단일 컬럼이므로 그쪽을 쓴다. */
   const IN=fmt==='NICE'?(pick(/주요주주/,/종업원수/,/표준산업분류/)||pick(/기업개요/,/종업원수/))
+                       :fmt==='KODATA_WEB'?pick(/기업개요/,/설립년월/,/종업원수/)
                        :pick(/기 업 명|기업명/,/설 립 일 자|설립일자/);
   if(!BS)throw new Error('재무상태표를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
   if(!IS)throw new Error('손익계산서를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
 
   const yr=finYears(BS)||{years:[0,0,0],desc:true};
+  if(fmt==='KODATA_WEB'){
+    /* 페이지 상단 '조회일시:2025-…'가 첫 매치로 잡혀 연도 순서가 깨진다 —
+       표 헤더의 완전 날짜(YYYY-MM-DD 단독 아이템)만으로 재판정. 헤더는 좌→우 = 과거→최신(오름차순). */
+    const hd=BS.filter(i=>/^20\d{2}-\d{2}-\d{2}$/.test(i.s)).slice(0,3);
+    if(hd.length===3){yr.years=hd.map(i=>parseInt(i.s.slice(0,4)));yr.desc=yr.years[0]>yr.years[2];}
+  }
   const ord=a=>a?(yr.desc?a:[...a].reverse()):null;      // 항상 [최신,직전,전전]
   if(!yr.desc)yr.years=[...yr.years].reverse();
 
@@ -3154,6 +3208,16 @@ function finParse(pages,fmt){
     매출액:'매출액',매출원가:'매출원가',영업이익:'영업이익(손실)',순이익:'당기순이익(손실)',
     이자비용:'(이자비용)',인건비:'(인건비)',영업현금:'영업활동조달현금',
     퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금'
+  }:fmt==='KODATA_WEB'?{
+    /* 웹출력 '기업 종합 보고서' — KCR2와 계정명은 같지만 로마숫자 접두가 없고 총계가 '자산(*)' 표기 */
+    자산총계:'자산(*)',부채총계:'부채(*)',자본총계:'자본(*)',
+    자본금:'자본금(*)',이익잉여금:'이익잉여금(*)',
+    단기차입금:'단기차입금(*)',장기차입금:'장기차입금(*)',사채:'사채(*)',
+    매출채권:'매출채권(*)',현금:'현금 및 현금성자산(*)',
+    유동자산:'유동자산(*)',유동부채:'유동부채(*)',재고자산:'재고자산(*)',매입채무:'매입채무(*)',
+    매출액:'매출액(*)',매출원가:'매출원가(*)',영업이익:'영업이익(손실)',순이익:'당기순이익(순손실)',
+    이자비용:'이자비용',인건비:'급여(*)',영업현금:'4.영업활동후의 현금흐름액',
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금(*)'
   }:{
     자본금:['Ⅰ. 자본금(*)','자본금(*)'],이익잉여금:['Ⅴ. 이익잉여금(*)','이익잉여금(*)'],
     단기차입금:'단기차입금(*)',장기차입금:'장기차입금(*)',사채:'사채(*)',
@@ -3167,7 +3231,7 @@ function finParse(pages,fmt){
   const CF=pick(/영업활동후의 현금흐름액|영업활동조달현금/)||IS;
 
   const D={fmt,years:yr.years,
-    자산총계:ord(finCells(BS,'자산총계')), 부채총계:ord(finCells(BS,'부채총계')), 자본총계:ord(finCells(BS,'자본총계')),
+    자산총계:ord(finCells(BS,P.자산총계||'자산총계')), 부채총계:ord(finCells(BS,P.부채총계||'부채총계')), 자본총계:ord(finCells(BS,P.자본총계||'자본총계')),
     자본금:ord(finCells(BS,P.자본금)), 이익잉여금:ord(finCells(BS,P.이익잉여금)),
     단기차입금:ord(finCells(BS,P.단기차입금)), 장기차입금:ord(finCells(BS,P.장기차입금)),
     사채:ord(finCells(BS,P.사채))||[0,0,0],
@@ -3187,12 +3251,12 @@ function finParse(pages,fmt){
   const S=FIN_INFO_LABELS;
   D.회사명 = IN?finText(IN,['업체명','기 업 명','기업명'],S):'';
   D.대표자 = (IN?finText(IN,['대표자명','대표자','대 표 자'],S):'').split(/\s+/)[0]||'';
-  const est = (IN?finText(IN,['설립일자','설 립 일 자'],S):'').match(/(\d{4})/);
+  const est = (IN?finText(IN,['설립일자','설 립 일 자','설립년월'],S):'').match(/(\d{4})/);
   D.설립년 = est?parseInt(est[1]):0;
   const emp = (IN?finText(IN,['종업원수','상 시 종 업 원','상시종업원'],S):'').match(/([\d,]+)/);
   D.종업원 = emp?parseInt(emp[1].replace(/,/g,'')):0;
   const ind = IN?finText(IN,['표준산업분류','업 종 분 류','업종분류'],S):'';
-  D.업종 = ind.replace(/\([A-Z]\d+\)/g,'').replace(/\s+/g,' ').trim();
+  D.업종 = ind.replace(/^\d+\s*차\)\s*/,'').replace(/\(\s*[A-Z]\s*\d+\s*\)/g,'').replace(/\s+/g,' ').trim();
 
   /* ── 주주 (행 단위 좌표 스캔) ── */
   D.주주=[]; D.총주식=0; D.액면=0;
@@ -3203,6 +3267,8 @@ function finParse(pages,fmt){
       r.sort((a,b)=>a.x-b.x);
       const nm=r[0]&&r[0].s;
       if(!nm||nm==='합계'||finIsLabelLike(nm)===false)return;
+      /* KODATA_WEB: 숫자 재조립 탓에 머리글·푸터 행(조회일시·COPYRIGHT 등)이 숫자 2개 이상을 갖게 된다 — 제외 */
+      if(fmt==='KODATA_WEB'&&r.some(i=>/조회일시|기준일자|COPYRIGHT|RESERVED/i.test(i.s)))return;
       const nums=r.slice(1).map(i=>i.s.replace(/\s|%/g,'')).filter(t=>/^[\d,]+(\.\d+)?$/.test(t));
       if(nums.length<2)return;
       const shares=parseInt(nums[0].replace(/,/g,''));
@@ -3211,6 +3277,25 @@ function finParse(pages,fmt){
       if(shares<1)return;
       D.주주.push({명:nm,주식:shares,율:rate});
     });
+    if(fmt==='KODATA_WEB'&&!D.주주.length){
+      /* 웹출력형 주요주주현황은 소유주식수 칸이 비고 지분율만 있는 경우가 있다 — 지분율 단독 행 수용 (주식수 0).
+         같은 페이지의 다른 표(관계회사현황 등) 혼입을 막기 위해 표 제목 y 구간 안쪽 행만 본다. */
+      const _hy=(SH.find(i=>i.s.replace(/\s+/g,'').startsWith('주요주주현황'))||{}).y;
+      const _ey=(SH.find(i=>i.s.replace(/\s+/g,'').startsWith('관계회사현황'))||{}).y;
+      rows.forEach(r=>{
+        r.sort((a,b)=>a.x-b.x);
+        const _ry=r[0]&&r[0].y;
+        if(_hy!=null&&_ry>=_hy)return;
+        if(_ey!=null&&_ry<=_ey)return;
+        const nm=r[0]&&r[0].s;
+        if(!nm||nm==='합계'||nm==='주주명'||finIsLabelLike(nm)===false)return;
+        const nums=r.slice(1).map(i=>i.s.replace(/\s|%/g,'')).filter(t=>/^[\d,]+(\.\d+)?$/.test(t));
+        if(nums.length!==1)return;
+        const rate=parseFloat(nums[0]);
+        if(!Number.isFinite(rate)||rate<=0||rate>100)return;
+        D.주주.push({명:nm,주식:0,율:rate});
+      });
+    }
     const tot=(SH.text||'').match(/합계\s*([\d,]+)/);
     const par=(SH.text||'').match(/주당액면가\s*([\d,]+)\s*원/);
     const cnt=(SH.text||'').match(/주식수\s*([\d,]+)\s*주/);
@@ -4994,7 +5079,7 @@ function crFinRender(){
   rows+='<tr><td>대표 지분 평가'+(FIN.data.대표지분?' ('+FIN.data.대표지분+'%)':'')+'</td><td>'+eok(pick.대표지분가치)+'</td></tr>';
   rows+='<tr><td>예상 상속세 (주식만)</td><td>'+eok(pick.상속세)+'</td></tr>';
   if(pick.주당!=null)rows+='<tr><td>1주 평가액</td><td>'+Math.round(pick.주당).toLocaleString()+'원</td></tr>';
-  p.innerHTML='📄 '+escHtml(FIN.fileName)+' · '+escHtml(FIN.src)
+  p.innerHTML='📄 '+escHtml(FIN.fileName)+' · '+escHtml(finSrcLabel())
     +(bad.length?'<div class="ng">⚠ 검산 '+C.length+'건 중 '+bad.length+'건 확인 필요: '+escHtml(bad.map(function(b){return b.n;}).join(', '))+'</div>'
                 :'<div class="ok">✅ 회계 항등식 검산 '+C.length+'건 전건 통과</div>')
     +'<table>'+rows+'</table>'
@@ -5111,7 +5196,7 @@ function crFinBrief(){
     +'.ft{margin-top:26px;font-size:10px;color:rgba(231,227,215,.4);line-height:1.7;border-top:1px solid rgba(231,227,215,.14);padding-top:9px}'
     +'@media print{body{background:#fff;color:#222}.hd span{color:#8a6a1f;border-color:#8a6a1f}.bl{color:#8a6a1f}td{border-color:#ddd}.sig{border-color:#ddd;background:#faf8f2}.sig .sh{color:#222}.mut{color:#777}}</style></head><body><div class="w">'
     +'<div class="hd"><b>'+escHtml(f.company||D.회사명||'기업')+' 재무분석 브리핑</b><span>CONSULTANT ONLY</span></div>'
-    +'<p class="mut" style="margin-top:7px">'+escHtml(FIN.fileName||'')+' · '+escHtml(FIN.src||'')+' · 공개 신용정보 기준</p>'
+    +'<p class="mut" style="margin-top:7px">'+escHtml(FIN.fileName||'')+' · '+escHtml(finSrcLabel()||'')+' · 공개 신용정보 기준</p>'
     +brief
     +'<div class="bl" style="margin-top:34px;border-top:1px solid rgba(231,227,215,.2);padding-top:18px">부록 — 수치 상세 (단위: 억원 · 당기/전기/전전기)</div>'
     +'<table><tr><th>계정</th><th>당기</th><th>전기</th><th>전전기</th></tr>'+rows3+'</table>'
@@ -5178,7 +5263,7 @@ async function crGenerate(force){
   var T=crTeaserApi();
   if(!T){toast('진단 엔진(계산기 번들)을 불러오지 못했습니다. 새로고침해 주세요.');return;}
   crLogReset();
-  crLog('생성 시작 — '+(CEO.fields.company||'회사')+' · '+(FIN.src||'PDF')+' 재무제표');
+  crLog('생성 시작 — '+(CEO.fields.company||'회사')+' · '+(finSrcLabel()||'PDF')+' 재무제표');
   CEO.fields=crFields();
   var F=crEngineInput();
   crLog('재무 수치 정규화 완료 (검산 '+((FIN.checks||[]).filter(function(c){return c.ok;}).length)+'건 통과)','ok');
@@ -5430,7 +5515,7 @@ function crSheetHtml(S,skin,isPreview){
     +'<div class="cr-callhint">'+(S.demo?'<span class="cr-shimmer" style="display:inline-block;width:52%">&nbsp;</span>':'지금 누르시면 바로 연결됩니다 · '+escHtml(f.hours||'')+' 즉시 응대')+'</div>'
     +(f.email?'<a style="display:block;text-align:center;margin-top:8px;color:inherit;opacity:.6;font-size:11px;text-decoration:none;position:relative;z-index:1" href="mailto:'+escHtml(f.email)+'">'+escHtml(f.email)+'</a>':'')+'</div>'
     +(S.demo?'<p class="cr-foot"><span class="cr-shimmer" style="display:inline-block;width:92%">&nbsp;</span><br><span class="cr-shimmer" style="display:inline-block;width:64%">&nbsp;</span></p>'
-             :'<p class="cr-foot">※ 본 자료는 공개 신용정보('+escHtml(FIN.src||'CRETOP')+') 상 재무제표를 기초로 한 참고 목적의 사전 추정이며, 정관·세무자료 확인 후 결론이 달라질 수 있습니다. 상속세는 주식분만 반영한 보수적 추정치입니다(기본공제 가정'+(FIN.data&&FIN.data.대표지분>=50?'':'·할증 미적용')+').'+escHtml(pend)+'</p>')
+             :'<p class="cr-foot">※ 본 자료는 공개 신용정보('+escHtml(finSrcLabel()||'CRETOP')+') 상 재무제표를 기초로 한 참고 목적의 사전 추정이며, 정관·세무자료 확인 후 결론이 달라질 수 있습니다. 상속세는 주식분만 반영한 보수적 추정치입니다(기본공제 가정'+(FIN.data&&FIN.data.대표지분>=50?'':'·할증 미적용')+').'+escHtml(pend)+'</p>')
     +'</div>';
 }
 function crFillTokensState(t,S){
@@ -5530,12 +5615,30 @@ function crExportFront(autoPrint){
     +(autoPrint?'<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},700);});<\/script>':'')
     +'</body></html>';
 }
-function crExportBack(){
+function crExportBack(autoPrint){
   var body=crBackHtml(crState()).replace(/ data-ed="[^"]*"/g,'').replace(/ contenteditable="true"/g,'');
   var css=document.getElementById('ceoCss').textContent;
   return '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>화법카드</title>'
     +'<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@700&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">'
-    +'<style>body{margin:0;background:#0B1120;padding:16px 0 40px;display:flex;flex-direction:column;align-items:center;font-family:\'Noto Sans KR\',sans-serif}'+css.replace(/#ceoOverlay[^{]*\{[^}]*\}/g,'')+'</style></head><body>'+body+'</body></html>';
+    +'<style>body{margin:0;background:#0B1120;padding:16px 0 40px;display:flex;flex-direction:column;align-items:center;font-family:\'Noto Sans KR\',sans-serif}'
+    +css.replace(/#ceoOverlay[^{]*\{[^}]*\}/g,'')
+    /* ── 앞면(crExportFront)과 동일 규격: A4 세로 · 여백 13×14mm (2026-07-14) ── */
+    +'@page{size:A4 portrait;margin:13mm 14mm}'
+    /* ── 인쇄: 브라우저는 어두운 배경을 찍지 않으므로 화면(다크)→종이(라이트)로 자동 반전 조판 ── */
+    +'@media print{body{background:#fff;padding:0}'
+    +'.cr-sheet{width:100%;max-width:none;box-shadow:none;padding:0 1mm}'
+    +'.cr-sheet.back{background:#fff!important;color:#17263A;border-top:2px solid #96783C}'
+    +'.cr-sheet.back .band{border-bottom-color:#D8D0BC}'
+    +'.cr-sheet.back .band span{color:#96783C;border-color:#96783C}'
+    +'.cr-sheet.back .bl{color:#96783C}'
+    +'.cr-sheet.back .script{background:none;border-left-color:#96783C}'
+    +'.cr-sheet.back .qa,.cr-sheet.back .qa:last-child,.cr-sheet.back .chk,.cr-sheet.back .chk:last-child{border-color:#D8D0BC}'
+    +'.cr-sheet.back .qa .q{color:#6E675B}'
+    +'.cr-sheet.back p{color:#8A8577!important;border-top-color:#D8D0BC!important}'
+    +'.cr-sheet.back .blk,.cr-sheet.back .script,.cr-sheet.back .qa,.cr-sheet.back .chk{break-inside:avoid;page-break-inside:avoid}}'
+    +'</style></head><body>'+body
+    +(autoPrint?'<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},700);});<\/script>':'')
+    +'</body></html>';
 }
 function crDownload(html,fn){
   var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));a.download=fn;
