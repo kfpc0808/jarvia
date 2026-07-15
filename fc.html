@@ -2213,10 +2213,12 @@ async function renderCatalog(){
   ]);
   // 자격증·경력
   const cd=(fcData.channelData||{});
-  if(cd.certifications||cd.careerHighlights){
+  if(cd.certifications||cd.careerHighlights||cd.careerHtml){
     const certLines=[];
     if(cd.certifications&&cd.certifications.length)certLines.push(esc(cd.certifications.join(' · ')));
-    if(cd.careerHighlights&&cd.careerHighlights.length)certLines.push(...cd.careerHighlights.map(esc));
+    /* 2026-07-15: 서식 저장분(careerHtml) 우선 — 표시 직전에도 정제기 재통과(이중 방어) */
+    if(cd.careerHtml)certLines.push(fcCareerSanitize(cd.careerHtml));
+    else if(cd.careerHighlights&&cd.careerHighlights.length)certLines.push(...cd.careerHighlights.map(esc));
     $('certBody').innerHTML=certLines.join('<br>');
     $('cardCert').classList.remove('hidden');
   }
@@ -6588,7 +6590,35 @@ init();
   var fCat="all",fWish=null,kw="",myPos=null,kakaoReady=false,urlPool=[];
   var $=function(id){return document.getElementById(id);};
   function bU(blob){var u=URL.createObjectURL(blob);urlPool.push(u);return u;}
-  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+  /* 경력·수상 서식 정제기 (2026-07-15) — 허용: B/BR/줄바꿈, SPAN(색·크기만). 그 외 태그·속성 전부 제거 (XSS 차단) */
+function fcCareerSanitize(html){
+  var doc;try{doc=new DOMParser().parseFromString('<div>'+String(html||'')+'</div>','text/html');}catch(_e){return '';}
+  var root=doc.body.firstChild;
+  var SIZE={'1':'10px','2':'11.5px','3':'13px','4':'15px','5':'17px','6':'20px','7':'24px'};
+  function walk(node){
+    var out='';
+    node.childNodes.forEach(function(ch){
+      if(ch.nodeType===3){out+=ch.nodeValue.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');return;}
+      if(ch.nodeType!==1)return;
+      var tag=ch.tagName,inner=walk(ch);
+      if(tag==='BR'){out+='<br>';return;}
+      if(tag==='B'||tag==='STRONG'){out+=inner?'<b>'+inner+'</b>':'';return;}
+      if(tag==='DIV'||tag==='P'){out+=(out?'<br>':'')+inner;return;}
+      if(tag==='FONT'||tag==='SPAN'){
+        var st='';
+        var col=ch.getAttribute&&(ch.getAttribute('color')||(ch.style&&ch.style.color));
+        var fs=(ch.getAttribute&&ch.getAttribute('size'))?SIZE[ch.getAttribute('size')]:(ch.style&&ch.style.fontSize);
+        if(col&&/^(#[0-9a-fA-F]{3,8}|rgb\([\d ,]+\))$/.test(String(col).trim()))st+='color:'+col+';';
+        if(fs&&/^\d{1,2}(\.\d)?px$/.test(String(fs).trim()))st+='font-size:'+fs+';';
+        out+=st?('<span style="'+st+'">'+inner+'</span>'):inner;return;
+      }
+      out+=inner;
+    });
+    return out;
+  }
+  return walk(root).replace(/(<br>\s*){3,}/g,'<br><br>').trim();
+}window.fcCareerSanitize=fcCareerSanitize;   /* IIFE 밖(표시부)에서 접근 — 스코프 격리 해제 */
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
   function stars(n){var s="";for(var i=1;i<=5;i++)s+=i<=n?"★":"☆";return s;}
 
   /* ---------- IndexedDB ---------- */
