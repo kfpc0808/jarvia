@@ -639,6 +639,9 @@
         <button type="button" class="fpdf-btn" id="finPdfBtn" onclick="finPdfPick()">📄 재무보고서 PDF 첨부</button>
         <input type="file" id="finPdfInput" accept=".pdf,application/pdf" style="display:none" onchange="finPdfHandle(event)">
         <div class="fpdf-stat" id="finPdfStat"></div>
+        <div id="jebManMiss"></div>
+        <button type="button" class="fpdf-btn" style="margin-top:7px;background:#fff;color:#0F1B33;border:1.5px solid #0F1B33" onclick="crManToggle(true,'jeb')">📝 숫자 직접 입력 — PDF가 없거나 이미지 저장본일 때 · 파싱값 보충</button>
+        <div id="jebManHost"></div>
       </div>
     </div>
     <div class="fincard" id="finCard"></div>
@@ -3574,11 +3577,13 @@ async function finPdfHandle(e){
     }
     finStat(`📄 ${f.name} · ${pages.length}쪽 중 필요한 부분만 읽었습니다.`);
     finRender();
+    var _jm=document.getElementById('jebManMiss');if(_jm)_jm.innerHTML=crManMissMsg('jeb');
     if(bad)toast('검산에서 '+bad+'건이 확인되었습니다. 내용을 확인해 주세요.',5000);
     else toast('재무 수치 추출 완료 — 검산 전건 통과',3200);
   }catch(err){
     FIN.data=null; finRender();
-    finStat('❌ '+(err&&err.message?err.message:'PDF를 읽지 못했습니다.'),1);
+    finStat('❌ '+(err&&err.message?err.message:'PDF를 읽지 못했습니다.')+' → 아래 📝 숫자 직접 입력으로 동일하게 반영할 수 있습니다.',1);
+    crManToggle(true,'jeb');   /* 이미지 PDF 등 실패 시 우회로 자동 개방 (2026-07-15) */
   }finally{ if(btn)btn.disabled=false; }
 }
 
@@ -5053,6 +5058,7 @@ var CR_CALC_URL='https://jarvia.co.kr/calculators/Unlisted_Stock_Valuation_Calcu
 /* ── 진입·이탈 ── */
 function openCeoReport(){
   if(!crAllowed()){toast('오픈 준비 중인 기능입니다.');return;}
+  crManDock('ceo');   /* 패널이 제안서 쪽에 가 있었다면 복귀 (2026-07-15) */
   document.getElementById('ceoOverlay').classList.add('on');
   document.body.style.overflow='hidden';
 }
@@ -5131,8 +5137,15 @@ function crManBuild(){
    +'<div class="crman-srcline" id="crManSrc"></div>'
    +'<button type="button" class="crman-apply" id="crManApply" onclick="crManApply()" disabled>✔ 이 수치로 적용</button>';
 }
-function crManToggle(force){
+var CRMAN_CTX='ceo';   /* 패널이 현재 어느 화면에 있나 — 'ceo'(대표님 리포트) | 'jeb'(제안서 기업컨설팅). FIN 상태는 양쪽 공유 (2026-07-15) */
+function crManDock(ctx){
+  var m=document.getElementById('crMan');if(!m||CRMAN_CTX===ctx)return;
+  if(ctx==='jeb'){var h=document.getElementById('jebManHost');if(h){h.appendChild(m);CRMAN_CTX='jeb';}}
+  else{var p=document.getElementById('crFinPanel');if(p&&p.parentNode){p.parentNode.insertBefore(m,p.nextSibling);CRMAN_CTX='ceo';}}
+}
+function crManToggle(force,ctx){
   var m=document.getElementById('crMan');if(!m)return;
+  if(ctx)crManDock(ctx);
   crManBuild();
   var open=(force===true)?true:(force===false)?false:!m.classList.contains('open');
   m.classList.toggle('open',open);
@@ -5261,13 +5274,22 @@ function crManApply(){
       설립년:0,종업원:0,업종:''};
     FIN.data=D2;FIN.src='MANUAL';FIN.fileName='직접 입력';FIN.manual=false;
   }
-  FIN.checks=finVerify(FIN.data);FIN.calc=finCalc(FIN.data);FIN.risks=null;
-  crFinRender();crBind();
+  FIN.checks=finVerify(FIN.data);FIN.calc=finCalc(FIN.data);
+  if(CRMAN_CTX==='jeb'){
+    /* 제안서(기업컨설팅) 컨텍스트: 그쪽 후처리 그대로 — 리스크 산정 + 카드 렌더 + 상태줄 */
+    FIN.risks=finRisks(FIN.data,FIN.calc);
+    if(typeof finRender==='function')finRender();
+    if(typeof finStat==='function')finStat('📝 직접 입력 적용 — 검산 후 반영되었습니다.');
+    var jm=document.getElementById('jebManMiss');if(jm)jm.innerHTML=crManMissMsg('jeb');
+  }else{
+    FIN.risks=null;
+    crFinRender();crBind();
+  }
   toast(fromParse?'✔ 보충 입력 적용 — 파싱값과 병합했습니다':'✔ 직접 입력 적용 — 검산 통과');
   crManPrefill();   /* 적용 후 최신 상태로 재프리필 */
 }
 /* 파싱 성공 후 결손 항목 안내 — 판독·산출에 실제 쓰이는 항목만 */
-function crManMissMsg(){
+function crManMissMsg(ctx){
   var D=FIN.data;if(!D||FIN.src==='MANUAL')return '';
   var miss=[];
   var no=function(a){return !(a&&Number.isFinite(a[0]));};
@@ -5283,7 +5305,7 @@ function crManMissMsg(){
   return '<div class="crman-missmsg">⚠ PDF에서 읽지 못한 항목 <b>'+miss.length+'개</b>: '
     +miss.map(function(m){return m[0];}).join(' · ')
     +'<br>보충하면 '+miss.slice(0,4).map(function(m){return m[1];}).filter(function(v,i,a){return a.indexOf(v)===i;}).join('·')+'이(가) 정확해집니다.'
-    +'<br><button type="button" onclick="crManToggle(true)">📝 보충 입력 열기 — 빈 칸만 노랗게 표시됩니다</button></div>';
+    +'<br><button type="button" onclick="crManToggle(true,\''+(ctx==='jeb'?'jeb':'ceo')+'\')">📝 보충 입력 열기 — 빈 칸만 노랗게 표시됩니다</button></div>';
 }
 
 function crStart(){
@@ -5450,7 +5472,7 @@ function crFinRender(){
     +'<div id="crDiagPre"></div>'
     +'<div style="display:flex;gap:6px;margin-top:8px"><button onclick="crFinBrief()" style="flex:1.6;border:1px solid #0F1B33;background:#fff;color:#0F1B33;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">📊 재무분석 브리핑 보기</button>'
     +'<button onclick="crFinBrief(\'save\')" style="flex:1;border:1px solid #0F1B33;background:#0F1B33;color:#F3EFE4;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">⬇ HTML 저장</button></div>'
-    +crManMissMsg();   /* 2026-07-15: 파싱 결손 항목 안내 */
+    +crManMissMsg('ceo');   /* 2026-07-15: 파싱 결손 항목 안내 */
   /* 지분·액면 수동 입력 노출 — PDF 원값이 없을 때만 (P0-③) */
   (function(){
     var D=FIN.data,mw=document.getElementById('crManualWrap');if(!mw)return;
