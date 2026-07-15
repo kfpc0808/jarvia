@@ -834,7 +834,7 @@ a{color:inherit;text-decoration:none}
       <!-- 1.7 자가진단 ｜ 나의 장소 (2-up) — 펼침 3종은 전체폭 -->
       <div class="qzGroup" id="cardQuiz">
         <div style="display:flex;gap:10px">
-          <button type="button" class="dualTile qzToggleTile" style="flex:1;position:relative" onclick="document.getElementById('cardQuiz').classList.toggle('qzOpen')" aria-label="자가진단 펼치기/접기">
+          <button type="button" class="dualTile qzToggleTile" style="flex:1;position:relative" onclick="try{window.jvTrack&&window.jvTrack('card','quiz_open');}catch(e){}document.getElementById('cardQuiz').classList.toggle('qzOpen')" aria-label="자가진단 펼치기/접기">
             <i class="ti ti-chevron-down qzChv" style="position:absolute;top:12px;right:12px"></i>
             <i class="ti ti-clipboard-heart dtIc dtIc--teal"></i>
             <div class="dtTitle">자가진단</div>
@@ -1100,6 +1100,18 @@ a{color:inherit;text-decoration:none}
         <div class="requestList" id="requestList">
           <div class="requestEmpty">아직 신청이 없습니다</div>
         </div>
+      </div>
+
+      <!-- ─── FC 본인: 계산기 사용 내역 (데일리 리포트·채널 공통 집계) 2026-07-15 ─── -->
+      <div id="fcCalcSection" class="fcAdminSection hidden" style="background:linear-gradient(135deg,#EBF0FA,#FFFFFF);border-color:#B9CBE8;box-shadow:0 4px 14px rgba(45,93,174,.15)">
+        <div class="adminHeader">
+          <div>
+            <div class="label" style="color:#2D5DAE">CUSTOMER ACTIVITY</div>
+            <div class="title">📊 고객 활동 내역</div>
+          </div>
+          <button id="fcCalcLoadBtn" type="button" style="border:1px solid #2D5DAE;background:#fff;color:#2D5DAE;border-radius:99px;padding:6px 13px;font-size:11px;font-weight:800;cursor:pointer">내역 보기</button>
+        </div>
+        <div id="fcCalcBody" style="font-size:11.5px;color:#5A6484">고객이 내 채널·데일리 리포트에서 사용한 계산기·생활변화 점검·자가진단·종합검진 열람이 시간과 함께 집계됩니다.</div>
       </div>
 
       <!-- 하단 고정 바 높이만큼 여백 (바가 콘텐츠를 가리지 않도록) -->
@@ -2542,7 +2554,7 @@ function bindFormEvents(){
   $('termsLink').addEventListener('click',e=>{e.stopPropagation();$('termsModal').classList.add('active');});
   // KMI 제휴 배너 → 안내 팝업
   const _kmiBn=$('kmiBannerOpen');
-  if(_kmiBn)_kmiBn.addEventListener('click',()=>$('kmiModal').classList.add('active'));
+  if(_kmiBn)_kmiBn.addEventListener('click',()=>{try{window.jvTrack&&window.jvTrack('card','kmi_open');}catch(e){}$('kmiModal').classList.add('active');});
   // 모달 닫기
   document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>$(b.dataset.close).classList.remove('active')));
   document.querySelectorAll('.modalBg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('active');}));
@@ -2735,9 +2747,41 @@ function setupContactButtons(){
   }
 }
 
+/* ═══ 계산기 사용 내역 로더 (2026-07-15) — fc_view_logs(fcAuthUid 기준)에서 calc_* 이벤트만 집계 ═══ */
+async function fcCalcLogsLoad(){
+  const body=$('fcCalcBody');if(!body)return;
+  body.innerHTML='불러오는 중…';
+  try{
+    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid),limit(150)));
+    const rows=[];const sum={};
+    const ACT_LABEL={lc_open:'생활변화 점검 열람',quiz_open:'자가진단 열람',kmi_open:'KMI 종합검진 안내 열람',diagnosis_daily:'재무진단 신청 폼 열람'};
+    qs.forEach(d=>{const r=d.data();(r.events||[]).forEach(e=>{
+      if(e.t!=='card'||!e.id)return;
+      const id=String(e.id);let nm=null;
+      if(id.indexOf('calc_')===0){const k=id.slice(5);nm=(window.CH_NAMES&&window.CH_NAMES[k])||k;}
+      else if(ACT_LABEL[id])nm=ACT_LABEL[id];
+      if(!nm)return;
+      sum[nm]=(sum[nm]||0)+1;
+      rows.push({nm,cid:r.clientId||'',page:r.page||'',ts:(r.createdAt&&r.createdAt.toMillis)?r.createdAt.toMillis():0});
+    });});
+    if(!rows.length){body.innerHTML='아직 활동 기록이 없습니다 — 고객이 계산기·생활변화·자가진단·종합검진을 열면 여기에 쌓입니다.';return;}
+    rows.sort((a,b)=>b.ts-a.ts);
+    const top=Object.entries(sum).sort((a,b)=>b[1]-a[1]).slice(0,6)
+      .map(([n,c])=>'<span style="display:inline-block;background:#fff;border:1px solid #B9CBE8;border-radius:99px;padding:3px 10px;margin:2px 3px 0 0;font-size:10.5px;font-weight:700;color:#1B3A6B">'+ccvEsc(n)+' <b style="color:#2D5DAE">'+c+'</b></span>').join('');
+    const list=rows.slice(0,30).map(r=>{
+      const dt=r.ts?new Date(r.ts):null;
+      const dstr=dt?((dt.getMonth()+1)+'/'+dt.getDate()+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0')):'';
+      const who=r.cid?('고객 '+ccvEsc(String(r.cid).slice(-4))):'미식별 방문자';
+      const src=r.page==='daily'?'데일리':'채널';
+      return '<div style="display:flex;gap:8px;align-items:center;padding:7px 2px;border-top:1px solid #E4EAF4"><b style="flex:1;font-size:11.5px;color:#1B2430">'+ccvEsc(r.nm)+'</b><span style="font-size:10px;color:#2D5DAE;font-weight:700">'+src+'</span><span style="font-size:10px;color:#8a877f">'+who+'</span><span style="font-size:10px;color:#8a877f">'+dstr+'</span></div>';}).join('');
+    body.innerHTML='<div style="margin-bottom:8px">'+top+'</div>'+list
+      +'<div style="font-size:9.5px;color:#8a877f;margin-top:8px">최근 '+Math.min(rows.length,30)+'건 표시 · 총 '+rows.length+'회 (데일리 리포트 + 내 채널 합산)</div>';
+  }catch(e){body.innerHTML='불러오지 못했어요 — 잠시 후 [내역 보기]를 다시 눌러주세요. ('+(e.message||'')+')';}
+}
 // ═══ FC 본인 로그인 시 진단 신청 관리 섹션 ═══
 async function loadFcAdminSection(){
   $('fcAdminSection').classList.remove('hidden');
+  try{$('fcCalcSection').classList.remove('hidden');const _b=$('fcCalcLoadBtn');if(_b&&!_b._wired){_b._wired=true;_b.addEventListener('click',fcCalcLogsLoad);}}catch(_e){}
   await refreshRequestList('all');
   // 필터 클릭
   $('adminFilters').addEventListener('click',e=>{
@@ -7346,6 +7390,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   }
 
   /* ---------- 시트 ---------- */
+  try{window.CH_NAMES={};for(var _k in C)window.CH_NAMES[_k]=C[_k].nm;}catch(e){}   /* 사용 내역 라벨 (2026-07-15) */
   function openCalc(k){curKey=k;try{window.jvTrack&&window.jvTrack('card','calc_'+k);}catch(e){}var c=C[k];state={};
     if(c.in)c.in.forEach(function(f){state[f.k]=f.v;});if(c.seg)state[c.seg.k]=c.seg.v;
     $('chSic').textContent=c.ic;$('chSnm').textContent=c.nm;$('chSds').textContent=c.ds;
