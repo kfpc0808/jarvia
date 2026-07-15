@@ -3418,9 +3418,11 @@ function finParse(pages,fmt){
 function finVerify(D){
   const near=(a,b,t)=>Math.abs(a-b)<=Math.max(Math.abs(a),Math.abs(b))*(t||0.01)+1;
   const C=[];
-  D.years.forEach((y,i)=>C.push({n:`자산 = 부채 + 자본 (${y})`,
+  D.years.forEach((y,i)=>{
+    if(!(Number.isFinite(D.자산총계[i])&&Number.isFinite(D.부채총계[i])&&Number.isFinite(D.자본총계[i])))return;   /* 연도 수 > 값 수 방어 (2026-07-15) */
+    C.push({n:`자산 = 부채 + 자본 (${y})`,
     ok:near(D.자산총계[i],D.부채총계[i]+D.자본총계[i]),
-    d:`${D.자산총계[i].toLocaleString()} vs ${(D.부채총계[i]+D.자본총계[i]).toLocaleString()}`}));
+    d:`${D.자산총계[i].toLocaleString()} vs ${(D.부채총계[i]+D.자본총계[i]).toLocaleString()}`});});
   if(D.총주식&&D.액면)C.push({n:'자본금 = 주식수 × 액면가',
     ok:near(D.자본금[0]*finUnitScale().won,D.총주식*D.액면,0.02),
     d:`${(D.자본금[0]*finUnitScale().won).toLocaleString()} vs ${(D.총주식*D.액면).toLocaleString()}`});
@@ -5158,7 +5160,8 @@ function crManPrefill(){
       share:(D.대표지분>0?D.대표지분:null),rev1:arr(D.매출액,1),ni1:arr(D.순이익,1),ni2:arr(D.순이익,2),
       shares:(D.총주식>0?D.총주식:null)};
     if(isManual&&D.장기차입금)pv.borrow=arr(D.장기차입금,0);   /* 수기 저장분의 총차입 복원 */
-    if(D.years&&D.years[0]){var ye=document.getElementById('crm_year');if(ye)ye.value=String(D.years[0]);}
+    var ye=document.getElementById('crm_year');
+    if(ye){if(D.years&&D.years[0])ye.value=String(D.years[0]);ye.dataset.pf=String((D.years&&D.years[0])||'');}
   }
   CR_MAN_FIELDS.forEach(function(f){
     if(f[0]==='year')return;
@@ -5183,10 +5186,10 @@ function crManCheck(){
   /* 프리필 상태에서 실제 수정(빈칸→값 포함, 값 지움은 '보존'이라 제외)이 있는지 추적 (2026-07-15) */
   var pfMode=false,anyEdit=false;
   CR_MAN_FIELDS.forEach(function(f){var el=document.getElementById('crm_'+f[0]);
-    if(!el||el.tagName!=='INPUT'||el.dataset.pf===undefined)return;
+    if(!el||el.dataset.pf===undefined)return;
     pfMode=true;
     var cur=String(el.value||''),ed=(cur!==el.dataset.pf&&cur!=='');
-    el.classList.toggle('edited',ed);
+    if(el.tagName==='INPUT')el.classList.toggle('edited',ed);
     if(ed)anyEdit=true;});
   btn.textContent=(pfMode&&FIN.src&&FIN.src!=='MANUAL')?'✔ 수정한 값 반영':'✔ 이 수치로 적용';
   var req=['asset','liab','equity','capital','rev','op','ni'].map(crManNum);
@@ -5225,10 +5228,16 @@ function crManApply(){
     if(bel&&String(bel.value||'')!==bel.dataset.pf&&V('borrow')!=null){
       D.장기차입금=[Math.round(V('borrow')*fromM)];D.단기차입금=null;D.사채=null;patched++;   /* 합산값은 장기에 배치(단기 유동성 과대경고 방지) */
     }
-    if(share!=null&&share!==D.대표지분){D.대표지분=share;patched++;}
-    if(shares!=null&&shares!==D.총주식){D.총주식=shares;patched++;}
+    var _shPatched=false;
+    if(share!=null&&share!==D.대표지분){D.대표지분=share;patched++;_shPatched=true;}
+    if(shares!=null&&shares!==D.총주식){D.총주식=shares;patched++;_shPatched=true;}
     if(D.총주식>0&&D.대표지분>0){D.대표주식=Math.floor(D.총주식*D.대표지분/100);
       if(D.자본금&&D.자본금[0])D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);}
+    if(_shPatched){D._share0=D.대표지분;D._tot0=D.총주식;D._par0=D.액면||0;D._cs0=D.대표주식;}
+    var _ye=document.getElementById('crm_year');
+    if(_ye&&_ye.dataset.pf!==undefined&&String(_ye.value)!==_ye.dataset.pf&&Number(_ye.value)>0){
+      var _y0=Number(_ye.value);D.years=(D.years||[_y0]).map(function(_,i){return _y0-i;});patched++;   /* 사용자 교정 연도 최우선 (2026-07-15) */
+    }   /* ★ P0-③ 원값 스냅샷 동기화(2026-07-15) — 패널 적용값이 새 원값. 이게 없으면 crApplyManual이 이전 값으로 롤백해 "변경이 안 되는" 결함 발생 */
     if(!patched){toast('수정된 칸이 없습니다 — 파싱값 그대로 사용 중입니다.');return;}
     FIN.manual=true;
   }else{
@@ -5246,6 +5255,7 @@ function crManApply(){
       주주:[],대표지분:share||0,총주식:shares||0,
       대표주식:(shares&&share)?Math.floor(shares*share/100):0,
       액면:(shares&&req[3])?Math.round(req[3]*1e6/shares):0,
+      _share0:share||0,_tot0:shares||0,_par0:(shares&&req[3])?Math.round(req[3]*1e6/shares):0,_cs0:(shares&&share)?Math.floor(shares*share/100):0,
       대표자:(document.getElementById('crfCeo')||{}).value||'',
       회사명:(document.getElementById('crfCompany')||{}).value||'',
       설립년:0,종업원:0,업종:''};
