@@ -5182,7 +5182,7 @@ async function ccVaultUI(next){
     if(!confirm('나만의 보관함 연결을 해제할까요?\n드라이브의 자료는 그대로 남고, 다시 연결하면 복원됩니다.'))return;
     const pin=await ccRequirePin();if(!pin)return;
     try{await httpsCallable(fns,'gdDisconnect')({slug:ccVaultId(),pin:pin});}catch(_e){}
-    try{localStorage.removeItem('cc_gd_'+ccVaultId());localStorage.removeItem('cc_gdf_'+ccVaultId());}catch(_e){}
+    try{localStorage.removeItem('cc_gd_'+ccVaultId());localStorage.removeItem('cc_gdf_'+ccVaultId());localStorage.removeItem('myplaces_drive_on');}catch(_e){}   /* 나의 장소 플래그도 동시 해제 (2026-07-15) */
     m.remove();toast('연결이 해제되었습니다','info');
   };
 }
@@ -6710,7 +6710,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcXlsxExport(){if(!customers.length){alert("내보낼 고객이 없어요.");return;}mpcLoadXLSX(function(ok){if(!ok){alert("엑셀 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");return;}var out=customers.map(function(c){return {"이름":c.name||"","회사":c.company||"","직함":c.title||"","연락처":c.phone||"","주소":c.addr||"","관계":(c.rels||[]).join(","),"메모":c.memo||"","_위도":c.lat||"","_경도":c.lng||""};});var ws=XLSX.utils.json_to_sheet(out);var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"고객목록");XLSX.writeFile(wb,"내고객_백업_"+new Date().toISOString().slice(0,10)+".xlsx");});}
   // ── 내 고객: 구글드라이브 자동 동기화 (나의 장소 인증 재사용 · 별도 파일 · 연결 시에만 조용히) ──
   var GD_CUST_FILE="내고객.json",gdCustFileId=null;
-  function mpcGdOn(){return localStorage.getItem(GD_FLAG)==="1"&&window.ccStorage&&window.ccStorage.connected&&window.ccStorage.connected();}
+  function mpcGdOn(){try{return !!(window.ccStorage&&window.ccStorage.connected&&window.ccStorage.connected());}catch(_e){return false;}}   /* 통합 (2026-07-15) */
   function mpcGdFind(cb){var q=encodeURIComponent("name='"+GD_CUST_FILE+"' and trashed=false");gdApi("GET","https://www.googleapis.com/drive/v3/files?q="+q+"&spaces=drive&fields=files(id,name,modifiedTime)").then(function(r){return r.json();}).then(function(d){var f=(d.files&&d.files[0])||null;gdCustFileId=f?f.id:null;cb(f);}).catch(function(){cb(null);});}
   function mpcGdUpload(jsonStr,cb){if(gdCustFileId){gdApi("PATCH","https://www.googleapis.com/upload/drive/v3/files/"+gdCustFileId+"?uploadType=media",{"Content-Type":"application/json"},jsonStr).then(function(r){return r.json();}).then(function(d){cb&&cb(d&&d.id);}).catch(function(){cb&&cb(null);});}else{var b="mcb"+Date.now();var meta={name:GD_CUST_FILE,mimeType:"application/json"};var body="--"+b+"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"+JSON.stringify(meta)+"\r\n--"+b+"\r\nContent-Type: application/json\r\n\r\n"+jsonStr+"\r\n--"+b+"--";gdApi("POST","https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{"Content-Type":"multipart/related; boundary="+b},body).then(function(r){return r.json();}).then(function(d){gdCustFileId=d&&d.id;cb&&cb(gdCustFileId);}).catch(function(){cb&&cb(null);});}}
   function mpcGdPush(){if(!mpcGdOn())return;gdGetToken(true,function(ok){if(!ok)return;var json=JSON.stringify({app:"mycustomers",version:1,updatedAt:Date.now(),customers:customers});mpcGdFind(function(){mpcGdUpload(json,function(){});});});}
@@ -6801,7 +6801,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     $("mpKw").addEventListener("input",function(){kw=$("mpKw").value.trim();renderList();});
     $("mpHereBtn").onclick=function(){if(!navigator.geolocation){toast("위치를 사용할 수 없어요");return;}toast("내 위치 찾는 중…");navigator.geolocation.getCurrentPosition(function(pos){myPos={lat:pos.coords.latitude,lng:pos.coords.longitude};renderList();if(map){var ll=new kakao.maps.LatLng(myPos.lat,myPos.lng);if(map.__myMk)map.__myMk.setMap(null);var dot=document.createElement("div");dot.style.cssText="width:16px;height:16px;border-radius:50%;background:#3D6EA8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(61,110,168,.22),0 1px 4px rgba(0,0,0,.35)";map.__myMk=new kakao.maps.CustomOverlay({position:ll,content:dot,xAnchor:.5,yAnchor:.5,zIndex:5});map.__myMk.setMap(map);map.setLevel(4);map.setCenter(ll);}toast("내 위치로 이동했어요");},function(){toast("위치 권한이 필요해요");},{enableHighAccuracy:true,timeout:8000});};
     $("mpBackupBtn").onclick=gdBtn;$("mpMenu").onclick=gdMenu;
-    $("mpFsBtn").onclick=mapFsToggle;(function(){var h=$("mpMapHandle");if(!h)return;var mapEl=$("mpMap"),y0=null,h0=0;function maxH(){return Math.round((window.innerHeight||600)*0.82);}function setH(px){px=Math.max(160,Math.min(px,maxH()));mapEl.style.maxHeight="none";mapEl.style.height=px+"px";if(map&&map.relayout)map.relayout();}function redraw(){if(!map)return;setTimeout(function(){map.relayout&&map.relayout();if(document.getElementById("mpOverlay").classList.contains("custMode")){if(window.__mpCustDraw)window.__mpCustDraw(false);}else{drawMarkers();}},60);}h.addEventListener("touchstart",function(e){y0=e.touches[0].clientY;h0=mapEl.getBoundingClientRect().height;},{passive:true});h.addEventListener("touchmove",function(e){if(y0==null)return;e.preventDefault();setH(h0+(e.touches[0].clientY-y0));},{passive:false});h.addEventListener("touchend",function(){y0=null;redraw();},{passive:true});h.addEventListener("mousedown",function(e){y0=e.clientY;h0=mapEl.getBoundingClientRect().height;e.preventDefault();var mm=function(ev){if(y0==null)return;setH(h0+(ev.clientY-y0));};var mu=function(){y0=null;document.removeEventListener("mousemove",mm);document.removeEventListener("mouseup",mu);redraw();};document.addEventListener("mousemove",mm);document.addEventListener("mouseup",mu);});})();document.addEventListener("visibilitychange",function(){if(document.hidden)return;if(localStorage.getItem(GD_FLAG)!=="1")return;if(!$("mpOverlay").classList.contains("show"))return;gdGetToken(true,function(ok){if(!ok){gdSetUI("reconnect");return;}if(gdDirty)gdPush(function(){});else gdSetUI("synced");});});$("mpHelpBtn").onclick=function(){$("mpHelpSheet").classList.add("show");};$("mpHelpBack").onclick=function(){$("mpHelpSheet").classList.remove("show");};$("mpIntroGo").onclick=function(){if($("mpIntroDont").checked)localStorage.setItem("myplaces_intro_seen","1");$("mpIntro").classList.remove("show");};$("mpLbX").onclick=lbClose;$("mpLbPrev").onclick=function(){lbGo(-1);};$("mpLbNext").onclick=function(){lbGo(1);};$("mpLightbox").addEventListener("click",function(e){if(e.target.id==="mpLightbox")lbClose();});var _lbs=$("mpLbStage");_lbs.addEventListener("touchstart",function(e){lbX0=e.touches[0].clientX;},{passive:true});_lbs.addEventListener("touchend",function(e){if(lbX0==null)return;var dx=e.changedTouches[0].clientX-lbX0;if(Math.abs(dx)>40)lbGo(dx<0?1:-1);lbX0=null;},{passive:true});
+    $("mpFsBtn").onclick=mapFsToggle;(function(){var h=$("mpMapHandle");if(!h)return;var mapEl=$("mpMap"),y0=null,h0=0;function maxH(){return Math.round((window.innerHeight||600)*0.82);}function setH(px){px=Math.max(160,Math.min(px,maxH()));mapEl.style.maxHeight="none";mapEl.style.height=px+"px";if(map&&map.relayout)map.relayout();}function redraw(){if(!map)return;setTimeout(function(){map.relayout&&map.relayout();if(document.getElementById("mpOverlay").classList.contains("custMode")){if(window.__mpCustDraw)window.__mpCustDraw(false);}else{drawMarkers();}},60);}h.addEventListener("touchstart",function(e){y0=e.touches[0].clientY;h0=mapEl.getBoundingClientRect().height;},{passive:true});h.addEventListener("touchmove",function(e){if(y0==null)return;e.preventDefault();setH(h0+(e.touches[0].clientY-y0));},{passive:false});h.addEventListener("touchend",function(){y0=null;redraw();},{passive:true});h.addEventListener("mousedown",function(e){y0=e.clientY;h0=mapEl.getBoundingClientRect().height;e.preventDefault();var mm=function(ev){if(y0==null)return;setH(h0+(ev.clientY-y0));};var mu=function(){y0=null;document.removeEventListener("mousemove",mm);document.removeEventListener("mouseup",mu);redraw();};document.addEventListener("mousemove",mm);document.addEventListener("mouseup",mu);});})();document.addEventListener("visibilitychange",function(){if(document.hidden)return;if(!gdOn())return;if(!$("mpOverlay").classList.contains("show"))return;gdGetToken(true,function(ok){if(!ok){gdSetUI("reconnect");return;}if(gdDirty)gdPush(function(){});else gdSetUI("synced");});});$("mpHelpBtn").onclick=function(){$("mpHelpSheet").classList.add("show");};$("mpHelpBack").onclick=function(){$("mpHelpSheet").classList.remove("show");};$("mpIntroGo").onclick=function(){if($("mpIntroDont").checked)localStorage.setItem("myplaces_intro_seen","1");$("mpIntro").classList.remove("show");};$("mpLbX").onclick=lbClose;$("mpLbPrev").onclick=function(){lbGo(-1);};$("mpLbNext").onclick=function(){lbGo(1);};$("mpLightbox").addEventListener("click",function(e){if(e.target.id==="mpLightbox")lbClose();});var _lbs=$("mpLbStage");_lbs.addEventListener("touchstart",function(e){lbX0=e.touches[0].clientX;},{passive:true});_lbs.addEventListener("touchend",function(e){if(lbX0==null)return;var dx=e.changedTouches[0].clientX-lbX0;if(Math.abs(dx)>40)lbGo(dx<0?1:-1);lbX0=null;},{passive:true});
   });
   /* ═══════════ 구글드라이브 연동 (고객별 저장) ═══════════ */
   var GD_CLIENT_ID="388025068900-aicv6rov7o9o8jf2re4el62m7o0ld4c7.apps.googleusercontent.com";
@@ -6824,6 +6824,12 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       }
       after();
     });
+  }
+  /* 통합 연결 판정 (2026-07-15): 나의 장소 자체 연결 이력 또는 "내 금고(ccStorage)" 연결 중 하나면 ON
+     — 구글 연결 한 번으로 자산관리·캘린더·금고·문서함·나의 장소가 전부 구동 */
+  function gdOn(){
+    if(localStorage.getItem(GD_FLAG)==="1")return true;
+    try{return !!(window._ccSlug&&window.ccStorage&&ccStorage.connected());}catch(_e){return false;}
   }
   function gdGetToken(silent,cb){
     // ★ 2-A 전환: 고객 홈페이지에서는 "내 금고" 연결을 재사용 (서버 토큰 — 카톡 인앱에서도 유지, 재로그인·끊김 없음)
@@ -6896,7 +6902,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       gdDownload(f.id,function(data){gdMergeRemote(data).then(function(){gdPush(function(ok){cb&&cb(ok);});});});
     });
   }
-  function gdSyncQueue(){gdDirty=true;if(localStorage.getItem(GD_FLAG)!=="1")return;clearTimeout(gdSyncT);gdSyncT=setTimeout(function(){gdGetToken(true,function(ok){if(ok)gdPush(function(){});else gdSetUI("reconnect");});},1500);}
+  function gdSyncQueue(){gdDirty=true;if(!gdOn())return;clearTimeout(gdSyncT);gdSyncT=setTimeout(function(){gdGetToken(true,function(ok){if(ok)gdPush(function(){});else gdSetUI("reconnect");});},1500);}
   function gdAgo(){if(!gdSynced)return"어느 기기서든 복원";var s=Math.floor((Date.now()-gdSynced)/1000);if(s<10)return"방금 동기화";if(s<60)return s+"초 전 동기화";var m=Math.floor(s/60);if(m<60)return m+"분 전 동기화";var h=Math.floor(m/60);return h+"시간 전 동기화";}
   function gdSetUI(s){var t=$("mpBackupTxt"),b=$("mpBackupBtn");if(!t||!b)return;
     if(s==="on"||s==="synced"){t.innerHTML='<b>☁️ 드라이브 동기화됨</b> · '+gdAgo();b.textContent="동기화";}
@@ -6914,7 +6920,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     });
   }
   function gdAutoConnect(){
-    if(localStorage.getItem(GD_FLAG)!=="1"){gdSetUI("off");return;}
+    if(!gdOn()){gdSetUI("off");return;}
     gdSetUI("syncing");
     gdGetToken(true,function(ok){
       if(!ok){gdSetUI("reconnect");return;}
@@ -6926,6 +6932,10 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     else gdConnect();
   }
   function gdMenu(){
+    /* 금고 연결을 재사용 중이면 해제도 한 곳(금고 상태 모달)에서 — 반쪽 해제 혼선 방지 (2026-07-15) */
+    if(window._ccSlug&&window.ccStorage&&(function(){try{return ccStorage.connected();}catch(_e){return false;}})()){
+      if(window.ccVaultUI)ccVaultUI();return;
+    }
     if(gdToken){if(confirm("구글 드라이브 연결을 해제할까요?\n(이 기기의 장소는 그대로 남아요)")){gdToken=null;gdExp=0;localStorage.removeItem(GD_FLAG);gdSetUI("off");toast("연결을 해제했어요");}}
     else gdConnect();
   }
