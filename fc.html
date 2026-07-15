@@ -5329,12 +5329,22 @@ function ccComingSheet(k){
   document.body.appendChild(m);
 }
 /* ═══ 💰 My 자산관리 ═══ */
+/* 2026-07-15 전문화: 유형별 금액 라벨·금리 노출·순자산 반영을 분리.
+   보험(sign 0)은 순자산 미반영 — 보장성 보험은 해약 전제가 아니므로(도메인 원칙) 월 보험료를 지출로 기록만 함 */
 const CCA_TYPES=[
- ['cash','💵','현금·입출금',1],['save','🏦','적금·예금',1],['invest','📈','주식·펀드',1],
- ['pension','🛡️','연금',1],['ins','📋','보험',1],['re','🏠','부동산',1],
- ['deposit','🔑','전월세보증금',1],['car','🚗','자동차',1],['crypto','🪙','가상자산',1],
- ['gold','🥇','금·외화',1],['lend','🤝','빌려준 돈',1],['loan','🏧','대출',-1]];
+ ['cash','💵','현금·입출금',1,'잔액',1],['save','🏦','적금·예금',1,'현재 잔액',1],['invest','📈','주식·펀드',1,'평가액',1],
+ ['pension','🛡️','연금',1,'평가액(적립금)',1],['ins','📋','보험',0,'월 보험료',0],['re','🏠','부동산',1,'시세 평가액',0],
+ ['deposit','🔑','전월세보증금',1,'보증금',0],['car','🚗','자동차',1,'현재 시세',0],['crypto','🪙','가상자산',1,'평가액',0],
+ ['gold','🥇','금·외화',1,'평가액',0],['lend','🤝','빌려준 돈',1,'빌려준 원금 잔액',1],['loan','🏧','대출',-1,'대출 잔액',1]];
 const CCA_T=k=>CCA_TYPES.find(t=>t[0]===k)||CCA_TYPES[0];
+/* 유형별 기관 라벨·예시 (2026-07-15) — 금융상품은 기관명이 기본 */
+const CCA_PH={cash:'20,000,000',save:'10,000,000',invest:'25,000,000',pension:'48,000,000',ins:'150,000',re:'420,000,000',deposit:'300,000,000',car:'18,000,000',crypto:'5,000,000',gold:'8,000,000',lend:'10,000,000',loan:'180,000,000'};
+const CCA_ORG={cash:['은행·증권사','예: 국민은행, 카카오뱅크'],save:['금융기관','예: 하나은행, 새마을금고'],
+ invest:['증권사·운용사','예: 미래에셋증권, 삼성자산운용'],pension:['금융기관','예: 신한은행 IRP, 한화생명 연금'],
+ ins:['보험사','예: 한국생명, 삼성화재'],re:['소재지·물건명(선택)','예: 안성 ○○아파트'],
+ deposit:['임대인·물건(선택)','예: 서초 오피스텔'],car:['차종(선택)','예: 그랜저 하이브리드'],
+ crypto:['거래소','예: 업비트, 빗썸'],gold:['보관처·기관(선택)','예: 한국금거래소, KB골드투자'],
+ lend:['상대방','예: 김철수 (동생)'],loan:['금융기관','예: 국민은행 주택담보']};
 let _ccaData=null,_ccaFilter='all';
 function ccaFmt(v){ // ★ 원 단위 → "3억 6,120만 5,000원" (끝자리까지 정확)
   v=Math.round(Number(v)||0);const neg=v<0;v=Math.abs(v);
@@ -5392,7 +5402,7 @@ function ccaRender(){
   if(srt)srt.innerHTML=ccvSortChip('amt','금액순',_ccaSort==='amt')+ccvSortChip('new','최신순',_ccaSort==='new')+ccvSortChip('name','이름순',_ccaSort==='name');
   const items=(_ccaData&&_ccaData.items)||[];
   let tot=0,debt=0;
-  items.forEach(it=>{const sgn=CCA_T(it.type)[3];const v=(Number(it.amt)||0);if(sgn<0)debt+=v;else tot+=v;});
+  items.forEach(it=>{const sgn=CCA_T(it.type)[3];const v=(Number(it.amt)||0);if(sgn<0)debt+=v;else if(sgn>0)tot+=v;});   /* sign 0(보험)은 순자산 미반영 (2026-07-15) */
   const net=tot-debt;
   const sum=document.getElementById('ccaSum');if(!sum)return;
   const cell=(l,v,c)=>'<div style="flex:1;text-align:center"><small style="font-size:8.5px;color:#8E97AB;display:block">'+l+'</small><b style="font-size:12.5px;color:'+c+'">'+v+'</b></div>';
@@ -5414,7 +5424,7 @@ function ccaRender(){
     const rows=items.filter(i=>i.type===t[0]&&match(i)).sort(sorter);
     const sub=rows.reduce((a,i)=>a+(Number(i.amt)||0),0)*(t[3]<0?-1:1);
     const col=!!_ccaCol[t[0]];
-    h+='<div data-grp="'+t[0]+'" style="display:flex;justify-content:space-between;align-items:center;background:#F6F4EE;padding:8px 11px;font-weight:800;font-size:10px;color:#6b5a33;cursor:pointer"><span>'+(col?'▸':'▾')+' '+t[1]+' '+t[2]+' ('+rows.length+')</span><span style="color:'+(t[3]<0?'#993C1D':'#1B3A6B')+'">'+ccaFmt(sub)+'</span></div>';
+    h+='<div data-grp="'+t[0]+'" style="display:flex;justify-content:space-between;align-items:center;background:#F6F4EE;padding:8px 11px;font-weight:800;font-size:10px;color:#6b5a33;cursor:pointer"><span>'+(col?'▸':'▾')+' '+t[1]+' '+t[2]+' ('+rows.length+')</span><span style="color:'+(t[3]<0?'#993C1D':(t[3]===0?'#8a877f':'#1B3A6B'))+'">'+(t[3]===0?'월 '+ccaFmt(sub)+' 납입':ccaFmt(sub))+'</span></div>';
     if(col)return;
     rows.forEach(i=>{
       let ext='';
@@ -5424,7 +5434,7 @@ function ccaRender(){
         +'<div style="flex:1;min-width:0"><b style="font-size:11.5px;color:#1B2430">'+(i.name||'')+'</b>'
         +'<small style="display:block;font-size:8.5px;color:#8a877f">'+[i.org,i.owner&&i.owner!=='본인'?i.owner:''].filter(Boolean).join(' · ')+'</small></div>'
         +ext
-        +'<b style="font-size:11.5px;color:'+(t[3]<0?'#993C1D':'#1B2430')+';white-space:nowrap">'+(t[3]<0?'-':'')+ccaFmt(i.amt)+'</b>'
+        +'<b style="font-size:11.5px;color:'+(t[3]<0?'#993C1D':(t[3]===0?'#6b5a33':'#1B2430'))+';white-space:nowrap">'+(t[3]<0?'-':'')+(t[3]===0?'월 ':'')+ccaFmt(i.amt)+(t[3]===0?' 납입':'')+'</b>'
         +ccvEditBtn('data-edit="'+i.id+'"')+'</div>';
     });
   });
@@ -5456,7 +5466,15 @@ function ccaEdit(item){
     if(t==='save')return inp('dMonthly','월 납입액 (원)',d.monthly,'500,000','won')+inp('dEnd','만기일',d.end,'2026-12-31','date')+'<div id="dCalc" style="font-size:10.5px;color:#0F6E56;font-weight:700;margin-top:6px"></div>';
     if(t==='invest')return inp('dPrincipal','투자 원금 (원) — 수익률 자동계산',d.principal,'25,000,000','won');
     if(t==='pension')return '<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">세부 유형</small>'+chips('dSub',['연금저축','IRP','퇴직연금','기타'],d.sub||'연금저축')+inp('dYear','올해 납입액 (원) — 세액공제 여유 자동',d.year,'4,000,000','won')+'<div id="dCalc" style="font-size:10.5px;color:#0F6E56;font-weight:700;margin-top:6px"></div>';
-    if(t==='ins')return '<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">종류</small>'+chips('dSub',['종신','정기','건강','실손','저축성','변액','기타'],d.sub||'건강')+inp('dWho','피보험자',d.who,'본인')+inp('dMonthly','월 보험료 (원)',d.monthly,'122,500','won');
+    if(t==='ins')return '<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">종류</small>'+chips('dSub',['종신','정기','건강','실손','저축성','변액','기타'],d.sub||'건강')
+      +inp('dHolder','계약자',d.holder,'본인')
+      +inp('dWho','피보험자',d.who,'본인')
+      +inp('dBene','수익자',d.bene,'법정상속인')
+      +inp('dPayTerm','납입기간',d.payTerm,'예: 20년납 (2035년까지)')
+      +inp('dCoverTerm','보장기간',d.coverTerm,'예: 종신 / 90세 만기')
+      +inp('dCoverage','보장내용',d.coverage,'예: 사망 1억 · 암진단 5천')
+      +inp('dSurrender','해약환급금 (원 · 참고 기록)',d.surrender,'','won')
+      +'<small style="font-size:9.5px;color:#8a877f;display:block;margin-top:5px">※ 보험은 보장 유지가 전제라 순자산 합계에 넣지 않습니다 — 월 보험료는 기록·관리용입니다.</small>';
     if(t==='re')return inp('dBuy','취득가 (원)',d.buy,'420,000,000','won')+inp('dDate','취득일',d.date,'2021-03-15','date')+inp('dShare','내 지분율 (%)',d.share,'50','digits');
     if(t==='loan')return '<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">금리 방식</small>'+chips('dSub',['고정','변동'],d.sub||'변동')+inp('dMonthly','월 상환액 (원)',d.monthly,'820,000','won')+inp('dEnd','만기일',d.end,'2049-06-30','date');
     return inp('dMemo','메모 (선택)',d.memo,'');
@@ -5466,9 +5484,9 @@ function ccaEdit(item){
     +'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:10px">유형</small>'
     +'<div id="ccaTypeGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:3px">'+CCA_TYPES.map(t=>'<button type="button" data-t="'+t[0]+'" style="border:'+(it.type===t[0]?'2px solid #1B3A6B;background:#F0F4FA;font-weight:800':'1px solid #D9D5CA;background:#fff')+';border-radius:8px;padding:7px 0;font-size:10px;color:#1B2430">'+t[1]+' '+t[2]+'</button>').join('')+'</div>'
     +inp('ccaName','이름',it.name,'예: 급여통장, 청년적금')
-    +inp('ccaOrg','기관 (선택)',it.org,'예: 국민은행')
-    +inp('ccaAmt',(it.type==='loan'?'대출 잔액':'평가액')+' (원)',it.amt,'10,000,000','won')
-    +inp('ccaRate','금리·수익률 % (선택)',it.rate,'3.5','dec')
+    +'<div id="ccaOrgWrap">'+inp('ccaOrg',(CCA_ORG[it.type]||CCA_ORG.cash)[0],it.org,(CCA_ORG[it.type]||CCA_ORG.cash)[1])+'</div>'
+    +'<div id="ccaAmtWrap">'+inp('ccaAmt',CCA_T(it.type)[4]+' (원)',it.amt,CCA_PH[it.type]||'10,000,000','won')+'</div>'
+    +'<div id="ccaRateWrap" style="display:'+(CCA_T(it.type)[5]?'block':'none')+'">'+inp('ccaRate','금리·수익률 % (선택)',it.rate,'3.5','dec')+'</div>'
     +'<small style="font-size:10px;color:#5F5E5A;display:block;margin-top:9px">소유자</small>'+chips('owner',['본인','배우자','자녀','공동'],it.owner||'본인')
     +'<button id="ccaMore" type="button" style="width:100%;border:1px dashed #C9A96E;background:#FDFBF5;color:#8B6914;border-radius:10px;padding:8px;font-size:11px;font-weight:700;margin-top:12px">더 입력 ▾ <small style="font-weight:400">(선택 — 유형별 상세)</small></button>'
     +'<div id="ccaDetail" style="display:none">'+detailFields()+'</div>'
@@ -5488,7 +5506,19 @@ function ccaEdit(item){
     const tb=ev.target.closest('[data-t]');
     if(tb){it.type=tb.dataset.t;
       document.querySelectorAll('#ccaTypeGrid [data-t]').forEach(x=>{const on=x.dataset.t===it.type;x.style.border=on?'2px solid #1B3A6B':'1px solid #D9D5CA';x.style.background=on?'#F0F4FA':'#fff';x.style.fontWeight=on?'800':'400';});
-      document.getElementById('ccaDetail').innerHTML=detailFields();try{ccNumWire(m);}catch(_e){}calc();return;}
+      /* 유형에 매칭되는 필드만 노출 (2026-07-15): 금액 라벨 교체 + 무관한 금리칸 숨김 */
+      const _T=CCA_T(it.type);
+      const _aw=document.getElementById('ccaAmtWrap');
+      if(_aw){const _lb=_aw.querySelector('small');if(_lb)_lb.textContent=_T[4]+' (원)';
+        const _ai=document.getElementById('ccaAmt');if(_ai)_ai.placeholder=CCA_PH[it.type]||'10,000,000';}
+      const _rw=document.getElementById('ccaRateWrap');
+      if(_rw)_rw.style.display=_T[5]?'block':'none';
+      const _ow=document.getElementById('ccaOrgWrap'),_og=CCA_ORG[it.type]||CCA_ORG.cash;
+      if(_ow){const _ol=_ow.querySelector('small');if(_ol)_ol.textContent=_og[0];
+        const _oi=document.getElementById('ccaOrg');if(_oi)_oi.placeholder=_og[1];}
+      document.getElementById('ccaDetail').innerHTML=detailFields();try{ccNumWire(m);}catch(_e){}calc();
+      if(it.type==='ins'){const d=document.getElementById('ccaDetail');d.style.display='block';document.getElementById('ccaMore').innerHTML='더 입력 ▴';}
+      return;}
     const cb=ev.target.closest('[data-g]');
     if(cb){const g=cb.dataset.g,v=cb.dataset.v;if(g==='owner')it.owner=v;else it.detail.sub=v;
       m.querySelectorAll('[data-g="'+g+'"]').forEach(x=>{const on=x.dataset.v===v;x.style.border=on?'2px solid #1B3A6B':'1px solid #D9D5CA';x.style.background=on?'#F0F4FA':'#fff';x.style.fontWeight=on?'800':'400';});}
@@ -5503,8 +5533,8 @@ function ccaEdit(item){
     it.org=document.getElementById('ccaOrg').value.trim();
     it.amt=ccNumVal('ccaAmt');
     it.rate=document.getElementById('ccaRate').value.trim();
-    ['dMonthly','dEnd','dPrincipal','dYear','dWho','dBuy','dDate','dShare','dMemo'].forEach(id=>{const el=document.getElementById(id);if(!el)return;
-      const key={dMonthly:'monthly',dEnd:'end',dPrincipal:'principal',dYear:'year',dWho:'who',dBuy:'buy',dDate:'date',dShare:'share',dMemo:'memo'}[id];
+    ['dMonthly','dEnd','dPrincipal','dYear','dWho','dBuy','dDate','dShare','dMemo','dHolder','dBene','dPayTerm','dCoverTerm','dCoverage','dSurrender'].forEach(id=>{const el=document.getElementById(id);if(!el)return;
+      const key={dMonthly:'monthly',dEnd:'end',dPrincipal:'principal',dYear:'year',dWho:'who',dBuy:'buy',dDate:'date',dShare:'share',dMemo:'memo',dHolder:'holder',dBene:'bene',dPayTerm:'payTerm',dCoverTerm:'coverTerm',dCoverage:'coverage',dSurrender:'surrender'}[id];
       it.detail[key]=(el.dataset.num==='won'||el.dataset.num==='digits')?ccNumVal(id):el.value;});
     if(isNew)_ccaData.items.push(it);
     m.remove();ccaSave();
@@ -5522,7 +5552,7 @@ function ccaGuideSheet(){
     +'<div style="height:1px;background:linear-gradient(90deg,rgba(201,169,110,.6),transparent);margin:14px 0 0"></div>'
     +sec(1,'이 공간은 무엇인가요','흩어진 내 돈 — 통장·적금·주식·연금·보험·집·대출까지 — 을 한 화면에 모아 <b style="color:#E8C97A">순자산</b>을 바로 보는 나만의 장부입니다. 은행 앱처럼 연결하는 게 아니라, 내가 아는 금액을 적어두는 방식이라 아주 간단해요.')
     +sec(2,'처음 30초 — 첫 자산 넣기','오른쪽 위 <b style="color:#fff">＋</b> 버튼 → 유형(예: 현금·입출금) 선택 → <b style="color:#fff">이름과 금액(만원)</b>만 넣고 저장. 끝입니다. 3~4개만 넣어도 내 순자산이 위에 자동으로 계산돼요.')
-    +sec(3,'이런 것도 됩니다','· 항목을 누르면 언제든 <b style="color:#fff">수정·삭제</b><br>· <b style="color:#fff">더 입력 ▾</b>을 열면 — 적금은 만기 예상액, 주식은 원금 대비 수익률, 연금은 올해 세액공제 여유가 <b style="color:#E8C97A">자동 계산</b><br>· 소유자(본인·배우자·자녀)를 구분해 가족 자산도 함께')
+    +sec(3,'이런 것도 됩니다','· 항목을 누르면 언제든 <b style="color:#fff">수정·삭제</b><br>· <b style="color:#fff">더 입력 ▾</b>을 열면 — 적금은 만기 예상액, 주식은 원금 대비 수익률, 연금은 올해 세액공제 여유가 <b style="color:#E8C97A">자동 계산</b><br>· 소유자(본인·배우자·자녀)를 구분해 가족 자산도 함께<br>· <b style=\'color:#fff\'>보험은 월 보험료로 기록</b>되고 <b style=\'color:#E8C97A\'>순자산 합계에는 넣지 않습니다</b> — 보장 유지가 전제니까요 (해약환급금은 상세에 참고 기록)')
     +sec(4,'안심하세요','입력한 내용은 <b style="color:#fff">이 폰과 회원님의 구글드라이브에만</b>, 암호화되어 저장됩니다. 회사 서버에는 어떤 금액도 저장되지 않고, 저희도 볼 수 없습니다.')
     +sec(5,'자주 묻는 것','<b style="color:#D8DCE8">Q. 금액이 바뀌면?</b> 항목을 눌러 고치면 합계가 바로 반영돼요.<br><b style="color:#D8DCE8">Q. 정확한 금액을 몰라요.</b> 대략으로 넣고 나중에 고치셔도 충분합니다.<br><b style="color:#D8DCE8">Q. 폰을 바꾸면?</b> 새 폰에서 구글 계정만 다시 연결하면 전부 복원됩니다.')
     +'<button onclick="document.getElementById(\'ccaGuideM\').remove()" style="width:100%;border:0;border-radius:12px;padding:13px;background:#C9A96E;color:#0F1B33;font-size:13.5px;font-weight:800;margin-top:20px">닫고 시작하기</button></div>';
@@ -5758,8 +5788,8 @@ function cclEdit(item,tpl,kindPre){
     it.end=(document.getElementById('clEnd').value||'').trim();
     if(sel.repeat==='once'){it.date=document.getElementById('clDate').value;}
     else if(sel.repeat==='weekly'){it.weekday=['일','월','화','수','목','금','토'].indexOf(sel.weekday||'월');if(it.weekday<0)it.weekday=1;}
-    else if(sel.repeat==='yearly'){it.month=ccNumVal('clMonth')||1;it.day=ccNumVal('clDay')||1;}
-    else{it.day=ccNumVal('clDay')||1;}
+    else if(sel.repeat==='yearly'){it.month=Math.min(12,Math.max(1,ccNumVal('clMonth')||1));it.day=Math.min(31,Math.max(1,ccNumVal('clDay')||1));}   /* 범위 클램프 (2026-07-15) — 13월 등 무효값이 조용히 미발생하던 잔재 제거 */
+    else{it.day=Math.min(31,Math.max(1,ccNumVal('clDay')||1));}
     if(isNew)_cclData.items.push(it);
     m.remove();cclSave();
   };
