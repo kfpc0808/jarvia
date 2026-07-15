@@ -631,7 +631,7 @@
     <div class="inputmeta"><span id="startcount">0 / 5,000자 · 권장 2,000자 이내</span></div>
     <div class="finhelp" id="finhelp">
       <div class="fint">🏢 기업 재무자료 입력 안내</div>
-      CRETOP·재무보고서에서 필요한 부분만 복사해 붙여넣어 주세요. <b>재무상태표, 손익계산서, 차입금·이익잉여금·가지급금 관련 항목</b>이면 충분합니다.<br>
+      <b>① PDF 첨부(가장 정확) → ② 없으면 아래 📝 숫자 직접 입력 → ③ 조각 자료만 있으면</b> 필요한 부분을 복사해 붙여넣어 주세요. <b>재무상태표, 손익계산서, 차입금·이익잉여금·가지급금 관련 항목</b>이면 충분합니다.<br>
       <b>권장 2,000자 이내 · 최대 5,000자</b>이며, 길면 여러 메시지로 나누어 주세요. AI가 수치를 추출해 먼저 보여드리고, 사용자가 <b>“예”</b>라고 확인한 뒤에만 계산과 제안서에 반영합니다.
       <div class="fpdf">
         <div class="fpdf-t">📎 <b>재무보고서 PDF가 있으시면 첨부해 주세요</b> <span class="fpdf-rec">권장</span></div>
@@ -955,6 +955,7 @@
 .crman-f select{text-align:left}
 .crman-f input.miss{background:#FFF6D9;border-color:#E0B84C}   /* 파싱 결손 칸 하이라이트 */
 .crman-f input.edited{border-color:#96783C;background:#FDF9F0}
+.crman-f .won{display:block;text-align:right;font-size:10px;color:#96783C;min-height:13px;margin-top:2px;font-weight:700}
 .crman-chk{margin-top:10px;font-size:11.5px;border-radius:8px;padding:8px 10px;line-height:1.6}
 .crman-chk.ok{background:#EAF4EA;color:#2E6B33}
 .crman-chk.bad{background:#FBEDEB;color:#A93226}
@@ -3044,7 +3045,7 @@ const FIN={data:null,calc:null,risks:null,checks:null,src:'',fileName:'',stmtTyp
    기존엔 '백만원' 가정이 finToPending(×100)·finToText(헤더)·finCalc(×1e6) 세 곳에 흩어져 있어,
    천원 단위를 쓰는 새 보고서 포맷을 추가하는 날 조용히 100배 오차가 나는 지뢰였다.
    새 포맷 추가 시 이 표에 한 줄만 넣으면 세 곳이 함께 맞는다. 미등록 포맷은 백만원으로 가정. */
-const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원',KODATA_WEB:'천원'};   /* KODATA_WEB: 웹출력 상세 재무제표는 천원 단위 (2026-07-14 실측) */
+const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원',KODATA_WEB:'천원',MANUAL:'원'};   /* MANUAL: 직접 입력은 원 단위 (2026-07-15) */   /* KODATA_WEB: 웹출력 상세 재무제표는 천원 단위 (2026-07-14 실측) */
 const FIN_UNIT_SCALE={'원':{man:0.0001,won:1},'천원':{man:0.1,won:1e3},'만원':{man:1,won:1e4},'백만원':{man:100,won:1e6},'억원':{man:10000,won:1e8}};
 function finUnit(){return FIN_FMT_UNIT[FIN.src]||'백만원';}
 function finSrcLabel(){return FIN.src==='KODATA_WEB'?'CRETOP':FIN.src==='MANUAL'?'직접 입력':FIN.src;}
@@ -4992,6 +4993,17 @@ function crFmtPhone(v){var d=String(v||'').replace(/[^0-9]/g,'').slice(0,11);
   return d.replace(/^(\d{3})(\d{3,4})(\d{4})$/,'$1-$2-$3');}
 function crFmtComma(v){var d=String(v||'').replace(/[^0-9]/g,'');return d?Number(d).toLocaleString():'';}
 /* 통합 숫자 입력기 (2026-07-15): 문자 즉시 차단 + 천단위 콤마 + 캐럿 보존. opt {d:소수허용, n:음수허용} */
+/* 원 단위 → 한글 읽기: 1657000000 → '16억 5,700만' (2026-07-15) */
+function jbKoWon(n){
+  if(!Number.isFinite(n)||n===0)return n===0?'0원':'';
+  var neg=n<0;n=Math.abs(Math.round(n));
+  var jo=Math.floor(n/1e12),eok=Math.floor(n%1e12/1e8),man=Math.floor(n%1e8/1e4),won=n%1e4,p=[];
+  if(jo)p.push(jo.toLocaleString()+'조');
+  if(eok)p.push(eok.toLocaleString()+'억');
+  if(man)p.push(man.toLocaleString()+'만');
+  if(won&&!jo&&!eok)p.push(won.toLocaleString());
+  return (neg?'-':'')+(p.join(' ')||'0')+'원';
+}
 function jbNumIn(el,opt){
   opt=opt||{};
   var v=el.value, pos=(el.selectionStart==null)?v.length:el.selectionStart;
@@ -5127,9 +5139,9 @@ function crManBuild(){
     var inp=f[0]==='year'
       ?'<select id="crm_'+f[0]+'" onchange="crManCheck()">'+(function(){var y=new Date().getFullYear(),o='';for(var k=y;k>=y-4;k--)o+='<option value="'+k+'"'+(k===y-1?' selected':'')+'>'+k+'년</option>';return o;})()+'</select>'
       :'<input id="crm_'+f[0]+'" inputmode="decimal" placeholder="" oninput="jbNumIn(this,{d:1,n:1});crManCheck()">';
-    return '<div class="crman-f"><label><b>'+f[1]+'</b>'+(f[2]?'<em>· '+f[2]+'</em>':'')+'</label>'+inp+'</div>';
+    return '<div class="crman-f"><label><b>'+f[1]+'</b>'+(f[2]?'<em>· '+f[2]+'</em>':'')+'</label>'+inp+(f[0]==='year'?'':'<small class="won" id="crmw_'+f[0]+'"></small>')+'</div>';
   }).join('');};
-  b.innerHTML='<div class="crman-note">최신 결산 기준 · 단위 <b>백만원</b> (크레탑 요약표 숫자 그대로 — 억이 아닙니다) · 지분율은 %, 주식수는 주 · 모르는 칸은 비워두세요</div>'
+  b.innerHTML='<div class="crman-note">최신 결산 기준 · 단위 <b>원</b> — 입력하면 칸 아래에 <b>억·만 환산</b>이 바로 표시됩니다.<br>크레탑 표가 <b>백만원</b> 단위면 뒤에 0을 6개(예: 1,657 → 1,657,000,000), <b>천원</b> 단위면 0을 3개 붙여 주세요 · 지분율은 %, 주식수는 주 · 모르는 칸은 비워두세요</div>'
    +'<div class="crman-sec"><span class="req">★ 필수</span> — 이 7칸이 있어야 생성됩니다</div><div class="crman-grid">'+g('req')+'</div>'
    +'<div class="crman-sec">권장 — 접점 판독 정확도</div><div class="crman-grid">'+g('a')+'</div>'
    +'<div class="crman-sec">권장 — 3개년 · 주식가치</div><div class="crman-grid">'+g('b')+'</div>'
@@ -5159,7 +5171,7 @@ function crManPrefill(){
   crManBuild();
   var D=FIN.data, has=!!(D&&FIN.src);                 /* MANUAL 포함 — 재로딩 후에도 폼 복원 (2026-07-15 감사수정) */
   var isManual=FIN.src==='MANUAL';
-  var toM=has?finUnitScale().won/1e6:1;
+  var toM=has?finUnitScale().won:1;   /* 파싱 단위 → 원 (MANUAL은 이미 원) */
   var arr=function(a,i){return (a&&Number.isFinite(a[i]))?Math.round(a[i]*toM):null;};
   var pv={};
   if(has){
@@ -5181,8 +5193,8 @@ function crManPrefill(){
     var el=document.getElementById('crm_'+f[0]);if(!el)return;
     var v=pv[f[0]];
     if(has){
-      el.value=(v==null?'':String(v));
-      el.dataset.pf=(v==null?'':String(v));
+      el.value=(v==null?'':v.toLocaleString());   /* 프리필도 콤마 표기 (2026-07-15) */
+      el.dataset.pf=(v==null?'':v.toLocaleString());
       el.classList.toggle('miss',!isManual && v==null && f[3]!=='b');   /* 3개년(b)은 원래 없을 수 있어 노랑 제외, 단 ni2 등도 비움표시는 안함 */
       el.classList.remove('edited');
     }
@@ -5199,7 +5211,12 @@ function crManCheck(){
   /* 프리필 상태에서 실제 수정(빈칸→값 포함, 값 지움은 '보존'이라 제외)이 있는지 추적 (2026-07-15) */
   var pfMode=false,anyEdit=false;
   CR_MAN_FIELDS.forEach(function(f){var el=document.getElementById('crm_'+f[0]);
-    if(!el||el.dataset.pf===undefined)return;
+    if(!el)return;
+    /* 칸 아래 실시간 환산: 금액은 억·만 한글, 지분율은 %, 주식수는 주 */
+    var w=document.getElementById('crmw_'+f[0]);
+    if(w){var v=crManNum(f[0]);
+      w.textContent=(v==null)?'':(f[0]==='share'?'= '+v+'%':(f[0]==='shares'?'= '+v.toLocaleString()+'주':'= '+jbKoWon(v)));}
+    if(el.dataset.pf===undefined)return;
     pfMode=true;
     var cur=String(el.value||''),ed=(cur!==el.dataset.pf&&cur!=='');
     if(el.tagName==='INPUT')el.classList.toggle('edited',ed);
@@ -5208,14 +5225,14 @@ function crManCheck(){
   var req=['asset','liab','equity','capital','rev','op','ni'].map(crManNum);
   if(req.some(function(v){return v==null;})){chk.className='crman-chk idle';chk.textContent='필수 7칸을 모두 입력하면 검산이 실행됩니다';btn.disabled=true;return;}
   var a=req[0],l=req[1],e=req[2],diff=a-(l+e),tol=Math.max(Math.abs(a)*0.01,1);
-  if(Math.abs(diff)>tol){chk.className='crman-chk bad';chk.textContent='❌ 검산 불일치 — 자산 vs 부채+자본 차액 '+diff.toLocaleString()+'백만원. 오타를 확인해 주세요 (통과 전에는 적용되지 않습니다)';btn.disabled=true;return;}
+  if(Math.abs(diff)>tol){chk.className='crman-chk bad';chk.textContent='❌ 검산 불일치 — 자산 vs 부채+자본 차액 '+jbKoWon(diff)+'. 오타를 확인해 주세요 (통과 전에는 적용되지 않습니다)';btn.disabled=true;return;}
   if(pfMode&&!anyEdit){
     /* 파싱/기적용 값 그대로 — 누를 이유가 없으므로 비활성 (사용자 혼선 방지) */
     chk.className='crman-chk ok';
     chk.textContent='✅ 검산 통과 · 현재 적용 중인 값 그대로입니다 — 값을 수정하거나 노란 칸을 채우면 반영 버튼이 켜집니다';
     btn.disabled=true;return;
   }
-  chk.className='crman-chk ok';chk.textContent='✅ 검산 통과 — 자산 '+a.toLocaleString()+' = 부채 '+l.toLocaleString()+' + 자본 '+e.toLocaleString();
+  chk.className='crman-chk ok';chk.textContent='✅ 검산 통과 — 자산 '+jbKoWon(a)+' = 부채 '+jbKoWon(l)+' + 자본 '+jbKoWon(e);
   btn.disabled=false;
 }
 /* 적용: 파싱 있으면 병합(수정 칸만), 없으면 신규 MANUAL D 구성 → 기존 계산·검산·렌더 재사용 */
@@ -5226,7 +5243,7 @@ function crManApply(){
   var share=V('share'),shares=V('shares');
   var fromParse=!!(FIN.data&&FIN.src&&FIN.src!=='MANUAL');
   if(fromParse){
-    var D=FIN.data,fromM=1e6/finUnitScale().won,patched=0;
+    var D=FIN.data,fromM=1/finUnitScale().won,patched=0;   /* 원 → 파싱 단위 */
     var setArr=function(dk,i,id){var el=document.getElementById('crm_'+id),v=V(id);
       if(!el)return;
       if(String(el.value||'')===el.dataset.pf)return;                 /* 수정 안 함 */
@@ -5267,8 +5284,8 @@ function crManApply(){
       매출원가:null,유동자산:null,유동부채:null,재고자산:null,매입채무:null,인건비:null,
       주주:[],대표지분:share||0,총주식:shares||0,
       대표주식:(shares&&share)?Math.floor(shares*share/100):0,
-      액면:(shares&&req[3])?Math.round(req[3]*1e6/shares):0,
-      _share0:share||0,_tot0:shares||0,_par0:(shares&&req[3])?Math.round(req[3]*1e6/shares):0,_cs0:(shares&&share)?Math.floor(shares*share/100):0,
+      액면:(shares&&req[3])?Math.round(req[3]/shares):0,
+      _share0:share||0,_tot0:shares||0,_par0:(shares&&req[3])?Math.round(req[3]/shares):0,_cs0:(shares&&share)?Math.floor(shares*share/100):0,
       대표자:(document.getElementById('crfCeo')||{}).value||'',
       회사명:(document.getElementById('crfCompany')||{}).value||'',
       설립년:0,종업원:0,업종:''};
@@ -5285,7 +5302,8 @@ function crManApply(){
     FIN.risks=null;
     crFinRender();crBind();
   }
-  toast(fromParse?'✔ 보충 입력 적용 — 파싱값과 병합했습니다':'✔ 직접 입력 적용 — 검산 통과');
+  var _regenHint=(CRMAN_CTX!=='jeb'&&typeof CEO!=='undefined'&&CEO&&CEO.teaser)?' · 문장에 새 숫자를 반영하려면 [다시 생성]하세요':'';
+  toast((fromParse?'✔ 보충 입력 적용 — 파싱값과 병합했습니다':'✔ 직접 입력 적용 — 검산 통과')+_regenHint,_regenHint?5200:3000);
   crManPrefill();   /* 적용 후 최신 상태로 재프리필 */
 }
 /* 파싱 성공 후 결손 항목 안내 — 판독·산출에 실제 쓰이는 항목만 */
