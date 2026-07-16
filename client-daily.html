@@ -218,6 +218,18 @@ body{
 .sec-divider.accordion.open .sec-arrow{transform:rotate(180deg)}
 .sec-body{overflow:hidden;max-height:0;transition:max-height .5s var(--ease)}
 .sec-body.open{max-height:9999px}
+/* ═══ 섹션 2~5 타일 내비게이션 (2026-07-16 · 2×2 + 하단 본문 교체) ═══ */
+.secTileGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 14px}
+.secTile{background:#fff;border:1px solid #E6E2D9;border-radius:12px;padding:12px;text-align:left;cursor:pointer;font-family:inherit;display:flex;flex-direction:column;gap:7px;transition:all .2s var(--ease)}
+.secTile .stHead{display:flex;align-items:center;gap:6px;min-width:0}
+.secTile .stNum{width:22px;height:22px;border-radius:7px;background:var(--accent);border:1px solid var(--gold);color:#F0DDBA;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0}
+.secTile .stName{font-size:12px;font-weight:800;color:#1C2024;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.secTile .stTitle{font-size:12px;color:#4A5058;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.secTile.active{background:var(--accent);border:1.5px solid var(--gold)}
+.secTile.active .stNum{background:#2B3138}
+.secTile.active .stName{color:#F5EFE0}
+.secTile.active .stTitle{color:#C9CDD4}
+.secPane .sec-divider{cursor:default}
 .sec-preview{
   background:var(--bg-card);border:1px solid var(--border-lt);
   border-left:4px solid var(--border);border-radius:0 var(--radius-xs) var(--radius-xs) 0;
@@ -1662,7 +1674,76 @@ function renderSections(){
   const _ck=document.getElementById('cdCheckSec');
   container.innerHTML=html;
   try{if(_ck){container.appendChild(_ck);_ck.style.display='block';}}catch(e){}
+  try{buildSectionTiles();}catch(e){console.warn('타일 빌드 실패 — 아코디언 현행 유지',e);}
 }
+
+/* ═══ 섹션 2~5 타일 내비게이션 (2026-07-16) ═══
+   렌더 함수는 건드리지 않고 조립된 DOM을 후처리:
+   ① 아코디언 wrap + 뒤따르는 EN 버튼·패널을 pane으로 묶고
+   ② 타일 그리드(2×2)를 앞에 삽입, 탭하면 해당 pane만 표시(본문 항상 펼침)
+   섹션 데이터가 1개 이하면 아무것도 하지 않음(기존 아코디언 유지) */
+function buildSectionTiles(){
+  const container=document.getElementById('sectionsContainer');
+  const accWraps=[...container.querySelectorAll(':scope > .wrap')].filter(w=>w.querySelector('.sec-divider.accordion'));
+  if(accWraps.length<2)return;
+  // 타일 데이터 추출 (번호·섹션명·헤드라인)
+  const tiles=accWraps.map(w=>{
+    const num=((w.querySelector('.sec-num')||{}).textContent||'').trim();
+    const name=((w.querySelector('.sec-divider-text')||{}).textContent||'').trim();
+    let head='';
+    const pv=w.querySelector('.sec-preview');
+    if(pv){const dvs=pv.querySelectorAll('div');head=(dvs.length?dvs[dvs.length-1].textContent:pv.textContent).trim();}
+    if(!head){const nt=w.querySelector('.news-title');head=nt?nt.textContent.trim():'';}
+    return {num,name,head};
+  });
+  // 섹션 wrap + 다음 섹션 전까지의 형제(EN 버튼·패널)를 pane으로 묶기
+  const panes=accWraps.map(w=>{
+    const pane=document.createElement('div');pane.className='secPane';
+    container.insertBefore(pane,w);
+    let n=w;
+    while(n){
+      const next=n.nextElementSibling;
+      pane.appendChild(n);
+      if(!next)break;
+      if(next.id==='cdCheckSec')break;
+      if(next.classList.contains('secPane'))break;
+      if(next.classList.contains('wrap')&&next.querySelector('.sec-divider'))break;
+      n=next;
+    }
+    return pane;
+  });
+  // pane 내부 정리: 토글 해제·본문 상시 펼침·미리보기 숨김·EN 버튼을 헤더 우측으로
+  panes.forEach(pane=>{
+    const dv=pane.querySelector('.sec-divider');
+    if(dv){dv.onclick=null;dv.classList.add('open');const ar=dv.querySelector('.sec-arrow');if(ar)ar.style.display='none';}
+    const bd=pane.querySelector('.sec-body');if(bd)bd.classList.add('open');
+    const pv=pane.querySelector('.sec-preview');if(pv)pv.style.display='none';
+    const enBtn=[...pane.querySelectorAll('button')].find(b=>b.textContent.trim()==='EN 영어학습');
+    if(dv&&enBtn){const oldWrap=enBtn.closest('.wrap');enBtn.style.marginLeft='auto';enBtn.style.flexShrink='0';dv.appendChild(enBtn);
+      if(oldWrap&&!oldWrap.textContent.trim())oldWrap.style.display='none';}
+  });
+  // 타일 그리드 삽입
+  const grid=document.createElement('div');
+  grid.className='wrap';
+  grid.innerHTML='<div class="secTileGrid">'+tiles.map((t,i)=>
+    '<button type="button" class="secTile" onclick="selectSecTile('+i+')">'
+    +'<span class="stHead"><span class="stNum">'+esc(t.num)+'</span><span class="stName">'+esc(t.name)+'</span></span>'
+    +'<span class="stTitle">'+esc(t.head)+'</span></button>').join('')+'</div>';
+  container.insertBefore(grid,panes[0]);
+  window._secPanes=panes;
+  window._secTileEls=[...grid.querySelectorAll('.secTile')];
+  selectSecTile(0,true);
+}
+window.selectSecTile=function(i,silent){
+  (window._secPanes||[]).forEach((p,j)=>{p.style.display=j===i?'':'none';});
+  (window._secTileEls||[]).forEach((t,j)=>{t.classList.toggle('active',j===i);});
+  try{
+    if(!silent&&typeof window.jvTrack==='function'){
+      const nm=((window._secTileEls[i].querySelector('.stName')||{}).textContent||'섹션').trim();
+      window.jvTrack('daily_section',nm);
+    }
+  }catch(e){}
+};
 
 var _ctxC={'일상대화':['#FAEEDA','#854F0B'],'비즈니스':['#E1F5EE','#0F6E56'],'SNS':['#EEEDFE','#534AB7'],'동료에게':['#FAEEDA','#854F0B'],'고객에게':['#E1F5EE','#0F6E56'],'실생활':['#EEEDFE','#534AB7']};
 var _enPanelIdx=0;
