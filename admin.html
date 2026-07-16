@@ -2353,6 +2353,27 @@ function _rvYM(t){const d=t&&t.toDate?t.toDate():null;return d?(d.getFullYear()+
 function _rvMonthRank(r){const ym=_rvYM(r.createdAt);const my=_rvAll.filter(x=>x.userId===r.userId&&_rvYM(x.createdAt)===ym).sort((a,b)=>(a.createdAt?.toMillis?.()??0)-(b.createdAt?.toMillis?.()??0));return my.findIndex(x=>x.reviewId===r.reviewId)+1;}
 const _rvStBadge={approved:'<span style="font-size:11px;font-weight:600;color:#0F6E56;background:#E1F5EE;border-radius:4px;padding:2px 8px">게시중</span>',pending:'<span style="font-size:11px;font-weight:600;color:#795548;background:#FFF8E1;border-radius:4px;padding:2px 8px">대기</span>',rejected:'<span style="font-size:11px;font-weight:600;color:#A32D2D;background:#FCEBEB;border-radius:4px;padding:2px 8px">거절</span>',hidden:'<span style="font-size:11px;font-weight:600;color:#5F5E5A;background:#F1EFE8;border-radius:4px;padding:2px 8px">숨김</span>',deleted:'<span style="font-size:11px;font-weight:600;color:#fff;background:#7A1F1F;border-radius:4px;padding:2px 8px">삭제</span>'};
 const _rvCatBadge=c=>c==='knowhow'?'<span style="font-size:11px;color:#0F6E56;background:#E1F5EE;border-radius:4px;padding:2px 8px">노하우</span>':'<span style="font-size:11px;color:#185FA5;background:#E6F1FB;border-radius:4px;padding:2px 8px">후기</span>';
+// ── 분야(topic) 지정/수정: 분야 도입 전 작성글 보완 + 오분류 교정용 (관리자 전용) ──
+const RVA_TOPICS=['데일리리포트','콘텐츠','마이플랫폼','제안서생성','예규사이트','재무계산기','금융경제통계','문자발송','정부지원사업조회','연구노트생성','병원찾기'];
+function _rvTopicEditor(pfx,r){
+  const isCust=!!r.topic&&!RVA_TOPICS.includes(r.topic);
+  const opts=RVA_TOPICS.map(t=>'<option'+(r.topic===t?' selected':'')+'>'+t+'</option>').join('')+'<option value="__custom"'+(isCust?' selected':'')+'>직접입력</option>';
+  const custVal=isCust?esc(r.topic).replace(/"/g,'&quot;'):'';
+  return `<div id="rv-topic-ed-${pfx}-${r.reviewId}" class="hidden" style="margin-top:8px;background:#F1F5F9;border:1px solid var(--border);border-radius:8px;padding:9px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <label style="font-size:12px;font-weight:600">분야</label>
+    <select id="rv-topic-sel-${pfx}-${r.reviewId}" onchange="document.getElementById('rv-topic-cust-${pfx}-${r.reviewId}').classList.toggle('hidden',this.value!=='__custom')" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font)">${opts}</select>
+    <input id="rv-topic-cust-${pfx}-${r.reviewId}" class="${isCust?'':'hidden'}" value="${custVal}" maxlength="20" placeholder="직접 입력 (최대 20자)" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font)">
+    <button class="btn btn-sm" onclick="rvTopicSave('${r.reviewId}','${pfx}')">저장</button>
+  </div>`;
+}
+function rvTopicEditToggle(rid,pfx){const el=$('rv-topic-ed-'+pfx+'-'+rid);if(el)el.classList.toggle('hidden');}
+async function rvTopicSave(rid,pfx){
+  const sel=$('rv-topic-sel-'+pfx+'-'+rid);if(!sel)return;
+  let topic=sel.value;
+  if(topic==='__custom'){topic=($('rv-topic-cust-'+pfx+'-'+rid)?.value||'').trim();if(!topic){toast('분야를 직접 입력해 주세요.','warning');return;}}
+  try{await updateDoc(doc(db,'user_reviews',rid),{topic:topic,updatedAt:serverTimestamp()});toast('분야 저장 완료: '+topic,'success');loadReviewAdmin();}
+  catch(e){toast('저장 실패: '+(e.message||e),'error');}
+}
 async function loadReviewAdmin(){
   try{const snap=await getDocs(collection(db,'user_reviews'));_rvAll=snap.docs.map(d=>d.data());}catch(e){toast('글 목록 로드 실패: '+(e.message||e),'error');_rvAll=[];}
   try{const tsnap=await getDocs(query(collection(db,'transactions'),where('type','==','review_reward')));_rvRewards=tsnap.docs.map(d=>d.data()).sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));}catch(e){_rvRewards=[];}
@@ -2377,7 +2398,9 @@ function renderRvPending(){
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" style="background:#27AE60" onclick="rvApprove('${r.reviewId}')">✅ 승인 + ${fmt(RVA_REWARD)}P 지급</button>
         <button class="btn btn-danger" style="padding:10px 24px;font-size:14px" onclick="rvRejectOpen('${r.reviewId}')">거절</button>
+        <button class="btn btn-sec" style="padding:10px 18px;font-size:13px" onclick="rvTopicEditToggle('${r.reviewId}','p')">분야 ${r.topic?'수정':'지정'}</button>
       </div>
+      ${_rvTopicEditor('p',r)}
       <div id="rv-rej-${r.reviewId}" class="hidden" style="margin-top:10px;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:10px 12px">
         <label style="font-size:12px;font-weight:600;color:#795548;display:block;margin-bottom:5px">거절 사유 (작성자에게 표시)</label>
         <input id="rv-rej-reason-${r.reviewId}" placeholder="예: 내용이 구체적이지 않아 승인이 어렵습니다." style="width:100%;padding:8px 10px;border:1px solid #FFE082;border-radius:6px;font-size:13px;font-family:var(--font)">
@@ -2424,7 +2447,7 @@ function renderRvList(){
   $('rv-list-cnt').textContent='총 '+items.length+'건 (전체 '+_rvAll.length+' · 게시 '+_rvAll.filter(r=>r.status==='approved').length+' · 대기 '+_rvAll.filter(r=>r.status==='pending').length+' · 거절 '+_rvAll.filter(r=>r.status==='rejected').length+' · 숨김 '+_rvAll.filter(r=>r.status==='hidden').length+' · 삭제 '+_rvAll.filter(r=>r.status==='deleted').length+')';
   if(!items.length){body.innerHTML='<p style="color:var(--text-lt);padding:20px 0;text-align:center">조건에 맞는 글이 없습니다.</p>';return;}
   body.innerHTML=items.map(r=>{
-    let acts='<a style="color:var(--accent);cursor:pointer;font-size:12px" onclick="rvToggleBody(\'l-'+r.reviewId+'\')">전문 보기</a>';
+    let acts='<a style="color:var(--accent);cursor:pointer;font-size:12px" onclick="rvToggleBody(\'l-'+r.reviewId+'\')">전문 보기</a> <button class="btn btn-sec btn-sm" onclick="rvTopicEditToggle(\''+r.reviewId+'\',\'l\')">분야 '+(r.topic?'수정':'지정')+'</button>';
     if(r.status==='approved')acts+=' <button class="btn btn-sec btn-sm" onclick="rvSetStatus(\''+r.reviewId+'\',\'hidden\')">숨김</button> <button class="btn-danger" style="padding:4px 10px;border-radius:6px;border:none;cursor:pointer;font-size:12px;background:var(--danger);color:#fff" onclick="rvDelete(\''+r.reviewId+'\')">삭제</button>';
     else if(r.status==='hidden')acts+=' <button class="btn btn-sec btn-sm" onclick="rvSetStatus(\''+r.reviewId+'\',\'approved\')">게시 복원</button> <button class="btn-danger" style="padding:4px 10px;border-radius:6px;border:none;cursor:pointer;font-size:12px;background:var(--danger);color:#fff" onclick="rvDelete(\''+r.reviewId+'\')">삭제</button>';
     else if(r.status==='pending')acts+=' <button class="btn btn-sm" onclick="rvTab(\'pending\',document.querySelector(\'#p-reviews .tab\'))">승인 처리 →</button>';
@@ -2437,7 +2460,8 @@ function renderRvList(){
       <div style="font-size:14px;font-weight:600">${esc(r.title||'')}</div>
       <div style="font-size:12px;color:var(--text-lt);margin:3px 0 6px">${esc(r.userName||'')} (${esc(r.loginId||'')})${meta?' · '+meta:''}</div>
       <div class="hidden" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word" id="rv-body-l-${r.reviewId}" data-cl="1">${esc(r.body||'')}</div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">${acts}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">${acts}</div>
+      ${_rvTopicEditor('l',r)}
     </div>`;
   }).join('');
 }
@@ -2470,7 +2494,7 @@ function renderRvMembers(){
   if(!rows.length){tb.innerHTML='<tr><td colspan="7" class="tc">데이터가 없습니다.</td></tr>';return;}
   tb.innerHTML=rows.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.loginId)}</td><td>${m.approved}</td><td>${m.pending}</td><td>${m.rejected}</td><td>${m.total}</td><td style="font-weight:600;color:var(--primary)">${fmt(m.reward)}P</td></tr>`).join('');
 }
-window.rvTab=rvTab;window.rvApprove=rvApprove;window.rvRejectOpen=rvRejectOpen;window.rvReject=rvReject;window.rvToggleBody=rvToggleBody;window.rvSetStatus=rvSetStatus;window.rvDelete=rvDelete;window.renderRvList=renderRvList;
+window.rvTab=rvTab;window.rvApprove=rvApprove;window.rvRejectOpen=rvRejectOpen;window.rvReject=rvReject;window.rvToggleBody=rvToggleBody;window.rvSetStatus=rvSetStatus;window.rvDelete=rvDelete;window.renderRvList=renderRvList;window.rvTopicEditToggle=rvTopicEditToggle;window.rvTopicSave=rvTopicSave;
 
 // ═══ DASHBOARD ═══
 async function loadDash(){
