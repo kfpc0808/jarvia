@@ -5291,8 +5291,43 @@ function aiInit(){
     document.body.appendChild(fab);
     const tip=document.getElementById('aiFabTip');
     try{if(localStorage.getItem('ai_tip_seen'))tip.style.display='none';else setTimeout(()=>{tip.style.display='none';try{localStorage.setItem('ai_tip_seen','1');}catch(_e){}},7000);}catch(_e){}
-    document.getElementById('aiFabBtn').onclick=aiOpen;
+    /* ★ 꾹(롱프레스) 퀵메뉴 (2026-07-17): 짧은 탭=AI 채팅, 550ms 꾹=고객 추가 등 빠른 메뉴 */
+    const btn=document.getElementById('aiFabBtn');
+    let _lpT=null,_lpFired=false,_lpXY=null;
+    const _lpStart=ev=>{_lpFired=false;const p=(ev.touches&&ev.touches[0])||ev;_lpXY=[p.clientX,p.clientY];
+      _lpT=setTimeout(()=>{_lpFired=true;try{navigator.vibrate&&navigator.vibrate(28);}catch(_e){}aiQuickMenu();},550);};
+    const _lpEnd=()=>{if(_lpT){clearTimeout(_lpT);_lpT=null;}};
+    const _lpMove=ev=>{if(!_lpT||!_lpXY)return;const p=(ev.touches&&ev.touches[0])||ev;if(Math.abs(p.clientX-_lpXY[0])>12||Math.abs(p.clientY-_lpXY[1])>12)_lpEnd();};
+    btn.addEventListener('touchstart',_lpStart,{passive:true});btn.addEventListener('mousedown',_lpStart);
+    btn.addEventListener('touchend',_lpEnd);btn.addEventListener('touchcancel',_lpEnd);btn.addEventListener('mouseup',_lpEnd);btn.addEventListener('mouseleave',_lpEnd);
+    btn.addEventListener('touchmove',_lpMove,{passive:true});btn.addEventListener('mousemove',_lpMove);
+    btn.addEventListener('contextmenu',ev=>{ev.preventDefault();});   /* 모바일 롱프레스 기본메뉴 차단 */
+    btn.onclick=()=>{if(_lpFired){_lpFired=false;return;}aiOpen();};
+    /* 최초 1회 발견성 안내 */
+    try{if(!localStorage.getItem('ai_lp_seen')){setTimeout(()=>{
+      const t2=document.createElement('div');
+      t2.style.cssText='background:#fff;border:1px solid #E0C36B;border-radius:10px;padding:6px 10px;font-size:10.5px;color:#8B6914;font-weight:700;box-shadow:0 4px 14px rgba(15,27,51,.18)';
+      t2.textContent='💡 버튼을 꾹 누르면 고객 추가 빠른 메뉴!';
+      fab.insertBefore(t2,fab.firstChild);
+      setTimeout(()=>{try{t2.remove();}catch(_e){}},7000);
+      localStorage.setItem('ai_lp_seen','1');
+    },9000);}}catch(_e){}
   }catch(_e){}
+}
+/* ★ 꾹 퀵메뉴 (2026-07-17) — FAB 위로 펼침, 바깥 탭 시 닫힘 */
+function aiQuickMenu(){
+  let ex=document.getElementById('aiQm');if(ex){ex.remove();return;}
+  const fab=document.getElementById('aiFab');if(!fab)return;
+  const qm=document.createElement('div');qm.id='aiQm';
+  qm.style.cssText='display:flex;flex-direction:column;align-items:flex-end;gap:7px';
+  const item=(ic,label)=>'<button type="button" style="display:flex;align-items:center;gap:8px;border:1px solid #C9A96E;background:#fff;border-radius:22px;padding:10px 15px;font-size:12.5px;color:#15294A;font-weight:800;box-shadow:0 5px 16px rgba(15,27,51,.22);cursor:pointer"><i class="ti '+ic+'" style="font-size:16px;color:#8B6914"></i>'+label+'</button>';
+  qm.innerHTML=item('ti-user-plus','고객 추가')+item('ti-map-pin','내 고객 지도');
+  fab.insertBefore(qm,fab.firstChild);
+  const bs=qm.querySelectorAll('button');
+  bs[0].onclick=()=>{qm.remove();if(window.__mpcQuickAdd)window.__mpcQuickAdd(true);};
+  bs[1].onclick=()=>{qm.remove();if(window.__mpcQuickAdd)window.__mpcQuickAdd(false);};
+  const closer=ev=>{if(!qm.contains(ev.target)&&ev.target.id!=='aiFabBtn'&&!document.getElementById('aiFabBtn').contains(ev.target)){try{qm.remove();}catch(_e){}document.removeEventListener('pointerdown',closer,true);}};
+  setTimeout(()=>document.addEventListener('pointerdown',closer,true),80);
 }
 function aiOpen(){
   let m=document.getElementById('aiSheet');
@@ -7237,6 +7272,14 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function custLoad(){return openCustDB().then(custAll).then(function(a){customers=a||[];customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(){customers=[];return customers;});}
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
   window.__mpcAddMeeting=function(name,note,cb){try{var hits=customers.filter(function(c){return (c.name||"")===name;});if(hits.length!==1){if(cb)cb(false,hits.length);return;}var c=hits[0];c.meetings=c.meetings||[];c.meetings.push({id:"m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),date:mpcTodayStr(),place:"",note:String(note||"").slice(0,2000),next:"",ts:Date.now(),src:"ai"});c.createdAt=Date.now();custPut(c);mpcGdPush();if(cb)cb(true,1);}catch(_e){if(cb)cb(false,0);}};   /* ★ AI 브리핑 → 미팅기록 승격 (2026-07-17) */
+  window.__mpcQuickAdd=function(openForm){try{   /* ★ 꾹 퀵메뉴: 내 고객 직행 (2026-07-17) */
+    window.myPlacesOpen&&window.myPlacesOpen();
+    var o=document.getElementById("mpOverlay");if(o)o.classList.add("custMode");
+    var tp=document.getElementById("mpTabPlaces"),tc=document.getElementById("mpTabCust");
+    if(tp)tp.classList.remove("on");if(tc)tc.classList.add("on");
+    if(window.__mpCustOpen)window.__mpCustOpen();
+    if(openForm!==false)setTimeout(function(){openCustForm(null);setTimeout(function(){try{$("mpcName").focus();}catch(_e){}},250);},420);
+  }catch(_e){}};
   window.__mpCustLoad=custLoad; // 다음 조각(렌더)에서 사용
   // ── 내 고객: 관계 정의 · 지오코딩(index.html 이식) · 폼 · 저장 · 리스트 ──
   var REL_DEFS=[{k:"고객",c:"#2D5DAE"},{k:"가망고객",c:"#E39A2B"},{k:"친구",c:"#2E8B6E"},{k:"지인",c:"#8A93A8"}];
