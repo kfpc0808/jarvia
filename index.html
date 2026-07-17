@@ -7688,6 +7688,7 @@ let _chTestimonialEditing=null; // 후기 편집 중 id
 /* ★ channelV2: 고객 상세 접속 내역 (fc_view_logs — 본인 fcAuthUid 로그만 규칙상 열람 가능) — 2026-07 */
 const CC_CARD_LABELS={channel_visit:'🏠 홈페이지 방문',daily_visit:'📰 데일리리포트 열람',cardDailyLink:'📰 오늘의 데일리 카드',cardCalendar:'📅 일정·이벤트 캘린더',cardSim:'🧮 시뮬레이션',cardCurated:'⭐ 추천 콘텐츠',cardDashboard:'💼 재무 대시보드',cardMorning:'🌅 아침독서',cardCert:'🎖 자격·경력',cardResource:'📂 자료실',cardReview:'💬 고객 후기'};
 const CC_CALC_LABELS={calc_pension:'국민연금 예상수령액',calc_retire:'노후 필요자금',calc_goalback:'목표 금액 역산',calc_house:'주택연금 예상수령액',calc_fv:'미래가치',calc_pv:'현재가치',calc_accum:'적립 시뮬',calc_compound:'복리 계산기',calc_irp:'연금저축·IRP 세액공제',calc_pensiontax:'연금소득세',calc_needins:'필요 보장액',calc_medself:'실손 자기부담금',calc_lifecmp:'종신 vs 정기 비교',calc_loan:'대출 이자',calc_saving:'예·적금 이자',calc_salary:'연봉 실수령액',calc_dutch:'더치페이(N빵)',calc_percent:'할인가 계산',calc_retiretax:'퇴직소득세',calc_inherit:'상속세',calc_gift:'증여세',calc_giftcmp:'증여 vs 상속 비교',calc_transfer:'양도소득세',calc_jeonse:'전월세 전환',calc_dsr:'대출 한도(DSR)',calc_ltv:'LTV·DTI 한도',calc_pyeong:'평 ↔ ㎡',calc_bmi:'BMI',calc_bmr:'기초대사량(BMR)',calc_stdwt:'표준체중',calc_burn:'칼로리 소모',calc_unit:'단위 변환(거리)',calc_age:'만 나이'};
+function OP_LBL_FALLBACK(k){return String(k).replace(/^calc_|^sim_/,'').replace(/_/g,' ');}
 function ccEvLabel(ev){
   const t=ev&&ev.t,id=(ev&&ev.id)||'';
   if(t==='channel_visit')return CC_CARD_LABELS.channel_visit;
@@ -7696,6 +7697,10 @@ function ccEvLabel(ev){
   if(t==='content')return '📄 콘텐츠 열람'+(id?' · '+id:'');
   if(t==='card'){
     if(id.indexOf('calc_')===0)return '🧮 계산기 · '+(CC_CALC_LABELS[id]||id.replace('calc_',''));
+    if(id.indexOf('선택·')===0)return '⚖️ 오늘의 선택 · '+esc(id.slice(3).replace(/_/g,' ').replace('-',' → '));
+    if(id.indexOf('자가진단·')===0)return '✅ '+esc(id.replace(/_/g,' '));
+    if(id.indexOf('생활변화·')===0)return '🧭 '+esc(id.replace(/_/g,' '));
+    if(id.indexOf('자료·')===0)return '📂 자료 열람 · '+esc(id.slice(3).replace(/_/g,' '));
     return CC_CARD_LABELS[id]||('▫ '+id);
   }
   return '▫ '+(t||'활동')+(id?' · '+id:'');
@@ -7716,7 +7721,39 @@ window.ccToggleCustDetail=async function(slug,title){
     if(!logs.length){wrap.innerHTML='<span style="color:#8a877f">아직 기록이 없습니다. 고객이 홈페이지를 이용하면 여기에 쌓여요.</span>';wrap.dataset.loaded='1';return;}
     const ymd=d=>d?(d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')):'';
     const hm=d=>d?(String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
-    let html='',lastDay='';
+    /* ★ 관심사 프로필 (2026-07-17) — 동일 로그에서 집계, 추가 조회 없음 */
+    const _agg={sel:{},calc:{},quiz:{},life:{},mat:{},sec:{}};
+    logs.forEach(l=>l.events.forEach(ev=>{const id=String(ev.id||'');
+      if(ev.t==='daily_section'&&id)_agg.sec[id]=(_agg.sec[id]||0)+1;
+      else if(ev.t==='card'&&id){
+        if(id.indexOf('선택·')===0)_agg.sel[id.slice(3)]=(_agg.sel[id.slice(3)]||0)+1;
+        else if(id.indexOf('calc_')===0||id.indexOf('sim_')===0)_agg.calc[id]=(_agg.calc[id]||0)+1;
+        else if(id.indexOf('자가진단·')===0)_agg.quiz[id.slice(5)]=(_agg.quiz[id.slice(5)]||0)+1;
+        else if(id.indexOf('생활변화·')===0)_agg.life[id.slice(5)]=(_agg.life[id.slice(5)]||0)+1;
+        else if(id.indexOf('자료·')===0)_agg.mat[id.slice(3)]=(_agg.mat[id.slice(3)]||0)+1;
+      }}));
+    const _chip=(t,c)=>'<span style="display:inline-block;font-size:11px;background:#fff;border:1px solid #E4D9BF;border-radius:99px;padding:2px 9px;margin:2px 4px 2px 0;color:#5F5E5A"><b style="color:#1B3A6B">'+esc(t)+'</b>'+(c>1?' <b style="color:#A68B4B">'+c+'</b>':'')+'</span>';
+    const _top=(o,n)=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,n);
+    const _grp=(lbl,rows)=>rows?'<div style="font-size:10.5px;font-weight:700;color:#5A6484;margin:7px 0 2px">'+lbl+'</div><div>'+rows+'</div>':'';
+    const _selR=_top(_agg.sel,12).map(([k,c])=>_chip(k.replace(/_/g,' ').replace('-',' → '),c)).join('');
+    const _calR=_top(_agg.calc,8).map(([k,c])=>_chip(CC_CALC_LABELS[k]||OP_LBL_FALLBACK(k),c)).join('');
+    const _qzR=_top(_agg.quiz,5).map(([k,c])=>_chip(k.replace(/_/g,' '),c)).join('');
+    const _lfR=_top(_agg.life,5).map(([k,c])=>_chip(k.replace(/_/g,' '),c)).join('');
+    const _mtR=_top(_agg.mat,6).map(([k,c])=>_chip(k.replace(/_/g,' '),c)).join('');
+    const _scR=_top(_agg.sec,6).map(([k,c])=>_chip(k.replace(/_/g,' '),c)).join('');
+    let _ins='';
+    if(_selR||_calR||_qzR||_lfR||_mtR||_scR){
+      _ins='<div style="background:linear-gradient(135deg,#FFFDF6,#FBF4E4);border:1px solid #EAD9B8;border-radius:12px;padding:12px 14px;margin:4px 0 10px">'
+        +'<div style="font-size:11.5px;font-weight:800;color:#A68B4B;letter-spacing:.5px;margin-bottom:2px">🎯 관심사 프로필 <span style="font-weight:600;color:#8B93AE">· 최근 활동 로그 기준</span></div>'
+        +_grp('⚖️ 오늘의 선택 답변',_selR)
+        +_grp('🧮 계산기 사용',_calR)
+        +_grp('✅ 자가진단',_qzR)
+        +_grp('🧭 생활변화 점검',_lfR)
+        +_grp('📂 열람 자료',_mtR)
+        +_grp('📰 많이 본 데일리 섹션',_scR)
+        +'</div><div style="margin:10px 0 2px;font-size:11px;font-weight:800;color:#8B93AE">🕒 최근 활동</div>';
+    }
+    let html=_ins,lastDay='';
     logs.forEach(l=>{
       const day=ymd(l.at);
       if(day!==lastDay){html+='<div style="margin:8px 0 3px;font-size:11px;font-weight:800;color:#A68B4B">'+(day||'날짜 미상')+'</div>';lastDay=day;}
