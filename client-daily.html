@@ -4560,6 +4560,7 @@ function lsGet(k,d){try{var v=LS.getItem(k);return v==null?d:v;}catch(e){return 
 function lsSet(k,v){try{LS.setItem(k,v);}catch(e){}}
 function dcYmd(){var k=new Date(Date.now()+9*3600000);return ''+k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');}
 function dcAns(){try{return JSON.parse(lsGet('dc_ans','[]'))||[];}catch(e){return [];}}
+function dcDayCnt(){return lsGet('dc_doneday','')===dcYmd()?(parseInt(lsGet('dc_dayn','0'),10)||0):0;} /* 오늘 답변 수 (하루 2문항 상한) */
 function dcHash(s){var h=0;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;}return h;}
 var $d=function(id){return document.getElementById(id);};
 var dcSt={qa:[],cur:null,open:false};
@@ -4580,6 +4581,7 @@ function dcPick(round){
 function dcCatName(c){for(var i=0;i<5;i++)if(DC_CATS[i][0]===c)return DC_CATS[i][1];return '';}
 /* ── 렌더 ── */
 function dcRenderQ(){
+ if(dcDayCnt()>=2)return dcRenderDone(); /* 하루 2문항 상한 — 자동·수동 통합 */
  var pk=dcPick();if(!pk)return dcClose();
  dcSt.cur=pk;$d('dcCatChip').textContent=dcCatName(pk.cat);
  var q=pk.q;
@@ -4595,13 +4597,13 @@ function dcAnswer(c){
  var pk=dcSt.cur,q=pk.q;
  dcSt.qa.push({q:q,cat:pk.cat,c:c});
  var ans=dcAns();ans.push(q.k);if(ans.length>300)ans=ans.slice(-300);lsSet('dc_ans',JSON.stringify(ans));
- lsSet('dc_doneday',dcYmd());lsSet('dc_skip','0');
+ var _n=dcDayCnt()+1;lsSet('dc_doneday',dcYmd());lsSet('dc_dayn',''+_n);lsSet('dc_skip','0');
  try{window.jvTrack&&window.jvTrack('card','선택·'+q.k+'-'+(c===1?q.sa:q.sb));window.jvFlush&&window.jvFlush();}catch(e){}
  dcRenderStat(c);
 }
 function dcRenderStat(c){
  var q=dcSt.cur.q,p1=q.p,p2=100-p1,mine=c===1;
- var more=dcSt.qa.length<2;
+ var more=dcSt.qa.length<2&&dcDayCnt()<2;
  $d('dcBody').innerHTML='<div class="dcMineLb">나의 선택</div>'
   +'<div class="dcMine">'+(c===1?'① '+q.a:'② '+q.b)+'</div>'
   +'<div class="dcStat"><div class="dcStatT">다른 분들은 이렇게 답했어요</div>'
@@ -4618,6 +4620,7 @@ function dcRenderInsight(){
  var last=dcSt.qa[dcSt.qa.length-1];if(!last)return dcClose();
  var pool=DC_INS[last.cat]||DC_INS.A;
  var ins=pool[dcAns().length%pool.length];
+ try{lsSet('dc_lastins',JSON.stringify(ins));lsSet('dc_insday',dcYmd());}catch(e){}
  $d('dcCatChip').textContent='';
  $d('dcBody').innerHTML='<div class="dcDoneTx">오늘의 선택 완료 · 참여해 주셔서 감사해요</div>'
   +'<div class="dcIns"><div class="dcInsLb">오늘의 생각 한 줄</div><div class="dcInsTx">'+ins.tx+'</div></div>'
@@ -4626,9 +4629,19 @@ function dcRenderInsight(){
  $d('dcCalcGo').onclick=function(){dcClose();setTimeout(function(){try{if(window.dcOpenCalc)window.dcOpenCalc(ins.ck);}catch(e){}},250);};
  $d('dcCloseEnd').onclick=dcClose;
 }
+function dcRenderDone(){
+ dcSt.done=true;$d('dcCatChip').textContent='';
+ var ins=null;try{if(lsGet('dc_insday','')===dcYmd())ins=JSON.parse(lsGet('dc_lastins','null'));}catch(e){}
+ $d('dcBody').innerHTML='<div class="dcDoneTx">오늘 참여 완료 · 내일 아침 새 질문이 준비돼요</div>'
+  +(ins?'<div class="dcIns"><div class="dcInsLb">오늘의 생각 한 줄</div><div class="dcInsTx">'+ins.tx+'</div></div><button type="button" class="dcCalcBtn" id="dcCalcGo2">🧮 '+ins.cl+'</button>'
+       :'<div class="dcIns"><div class="dcInsLb">내일 만나요</div><div class="dcInsTx">좋은 질문 하나가 하루의 생각을 바꿉니다. 내일의 질문을 준비해 둘게요.</div></div>')
+  +'<button type="button" class="dcSkip" id="dcCloseDone">닫기</button>';
+ var g=$d('dcCalcGo2');if(g&&ins)g.onclick=function(){dcClose();setTimeout(function(){try{if(window.dcOpenCalc)window.dcOpenCalc(ins.ck);}catch(e){}},250);};
+ $d('dcCloseDone').onclick=dcClose;
+}
 /* ── 열기/닫기/스킵 ── */
 function dcOpen(auto){
- if(dcSt.open)return;dcSt.open=true;dcSt.qa=[];
+ if(dcSt.open)return;dcSt.open=true;dcSt.qa=[];dcSt.done=false;
  if(auto)lsSet('dc_autoday',dcYmd());
  $d('dcBack').classList.add('show');$d('dcSheet').classList.add('show');
  dcRenderQ();
@@ -4652,8 +4665,8 @@ function dcCanAuto(){
 function dcAutoShow(){if(dcCanAuto()&&!dcSt.open)dcOpen(true);}
 /* ── 트리거: 섹션 2개 열람 시 자동 표시 + 45초 폴백 ── */
 function dcBind(){
- var x=$d('dcXBtn');if(x)x.onclick=function(){if(dcSt.qa.length)dcClose();else dcSkip();};
- var bk=$d('dcBack');if(bk)bk.onclick=function(){if(dcSt.qa.length)dcClose();else dcSkip();};
+ var x=$d('dcXBtn');if(x)x.onclick=function(){if(dcSt.qa.length||dcSt.done)dcClose();else dcSkip();};
+ var bk=$d('dcBack');if(bk)bk.onclick=function(){if(dcSt.qa.length||dcSt.done)dcClose();else dcSkip();};
  var en=$d('dcEntryBtn');
  if(en){en.onclick=function(){dcSt.open=false;dcOpen(false);};if(lsGet('dc_doneday','')===dcYmd()){var s=en.querySelector('small');if(s)s.textContent='오늘 참여 완료 · 내일 새 질문';}}
  var secN=0,orig=window.jvTrack;
