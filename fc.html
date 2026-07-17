@@ -2133,6 +2133,8 @@ async function init(){
       // ★ 2026-07: 구조 통일 — 컨설턴트 채널 방문자에게도 사적 영역(나의 장소·나만의 보관함)을 고객홈페이지와 동일하게 노출.
       //   단 🔒 잠금 — 클릭 시 안내 토스트만 뜨고 내용에는 절대 접근 불가 (ccIsLocked 관문).
       try{ccInjectVaultZone();ccApplyLockUI();}catch(_e){}
+      try{aiInit();}catch(_e){}   /* ★ AI 비서 게이트 (aiEnabled 소유자만, 2026-07-17) */
+      try{setTimeout(ccQuotaBannerMaybe,4000);}catch(_e){}   /* ★ Drive 용량 90%↑ 안내 배너 (세션 1회, 2026-07-17) */
       if(isOwnerView&&!window._ccSlug){ // ★ channelV2: 고객 채널 화면에서는 컨설턴트 도구(편집·매뉴얼·⋮·새요청 알림바) 미표시
         // ★ 자가치유: loginIdLower 미보유/불일치 시 본인 users 문서에만 조용히 보강 (대소문자 무시 조회 완결 — 새 파일·관리자 작업 불필요)
         try{const _need=((fcData&&fcData.loginId)||'').toLowerCase();if(_need&&fcData.loginIdLower!==_need){updateDoc(doc(db,'users',fcUid),{loginIdLower:_need}).catch(()=>{});}}catch(_e){}
@@ -5257,6 +5259,160 @@ window.fccBridge={
   }
 };
 
+/* ═══ 🤖 AI 비서 — gildong 전용 베타 (2026-07-17) ═══
+   게이트 2중: ① 여기서 isOwnerView && fcData.aiEnabled 확인(미해당자는 렌더링 자체 없음)
+             ② 서버 aiChat 함수가 호출자 uid → consultants.aiEnabled 재검증 + 일일 상한 (실방어선)
+   컨텍스트: 질문에서 고객명 매칭 → 해당 고객만 조립(지도+미팅+fc_clients+활동) = 비용 통제 2단 구조
+   저장: 대화는 컨설턴트 Drive '대화저장/AI대화' 암호화 — 회사 서버 무저장 원칙 */
+let aiHist=[],aiBusy=false,aiUsage=null;
+const _aiEsc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function aiAge(b){if(!b||b.length!==10)return null;const t=new Date();let a=t.getFullYear()-parseInt(b.slice(0,4),10);if((t.getMonth()+1)*100+t.getDate()<parseInt(b.slice(5,7),10)*100+parseInt(b.slice(8,10),10))a--;return a;}
+function aiDday(ymd){if(!ymd||String(ymd).length<10)return null;const t=new Date();const base=new Date(t.getFullYear(),t.getMonth(),t.getDate());return Math.round((new Date(String(ymd).slice(0,10)+'T00:00:00')-base)/86400000);}
+function aiDdayMmdd(mmdd){if(!mmdd||mmdd.length!==4)return null;const t=new Date();const base=new Date(t.getFullYear(),t.getMonth(),t.getDate());let d=new Date(t.getFullYear(),parseInt(mmdd.slice(0,2),10)-1,parseInt(mmdd.slice(2,4),10));if(d<base)d=new Date(t.getFullYear()+1,parseInt(mmdd.slice(0,2),10)-1,parseInt(mmdd.slice(2,4),10));return Math.round((d-base)/86400000);}
+function aiSangMmdd(b){if(!b||b.length!==10)return '';let m=parseInt(b.slice(5,7),10),d=parseInt(b.slice(8,10),10);m+=6;if(m>12)m-=12;const dim=[31,28,31,30,31,30,31,31,30,31,30,31];if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}return String(m).padStart(2,'0')+String(d).padStart(2,'0');}
+function aiInit(){
+  try{
+    if(!isOwnerView||window._ccSlug||!fcData||!fcData.aiEnabled){
+      const _f=document.getElementById('aiFab');if(_f)_f.remove();   /* 로그아웃·계정 전환 시 잔존 제거 */
+      const _s=document.getElementById('aiSheet');if(_s)_s.remove();
+      return;
+    }
+    if(document.getElementById('aiFab'))return;
+    const fab=document.createElement('div');fab.id='aiFab';
+    fab.style.cssText='position:fixed;right:14px;bottom:82px;z-index:9400;display:flex;flex-direction:column;align-items:flex-end;gap:6px';
+    fab.innerHTML='<div id="aiFabTip" style="background:#fff;border:1px solid #E0C36B;border-radius:10px;padding:6px 10px;font-size:11px;color:#8B6914;font-weight:700;box-shadow:0 4px 14px rgba(15,27,51,.18)">내일 미팅, 제가 준비해둘까요?</div>'
+      +'<button type="button" id="aiFabBtn" style="width:54px;height:54px;border-radius:50%;background:#15294A;border:2px solid #C9A96E;color:#C9A96E;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(15,27,51,.35);cursor:pointer;padding:0"><i class="ti ti-sparkles" style="font-size:20px"></i><span style="font-size:8.5px;font-weight:800;color:#fff;margin-top:1px;line-height:1">AI 비서</span></button>';
+    document.body.appendChild(fab);
+    const tip=document.getElementById('aiFabTip');
+    try{if(localStorage.getItem('ai_tip_seen'))tip.style.display='none';else setTimeout(()=>{tip.style.display='none';try{localStorage.setItem('ai_tip_seen','1');}catch(_e){}},7000);}catch(_e){}
+    document.getElementById('aiFabBtn').onclick=aiOpen;
+  }catch(_e){}
+}
+function aiOpen(){
+  let m=document.getElementById('aiSheet');
+  if(m){m.style.display='flex';const inp=document.getElementById('aiInput');if(inp)setTimeout(()=>inp.focus(),120);return;}
+  m=document.createElement('div');m.id='aiSheet';
+  m.style.cssText='position:fixed;inset:0;z-index:9600;background:rgba(15,27,51,.45);display:flex;align-items:flex-end';
+  m.innerHTML='<div style="background:#F7F5EF;width:100%;height:93%;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:9px;flex-shrink:0">'
+    +'<i class="ti ti-sparkles" style="font-size:17px;color:#C9A96E"></i>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">나의 AI 비서</div>'
+    +'<div style="font-size:9.5px;color:#9AA3B8">'+_aiEsc((fcData&&fcData.name)||loginId||'')+'님 전용 · 베타 · <span id="aiUsageTxt">오늘 -/50회</span></div></div>'
+    +'<button type="button" id="aiCloseBtn" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
+    +'<div id="aiChips" style="display:flex;gap:6px;padding:9px 11px;overflow-x:auto;flex-shrink:0">'
+    +'<button type="button" data-aiq="내일 미팅 있는 고객 브리핑해줘" style="border:1px solid #E0C36B;background:#FFF8E7;border-radius:13px;padding:6px 11px;font-size:11px;color:#8B6914;font-weight:700;white-space:nowrap">내일 미팅 브리핑</button>'
+    +'<button type="button" data-aiq="오늘 연락하면 좋을 고객을 이유와 함께 알려줘" style="border:1px solid #D8DCE5;background:#fff;border-radius:13px;padding:6px 11px;font-size:11px;color:#5C6678;white-space:nowrap">오늘 연락할 고객</button>'
+    +'<button type="button" data-aiq="상령일이나 만기가 임박한 고객을 정리해줘" style="border:1px solid #D8DCE5;background:#fff;border-radius:13px;padding:6px 11px;font-size:11px;color:#5C6678;white-space:nowrap">상령일·만기 임박</button>'
+    +'<button type="button" data-aiq="3개월 넘게 미팅 기록이 없는 고객은 누구야?" style="border:1px solid #D8DCE5;background:#fff;border-radius:13px;padding:6px 11px;font-size:11px;color:#5C6678;white-space:nowrap">오래 못 만난 고객</button></div>'
+    +'<div id="aiMsgs" style="flex:1;overflow-y:auto;padding:4px 12px 10px"></div>'
+    +'<div style="border-top:1px solid #E4E0D6;background:#fff;padding:9px 11px;flex-shrink:0">'
+    +'<div style="display:flex;gap:7px;align-items:center">'
+    +'<input id="aiInput" type="text" placeholder="질문 입력 · 키보드 마이크로 음성 가능" style="flex:1;border:1px solid #D8DCE5;border-radius:20px;padding:10px 14px;font-size:13px;outline:0;min-width:0">'
+    +'<button type="button" id="aiSendBtn" style="width:38px;height:38px;border-radius:50%;background:#15294A;border:0;color:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-arrow-up" style="font-size:17px"></i></button></div>'
+    +'<div style="font-size:9px;color:#B7BDC9;text-align:center;margin-top:6px"><i class="ti ti-lock" style="font-size:9px"></i> 대화는 내 드라이브에 암호화 저장 · 회사 서버에는 남지 않아요</div></div></div>';
+  document.body.appendChild(m);
+  document.getElementById('aiCloseBtn').onclick=()=>{m.style.display='none';};
+  m.addEventListener('click',ev=>{if(ev.target===m)m.style.display='none';});
+  document.getElementById('aiSendBtn').onclick=aiSend;
+  document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();aiSend();}});
+  Array.prototype.forEach.call(m.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{document.getElementById('aiInput').value=b.getAttribute('data-aiq');aiSend();};});
+  aiMsgAdd('assistant','안녕하세요, '+((fcData&&fcData.name)||'컨설턴트')+'님. 고객지도·미팅내역·내고객관리 기록을 바탕으로 답해드려요.\n위 추천 질문을 누르거나, "김OO 고객 미팅 준비해줘"처럼 물어보세요.');
+  setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
+}
+function aiMsgAdd(role,text){
+  const box=document.getElementById('aiMsgs');if(!box)return null;
+  const w=document.createElement('div');
+  if(role==='user'){w.style.cssText='display:flex;justify-content:flex-end;margin:8px 0';w.innerHTML='<div style="background:#15294A;color:#fff;border-radius:13px 13px 4px 13px;padding:9px 13px;font-size:13px;max-width:82%;line-height:1.55;word-break:break-word">'+_aiEsc(text)+'</div>';}
+  else{w.style.cssText='display:flex;justify-content:flex-start;margin:8px 0';w.innerHTML='<div style="background:#fff;border:1px solid #E4E0D6;border-radius:4px 13px 13px 13px;padding:10px 13px;font-size:12.5px;color:#1B2430;max-width:88%;line-height:1.65;word-break:break-word;white-space:pre-wrap">'+_aiEsc(text)+'</div>';}
+  box.appendChild(w);box.scrollTop=box.scrollHeight;return w;
+}
+function aiTyping(on){
+  const box=document.getElementById('aiMsgs');if(!box)return;
+  let t=document.getElementById('aiTypingBubble');
+  if(on){if(t)return;t=document.createElement('div');t.id='aiTypingBubble';t.style.cssText='display:flex;justify-content:flex-start;margin:8px 0';t.innerHTML='<div style="background:#fff;border:1px solid #E4E0D6;border-radius:4px 13px 13px 13px;padding:10px 14px;font-size:12.5px;color:#8A93A8">기록을 살펴보는 중…</div>';box.appendChild(t);box.scrollTop=box.scrollHeight;}
+  else if(t)t.remove();
+}
+function aiUsageRender(){const el=document.getElementById('aiUsageTxt');if(el&&aiUsage)el.textContent='오늘 '+aiUsage.used+'/'+aiUsage.limit+'회';}
+async function aiBuildContext(q){
+  const ctx={consultant:(fcData&&fcData.name)||loginId||'',today:new Date().toISOString().slice(0,10)};
+  const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
+  let fcc=null;try{fcc=window.fccBridge?await window.fccBridge.pull():null;}catch(_e){}
+  let hit=null;
+  for(const c of (customers||[])){const nm=(c.name||'').trim();if(nm.length>=2&&q.indexOf(nm)>=0){if(!hit||nm.length>(hit.name||'').length)hit=c;}}
+  if(hit){
+    const key=(hit.name||'')+'|'+(hit.birthDate||'');
+    const f=(fcc&&fcc[key])||null;
+    const cts=[].concat((hit.contracts||[]).map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,insurer:x.insurer,premium:x.premium})),f?f.contracts.map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,src:'내고객관리'})):[]);
+    const seen={};const dedup=cts.filter(x=>{if(!x.product)return false;if(seen[x.product])return false;seen[x.product]=1;return true;}).slice(0,12).map(x=>{const dd=aiDday(x.expiry);return Object.assign({},x,dd!=null?{maturityDday:dd}:{});});
+    ctx.customer={name:hit.name,age:aiAge(hit.birthDate),birthDate:hit.birthDate||'',status:hit.status||'',needs:hit.needs||[],referrer:hit.referrer||'',nextContact:hit.nextContact||'',prefChannel:hit.prefChannel||'',prefTime:hit.prefTime||'',
+      family:(hit.family||[]).slice(0,6),memo:(hit.memo||'').slice(0,600),contracts:dedup,
+      sangryeongDday:hit.birthDate?aiDdayMmdd(aiSangMmdd(hit.birthDate)):null,
+      birthdayDday:hit.birthDate?aiDdayMmdd(hit.birthDate.slice(5,7)+hit.birthDate.slice(8,10)):null,
+      meetings:(hit.meetings||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,5).map(mm=>({date:mm.date,place:mm.place||'',note:(mm.note||'').slice(0,300),next:mm.next||''})),
+      files:(hit.files||[]).slice(0,10).map(x=>({name:x.name,desc:x.desc||''}))};
+    if(f&&f.id){try{
+      const snap=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid),where('clientId','==',f.id),limit(80)));
+      const evs=[];snap.forEach(dd=>{const x=dd.data();const ts=(x.createdAt&&x.createdAt.toMillis)?x.createdAt.toMillis():0;(x.events||[]).forEach(e=>{evs.push({t:(e&&(e.t||e.type||e.name))||'',ts:ts});});});
+      evs.sort((a,b)=>b.ts-a.ts);
+      const agg={};evs.slice(0,150).forEach(e=>{if(!e.t)return;const lb=(typeof CALC_LABELS!=='undefined'&&CALC_LABELS[e.t])||(typeof OP_CARD_LABELS!=='undefined'&&OP_CARD_LABELS[e.t])||e.t;agg[lb]=(agg[lb]||0)+1;});
+      const act=Object.entries(agg).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([k,v])=>k+' '+v+'회');
+      if(act.length)ctx.customer.activity=act;   /* 전용 링크 동의 고객만 존재 */
+    }catch(_e){}}
+  }else{
+    const up=[];
+    (customers||[]).forEach(c=>{
+      if(c.birthDate&&!c.birthUnknown){
+        const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=30)up.push({name:c.name,event:'생일',dday:bd});
+        const sg=aiDdayMmdd(aiSangMmdd(c.birthDate));if(sg!=null&&sg<=30)up.push({name:c.name,event:'상령일',dday:sg});
+      }
+      let cts=(c.contracts||[]);const key=(c.name||'')+'|'+(c.birthDate||'');if(fcc&&fcc[key])cts=cts.concat(fcc[key].contracts);
+      cts.forEach(ct=>{const dd=aiDday(ct.expiry);if(dd!=null&&dd>=0&&dd<=30)up.push({name:c.name,event:'만기('+(ct.product||'')+')',dday:dd});});
+      if(c.nextContact){const nc=aiDday(c.nextContact);if(nc!=null&&nc<=7)up.push({name:c.name,event:'연락 예정',dday:nc});}
+    });
+    up.sort((a,b)=>a.dday-b.dday);
+    const noMeet=(customers||[]).filter(c=>{
+      if(c.status==='휴면')return false;
+      const last=(c.meetings&&c.meetings.length)?Math.max.apply(null,c.meetings.map(mm=>{const t=Date.parse(mm.date||'');return isNaN(t)?0:t;})):0;
+      return !last||Date.now()-last>90*86400000;
+    }).slice(0,15).map(c=>c.name+((c.meetings&&c.meetings.length)?'':' (기록 없음)'));
+    ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,20),noMeetingOver90days:noMeet};
+  }
+  return ctx;
+}
+async function aiSend(){
+  const inp=document.getElementById('aiInput');if(!inp)return;
+  const q=(inp.value||'').trim();if(!q||aiBusy)return;
+  inp.value='';aiMsgAdd('user',q);aiBusy=true;aiTyping(true);
+  try{
+    const ctx=await aiBuildContext(q);
+    const r=await httpsCallable(fns,'aiChat')({question:q,context:ctx,history:aiHist.slice(-6)});
+    const d=r.data||{};
+    aiTyping(false);
+    if(d.ok){
+      aiMsgAdd('assistant',d.answer||'');
+      aiHist.push({role:'user',content:q},{role:'assistant',content:(d.answer||'').slice(0,2000)});
+      if(aiHist.length>12)aiHist=aiHist.slice(-12);
+      if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};aiUsageRender();}
+      aiSaveDrive(q,d.answer||'');
+    }else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
+    else if(d.reason==='disabled'){aiMsgAdd('assistant','AI 베타 이용 권한이 없는 계정이에요.');}
+    else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
+  }catch(e){aiTyping(false);aiMsgAdd('assistant','AI 서버에 연결하지 못했어요. 잠시 후 다시 시도해주세요.\n(aiChat 함수가 아직 배포 전이면 배포 후 이용 가능합니다)');}
+  aiBusy=false;
+}
+async function aiSaveDrive(q,a){
+  try{
+    if(!window.ccStorage||!ccStorage.connected())return;   /* 보관함 미연결 = 저장 생략 (무음) */
+    /* ★ 월별 파일 분할 (2026-07-17): AI대화_YYYY-MM — 총량 무제한, 파일당 소형 유지(암복호화 속도), 연·월 단위 회고 가능 */
+    const fname='AI대화_'+new Date().toISOString().slice(0,7);
+    let env=null;try{env=await ccStorage.loadJson('대화저장',fname);}catch(_e){env=null;}
+    if(!env||!Array.isArray(env.items))env={v:1,kind:'ai_chat',month:new Date().toISOString().slice(0,7),updatedAt:0,items:[]};
+    env.items.push({ts:Date.now(),q:String(q).slice(0,1000),a:String(a).slice(0,4000)});
+    env.updatedAt=Date.now();
+    await ccStorage.saveJson('대화저장',fname,env);
+  }catch(_e){}
+}
+
 /* ── ☁️ 내 금고 연결 UI (프리미엄 톤 · 최초 1회 → 폴더 자동생성 검증까지) ── */
 /* ── 🚪 VAULT 공용 관문 — 4개 버튼·나의 장소가 전부 이 관문을 통과 ──
    흐름: 로그인(기기 1회) → 미연결이면 연결 화면 자동 → 완료되면 원래 기능으로 자동 진입.
@@ -5269,6 +5425,60 @@ async function ccVaultGate(next){
   ccVaultUI(next);                                    // 3) 미연결 — 연결 화면(완료 시 next 자동)
 }
 window.ccVaultGate=ccVaultGate;window.ccVaultUI=ccVaultUI;
+/* ═══ ☁️ Drive 용량 안내 (2026-07-17) ═══
+   about.get(storageQuota)으로 사용률 조회 — 보관함 상태 모달에 게이지 상시, 90%↑는 진입 시 배너 1회.
+   조회 실패(권한·네트워크)는 전부 무음 — 기능 이용에 영향 없음. */
+let _ccQuotaCache=null;   /* {ts,usage,limit} 10분 캐시 */
+async function ccQuotaFetch(){
+  try{
+    if(_ccQuotaCache&&Date.now()-_ccQuotaCache.ts<600000)return _ccQuotaCache;
+    if(!window.ccStorage||!ccStorage.connected())return null;
+    const t=await ccStorage.token();
+    const r=await fetch('https://www.googleapis.com/drive/v3/about?fields=storageQuota',{headers:{Authorization:'Bearer '+t}});
+    if(!r.ok)return null;
+    const d=await r.json();const q=(d&&d.storageQuota)||{};
+    _ccQuotaCache={ts:Date.now(),usage:parseInt(q.usage||'0',10),limit:parseInt(q.limit||'0',10)};
+    return _ccQuotaCache;
+  }catch(_e){return null;}
+}
+function ccQuotaGB(n){return n>=1073741824?(n/1073741824).toFixed(1)+'GB':Math.max(1,Math.round(n/1048576))+'MB';}
+async function ccQuotaFill(){
+  const el=document.getElementById('ccVtQuota');if(!el)return;
+  const q=await ccQuotaFetch();
+  if(!q){el.style.display='none';return;}   /* 조회 불가(무제한 계정 등) = 조용히 숨김 */
+  if(!q.limit){el.innerHTML='드라이브 용량: '+ccQuotaGB(q.usage)+' 사용 중 (무제한 계정)';return;}
+  const pct=Math.min(100,Math.round(q.usage/q.limit*100));
+  const warn=pct>=90,near=pct>=80;
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:baseline"><span>드라이브 용량</span><b style="color:'+(warn?'#F09595':near?'#FAC775':'#9FE3C8')+'">'+pct+'% 사용</b></div>'
+    +'<div style="height:6px;background:rgba(255,255,255,.12);border-radius:3px;margin-top:7px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(warn?'#E24B4A':near?'#EF9F27':'#1D9E75')+'"></div></div>'
+    +'<div style="font-size:9.5px;color:#8E97AB;margin-top:6px">'+ccQuotaGB(q.usage)+' / '+ccQuotaGB(q.limit)
+    +(near?' · 용량이 얼마 남지 않았어요':'')+'</div>'
+    +(near?'<button type="button" id="ccVtQuotaUp" style="width:100%;border:1px solid rgba(201,169,110,.6);background:none;color:#C9A96E;border-radius:9px;padding:8px;font-size:11px;font-weight:700;margin-top:8px">구글 저장용량 늘리기 →</button>':'');
+  const up=document.getElementById('ccVtQuotaUp');
+  if(up)up.onclick=()=>{try{window.open('https://one.google.com/storage','_blank');}catch(_e){location.href='https://one.google.com/storage';}};
+}
+let _ccQuotaBannerShown=false;
+async function ccQuotaBannerMaybe(){
+  try{
+    if(_ccQuotaBannerShown)return;
+    try{if(sessionStorage.getItem('cc_quota_banner'))return;}catch(_e){}
+    if(!window.ccStorage||!ccStorage.connected())return;
+    const q=await ccQuotaFetch();
+    if(!q||!q.limit)return;
+    const pct=Math.round(q.usage/q.limit*100);
+    if(pct<90)return;
+    _ccQuotaBannerShown=true;try{sessionStorage.setItem('cc_quota_banner','1');}catch(_e){}
+    const b=document.createElement('div');
+    b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);top:12px;z-index:9450;background:#0F1B33;border:1px solid rgba(201,169,110,.55);border-radius:12px;padding:10px 12px;width:min(92vw,420px);box-shadow:0 8px 24px rgba(15,27,51,.35);display:flex;align-items:center;gap:9px';
+    b.innerHTML='<span style="font-size:16px">☁️</span><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:800;color:#fff">드라이브 용량이 '+pct+'% 찼어요</div><div style="font-size:10px;color:#9AA3B8;margin-top:1px">가득 차면 새 자료 저장이 안 돼요 — 파일 정리 또는 용량 추가를 권해요</div></div>'
+      +'<button type="button" data-q="up" style="border:1px solid rgba(201,169,110,.6);background:none;color:#C9A96E;border-radius:8px;padding:6px 9px;font-size:10.5px;font-weight:700;white-space:nowrap">늘리기</button>'
+      +'<button type="button" data-q="x" style="border:0;background:none;color:#8E97AB;font-size:14px;padding:2px 4px">✕</button>';
+    document.body.appendChild(b);
+    b.querySelector('[data-q="up"]').onclick=()=>{try{window.open('https://one.google.com/storage','_blank');}catch(_e){}b.remove();};
+    b.querySelector('[data-q="x"]').onclick=()=>b.remove();
+    setTimeout(()=>{try{b.remove();}catch(_e){}},20000);
+  }catch(_e){}
+}
 function ccInApp(){const u=navigator.userAgent||'';if(/KAKAOTALK/i.test(u))return 'kakao';if(/NAVER\(inapp|Instagram|FBAV|FBAN|Line\//i.test(u))return 'other';return null;}
 async function ccVaultUI(next){
   let m=document.getElementById('ccVaultModal');if(m)m.remove();
@@ -5281,6 +5491,7 @@ async function ccVaultUI(next){
     +'<div style="font-size:17px;font-weight:800;margin-top:3px">☁️ 나만의 보관함 '+(con?'상태':'연결')+'</div>'
     +(con
       ?('<div style="margin-top:12px;background:rgba(34,160,107,.12);border:1px solid rgba(34,160,107,.4);border-radius:12px;padding:11px;font-size:11.5px;color:#9FE3C8">✓ 구글드라이브에 정상 연결되어 있습니다<br><small style="color:#7FA795;font-size:9.5px">자료는 회원님 드라이브의 \'내 홈페이지 금고\' 폴더에 암호화 저장됩니다</small></div>'
+       +'<div id="ccVtQuota" style="margin-top:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:11px;font-size:11px;color:#9AA3B8">드라이브 용량 확인 중…</div>'
        +'<button id="ccVtCheck" type="button" style="width:100%;border:0;border-radius:12px;padding:12px;background:#C9A96E;color:#0F1B33;font-size:13px;font-weight:800;margin-top:14px">폴더 상태 점검</button>'
        +'<button id="ccVtOff" type="button" style="width:100%;border:1px solid rgba(255,255,255,.25);background:none;color:#9AA3B8;font-size:11px;border-radius:10px;padding:9px;margin-top:8px">연결 해제</button>')
       :(ccInApp()
@@ -5294,6 +5505,7 @@ async function ccVaultUI(next){
       )
     +'<button id="ccVtClose" type="button" style="width:100%;border:0;background:none;color:#8E97AB;font-size:11.5px;margin-top:10px">닫기</button></div>';
   document.body.appendChild(m);
+  if(con){try{ccQuotaFill();}catch(_e){}}   /* ★ Drive 용량 게이지 (2026-07-17) */
   document.getElementById('ccVtClose').onclick=()=>m.remove();
   const extBtn=document.getElementById('ccVtExt');
   if(extBtn)extBtn.onclick=()=>{
@@ -6922,6 +7134,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function custPut(o){return new Promise(function(res,rej){var r=cst("readwrite").put(o);r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
   function custDel(id){return new Promise(function(res){var r=cst("readwrite").delete(id);r.onsuccess=r.onerror=function(){res();};});}
   function custLoad(){return openCustDB().then(custAll).then(function(a){customers=a||[];customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(){customers=[];return customers;});}
+  window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
   window.__mpCustLoad=custLoad; // 다음 조각(렌더)에서 사용
   // ── 내 고객: 관계 정의 · 지오코딩(index.html 이식) · 폼 · 저장 · 리스트 ──
   var REL_DEFS=[{k:"고객",c:"#2D5DAE"},{k:"가망고객",c:"#E39A2B"},{k:"친구",c:"#2E8B6E"},{k:"지인",c:"#8A93A8"}];
