@@ -2144,11 +2144,20 @@
           <option value="sang">이번 달 상령일</option>
           <option value="mat">이번 달 만기·갱신</option>
         </select>
+        <select id="fcc-pp" onchange="fccSetPP(this.value)" style="flex:0 0 auto">
+          <option value="10">10개씩</option>
+          <option value="20">20개씩</option>
+          <option value="30">30개씩</option>
+          <option value="40">40개씩</option>
+          <option value="50">50개씩</option>
+          <option value="100">100개씩</option>
+        </select>
       </div>
       <div id="fcc-sub-box" style="margin-bottom:10px;border:1px solid #BFD3F0;background:#F2F7FF;border-radius:8px;padding:10px 12px"><button type="button" id="fcc-sub-btn" onclick="fccCalSubscribe()" style="width:100%;padding:11px;font-size:13px;font-weight:700;color:#fff;background:#2563EB;border:none;border-radius:8px;cursor:pointer">🔔 캘린더 자동 구독 — 한 번만 설정하면 끝</button><div style="font-size:10px;color:#5B6B8C;margin-top:5px;line-height:1.5">한 번 등록하면 이후 고객을 추가·수정만 해도 폰 캘린더에 <b>자동</b> 반영됩니다. (다운로드·매번 누르기 없음)</div><div id="fcc-sub-result" style="display:none;margin-top:10px"></div></div>
       <div style="margin-bottom:10px"><button type="button" onclick="fccExportIcs('all')" style="width:100%;padding:10px;font-size:13px;font-weight:700;color:#1B3A5C;background:#FFF8E7;border:1px solid #E0C36B;border-radius:8px;cursor:pointer">📅 전체 고객 캘린더 추가 (.ics)</button><div style="font-size:10px;color:#9CA3AF;margin-top:5px;line-height:1.5">생일·상령일·만기 일정이 한 번에 추가됩니다. 폰 캘린더에 넣으려면 <b>폰에서</b> 눌러주세요. (30일·7일·당일 알림 포함)</div></div>
       <div id="fcc-summary" style="font-size:12px;color:#8B93AE;margin-bottom:8px"></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="5" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:44px">No.</th><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="6" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
+      <div id="fcc-pager" style="display:flex;align-items:center;justify-content:center;gap:5px;flex-wrap:wrap;margin-top:12px"></div>
     </div>
     <!-- ═══ /📇 내 고객 관리 탭 ═══ -->
 
@@ -6425,20 +6434,24 @@ async function loadFcClients(){
     // 페이지 진입 직후엔 인증 복원(me 설정) 전일 수 있음 — 최대 8회(약 5.6초) 대기 후 재시도
     if(_fccAuthWait<8){
       _fccAuthWait++;
-      $('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">불러오는 중...</td></tr>';
+      $('fcc-tbody').innerHTML='<tr><td colspan="6" class="tc">불러오는 중...</td></tr>';
       setTimeout(loadFcClients,700);
       return;
     }
     _fccAuthWait=0;
-    $('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">로그인 후 이용 가능합니다.</td></tr>';
+    $('fcc-tbody').innerHTML='<tr><td colspan="6" class="tc">로그인 후 이용 가능합니다.</td></tr>';
     return;
   }
   _fccAuthWait=0;
-  $('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">불러오는 중...</td></tr>';
+  $('fcc-tbody').innerHTML='<tr><td colspan="6" class="tc">불러오는 중...</td></tr>';
   try{await fccFetch(true);}
-  catch(e){console.error('loadFcClients error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">고객 정보를 불러오지 못했습니다.</td></tr>';return;}
+  catch(e){console.error('loadFcClients error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="6" class="tc">고객 정보를 불러오지 못했습니다.</td></tr>';return;}
   window.fccRenderTable();
 }
+/* ★ 고객리스트 페이지네이션 상태 (2026-07-17) — 기본 10개, 검색·필터 변경 시 1페이지로 */
+let fccPage=1,fccPP=10,_fccLastKey='';
+window.fccSetPP=function(v){fccPP=parseInt(v,10)||10;fccPage=1;window.fccRenderTable();};
+window.fccGoPage=function(p){fccPage=p;window.fccRenderTable();try{const w=document.getElementById('fcc-tbody').closest('.tbl-wrap');if(w)w.scrollIntoView({behavior:'smooth',block:'start'});}catch(_e){}};
 window.fccRenderTable=function(){
   if(!fccCache)return;
   const kw=($('fcc-search')&&$('fcc-search').value||'').trim();
@@ -6457,9 +6470,16 @@ window.fccRenderTable=function(){
   }
   list.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
   const totalContracts=fccCache.reduce((s,c)=>s+((c.contracts&&c.contracts.length)||0),0);
-  $('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(list.length!==fccCache.length?' · 조건 일치 '+list.length+'명':'');
-  if(!list.length){$('fcc-tbody').innerHTML='<tr><td colspan="5" class="tc">'+(fccCache.length?'조건에 맞는 고객이 없습니다.':'등록된 고객이 없습니다. 위에서 등록해보세요.')+'</td></tr>';return;}
-  $('fcc-tbody').innerHTML=list.map(c=>{
+  /* ★ 검색어·필터가 바뀌면 1페이지로 리셋 */
+  const _key=kw+'|'+fil;if(_key!==_fccLastKey){_fccLastKey=_key;fccPage=1;}
+  const _pager=$('fcc-pager');
+  if(!list.length){$('fcc-tbody').innerHTML='<tr><td colspan="6" class="tc">'+(fccCache.length?'조건에 맞는 고객이 없습니다.':'등록된 고객이 없습니다. 위에서 등록해보세요.')+'</td></tr>';if(_pager)_pager.innerHTML='';$('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(fccCache.length?' · 조건 일치 0명':'');return;}
+  const totalPages=Math.max(1,Math.ceil(list.length/fccPP));
+  if(fccPage>totalPages)fccPage=totalPages;if(fccPage<1)fccPage=1;
+  const _st=(fccPage-1)*fccPP;
+  const pageList=list.slice(_st,_st+fccPP);
+  $('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(list.length!==fccCache.length?' · 조건 일치 '+list.length+'명':'')+' · '+(_st+1)+'–'+(_st+pageList.length)+'번 표시';
+  $('fcc-tbody').innerHTML=pageList.map((c,_i)=>{
     const hasB=!!(c.birthDate&&c.birthDate.length===10);
     const sg=hasB?((c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:fccSang(c.birthDate)):'';
     const sgTxt=hasB?(parseInt(sg.slice(0,2),10)+'/'+parseInt(sg.slice(2,4),10)):'—';
@@ -6468,6 +6488,7 @@ window.fccRenderTable=function(){
       ? c.contracts.map(ct=>{const _tl={silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금'}[ct.insType||'']||'';const _tb=_tl?'<span style="font-size:10px;font-weight:700;color:#633806;background:#FAEEDA;border-radius:8px;padding:1px 6px;white-space:nowrap;margin-right:4px">'+_tl+'</span>':'';return _tb+fccEsc(ct.productName||'(상품명 미입력)')+(ct.maturityDate?' <span style="color:#9CA3AF">· '+ct.maturityDate+'</span>':'')+(ct.yearly?' <span style="font-size:10px;font-weight:700;color:#085041;background:#E1F5EE;border-radius:8px;padding:1px 6px;white-space:nowrap">매년</span>':'');}).join('<br>')
       : '<span style="color:#C5CAD6">-</span>';
     return '<tr>'
+      +'<td class="tc" style="color:#8B93AE;font-size:12px">'+(_st+_i+1)+'</td>'
       +'<td style="font-weight:700">'+fccEsc(c.name)+'</td>'
       +'<td>'+fccEsc(c.birthDate||'')+'</td>'
       +'<td>'+(sgNow?'<span style="background:#FAEEDA;color:#633806;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">'+sgTxt+'</span>':sgTxt)+'</td>'
@@ -6475,6 +6496,21 @@ window.fccRenderTable=function(){
       +'<td class="tc" style="white-space:nowrap"><button type="button" data-fcccopy="'+fccEsc(c.id)+'" style="font-size:12px;color:#0F6E56;background:none;border:1px solid #9FE1CB;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">🔗 데일리</button><button type="button" data-fccedit="'+fccEsc(c.id)+'" style="font-size:12px;color:#1B3A5C;background:none;border:1px solid #C7D2DE;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">✏️</button><button type="button" data-fcccal="'+fccEsc(c.id)+'" style="font-size:12px;color:#7C5C1A;background:none;border:1px solid #E0C36B;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">📅</button><button type="button" data-fccdel="'+fccEsc(c.id)+'" style="font-size:12px;color:#DC2626;background:none;border:1px solid #FCA5A5;border-radius:6px;padding:3px 8px;cursor:pointer">삭제</button></td>'
       +'</tr>';
   }).join('');
+  /* ★ 페이지 버튼 렌더 — 현재 페이지 주변 5개 + 처음·끝 (2026-07-17) */
+  if(_pager){
+    if(totalPages<=1){_pager.innerHTML='';}
+    else{
+      const _btn=(p,label,on,dis)=>'<button type="button" '+(dis?'disabled ':'data-fccpg="'+p+'" ')+'style="min-width:34px;padding:7px 10px;font-size:12.5px;border-radius:8px;border:1px solid '+(on?'#1B3A5C':'#D1D5DB')+';background:'+(on?'#1B3A5C':'#fff')+';color:'+(on?'#fff':(dis?'#C5CAD6':'#374151'))+';font-weight:'+(on?'800':'600')+';cursor:'+(dis?'default':'pointer')+'">'+label+'</button>';
+      let h=_btn(fccPage-1,'‹',false,fccPage<=1);
+      let s=Math.max(1,fccPage-2),e=Math.min(totalPages,s+4);s=Math.max(1,e-4);
+      if(s>1){h+=_btn(1,'1',fccPage===1,false);if(s>2)h+='<span style="color:#9CA3AF;font-size:12px">…</span>';}
+      for(let p=s;p<=e;p++)h+=_btn(p,String(p),p===fccPage,false);
+      if(e<totalPages){if(e<totalPages-1)h+='<span style="color:#9CA3AF;font-size:12px">…</span>';h+=_btn(totalPages,String(totalPages),fccPage===totalPages,false);}
+      h+=_btn(fccPage+1,'›',false,fccPage>=totalPages);
+      _pager.innerHTML=h;
+      Array.prototype.forEach.call(_pager.querySelectorAll('[data-fccpg]'),b=>{b.onclick=()=>window.fccGoPage(parseInt(b.getAttribute('data-fccpg'),10));});
+    }
+  }
 };
 /* ── 📅 고객 일정 → .ics 캘린더 내보내기 (생일·상령일·만기 / 30·7·당일 09시 알림 / 한국 종일) ── */
 function _fccIcsEsc(s){return String(s||'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n');}
