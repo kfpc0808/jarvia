@@ -5242,13 +5242,18 @@ window.fccBridge={
       const byKey={};snap.forEach(d=>{const x=d.data();byKey[(x.name||'')+'|'+(x.birthDate||'')]={id:d.id,contracts:x.contracts||[]};});
       for(const s of list){
         if(!s.name||!s.birthDate)continue;
-        const k=s.name+'|'+s.birthDate,ex=byKey[k];
+        const k=s.name+'|'+s.birthDate;let ex=byKey[k];
+        /* ★ 생일 수정 (2026-07-17): 새 키로 못 찾고 이전 생일 키로 찾으면 = 생일 변경 → 기존 문서의 생일·상령일 갱신 */
+        let birthChanged=false;
+        if(!ex&&s.prevBirthDate){const pk=s.name+'|'+s.prevBirthDate;if(byKey[pk]){ex=byKey[pk];birthChanged=true;delete byKey[pk];byKey[k]=ex;}}
         const inc=(s.contracts||[]);
         if(ex){
-          if(!inc.length)continue;   // 갱신할 계약 없으면 기존 유지
+          if(!inc.length&&!birthChanged)continue;   // 갱신할 것 없으면 기존 유지
           const merged=(ex.contracts||[]).slice();
           inc.forEach(ct=>{const i2=merged.findIndex(x=>x.productName===ct.productName);if(i2>=0){merged[i2]=Object.assign({},merged[i2],{maturityDate:ct.maturityDate||merged[i2].maturityDate,insType:ct.insType||merged[i2].insType,yearly:(ct.yearly!=null)?ct.yearly:merged[i2].yearly});}else merged.push(ct);});
-          await updateDoc(doc(db,'fc_clients',ex.id),{contracts:merged.slice(0,20),updatedAt:serverTimestamp()});
+          const upd={contracts:merged.slice(0,20),updatedAt:serverTimestamp()};
+          if(birthChanged){upd.birthDate=s.birthDate;upd.birthMmdd=s.birthDate.slice(5,7)+s.birthDate.slice(8,10);upd.sangryeongMmdd=fccBridgeSang(s.birthDate);}
+          await updateDoc(doc(db,'fc_clients',ex.id),upd);
         }else{
           const ref=doc(collection(db,'fc_clients'));
           await setDoc(ref,{fcAuthUid:fcUid,fcLoginId:(typeof loginId!=='undefined'&&loginId)||'',name:s.name,birthDate:s.birthDate,contracts:inc.slice(0,20),birthMmdd:s.birthDate.slice(5,7)+s.birthDate.slice(8,10),sangryeongMmdd:fccBridgeSang(s.birthDate),createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
@@ -5299,6 +5304,7 @@ function aiOpen(){
     +'<i class="ti ti-sparkles" style="font-size:17px;color:#C9A96E"></i>'
     +'<div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">나의 AI 비서</div>'
     +'<div style="font-size:9.5px;color:#9AA3B8">'+_aiEsc((fcData&&fcData.name)||loginId||'')+'님 전용 · 베타 · <span id="aiUsageTxt">오늘 -/50회</span></div></div>'
+    +'<button type="button" id="aiHistBtn" title="지난 대화" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-history"></i></button>'
     +'<button type="button" id="aiCloseBtn" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
     +'<div id="aiChips" style="display:flex;gap:6px;padding:9px 11px;overflow-x:auto;flex-shrink:0">'
     +'<button type="button" data-aiq="내일 미팅 있는 고객 브리핑해줘" style="border:1px solid #E0C36B;background:#FFF8E7;border-radius:13px;padding:6px 11px;font-size:11px;color:#8B6914;font-weight:700;white-space:nowrap">내일 미팅 브리핑</button>'
@@ -5313,11 +5319,13 @@ function aiOpen(){
     +'<div style="font-size:9px;color:#B7BDC9;text-align:center;margin-top:6px"><i class="ti ti-lock" style="font-size:9px"></i> 대화는 내 드라이브에 암호화 저장 · 회사 서버에는 남지 않아요</div></div></div>';
   document.body.appendChild(m);
   document.getElementById('aiCloseBtn').onclick=()=>{m.style.display='none';};
+  document.getElementById('aiHistBtn').onclick=aiHistMenu;
   m.addEventListener('click',ev=>{if(ev.target===m)m.style.display='none';});
   document.getElementById('aiSendBtn').onclick=aiSend;
   document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();aiSend();}});
   Array.prototype.forEach.call(m.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{document.getElementById('aiInput').value=b.getAttribute('data-aiq');aiSend();};});
   aiMsgAdd('assistant','안녕하세요, '+((fcData&&fcData.name)||'컨설턴트')+'님. 고객지도·미팅내역·내고객관리 기록을 바탕으로 답해드려요.\n위 추천 질문을 누르거나, "김OO 고객 미팅 준비해줘"처럼 물어보세요.');
+  aiRestoreRecent();   /* ★ 이번 달 지난 대화 자동 복원 (2026-07-17) */
   setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
 }
 function aiMsgAdd(role,text){
@@ -5400,6 +5408,42 @@ async function aiSend(){
     else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
   }catch(e){aiTyping(false);aiMsgAdd('assistant','AI 서버에 연결하지 못했어요. 잠시 후 다시 시도해주세요.\n(aiChat 함수가 아직 배포 전이면 배포 후 이용 가능합니다)');}
   aiBusy=false;
+}
+/* ★ 지난 대화 복원·열람 (2026-07-17) — Drive 월별 파일(AI대화_YYYY-MM) 읽기 전용 표시 */
+function aiYm(off){const d=new Date();d.setMonth(d.getMonth()-(off||0));return d.toISOString().slice(0,7);}
+async function aiLoadMonth(ym){
+  try{if(!window.ccStorage||!ccStorage.connected())return null;
+    const env=await ccStorage.loadJson('대화저장','AI대화_'+ym);
+    return (env&&Array.isArray(env.items))?env.items:null;
+  }catch(_e){return null;}
+}
+function aiDivider(t){const box=document.getElementById('aiMsgs');if(!box)return;const d=document.createElement('div');d.style.cssText='text-align:center;margin:12px 0';d.innerHTML='<span style="background:#EFEBE0;color:#8A93A8;border-radius:10px;padding:3px 12px;font-size:9.5px;font-weight:700"></span>';d.querySelector('span').textContent=t;box.appendChild(d);box.scrollTop=box.scrollHeight;}
+function aiMsgOld(role,text){const w=aiMsgAdd(role,text);if(w)w.style.opacity='.62';}
+async function aiRestoreRecent(){
+  try{
+    let ym=aiYm(0),items=await aiLoadMonth(ym);
+    if(!items||!items.length){ym=aiYm(1);items=await aiLoadMonth(ym);}
+    if(!items||!items.length)return;
+    const last=items.slice(-8);
+    aiDivider('🕘 지난 대화 '+last.length+'건 ('+ym+') — 상단 시계 버튼으로 이전 달 보기');
+    last.forEach(it=>{aiMsgOld('user',it.q||'');aiMsgOld('assistant',it.a||'');});
+    aiDivider('여기서 이어가세요');
+  }catch(_e){}
+}
+async function aiShowMonth(ym){
+  const items=await aiLoadMonth(ym);
+  if(!items||!items.length){aiDivider('📂 '+ym+' — 저장된 대화가 없어요');return;}
+  aiDivider('📂 '+ym+' 기록 '+items.length+'건');
+  items.forEach(it=>{const d=it.ts?new Date(it.ts):null;aiMsgOld('user',(d?('['+(d.getMonth()+1)+'/'+d.getDate()+'] '):'')+(it.q||''));aiMsgOld('assistant',it.a||'');});
+  aiDivider('— '+ym+' 기록 끝 —');
+}
+function aiHistMenu(){
+  if(!window.ccStorage||!ccStorage.connected()){aiMsgAdd('assistant','지난 대화는 나만의 보관함(드라이브) 연결 시 저장·열람할 수 있어요.');return;}
+  const box=document.getElementById('aiMsgs');if(!box)return;
+  const w=document.createElement('div');w.style.cssText='display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin:10px 0';
+  let h='';for(let i=0;i<6;i++){const ym=aiYm(i);h+='<button type="button" data-aim="'+ym+'" style="border:1px solid #D8DCE5;background:#fff;border-radius:12px;padding:5px 11px;font-size:10.5px;color:#5C6678;font-weight:700">'+ym+'</button>';}
+  w.innerHTML=h;box.appendChild(w);box.scrollTop=box.scrollHeight;
+  Array.prototype.forEach.call(w.querySelectorAll('[data-aim]'),b=>{b.onclick=()=>aiShowMonth(b.getAttribute('data-aim'));});
 }
 async function aiSaveDrive(q,a){
   try{
@@ -7276,7 +7320,8 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var cb=$("mpcCtAdd");if(cb)cb.onclick=mpcCtAddFn;
     var bu=$("mpcBirthUnknown"),bi=$("mpcBirth");if(bu&&bi)bu.onchange=function(){bi.disabled=bu.checked;if(bu.checked)bi.value="";};}
   function mpcDoSave(){try{var _pn2=$("mpcMtNote"),_pp2=$("mpcMtPlace");if((_pn2&&_pn2.value.trim())||(_pp2&&_pp2.value.trim())){mpcMtAddFn();}}catch(_e){}   /* ★ 입력칸에 남은 미팅 자동 등록 — 유실 방지 (2026-07-17 버그수정) */
-    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:($("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),createdAt:Date.now()};if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}if(i>=0)customers[i]=o;else customers.push(o);if(window.fccBridge&&o.birthDate){try{window.fccBridge.upsert([{name:o.name,birthDate:o.birthDate,contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:ct.ptype||""};}).filter(function(x){return x.productName;})}]);}catch(_e){}}closeCustForm();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();});}
+    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:($("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),createdAt:Date.now()};if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}var _prevB="";if(i>=0&&customers[i].birthDate&&o.birthDate&&customers[i].birthDate!==o.birthDate)_prevB=customers[i].birthDate;   /* ★ 생일 수정 감지 (2026-07-17) */
+if(i>=0)customers[i]=o;else customers.push(o);if(window.fccBridge&&o.birthDate){try{window.fccBridge.upsert([{name:o.name,birthDate:o.birthDate,prevBirthDate:_prevB,contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:ct.ptype||""};}).filter(function(x){return x.productName;})}]);}catch(_e){}}closeCustForm();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();});}
   function mpcSaveCust(){if(!$("mpcName").value.trim()){alert("이름을 입력하세요.");return;}var addr=$("mpcAddr").value.trim();if(addr.length>=4&&!mpcCoord){$("mpcAddrStat").textContent="좌표 확인 중…";mpcGeocode(addr).then(function(g){if(g.ok)mpcCoord={lat:g.lat,lng:g.lng};mpcDoSave();});}else{mpcDoSave();}}
   function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)return;if(!customers.length){if(lctl)lctl.style.display="none";rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-map-pin" style="font-size:32px;color:#C9A96E"></i><b>내 고객 지도</b><span>아직 등록된 고객이 없어요.<br>＋ 고객 추가로 한 명씩, 또는 위 <b>양식 받기 → 엑셀 업로드</b>로 한 번에 등록하세요.</span></div>';return;}if(lctl)lctl.style.display="flex";var q=(mpcSearch||"").toLowerCase().trim();var arr=customers.filter(function(c){if(!mpcMatch(c))return false;if(q){var hay=((c.name||"")+" "+(c.company||"")+" "+(c.title||"")+" "+(c.phone||"")).toLowerCase();if(hay.indexOf(q)<0)return false;}return true;});if(mpcSort==="name"){arr.sort(function(a,b){return (a.name||"").localeCompare(b.name||"","ko");});}else if(mpcSort==="rel"){arr.sort(function(a,b){return (((a.rels&&a.rels[0])||"힐")).localeCompare(((b.rels&&b.rels[0])||"힐"),"ko");});}else{arr.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});}if(!arr.length){rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-search" style="font-size:28px;color:#C9A96E"></i><b>결과가 없어요</b><span>다른 검색어나 관계를 선택해 보세요.</span></div>';return;}var html='<div class="mpc-list">';arr.forEach(function(c){var pills=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("");var subP=[c.company,c.title].filter(Boolean).join(" · ");var phoneL=c.phone?'<a class="mpc-cph-tel" href="tel:'+c.phone+'" onclick="event.stopPropagation()">'+c.phone+'</a>':"";var subHtml=subP+(subP&&phoneL?" · ":"")+phoneL;if(!subHtml)subHtml="연락처 없음";var noloc=(!c.lat||!c.lng)?' <span style="color:#C0392B;font-size:10px">· 위치 미등록</span>':"";html+='<div class="mpc-card" data-cid="'+c.id+'"><div class="mpc-cmain"><div class="mpc-crow"><span class="mpc-cnm">'+(c.name||"")+'</span>'+pills+' '+mpcBadges(c)+'</div><div class="mpc-csub">'+subHtml+noloc+'</div></div><button class="mpc-cedit" type="button" data-edit="'+c.id+'">수정</button></div>';});html+="</div>";rows.innerHTML=html;Array.prototype.forEach.call(rows.querySelectorAll(".mpc-card"),function(el){el.onclick=function(){var id=el.getAttribute("data-cid"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c){mpcHighlightList(c);mpcFocusMap(c);mpcShowInfo(c);}};});Array.prototype.forEach.call(rows.querySelectorAll(".mpc-cedit"),function(el){el.onclick=function(ev){ev.stopPropagation();var id=el.getAttribute("data-edit"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c)openCustForm(c);};});}
   function mpcFocusMap(c){if(!map||!c||!c.lat||!c.lng)return;var ll=new kakao.maps.LatLng(c.lat,c.lng);if(map.getLevel&&map.getLevel()>5)map.setLevel(5);if(map.panTo)map.panTo(ll);else map.setCenter(ll);}
