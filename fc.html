@@ -5394,15 +5394,17 @@ async function aiSend(){
   inp.value='';aiMsgAdd('user',q);aiBusy=true;aiTyping(true);
   try{
     const ctx=await aiBuildContext(q);
+    const _custNm=(ctx.customer&&ctx.customer.name)||'';
     const r=await httpsCallable(fns,'aiChat')({question:q,context:ctx,history:aiHist.slice(-6)});
     const d=r.data||{};
     aiTyping(false);
     if(d.ok){
-      aiMsgAdd('assistant',d.answer||'');
+      const _w=aiMsgAdd('assistant',d.answer||'');
+      if(_custNm&&_w)aiPinBtn(_w,_custNm,q,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
       aiHist.push({role:'user',content:q},{role:'assistant',content:(d.answer||'').slice(0,2000)});
       if(aiHist.length>12)aiHist=aiHist.slice(-12);
       if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};aiUsageRender();}
-      aiSaveDrive(q,d.answer||'');
+      aiSaveDrive(q,d.answer||'',_custNm);
     }else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
     else if(d.reason==='disabled'){aiMsgAdd('assistant','AI 베타 이용 권한이 없는 계정이에요.');}
     else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
@@ -5427,15 +5429,45 @@ async function aiRestoreRecent(){
     const last=items.slice(-8);
     aiDivider('🕘 지난 대화 '+last.length+'건 ('+ym+') — 상단 시계 버튼으로 이전 달 보기');
     last.forEach(it=>{aiMsgOld('user',it.q||'');aiMsgOld('assistant',it.a||'');});
-    aiDivider('여기서 이어가세요');
+    aiDivider('여기서 이어가세요 — 지난 주제를 기억한 채 답해드려요');
+    /* ★ 이어가기 (2026-07-17): 최근 2문답을 대화 맥락에 주입 — 사실관계는 매 질문 최신 데이터가 우선 */
+    if(!aiHist.length)aiHist=last.slice(-2).reduce((arr,it)=>{arr.push({role:'user',content:String(it.q||'').slice(0,1500)},{role:'assistant',content:String(it.a||'').slice(0,1500)});return arr;},[]);
+  }catch(_e){}
+}
+function aiResume(q0,a0,label){
+  aiHist=[{role:'user',content:String(q0||'').slice(0,1500)},{role:'assistant',content:String(a0||'').slice(0,1500)}];
+  aiDivider('↩ '+(label||'선택한 대화')+'를 이어서 물어보세요');
+  const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
+}
+function aiPinBtn(w,cust,q,a){
+  try{
+    const bubble=w&&w.firstChild;if(!bubble)return;
+    const b=document.createElement('button');b.type='button';
+    b.style.cssText='display:block;margin-top:8px;border:1px solid #E0C36B;background:#FFF8E7;color:#8B6914;border-radius:9px;padding:6px 10px;font-size:10.5px;font-weight:700;cursor:pointer';
+    b.textContent='📌 '+cust+'님 미팅기록으로 저장';
+    b.onclick=()=>{
+      if(!confirm(cust+'님의 미팅내역에 이 브리핑을 저장할까요?\n(오늘 날짜로 등록되며, 고객 상세에서 언제든 수정·삭제할 수 있어요)'))return;
+      b.disabled=true;b.textContent='저장 중…';
+      const note='[AI 브리핑]\n질문: '+String(q).slice(0,300)+'\n\n'+String(a).slice(0,1800);
+      const run=()=>{ if(window.__mpcAddMeeting){window.__mpcAddMeeting(cust,note,(ok,n)=>{ if(ok){b.textContent='✓ 미팅기록에 저장됨';} else{b.disabled=false;b.textContent='📌 '+cust+'님 미팅기록으로 저장'; alert(n>1?('동명이인이 '+n+'명 있어요 — 지도의 고객 상세에서 직접 등록해주세요'):'지도에서 해당 고객을 찾지 못했어요');} });} else {b.disabled=false;alert('고객 지도를 한 번 열어준 뒤 다시 시도해주세요');} };
+      if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(()=>run());else run();
+    };
+    bubble.appendChild(b);
   }catch(_e){}
 }
 async function aiShowMonth(ym){
   const items=await aiLoadMonth(ym);
   if(!items||!items.length){aiDivider('📂 '+ym+' — 저장된 대화가 없어요');return;}
-  aiDivider('📂 '+ym+' 기록 '+items.length+'건');
-  items.forEach(it=>{const d=it.ts?new Date(it.ts):null;aiMsgOld('user',(d?('['+(d.getMonth()+1)+'/'+d.getDate()+'] '):'')+(it.q||''));aiMsgOld('assistant',it.a||'');});
+  aiDivider('📂 '+ym+' 기록 '+items.length+'건 — 각 대화의 ↩로 이어갈 수 있어요');
+  const box=document.getElementById('aiMsgs');
+  items.forEach(it=>{
+    const d=it.ts?new Date(it.ts):null;
+    aiMsgOld('user',(d?('['+(d.getMonth()+1)+'/'+d.getDate()+'] '):'')+(it.cust?('('+it.cust+') '):'')+(it.q||''));
+    aiMsgOld('assistant',it.a||'');
+    if(box){const r=document.createElement('div');r.style.cssText='display:flex;justify-content:flex-start;margin:-4px 0 8px';r.innerHTML='<button type="button" style="border:1px solid #D8DCE5;background:#fff;border-radius:9px;padding:4px 9px;font-size:9.5px;color:#5C6678;font-weight:700;cursor:pointer">↩ 이어가기</button>';r.querySelector('button').onclick=()=>aiResume(it.q,it.a,(it.cust?it.cust+'님 대화':ym+' 대화'));box.appendChild(r);}
+  });
   aiDivider('— '+ym+' 기록 끝 —');
+  if(box)box.scrollTop=box.scrollHeight;
 }
 function aiHistMenu(){
   if(!window.ccStorage||!ccStorage.connected()){aiMsgAdd('assistant','지난 대화는 나만의 보관함(드라이브) 연결 시 저장·열람할 수 있어요.');return;}
@@ -5445,14 +5477,37 @@ function aiHistMenu(){
   w.innerHTML=h;box.appendChild(w);box.scrollTop=box.scrollHeight;
   Array.prototype.forEach.call(w.querySelectorAll('[data-aim]'),b=>{b.onclick=()=>aiShowMonth(b.getAttribute('data-aim'));});
 }
-async function aiSaveDrive(q,a){
+/* ★ 고객별 AI 대화 열람 (2026-07-17) — 고객 상세에서 호출, 최근 3개월에서 이름표 필터 */
+window.__aiCustHist=async function(name){
+  try{
+    if(!isOwnerView||!window.ccStorage||!ccStorage.connected()){alert('나만의 보관함(드라이브) 연결 후 이용할 수 있어요.');return;}
+    let all=[];
+    for(let i=0;i<3;i++){const its=await aiLoadMonth(aiYm(i));if(its)its.forEach(x=>{if((x.cust||'')===name)all.push(x);});}
+    all.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    let ov=document.getElementById('aiCustHistOv');if(ov)ov.remove();
+    ov=document.createElement('div');ov.id='aiCustHistOv';
+    ov.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(15,27,51,.5);display:flex;align-items:flex-end';
+    let listH='';
+    if(!all.length)listH='<div style="text-align:center;color:#8A93A8;font-size:12px;padding:26px 0">최근 3개월 내 '+_aiEsc(name)+'님 관련 AI 대화가 없어요<br><small style="font-size:10px">AI에게 "'+_aiEsc(name)+' 브리핑해줘"처럼 이름을 넣어 물으면 자동으로 여기에 모여요</small></div>';
+    else all.slice(0,30).forEach((it,i)=>{const d=it.ts?new Date(it.ts):null;listH+='<div style="background:#fff;border:1px solid #E4E0D6;border-radius:11px;padding:10px 12px;margin-top:8px"><div style="font-size:9.5px;color:#8A93A8;font-weight:700">'+(d?(d.getFullYear()+'.'+(d.getMonth()+1)+'.'+d.getDate()):'')+'</div><div style="font-size:11.5px;color:#15294A;font-weight:700;margin-top:3px">Q. '+_aiEsc(it.q||'')+'</div><div style="font-size:11.5px;color:#3A4457;line-height:1.6;margin-top:4px;white-space:pre-wrap">'+_aiEsc(String(it.a||'').slice(0,1200))+(String(it.a||'').length>1200?'…':'')+'</div><button type="button" data-aicr="'+i+'" style="border:1px solid #E0C36B;background:#FFF8E7;color:#8B6914;border-radius:8px;padding:5px 10px;font-size:10px;font-weight:700;margin-top:7px">↩ AI에서 이어가기</button></div>';});
+    ov.innerHTML='<div style="background:#F7F5EF;width:100%;max-height:88%;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden">'
+      +'<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:8px;flex-shrink:0"><i class="ti ti-sparkles" style="font-size:15px;color:#C9A96E"></i><div id="aiChTitle" style="flex:1;font-size:13.5px;color:#fff;font-weight:800"></div><button type="button" id="aiChX" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px"><i class="ti ti-x"></i></button></div>'
+      +'<div style="flex:1;overflow-y:auto;padding:6px 12px 14px">'+listH+'</div></div>';
+    document.body.appendChild(ov);
+    const tt=ov.querySelector('#aiChTitle');if(tt)tt.textContent=name+'님과의 AI 대화'+(all.length?' · '+all.length+'건':'');
+    ov.querySelector('#aiChX').onclick=()=>ov.remove();
+    ov.addEventListener('click',ev=>{if(ev.target===ov)ov.remove();});
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-aicr]'),b=>{b.onclick=()=>{const it=all[parseInt(b.getAttribute('data-aicr'),10)];ov.remove();aiOpen();setTimeout(()=>aiResume(it.q,it.a,name+'님 대화'),250);};});
+  }catch(_e){}
+};
+async function aiSaveDrive(q,a,cust){
   try{
     if(!window.ccStorage||!ccStorage.connected())return;   /* 보관함 미연결 = 저장 생략 (무음) */
-    /* ★ 월별 파일 분할 (2026-07-17): AI대화_YYYY-MM — 총량 무제한, 파일당 소형 유지(암복호화 속도), 연·월 단위 회고 가능 */
+    /* ★ 월별 파일 분할 + 고객 이름표(cust) 자동 부착 (2026-07-17) */
     const fname='AI대화_'+new Date().toISOString().slice(0,7);
     let env=null;try{env=await ccStorage.loadJson('대화저장',fname);}catch(_e){env=null;}
     if(!env||!Array.isArray(env.items))env={v:1,kind:'ai_chat',month:new Date().toISOString().slice(0,7),updatedAt:0,items:[]};
-    env.items.push({ts:Date.now(),q:String(q).slice(0,1000),a:String(a).slice(0,4000)});
+    env.items.push({ts:Date.now(),q:String(q).slice(0,1000),a:String(a).slice(0,4000),cust:String(cust||'').slice(0,30)});
     env.updatedAt=Date.now();
     await ccStorage.saveJson('대화저장',fname,env);
   }catch(_e){}
@@ -7053,6 +7108,7 @@ init();
       <div class="mpcd-row" style="margin-top:14px;border:none"><span class="mpcd-lb">메모</span></div>
       <div id="mpcdMemo" style="font-size:12.5px;color:#3A4457;line-height:1.6;background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:11px;margin-top:2px">-</div>
       <div id="mpcdSales" style="display:none;background:#FFF8E7;border:1px solid #E0C36B;border-radius:10px;padding:9px 11px;margin-top:8px"></div>
+      <button type="button" id="mpcdAiBtn" style="display:none;width:100%;border:1px solid #D8DCE5;background:#fff;border-radius:10px;padding:9px;font-size:11.5px;color:#15294A;font-weight:700;margin-top:8px">🤖 이 고객과의 AI 대화 보기</button>
       <div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-top:12px">미팅내역</div>
       <div id="mpcdMeet" style="margin-top:2px"></div>
       <div id="mpcdFiles" style="margin-top:10px;display:none"></div>
@@ -7180,6 +7236,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function custDel(id){return new Promise(function(res){var r=cst("readwrite").delete(id);r.onsuccess=r.onerror=function(){res();};});}
   function custLoad(){return openCustDB().then(custAll).then(function(a){customers=a||[];customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(){customers=[];return customers;});}
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
+  window.__mpcAddMeeting=function(name,note,cb){try{var hits=customers.filter(function(c){return (c.name||"")===name;});if(hits.length!==1){if(cb)cb(false,hits.length);return;}var c=hits[0];c.meetings=c.meetings||[];c.meetings.push({id:"m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),date:mpcTodayStr(),place:"",note:String(note||"").slice(0,2000),next:"",ts:Date.now(),src:"ai"});c.createdAt=Date.now();custPut(c);mpcGdPush();if(cb)cb(true,1);}catch(_e){if(cb)cb(false,0);}};   /* ★ AI 브리핑 → 미팅기록 승격 (2026-07-17) */
   window.__mpCustLoad=custLoad; // 다음 조각(렌더)에서 사용
   // ── 내 고객: 관계 정의 · 지오코딩(index.html 이식) · 폼 · 저장 · 리스트 ──
   var REL_DEFS=[{k:"고객",c:"#2D5DAE"},{k:"가망고객",c:"#E39A2B"},{k:"친구",c:"#2E8B6E"},{k:"지인",c:"#8A93A8"}];
@@ -7339,7 +7396,7 @@ if(i>=0)customers[i]=o;else customers.push(o);if(window.fccBridge&&o.birthDate){
   window.__mpCustDraw=mpcDrawMarkers;
   window.__mpCustOpen=function(){mpcLoadCustomRels();custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();if(window.fccBridge){window.fccBridge.pull().then(function(ix){if(ix){mpcFccIdx=ix;var _added=mpcFccAdopt(ix);mpcRenderFilter();mpcRenderList();if(_added){if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();toast("내고객관리에서 "+_added+"명을 불러왔어요 (이름·생년월일)");}}}).catch(function(){});}mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}});ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();}});mpcCountBound=true;}mpcUpdateCount();}},180);});});};
   window.__mpPlacesRedraw=function(){mpcCloseInfo();mpcClearMarkers();if(map){map.relayout&&map.relayout();drawMarkers();}};
-  function openCustDetail(c){if(!c)return;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title].filter(Boolean).join(" · ")||"-";$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.needs&&c.needs.length)_sl.push("니즈: "+c.needs.join("·"));if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));(c.contracts||[]).forEach(function(ct){_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+ct.expiry:""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _mtb=$("mpcdMeet");if(_mtb){var _ms=(c.meetings||[]).slice().sort(function(a2,b2){return (b2.date||"").localeCompare(a2.date||"");});_mtb.innerHTML=_ms.length?_ms.map(function(m){return '<div style="background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;margin-top:5px"><div style="font-size:11px;font-weight:700;color:#15294A">📅 '+esc(m.date||"")+(m.place?' · 📍 '+esc(m.place):'')+'</div><div style="font-size:12px;color:#3A4457;line-height:1.55;margin-top:3px;white-space:pre-wrap">'+esc(m.note||"")+'</div>'+(m.next?'<div style="font-size:11px;color:#8B6914;margin-top:4px">→ 다음: '+esc(m.next)+'</div>':'')+'</div>';}).join(""):'<span style="font-size:11px;color:#9099AD">미팅 기록 없음</span>';}var _flb=$("mpcdFiles");if(_flb){var _fs=c.files||[];_flb.innerHTML=_fs.length?('<div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-bottom:4px">첨부파일</div>'+_fs.map(function(f,i){var isImg=/^image\//.test(f.mime||"");return '<button type="button" data-fi="'+i+'" style="display:block;width:100%;text-align:left;border:1px solid #ECEEF2;background:#fff;border-radius:9px;padding:9px 11px;font-size:11.5px;color:#15294A;margin-top:4px"><span style="font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(isImg?"📷 ":"📎 ")+esc(f.name||"파일")+'</span>'+(f.desc?'<span style="display:block;font-size:10.5px;color:#8A93A8;margin-top:2px">'+esc(f.desc)+'</span>':'')+'</button>';}).join("")):"";_flb.style.display=_fs.length?"block":"none";Array.prototype.forEach.call(_flb.querySelectorAll("[data-fi]"),function(b){b.onclick=function(){mpcFileOpen(_fs[parseInt(b.getAttribute("data-fi"),10)]);};});}$("mpcdEdit").onclick=function(){$("mpCustDetail").classList.remove("show");openCustForm(c);};$("mpcdDel").onclick=function(){if(confirm("이 고객을 지도에서 삭제할까요?\n(내고객관리의 기록은 남고, 지도에는 다시 불러오지 않습니다)")){if(c.birthDate){try{var _sk=JSON.parse(localStorage.getItem("mpc_fcc_skip")||"[]");var _k=(c.name||"")+"|"+c.birthDate;if(_sk.indexOf(_k)<0){_sk.push(_k);if(_sk.length>500)_sk=_sk.slice(-500);localStorage.setItem("mpc_fcc_skip",JSON.stringify(_sk));}}catch(_e){}}custDel(c.id).then(function(){for(var i=0;i<customers.length;i++){if(customers[i].id===c.id){customers.splice(i,1);break;}}$("mpCustDetail").classList.remove("show");mpcRenderList();if(map){mpcDrawMarkers(false);mpcUpdateCount();}mpcGdPush();});}};$("mpCustDetail").classList.add("show");}
+  function openCustDetail(c){if(!c)return;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title].filter(Boolean).join(" · ")||"-";$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.needs&&c.needs.length)_sl.push("니즈: "+c.needs.join("·"));if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));(c.contracts||[]).forEach(function(ct){_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+ct.expiry:""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}var _mtb=$("mpcdMeet");if(_mtb){var _ms=(c.meetings||[]).slice().sort(function(a2,b2){return (b2.date||"").localeCompare(a2.date||"");});_mtb.innerHTML=_ms.length?_ms.map(function(m){return '<div style="background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;margin-top:5px"><div style="font-size:11px;font-weight:700;color:#15294A">📅 '+esc(m.date||"")+(m.place?' · 📍 '+esc(m.place):'')+'</div><div style="font-size:12px;color:#3A4457;line-height:1.55;margin-top:3px;white-space:pre-wrap">'+esc(m.note||"")+'</div>'+(m.next?'<div style="font-size:11px;color:#8B6914;margin-top:4px">→ 다음: '+esc(m.next)+'</div>':'')+'</div>';}).join(""):'<span style="font-size:11px;color:#9099AD">미팅 기록 없음</span>';}var _flb=$("mpcdFiles");if(_flb){var _fs=c.files||[];_flb.innerHTML=_fs.length?('<div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-bottom:4px">첨부파일</div>'+_fs.map(function(f,i){var isImg=/^image\//.test(f.mime||"");return '<button type="button" data-fi="'+i+'" style="display:block;width:100%;text-align:left;border:1px solid #ECEEF2;background:#fff;border-radius:9px;padding:9px 11px;font-size:11.5px;color:#15294A;margin-top:4px"><span style="font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(isImg?"📷 ":"📎 ")+esc(f.name||"파일")+'</span>'+(f.desc?'<span style="display:block;font-size:10.5px;color:#8A93A8;margin-top:2px">'+esc(f.desc)+'</span>':'')+'</button>';}).join("")):"";_flb.style.display=_fs.length?"block":"none";Array.prototype.forEach.call(_flb.querySelectorAll("[data-fi]"),function(b){b.onclick=function(){mpcFileOpen(_fs[parseInt(b.getAttribute("data-fi"),10)]);};});}$("mpcdEdit").onclick=function(){$("mpCustDetail").classList.remove("show");openCustForm(c);};$("mpcdDel").onclick=function(){if(confirm("이 고객을 지도에서 삭제할까요?\n(내고객관리의 기록은 남고, 지도에는 다시 불러오지 않습니다)")){if(c.birthDate){try{var _sk=JSON.parse(localStorage.getItem("mpc_fcc_skip")||"[]");var _k=(c.name||"")+"|"+c.birthDate;if(_sk.indexOf(_k)<0){_sk.push(_k);if(_sk.length>500)_sk=_sk.slice(-500);localStorage.setItem("mpc_fcc_skip",JSON.stringify(_sk));}}catch(_e){}}custDel(c.id).then(function(){for(var i=0;i<customers.length;i++){if(customers[i].id===c.id){customers.splice(i,1);break;}}$("mpCustDetail").classList.remove("show");mpcRenderList();if(map){mpcDrawMarkers(false);mpcUpdateCount();}mpcGdPush();});}};$("mpCustDetail").classList.add("show");}
   // ── 내 고객: 엑셀 대량 업로드 (index.html 로직 이식 + 좌표캐시 + 자동 헤더매핑) ──
   var mpcXlsxStop=false;
   function mpcLoadXLSX(cb){if(window.XLSX){cb(true);return;}var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";s.onload=function(){cb(!!window.XLSX);};s.onerror=function(){cb(false);};document.head.appendChild(s);}
