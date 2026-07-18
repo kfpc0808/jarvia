@@ -1681,6 +1681,8 @@
         <button class="btn btn-sec" onclick="loadBizSignals()">🔄 새로고침</button>
         <button class="btn" onclick="bsExportJSON()">💾 JSON 백업</button>
         <button class="btn" onclick="bsExportXlsx()">📊 Excel 백업</button>
+        <button class="btn btn-sec" onclick="bsRestorePick()">📥 JSON 복원</button>
+        <input type="file" id="bs-restore-file" accept=".json,application/json" class="hidden" onchange="bsRestoreJSON(this)">
       </div>
       <p id="bs-count" style="font-size:13px;color:var(--text-lt);margin:-4px 0 12px"></p>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:50px">No</th><th style="width:84px">분류</th><th style="text-align:left">제목</th><th style="width:60px">중요</th><th style="width:96px">등록일</th><th style="width:70px">관리</th></tr></thead><tbody id="tb-bs"></tbody></table></div>
@@ -2477,7 +2479,34 @@ async function bsExportXlsx(){
     toast('Excel '+rows.length+'건 내보내기 완료','success');
   }catch(e){toast('Excel 내보내기 실패: '+(e.message||e),'error');}
 }
-window.loadBizSignals=loadBizSignals;window.bsRender=bsRender;window.bsDelete=bsDelete;window.bsToggleImp=bsToggleImp;window.bsExportJSON=bsExportJSON;window.bsExportXlsx=bsExportXlsx;
+function bsRestorePick(){$('bs-restore-file').click();}
+async function bsRestoreJSON(input){
+  const f=input.files&&input.files[0];input.value='';
+  if(!f)return;
+  let list;
+  try{list=JSON.parse(await f.text());}catch(e){toast('JSON 파싱 실패 — 올바른 백업 파일이 아닙니다.','error');return;}
+  if(!Array.isArray(list)||!list.length){toast('복원할 데이터가 없습니다. (JSON 백업 파일은 배열 형식입니다)','error');return;}
+  const bad=list.filter(x=>!x||!x.id).length;
+  if(bad){toast('문서ID(id) 없는 항목 '+bad+'건 — JSON 백업 파일이 맞는지 확인하세요. (Excel 파일은 복원에 사용할 수 없습니다)','error');return;}
+  if(!confirm('백업 파일에서 '+list.length+'건을 실시간자료실(biz_signals)에 복원할까요?\n\n· 같은 문서ID가 이미 있으면 백업 내용으로 덮어씁니다.\n· 서버에 없는 문서는 새로 생성됩니다.\n· 파일: '+f.name))return;
+  const TS=['publishedAt','collectedAt','createdAt','updatedAt'];
+  let done=0;
+  try{
+    for(let i=0;i<list.length;i+=400){
+      const batch=writeBatch(db);
+      for(const item of list.slice(i,i+400)){
+        const {id,...data}=item;
+        for(const k of TS){if(typeof data[k]==='string'&&data[k]){const d=new Date(data[k]);if(!isNaN(d.getTime()))data[k]=Timestamp.fromDate(d);}}
+        batch.set(doc(db,'biz_signals',String(id)),data);
+      }
+      await batch.commit();done=Math.min(i+400,list.length);
+      toast('복원 중... '+done+'/'+list.length+'건','info');
+    }
+    toast('복원 완료: '+done+'건','success');
+    loadBizSignals();
+  }catch(e){toast('복원 중단 ('+done+'건까지 처리됨): '+(e.message||e),'error');}
+}
+window.loadBizSignals=loadBizSignals;window.bsRender=bsRender;window.bsDelete=bsDelete;window.bsToggleImp=bsToggleImp;window.bsExportJSON=bsExportJSON;window.bsExportXlsx=bsExportXlsx;window.bsRestorePick=bsRestorePick;window.bsRestoreJSON=bsRestoreJSON;
 
 // ═══ ✍️ 노하우 & 후기 관리 (2026-07) ═══
 // 승인 시 runTransaction: users.point +2,500 + transactions(type:'review_reward') + 글 status:'approved' 원자 처리
