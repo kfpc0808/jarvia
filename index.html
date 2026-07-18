@@ -11146,18 +11146,14 @@ function sigShareLink(sid,cid){
 async function sigShareClient(sid){
   const lid=(meData&&meData.loginId)||'';
   if(!lid){toast('로그인 정보를 확인할 수 없습니다','error');return;}
-  let custs=[];
-  try{custs=(await fccFetch())||[];}catch(e){custs=[];}
-  custs=custs.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
   const old=document.getElementById('sig-share-ov');if(old)old.remove();
   const ov=document.createElement('div');
   ov.id='sig-share-ov';
   ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
-  const rows=custs.map(c=>'<button type="button" data-sigpick="'+esc(c.id)+'" data-signm="'+esc(c.name||'고객')+'" style="display:block;width:100%;text-align:left;padding:11px 14px;border:none;border-bottom:1px solid var(--border-lt);background:#fff;font-size:13px;cursor:pointer;font-family:var(--font)">'+esc(c.name||'고객')+'</button>').join('');
   ov.innerHTML='<div style="background:#fff;border-radius:14px;width:100%;max-width:360px;max-height:78vh;display:flex;flex-direction:column;overflow:hidden">'
     +'<div style="padding:14px 16px;border-bottom:1px solid var(--border-lt);display:flex;justify-content:space-between;align-items:center"><b style="font-size:14px">👤 고객에게 공유</b><button type="button" data-sigclose style="border:none;background:none;font-size:17px;cursor:pointer;color:var(--text-lt);padding:2px 4px">✕</button></div>'
     +'<div style="padding:10px 12px;border-bottom:1px solid var(--border-lt)"><input id="sig-share-q" placeholder="이름 검색..." style="width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:var(--font)"></div>'
-    +'<div id="sig-share-list" style="overflow-y:auto;flex:1">'+(rows||'<div style="padding:22px 16px;font-size:12.5px;color:var(--text-lt);text-align:center;line-height:1.7">내고객관리에 등록된 고객이 없습니다.<br>아래 버튼으로 미지정 링크를 공유할 수 있습니다.</div>')+'</div>'
+    +'<div id="sig-share-list" style="overflow-y:auto;flex:1;min-height:120px"><div style="padding:26px 16px;font-size:12.5px;color:var(--text-lt);text-align:center">고객 목록을 불러오는 중…</div></div>'
     +'<div style="padding:10px 12px;border-top:1px solid var(--border-lt)"><button type="button" data-sigpick="" data-signm="" style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--text);font-family:var(--font)">🔗 고객 미지정 링크 복사 (단체방·SNS용)</button>'
     +'<div style="font-size:10.5px;color:var(--text-lt);margin-top:6px;line-height:1.5">고객을 선택하면 해당 고객의 열람 여부가 고객 활동에 기록됩니다.</div></div></div>';
   document.body.appendChild(ov);
@@ -11175,6 +11171,23 @@ async function sigShareClient(sid){
     const v=this.value.trim();
     document.querySelectorAll('#sig-share-list [data-sigpick]').forEach(el=>{el.style.display=!v||(el.getAttribute('data-signm')||'').includes(v)?'block':'none';});
   });}
+  /* ── 목록 로딩: 인증 대기 → 조회 → 빈 결과 시 강제 재조회 → 오류는 화면에 표시 ── */
+  const listEl=document.getElementById('sig-share-list');
+  try{
+    for(let w=0;w<15&&!(window.me||me)?.uid;w++){await new Promise(r=>setTimeout(r,200));}
+    if(!(window.me||me)?.uid)throw new Error('로그인 세션이 아직 준비되지 않았습니다 — 잠시 후 다시 눌러주세요.');
+    let custs=(await fccFetch())||[];
+    if(!custs.length)custs=(await fccFetch(true))||[];
+    custs=custs.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
+    if(!listEl||!document.getElementById('sig-share-ov'))return;
+    listEl.innerHTML=custs.length
+      ?custs.map(c=>'<button type="button" data-sigpick="'+esc(c.id)+'" data-signm="'+esc(c.name||'고객')+'" style="display:block;width:100%;text-align:left;padding:11px 14px;border:none;border-bottom:1px solid var(--border-lt);background:#fff;font-size:13px;cursor:pointer;font-family:var(--font)">'+esc(c.name||'고객')+'</button>').join('')
+      :'<div style="padding:22px 16px;font-size:12.5px;color:var(--text-lt);text-align:center;line-height:1.7">내고객관리(마이페이지)에 등록된 고객이 없습니다.<br>아래 버튼으로 미지정 링크를 공유할 수 있습니다.</div>';
+    if(q&&q.value.trim())q.dispatchEvent(new Event('input'));
+  }catch(e){
+    console.error('[sigShare] 고객 목록 로딩 실패:',e);
+    if(listEl)listEl.innerHTML='<div style="padding:22px 16px;font-size:12px;color:#B91C1C;text-align:center;line-height:1.7">고객 목록을 불러오지 못했습니다.<br><span style="color:var(--text-lt)">'+esc(e&&e.message?e.message:String(e))+'</span></div>';
+  }
 }
 window.loadSignals=loadSignals;window.sigFilter=sigFilter;window.sigToggle=sigToggle;window.sigPage=sigPage;window.sigPer=sigPer;window.sigSearch=sigSearch;window.sigCopyMent=sigCopyMent;window.sigCopyUrl=sigCopyUrl;window.sigShareClient=sigShareClient;
 window.filterCat=filterCat;window.filterSub=filterSub;window.showTerms=showTerms;window.closeViewer=closeViewer;window.gridPg=gridPg;window.loadUpcoming=loadUpcoming;
