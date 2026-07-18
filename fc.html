@@ -2757,35 +2757,141 @@ function setupContactButtons(){
 }
 
 /* ═══ 계산기 사용 내역 로더 (2026-07-15) — fc_view_logs(fcAuthUid 기준)에서 calc_* 이벤트만 집계 ═══ */
+/* ═══ 고객 활동 내역 v2 (2026-07-18): 기간(오늘·7일·1개월·전체·직접)·정렬·고객 검색·페이지네이션·3단계 표시(미식별/고객 이름/ID 전체)
+   서버: 복합 인덱스(fcAuthUid↑+createdAt↓) 있으면 기간 범위 쿼리 — 없으면 최근 500건 폴백(화면 필터) ═══ */
+let fcvRows=null,fcvNames=null,fcvRange='1m',fcvFrom='',fcvTo='',fcvSize=30,fcvPage=1,fcvSort='new',fcvQ='',fcvIdxOk=true,fcvBusy=false;
+const FCV_ACT={lc_open:'생활변화 점검 열람',quiz_open:'자가진단 열람',kmi_open:'KMI 종합검진 안내 열람',diagnosis_daily:'재무진단 신청 폼 열람'};
+function fcvRangeDates(){
+  const now=new Date();const d0=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  if(fcvRange==='today')return {start:d0,end:new Date(+d0+86400000)};
+  if(fcvRange==='7d')return {start:new Date(+d0-6*86400000),end:new Date(+d0+86400000)};
+  if(fcvRange==='1m'){const s=new Date(d0);s.setMonth(s.getMonth()-1);return {start:s,end:new Date(+d0+86400000)};}
+  if(fcvRange==='custom'){
+    const s=fcvFrom?new Date(fcvFrom+'T00:00:00'):null;
+    const e=fcvTo?new Date(new Date(fcvTo+'T00:00:00').getTime()+86400000):null;
+    return {start:s,end:e};}
+  return {start:null,end:null};}
+async function fcvNamesLoad(){
+  if(fcvNames)return fcvNames;fcvNames={};
+  try{if(window.fccBridge&&window.fccBridge.pullDocs){const pd=await window.fccBridge.pullDocs();((pd&&pd.list)||[]).forEach(d=>{if(d&&d.id)fcvNames[d.id]=d.name||'';});}}catch(_e){}
+  return fcvNames;}
+function fcvExtract(docs){
+  const rows=[];
+  docs.forEach(r=>{(r.events||[]).forEach(e=>{
+    if(e.t!=='card'||!e.id)return;
+    const id=String(e.id);let nm=null;
+    if(id.indexOf('calc_')===0){const k=id.slice(5);nm=(window.CH_NAMES&&window.CH_NAMES[k])||k;}
+    else if(FCV_ACT[id])nm=FCV_ACT[id];
+    if(!nm)return;
+    rows.push({nm,cid:r.clientId||'',page:r.page||'',ts:(r.createdAt&&r.createdAt.toMillis)?r.createdAt.toMillis():0});
+  });});
+  return rows;}
+async function fcvFetch(){
+  const {start,end}=fcvRangeDates();
+  let docs=[];fcvIdxOk=true;
+  try{
+    const conds=[collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid)];
+    if(start)conds.push(where('createdAt','>=',start));
+    if(end)conds.push(where('createdAt','<',end));
+    conds.push(orderBy('createdAt','desc'),limit(1000));
+    const qs=await getDocs(query.apply(null,conds));
+    qs.forEach(d=>docs.push(d.data()));
+  }catch(e){
+    fcvIdxOk=false;   /* 복합 인덱스 미완성 등 → 폴백: 최근 500건 후 화면 필터 */
+    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid),limit(500)));
+    qs.forEach(d=>docs.push(d.data()));
+  }
+  let rows=fcvExtract(docs);
+  if(start||end)rows=rows.filter(r=>(!start||r.ts>=+start)&&(!end||r.ts<+end));   /* 폴백 대비 이중 필터 (인덱스 경로에서도 무해) */
+  fcvRows=rows;}
+function fcvWho(r,names){
+  if(!r.cid)return {t:'미식별 방문자',k:'anon'};
+  const nm=names&&names[r.cid];
+  return nm?{t:nm,k:'name'}:{t:String(r.cid),k:'id'};}
+function fcvRender(){
+  const list=$('fcvList'),pager=$('fcvPager'),chips=$('fcvChips'),foot=$('fcvFoot');if(!list)return;
+  const names=fcvNames||{};
+  const q=(fcvQ||'').toLowerCase().trim();
+  let rows=(fcvRows||[]).map(r=>Object.assign({who:fcvWho(r,names)},r));
+  if(q)rows=rows.filter(r=>(r.who.t+' '+r.nm).toLowerCase().indexOf(q)>=0);
+  if(fcvSort==='old')rows.sort((a,b)=>a.ts-b.ts);
+  else if(fcvSort==='ev')rows.sort((a,b)=>a.nm.localeCompare(b.nm,'ko')||b.ts-a.ts);
+  else if(fcvSort==='who')rows.sort((a,b)=>a.who.t.localeCompare(b.who.t,'ko')||b.ts-a.ts);
+  else rows.sort((a,b)=>b.ts-a.ts);
+  const sum={};rows.forEach(r=>{sum[r.nm]=(sum[r.nm]||0)+1;});
+  chips.innerHTML=Object.entries(sum).sort((a,b)=>b[1]-a[1]).slice(0,6)
+    .map(([n,c])=>'<span style="display:inline-block;background:#fff;border:1px solid #B9CBE8;border-radius:99px;padding:3px 10px;margin:2px 3px 0 0;font-size:10.5px;font-weight:700;color:#1B3A6B">'+ccvEsc(n)+' <b style="color:#2D5DAE">'+c+'</b></span>').join('')||'<span style="font-size:10.5px;color:#8a877f">이 조건의 기록이 없어요</span>';
+  const tp=Math.max(1,Math.ceil(rows.length/fcvSize));if(fcvPage>tp)fcvPage=tp;if(fcvPage<1)fcvPage=1;
+  const page=rows.slice((fcvPage-1)*fcvSize,fcvPage*fcvSize);
+  list.innerHTML=page.map(r=>{
+    const dt=r.ts?new Date(r.ts):null;
+    const dstr=dt?((dt.getMonth()+1)+'/'+dt.getDate()+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0')):'';
+    const src=r.page==='daily'?'데일리':'채널';
+    const whoStyle=r.who.k==='name'?'color:#15294A;font-weight:800':(r.who.k==='id'?'color:#5C6678;font-family:ui-monospace,monospace;font-size:9.5px':'color:#8a877f');
+    return '<div style="display:flex;gap:8px;align-items:center;padding:7px 2px;border-top:1px solid #E4EAF4"><b style="flex:1;font-size:11.5px;color:#1B2430">'+ccvEsc(r.nm)+'</b><span style="font-size:10px;color:#2D5DAE;font-weight:700;flex-shrink:0">'+src+'</span><span style="font-size:10px;'+whoStyle+';flex-shrink:0;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+ccvEsc(r.who.t)+'</span><span style="font-size:10px;color:#8a877f;flex-shrink:0">'+dstr+'</span></div>';}).join('')
+    ||'<div style="padding:16px 2px;font-size:11px;color:#8a877f">이 조건에 맞는 기록이 없습니다. 기간이나 검색어를 바꿔보세요.</div>';
+  /* 페이저 */
+  if(tp<=1){pager.innerHTML='';}
+  else{
+    const btn=(lb,p,cur,dis)=>'<button type="button" data-fcvpg="'+p+'" '+(dis?'disabled ':'')+'style="min-width:28px;height:28px;border-radius:8px;border:1px solid '+(cur?'#1B3A6B':'#D5DDEA')+';background:'+(cur?'#1B3A6B':'#fff')+';color:'+(cur?'#fff':(dis?'#C5CAD6':'#3A4457'))+';font-size:11px;font-weight:700;font-family:inherit;cursor:'+(dis?'default':'pointer')+'">'+lb+'</button>';
+    const dots='<span style="font-size:11px;color:#9099AD;padding:0 2px">…</span>';
+    let h2=btn('‹',fcvPage-1,false,fcvPage<=1)+btn('1',1,fcvPage===1,false);
+    const s2=Math.max(2,fcvPage-1),e2=Math.min(tp-1,fcvPage+1);
+    if(s2>2)h2+=dots;
+    for(let p=s2;p<=e2;p++)h2+=btn(String(p),p,fcvPage===p,false);
+    if(e2<tp-1)h2+=dots;
+    if(tp>1)h2+=btn(String(tp),tp,fcvPage===tp,false);
+    h2+=btn('›',fcvPage+1,false,fcvPage>=tp);
+    pager.innerHTML=h2;
+    Array.prototype.forEach.call(pager.querySelectorAll('[data-fcvpg]'),b=>{b.onclick=()=>{if(b.disabled)return;const p2=parseInt(b.getAttribute('data-fcvpg'),10);if(!p2||p2===fcvPage)return;fcvPage=p2;fcvRender();};});
+  }
+  const rl={today:'오늘','7d':'최근 7일','1m':'최근 1개월',all:'전체',custom:(fcvFrom||'…')+' ~ '+(fcvTo||'…')}[fcvRange]||'';
+  foot.innerHTML='총 '+rows.length+'건 · '+rl+' · '+((fcvPage-1)*fcvSize+ (rows.length?1:0))+'–'+Math.min(fcvPage*fcvSize,rows.length)+'번 표시 (데일리 리포트 + 내 채널 합산)'
+    +(fcvIdxOk?'':'<br><span style="color:#B8860B">인덱스 준비 중 — 최근 500건 기준으로 표시하고 있어요 (인덱스 완성 후 자동 정확화)</span>');
+}
+async function fcvReload(){
+  if(fcvBusy)return;fcvBusy=true;
+  const list=$('fcvList');if(list)list.innerHTML='<div style="padding:14px 2px;font-size:11px;color:#8a877f">불러오는 중…</div>';
+  let _err=false;
+  try{await fcvNamesLoad();await fcvFetch();}catch(_e){_err=true;}
+  fcvBusy=false;fcvPage=1;
+  if(_err&&!fcvRows){   /* 폴백까지 실패(네트워크 등) + 보여줄 이전 데이터도 없음 → 오류 안내 (v1 동작 복원) */
+    const l2=$('fcvList');if(l2)l2.innerHTML='<div style="padding:14px 2px;font-size:11px;color:#B0413E">불러오지 못했어요 — 잠시 후 [내역 보기]를 다시 눌러주세요.</div>';
+    const c2=$('fcvChips');if(c2)c2.innerHTML='';const p2=$('fcvPager');if(p2)p2.innerHTML='';const f2=$('fcvFoot');if(f2)f2.innerHTML='';
+    return;}
+  fcvRender();}
 async function fcCalcLogsLoad(){
   const body=$('fcCalcBody');if(!body)return;
-  body.innerHTML='불러오는 중…';
-  try{
-    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid),limit(150)));
-    const rows=[];const sum={};
-    const ACT_LABEL={lc_open:'생활변화 점검 열람',quiz_open:'자가진단 열람',kmi_open:'KMI 종합검진 안내 열람',diagnosis_daily:'재무진단 신청 폼 열람'};
-    qs.forEach(d=>{const r=d.data();(r.events||[]).forEach(e=>{
-      if(e.t!=='card'||!e.id)return;
-      const id=String(e.id);let nm=null;
-      if(id.indexOf('calc_')===0){const k=id.slice(5);nm=(window.CH_NAMES&&window.CH_NAMES[k])||k;}
-      else if(ACT_LABEL[id])nm=ACT_LABEL[id];
-      if(!nm)return;
-      sum[nm]=(sum[nm]||0)+1;
-      rows.push({nm,cid:r.clientId||'',page:r.page||'',ts:(r.createdAt&&r.createdAt.toMillis)?r.createdAt.toMillis():0});
-    });});
-    if(!rows.length){body.innerHTML='아직 활동 기록이 없습니다 — 고객이 계산기·생활변화·자가진단·종합검진을 열면 여기에 쌓입니다.';return;}
-    rows.sort((a,b)=>b.ts-a.ts);
-    const top=Object.entries(sum).sort((a,b)=>b[1]-a[1]).slice(0,6)
-      .map(([n,c])=>'<span style="display:inline-block;background:#fff;border:1px solid #B9CBE8;border-radius:99px;padding:3px 10px;margin:2px 3px 0 0;font-size:10.5px;font-weight:700;color:#1B3A6B">'+ccvEsc(n)+' <b style="color:#2D5DAE">'+c+'</b></span>').join('');
-    const list=rows.slice(0,30).map(r=>{
-      const dt=r.ts?new Date(r.ts):null;
-      const dstr=dt?((dt.getMonth()+1)+'/'+dt.getDate()+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0')):'';
-      const who=r.cid?('고객 '+ccvEsc(String(r.cid).slice(-4))):'미식별 방문자';
-      const src=r.page==='daily'?'데일리':'채널';
-      return '<div style="display:flex;gap:8px;align-items:center;padding:7px 2px;border-top:1px solid #E4EAF4"><b style="flex:1;font-size:11.5px;color:#1B2430">'+ccvEsc(r.nm)+'</b><span style="font-size:10px;color:#2D5DAE;font-weight:700">'+src+'</span><span style="font-size:10px;color:#8a877f">'+who+'</span><span style="font-size:10px;color:#8a877f">'+dstr+'</span></div>';}).join('');
-    body.innerHTML='<div style="margin-bottom:8px">'+top+'</div>'+list
-      +'<div style="font-size:9.5px;color:#8a877f;margin-top:8px">최근 '+Math.min(rows.length,30)+'건 표시 · 총 '+rows.length+'회 (데일리 리포트 + 내 채널 합산)</div>';
-  }catch(e){body.innerHTML='불러오지 못했어요 — 잠시 후 [내역 보기]를 다시 눌러주세요. ('+(e.message||'')+')';}
+  body.innerHTML=''
+    +'<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center" id="fcvRangeRow">'
+    +['today|오늘','7d|7일','1m|1개월','all|전체','custom|📅 직접'].map(x=>{const [k,lb]=x.split('|');return '<button type="button" data-fcvr="'+k+'" style="border:1px solid '+(fcvRange===k?'#1B3A6B':'#D5DDEA')+';background:'+(fcvRange===k?'#1B3A6B':'#fff')+';color:'+(fcvRange===k?'#fff':'#3A4457')+';border-radius:99px;padding:5px 12px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">'+lb+'</button>';}).join('')
+    +'</div>'
+    +'<div id="fcvCustomRow" style="display:'+(fcvRange==='custom'?'flex':'none')+';gap:6px;align-items:center;margin-top:7px">'
+    +'<input type="date" id="fcvFrom" value="'+ccvEsc(fcvFrom)+'" style="border:1px solid #D5DDEA;border-radius:9px;padding:6px 8px;font-size:11px;font-family:inherit">'
+    +'<span style="font-size:11px;color:#8a877f">~</span>'
+    +'<input type="date" id="fcvTo" value="'+ccvEsc(fcvTo)+'" style="border:1px solid #D5DDEA;border-radius:9px;padding:6px 8px;font-size:11px;font-family:inherit">'
+    +'<button type="button" id="fcvApply" style="border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:7px 13px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">적용</button></div>'
+    +'<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">'
+    +'<input type="text" id="fcvQ" value="'+ccvEsc(fcvQ)+'" placeholder="🔍 고객 이름·ID 검색" style="flex:1;min-width:140px;border:1px solid #D5DDEA;border-radius:10px;padding:7px 11px;font-size:11.5px;font-family:inherit;outline:0">'
+    +'<select id="fcvSort" style="border:1px solid #D5DDEA;border-radius:10px;padding:7px 8px;font-size:11px;font-family:inherit;background:#fff">'
+    +'<option value="new">최신순</option><option value="old">오래된순</option><option value="ev">이벤트명순</option><option value="who">방문자순</option></select>'
+    +'<select id="fcvSize" style="border:1px solid #D5DDEA;border-radius:10px;padding:7px 8px;font-size:11px;font-family:inherit;background:#fff">'
+    +[10,20,30,40,50,100].map(n=>'<option value="'+n+'"'+(n===fcvSize?' selected':'')+'>'+n+'개</option>').join('')+'</select></div>'
+    +'<div id="fcvChips" style="margin:9px 0 4px"></div>'
+    +'<div id="fcvList"></div>'
+    +'<div id="fcvPager" style="display:flex;gap:4px;justify-content:center;align-items:center;margin-top:9px;flex-wrap:wrap"></div>'
+    +'<div id="fcvFoot" style="font-size:9.5px;color:#8a877f;margin-top:7px"></div>';
+  const sortEl=$('fcvSort');if(sortEl)sortEl.value=fcvSort;
+  Array.prototype.forEach.call(body.querySelectorAll('[data-fcvr]'),b=>{b.onclick=()=>{
+    const k=b.getAttribute('data-fcvr');fcvRange=k;
+    const cr=$('fcvCustomRow');if(cr)cr.style.display=(k==='custom')?'flex':'none';
+    Array.prototype.forEach.call(body.querySelectorAll('[data-fcvr]'),x=>{const on=x.getAttribute('data-fcvr')===k;x.style.background=on?'#1B3A6B':'#fff';x.style.color=on?'#fff':'#3A4457';x.style.borderColor=on?'#1B3A6B':'#D5DDEA';});
+    if(k!=='custom')fcvReload();};});
+  const ap=$('fcvApply');if(ap)ap.onclick=()=>{fcvFrom=($('fcvFrom')&&$('fcvFrom').value)||'';fcvTo=($('fcvTo')&&$('fcvTo').value)||'';if(!fcvFrom&&!fcvTo){toast('시작일 또는 종료일을 선택해 주세요');return;}fcvReload();};
+  const qi=$('fcvQ');if(qi)qi.oninput=()=>{fcvQ=qi.value;fcvPage=1;fcvRender();};
+  if(sortEl)sortEl.onchange=()=>{fcvSort=sortEl.value;fcvPage=1;fcvRender();};
+  const sz=$('fcvSize');if(sz)sz.onchange=()=>{fcvSize=parseInt(sz.value,10)||30;fcvPage=1;fcvRender();};
+  fcvReload();
 }
 // ═══ FC 본인 로그인 시 진단 신청 관리 섹션 ═══
 async function loadFcAdminSection(){
