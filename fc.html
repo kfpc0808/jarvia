@@ -5316,8 +5316,10 @@ function aiInit(){
     const fab=document.createElement('div');fab.id='aiFab';
     fab.style.cssText='position:fixed;right:14px;bottom:82px;z-index:9400;display:flex;flex-direction:column;align-items:flex-end;gap:6px';
     fab.innerHTML='<div id="aiFabTip" style="background:#fff;border:1px solid #E0C36B;border-radius:10px;padding:6px 10px;font-size:11px;color:#8B6914;font-weight:700;box-shadow:0 4px 14px rgba(15,27,51,.18)">내일 미팅, 제가 준비해둘까요?</div>'
+      +'<button type="button" id="vmFabBtn" style="width:54px;height:54px;border-radius:50%;background:#C9A96E;border:2px solid #15294A;color:#15294A;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(15,27,51,.35);cursor:pointer;padding:0"><i class="ti ti-microphone" style="font-size:20px"></i><span style="font-size:8.5px;font-weight:800;color:#15294A;margin-top:1px;line-height:1">미팅기록</span></button>'
       +'<button type="button" id="aiFabBtn" style="width:54px;height:54px;border-radius:50%;background:#15294A;border:2px solid #C9A96E;color:#C9A96E;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(15,27,51,.35);cursor:pointer;padding:0"><i class="ti ti-sparkles" style="font-size:20px"></i><span style="font-size:8.5px;font-weight:800;color:#fff;margin-top:1px;line-height:1">AI 비서</span></button>';
     document.body.appendChild(fab);
+    const _vmb=document.getElementById('vmFabBtn');if(_vmb)_vmb.onclick=vmOpen;   /* ★ 🎙 음성 미팅 기록 (2026-07-18) */
     const tip=document.getElementById('aiFabTip');
     try{if(localStorage.getItem('ai_tip_seen'))tip.style.display='none';else setTimeout(()=>{tip.style.display='none';try{localStorage.setItem('ai_tip_seen','1');}catch(_e){}},7000);}catch(_e){}
     /* ★ 꾹(롱프레스) 퀵메뉴 (2026-07-17): 짧은 탭=AI 채팅, 550ms 꾹=고객 추가 등 빠른 메뉴 */
@@ -5429,7 +5431,12 @@ async function aiBuildContext(q){
       family:(hit.family||[]).slice(0,6),memo:(hit.memo||'').slice(0,600),contracts:dedup,
       sangryeongDday:hit.birthDate?aiDdayMmdd(aiSangMmdd(hit.birthDate)):null,
       birthdayDday:hit.birthDate?aiDdayMmdd(hit.birthDate.slice(5,7)+hit.birthDate.slice(8,10)):null,
-      meetings:(hit.meetings||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,5).map(mm=>({date:mm.date,place:mm.place||'',note:(mm.note||'').slice(0,300),next:mm.next||''})),
+      meetings:(function(){   /* ★ 전 건·전문 전달 (2026-07-18): 고객 특정 질문은 기록 100% — 안전 상한 초과 시에만 오래된 것부터 제외하고 명시 */
+        const all=(hit.meetings||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+        let tot=0,over=false,cut=0;const out=[];
+        for(const mm of all){const nt=String(mm.note||'');if(over||tot+nt.length>16000){over=true;cut++;continue;}tot+=nt.length;out.push({date:mm.date,place:mm.place||'',note:nt,next:mm.next||''});}
+        if(cut)out.push({date:'',place:'',note:'※ 분량 초과로 가장 오래된 기록 '+cut+'건은 이 답변에서 제외됨 — 답변에 이 사실을 알려줄 것',next:''});
+        return out;})(),
       files:(hit.files||[]).slice(0,10).map(x=>({name:x.name,desc:x.desc||''}))};
     if(f&&f.id){try{
       const snap=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',fcUid),where('clientId','==',f.id),limit(80)));
@@ -5653,6 +5660,181 @@ async function aiSaveDrive(q,a,cust){
     await ccStorage.saveJson('대화저장',fname,env);
     try{aiSideCache=null;if(aiSideOpen)aiSideLoad(true);}catch(_e2){}   /* ★ 사이드바 실시간 갱신 (2026-07-18) */
   }catch(_e){}
+}
+
+/* ═══════════ 🎙 음성 미팅 기록 (2026-07-18) ═══════════
+   흐름: 🎙 FAB → ①말하기(키보드 마이크) → [그대로 저장]=무료 / [AI 정리]=1회 차감
+        → ③확인(제목·정리·다음할일·다음연락일) → 해당 고객 미팅·AI 기록에 저장
+   분기: 동명이인=후보 선택 · 이름 미발견=검색 선택 · AI 불가=원문 폴백 — 어떤 경우에도 기록 유실 없음 */
+let vmText='',vmBusy=false,vmData=null,vmPickId=null,vmGen=0;   /* vmGen: 취소·닫기 후 늦게 도착한 응답 폐기용 세대 토큰 */
+function vmEl(id){return document.getElementById(id);}
+function vmClose(){vmGen++;vmBusy=false;const s=vmEl('vmSheet');if(s)s.style.display='none';}
+function vmOpen(){
+  let m=vmEl('vmSheet');
+  if(!m){
+    m=document.createElement('div');m.id='vmSheet';
+    m.style.cssText='position:fixed;inset:0;z-index:9650;background:rgba(15,27,51,.45);display:flex;align-items:flex-end';
+    m.innerHTML='<div id="vmBox" style="background:#F7F5EF;width:100%;max-width:480px;margin:0 auto;height:88%;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden"></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click',ev=>{if(ev.target===m)vmClose();});
+  }
+  m.style.display='flex';vmData=null;vmPickId=null;
+  vmRenderInput();
+}
+function vmHead(){return '<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:17px">🎙</span><div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">미팅 기록</div><div style="font-size:9.5px;color:#9AA3B8">말하면 정리해서 고객 기록에 저장해요</div></div><button type="button" id="vmX" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>';}
+function vmFoot(btns){return '<div style="border-top:1px solid #E4E0D6;background:#fff;padding:10px 12px;display:flex;gap:8px;flex-shrink:0">'+btns+'</div>';}
+function vmBtn(id,label,pri){return '<button type="button" id="'+id+'" style="flex:1;border:1px solid '+(pri?'#15294A':'#E1E5EC')+';background:'+(pri?'#15294A':'#fff')+';color:'+(pri?'#fff':'#3A4457')+';border-radius:12px;padding:12px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">'+label+'</button>';}
+function vmWire(){const x=vmEl('vmX');if(x)x.onclick=vmClose;}
+/* ── ① 입력 ── */
+function vmRenderInput(){
+  vmGen++;vmBusy=false;   /* 입력 화면 복귀(취소·다시 말하기) = 진행 중이던 요청 무효화 */
+  const b=vmEl('vmBox');if(!b)return;
+  b.innerHTML=vmHead()
+    +'<div style="flex:1;overflow-y:auto;padding:12px">'
+    +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:10px 13px;font-size:12px;color:#8B6914;line-height:1.65;font-weight:600">💬 <b>고객 이름부터</b> 말하고 미팅 내용을 이어서 말씀하세요.<br>약속 날짜("다음주 화요일")도 말하면 자동으로 잡아드려요.</div>'
+    +'<textarea id="vmTa" placeholder="예) 이규선 고객 만났고, 연금 관심 많고 다음주 화요일 재방문하기로 함" style="width:100%;min-height:230px;border:2px solid #E0C36B;border-radius:14px;background:#fff;margin-top:11px;padding:13px;font-size:14.5px;line-height:1.7;color:#3A4457;font-family:inherit;resize:none;outline:0;box-sizing:border-box"></textarea>'
+    +'<div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:9px;font-size:11.5px;color:#8A93A8;font-weight:600"><span style="background:#fff;border:1px solid #E1E5EC;border-radius:8px;padding:2px 9px;font-size:13px">🎤</span> 키보드의 마이크를 누르면 말로 입력돼요</div>'
+    +'<div style="font-size:11px;color:#8A93A8;line-height:1.65;background:#fff;border:1px dashed #D8DCE5;border-radius:10px;padding:9px 11px;margin-top:11px">"방금 강감찬 부장님 미팅. 암보험 만기 연장 결정. 서류는 금요일까지 카톡으로."</div>'
+    +'</div>'
+    +vmFoot(vmBtn('vmPlain','그대로 저장')+vmBtn('vmAi','✨ AI 정리하고 저장',1));
+  vmWire();
+  const ta=vmEl('vmTa');if(ta){ta.value=vmText;ta.oninput=()=>{vmText=ta.value;};setTimeout(()=>{try{ta.focus();}catch(_e){}},180);}
+  vmEl('vmPlain').onclick=()=>{vmText=(vmEl('vmTa').value||'').trim();if(!vmText){toast('먼저 내용을 말하거나 입력해 주세요','warn');return;}vmPlainFlow('');};
+  vmEl('vmAi').onclick=()=>{vmText=(vmEl('vmTa').value||'').trim();if(!vmText){toast('먼저 내용을 말하거나 입력해 주세요','warn');return;}vmAiFlow();};
+}
+/* ── 이름 매칭 (AI 무관 — 기기 내 대조) ── */
+function vmMatch(text,customers){
+  let best='';const byName={};
+  (customers||[]).forEach(c=>{const nm=(c.name||'').trim();if(nm.length>=2&&text.indexOf(nm)>=0){if(nm.length>best.length)best=nm;(byName[nm]=byName[nm]||[]).push(c);}});
+  return best?{name:best,hits:byName[best]}:{name:'',hits:[]};
+}
+function vmCustomers(cb){try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(cb);else cb([]);}catch(_e){cb([]);}}
+function vmJsonFix(t){let out='',ins=false;for(let i=0;i<t.length;i++){const ch=t[i];if(ch==='"'&&t[i-1]!=='\\')ins=!ins;if(ins&&(ch==='\n'||ch==='\r')){out+='\\n';continue;}out+=ch;}return out;}
+function vmFirstLine(t,max){t=String(t||'').replace(/\s+/g,' ').trim();return t.length>max?t.slice(0,max)+'…':t;}
+/* ── [그대로 저장] 폴백 흐름 (AI 미사용) ── */
+function vmPlainFlow(reason){
+  const _g=++vmGen;
+  vmCustomers(list=>{
+    if(_g!==vmGen)return;   /* 그 사이 취소·닫힘 → 폐기 */
+    const m=vmMatch(vmText,list);
+    vmData={mode:'plain',title:vmFirstLine(vmText,26),summary:'',todo:'',nextDate:'',custName:m.name,reason:reason||''};
+    if(m.hits.length===1){vmPickId=m.hits[0].id;vmRenderConfirm(m.hits[0]);}
+    else vmRenderPick(list,m,reason?reason:(m.hits.length>1?'같은 이름의 고객이 '+m.hits.length+'명 있어요. 누구의 기록인가요?':'말씀에서 고객 이름을 찾지 못했어요. 어느 고객의 기록인지 골라주세요.'));
+  });
+}
+/* ── [AI 정리] 흐름 ── */
+async function vmAiFlow(){
+  if(vmBusy)return;vmBusy=true;vmRenderLoading();
+  const _g=++vmGen;
+  try{
+    const list=await new Promise(res=>vmCustomers(res));
+    const names=(list||[]).map(c=>c.name).filter(Boolean).slice(0,300);
+    const today=new Date();const ymd=today.toISOString().slice(0,10);const dow=['일','월','화','수','목','금','토'][today.getDay()];
+    const q='다음은 보험 컨설턴트가 미팅 직후 말로 남긴 기록이다. 오늘은 '+ymd+'('+dow+')이다.\n'
+      +'등록 고객 명단: '+names.join(', ')+'\n'
+      +'--- 말한 원문 ---\n'+vmText.slice(0,2000)+'\n--- 끝 ---\n'
+      +'위 원문을 정리해 반드시 JSON만 출력하라(설명·마크다운 금지). 형식: {"custName":"명단에서 찾은 고객 이름(없으면 빈 문자열)","title":"핵심 제목 22자 이내","summary":"· 로 시작하는 정리 불릿 2~4줄(줄바꿈 구분)","todo":"다음 할 일 한 줄(없으면 빈 문자열)","nextDate":"약속 날짜가 언급됐으면 YYYY-MM-DD, 없으면 빈 문자열"}';
+    const r=await httpsCallable(fns,'aiChat')({question:q,context:{consultant:(fcData&&fcData.name)||loginId||'',today:ymd,task:'voice_meeting_note'},history:[]});
+    const d=r.data||{};vmBusy=false;
+    if(_g!==vmGen)return;   /* 취소·닫기 후 늦게 도착한 응답 — 조용히 폐기 (한도 반영만 아래서 생략됨) */
+    if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};try{aiUsageRender();}catch(_e){}}
+    if(!d.ok){vmPlainFlow(d.reason==='limit'?'지금은 AI 정리를 사용할 수 없어요(오늘 사용량 소진). 말한 그대로 저장해 드릴게요.':'AI 정리에 실패했어요. 말한 그대로 저장해 드릴게요.');return;}
+    let p=null;const _raw=String(d.answer||'').replace(/```json|```/g,'').trim();
+    try{p=JSON.parse(_raw);}catch(_e){try{p=JSON.parse(vmJsonFix(_raw));}catch(_e2){p=null;}}   /* 모델이 JSON 문자열 안에 생 개행을 넣는 경우 복구 */
+    if(!p||!p.title){vmPlainFlow('AI 응답을 해석하지 못했어요. 말한 그대로 저장해 드릴게요.');return;}
+    vmData={mode:'ai',title:vmFirstLine(p.title,26),summary:String(p.summary||'').slice(0,1200),todo:String(p.todo||'').slice(0,300),nextDate:(/^\d{4}-\d{2}-\d{2}$/.test(p.nextDate||'')?p.nextDate:''),custName:String(p.custName||'').trim(),reason:''};
+    const hits=(list||[]).filter(c=>(c.name||'')===vmData.custName);
+    if(hits.length===1){vmPickId=hits[0].id;vmRenderConfirm(hits[0]);}
+    else{const m2=vmData.custName?{name:vmData.custName,hits:hits}:vmMatch(vmText,list);
+      if(m2.hits.length===1){vmPickId=m2.hits[0].id;vmRenderConfirm(m2.hits[0]);}
+      else vmRenderPick(list,m2,m2.hits.length>1?'같은 이름의 고객이 '+m2.hits.length+'명 있어요. 누구의 기록인가요?':'말씀에서 고객 이름을 찾지 못했어요. 어느 고객의 기록인지 골라주세요.');}
+  }catch(e){vmBusy=false;if(_g!==vmGen)return;vmPlainFlow('AI 서버에 연결하지 못했어요. 말한 그대로 저장해 드릴게요.');}
+}
+/* ── ② 정리 중 ── */
+function vmRenderLoading(){
+  const b=vmEl('vmBox');if(!b)return;
+  if(!vmEl('vmSpinCss')){const st=document.createElement('style');st.id='vmSpinCss';st.textContent='@keyframes vmsp{to{transform:rotate(360deg)}}';document.head.appendChild(st);}
+  b.innerHTML=vmHead()
+    +'<div style="flex:1;padding:12px">'
+    +'<div style="width:52px;height:52px;border-radius:50%;border:4px solid #EBE6D8;border-top-color:#C9A96E;margin:80px auto 0;animation:vmsp 1s linear infinite"></div>'
+    +'<div style="text-align:center;margin-top:18px;font-size:14px;font-weight:800;color:#15294A">기록을 정리하고 있어요</div>'
+    +'<div style="text-align:center;margin-top:7px;font-size:11.5px;color:#8A93A8;line-height:1.7">고객 찾는 중 → 내용 정리 → 다음 일정 확인</div>'
+    +'</div>'+vmFoot(vmBtn('vmCancel','취소'));
+  vmWire();vmEl('vmCancel').onclick=()=>{vmBusy=false;vmRenderInput();};
+}
+/* ── ③ 확인 카드 (AI 정리 / 폴백 공용) ── */
+function vmRenderConfirm(c){
+  const b=vmEl('vmBox');if(!b||!vmData)return;
+  const d=vmData;const sub=[c.company,c.title].filter(Boolean).join(' · ');
+  const nd=d.nextDate?new Date(d.nextDate+'T00:00:00'):null;
+  const ndLabel=nd?((nd.getMonth()+1)+'/'+nd.getDate()+' ('+['일','월','화','수','목','금','토'][nd.getDay()]+')'):'';
+  b.innerHTML=vmHead()
+    +'<div style="flex:1;overflow-y:auto;padding:12px">'
+    +(d.reason?'<div style="background:#FBEAEA;border:1px solid #F2D7D7;border-radius:11px;padding:10px 12px;font-size:11.5px;color:#A23B3B;line-height:1.6;font-weight:700;margin-bottom:10px">'+_aiEsc(d.reason)+'<br><b>AI 미사용 — 차감 없음</b></div>':'')
+    +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:14px;padding:13px">'
+    +'<div style="display:flex;align-items:center;gap:8px"><span style="font-size:16px;font-weight:800;color:#15294A">'+_aiEsc(c.name||'')+'</span>'+(sub?'<span style="font-size:10px;font-weight:800;background:#E6F1FB;color:#185FA5;border-radius:8px;padding:2px 8px">'+_aiEsc(sub)+'</span>':'')+'<button type="button" id="vmChg" style="margin-left:auto;font-size:10.5px;font-weight:800;color:#8A93A8;border:1px solid #E1E5EC;border-radius:9px;padding:4px 9px;background:#fff;cursor:pointer">다른 고객 ▾</button></div>'
+    +'<div style="margin-top:12px"><div style="font-size:10px;font-weight:800;color:#8A93A8">제목</div><div style="font-size:13px;font-weight:800;color:#1B2430;margin-top:4px">🎙 '+_aiEsc(d.title)+'</div></div>'
+    +(d.summary?'<div style="margin-top:11px"><div style="font-size:10px;font-weight:800;color:#8A93A8">정리된 내용</div><div style="font-size:12.5px;color:#3A4457;line-height:1.7;background:#FBFAF6;border:1px solid #ECEEF2;border-radius:10px;padding:10px 12px;white-space:pre-wrap;margin-top:4px">'+_aiEsc(d.summary)+'</div></div>':'')
+    +(d.mode==='plain'?'<div style="margin-top:11px"><div style="font-size:10px;font-weight:800;color:#8A93A8">내용 (말한 그대로 저장돼요)</div><div style="font-size:12.5px;color:#3A4457;line-height:1.7;background:#FBFAF6;border:1px solid #ECEEF2;border-radius:10px;padding:10px 12px;white-space:pre-wrap;margin-top:4px">'+_aiEsc(vmText)+'</div></div>':'')
+    +(d.todo?'<div style="margin-top:11px"><div style="font-size:10px;font-weight:800;color:#8A93A8">다음 할 일</div><div style="font-size:12.5px;color:#3A4457;line-height:1.7;background:#FBFAF6;border:1px solid #ECEEF2;border-radius:10px;padding:10px 12px;margin-top:4px">'+_aiEsc(d.todo)+'</div></div>':'')
+    +(d.nextDate?'<label style="display:flex;align-items:center;gap:8px;background:#E1F5EE;border:1px solid #BFE3D6;border-radius:11px;padding:10px 12px;margin-top:12px;cursor:pointer"><input type="checkbox" id="vmNc" checked style="width:16px;height:16px;accent-color:#0F6E56"><span style="font-size:12px;font-weight:700;color:#0F6E56">다음 연락일을 <b>'+ndLabel+'</b>로 함께 저장</span></label>':'')
+    +(d.mode==='ai'?'<details style="margin-top:11px"><summary style="font-size:10.5px;color:#8A93A8;font-weight:700;cursor:pointer">말한 원문 보기</summary><div style="font-size:11.5px;color:#8A93A8;line-height:1.65;margin-top:6px;background:#fff;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;white-space:pre-wrap">'+_aiEsc(vmText)+'</div></details>':'')
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#8A93A8;margin-top:10px;justify-content:center"><i class="ti ti-lock" style="font-size:10px"></i> 드라이브 암호화 저장'+(d.mode==='ai'?' · AI 사용 1회 차감됨':' · AI 미사용(차감 없음)')+'</div>'
+    +'</div>'
+    +vmFoot(vmBtn('vmBack','다시 말하기')+vmBtn('vmSave','📌 '+_aiEsc(c.name||'')+' 님 기록으로 저장',1));
+  vmWire();
+  vmEl('vmBack').onclick=vmRenderInput;
+  vmEl('vmChg').onclick=()=>{vmCustomers(list=>vmRenderPick(list,{name:'',hits:[]},'어느 고객의 기록인지 골라주세요.'));};
+  vmEl('vmSave').onclick=()=>{
+    const useNc=vmEl('vmNc')?vmEl('vmNc').checked:false;
+    const note=vmBuildNote();
+    if(!window.__vmSaveMeeting){toast('저장 모듈을 불러오지 못했어요 — 새로고침 후 다시 시도해주세요','warn');return;}
+    window.__vmSaveMeeting(vmPickId,note,vmData.todo||'',useNc?vmData.nextDate:'',(ok,nm)=>{
+      if(ok){vmText='';vmClose();toast('🎙 '+(nm||'')+'님 기록에 저장했어요'+(useNc&&vmData.nextDate?' · 다음 연락 '+vmData.nextDate.slice(5).replace('-','/'):''));}
+      else toast('저장에 실패했어요 — 다시 시도해주세요','warn');
+    });
+  };
+}
+function vmBuildNote(){
+  const d=vmData;
+  if(d.mode==='ai')return '🎙 '+d.title+'\n'+(d.summary||'')+(d.todo?'\n\n다음 할 일: '+d.todo:'')+'\n\n— 말한 원문 —\n'+vmText;
+  return '🎙 '+d.title+'\n\n'+vmText;
+}
+/* ── ⑤⑥ 고객 선택 (동명이인·미발견 공용) ── */
+function vmRenderPick(list,m,msg){
+  const b=vmEl('vmBox');if(!b)return;
+  const cand=(m.hits&&m.hits.length)?m.hits:(list||[]).slice().sort((a2,b2)=>{
+    const la=(a2.meetings&&a2.meetings.length)?Math.max.apply(null,a2.meetings.map(x=>x.ts||0)):0;
+    const lb=(b2.meetings&&b2.meetings.length)?Math.max.apply(null,b2.meetings.map(x=>x.ts||0)):0;
+    return lb-la;});
+  const isDup=(m.hits&&m.hits.length>1);
+  b.innerHTML=vmHead()
+    +'<div style="flex:1;overflow-y:auto;padding:12px">'
+    +'<div style="background:'+(isDup?'#FFF8E7;border:1px solid #E0C36B':'#FBEAEA;border:1px solid #F2D7D7')+';border-radius:11px;padding:10px 12px;font-size:12px;color:'+(isDup?'#8B6914':'#A23B3B')+';line-height:1.6;font-weight:700">'+_aiEsc(msg)+'</div>'
+    +(!isDup?'<input id="vmQ" placeholder="🔍 고객 이름 검색" style="width:100%;border:1.5px solid #E1E5EC;border-radius:11px;background:#fff;padding:11px 13px;font-size:13px;font-family:inherit;margin-top:10px;outline:0;box-sizing:border-box">':'')
+    +'<div id="vmCand"></div>'
+    +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:13px;padding:12px;margin-top:11px"><div style="font-size:10px;font-weight:800;color:#8A93A8">'+(vmData&&vmData.summary?'정리된 내용 (선택 후 저장돼요)':'말한 내용 (그대로 저장돼요)')+'</div><div style="font-size:12px;color:#3A4457;line-height:1.65;background:#FBFAF6;border:1px solid #ECEEF2;border-radius:9px;padding:9px 11px;white-space:pre-wrap;margin-top:5px">'+_aiEsc((vmData&&vmData.summary)||vmText)+'</div></div>'
+    +'</div>'
+    +vmFoot(vmBtn('vmPkCancel','취소')+vmBtn('vmPkSave','📌 선택한 고객으로 저장',1));
+  vmWire();
+  let sel=null;
+  const renderCand=(q2)=>{
+    const w=vmEl('vmCand');if(!w)return;
+    let arr=cand;if(q2){const qq=q2.trim();arr=(list||[]).filter(c=>(c.name||'').indexOf(qq)>=0);}
+    w.innerHTML=arr.slice(0,8).map(c=>{
+      const inf=[c.company,c.title].filter(Boolean).join(' · ')||(c.birthDate?'생일 '+parseInt(c.birthDate.slice(5,7),10)+'/'+parseInt(c.birthDate.slice(8,10),10):'');
+      return '<button type="button" data-vmc="'+_aiEsc(c.id)+'" style="display:flex;align-items:center;gap:9px;width:100%;background:'+(sel===c.id?'#FFF8E7':'#fff')+';border:1.5px solid '+(sel===c.id?'#C9A96E':'#ECEEF2')+';border-radius:12px;padding:11px 12px;margin-top:8px;cursor:pointer;font-family:inherit;text-align:left"><span style="font-size:14px;font-weight:800;color:#15294A">'+_aiEsc(c.name||'')+'</span><span style="flex:1;min-width:0;font-size:10.5px;color:#8A93A8;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_aiEsc(inf)+'</span><span style="font-size:14px;color:#8B6914">'+(sel===c.id?'✓':'')+'</span></button>';}).join('')||'<div style="text-align:center;font-size:11px;color:#9099AD;padding:14px 0">일치하는 고객이 없어요</div>';
+    Array.prototype.forEach.call(w.querySelectorAll('[data-vmc]'),bt=>{bt.onclick=()=>{sel=bt.getAttribute('data-vmc');renderCand(vmEl('vmQ')?vmEl('vmQ').value:'');};});
+  };
+  renderCand('');
+  const qi=vmEl('vmQ');if(qi)qi.oninput=()=>renderCand(qi.value);
+  vmEl('vmPkCancel').onclick=vmRenderInput;
+  vmEl('vmPkSave').onclick=()=>{
+    if(!sel){toast('고객을 먼저 선택해 주세요','warn');return;}
+    vmPickId=sel;const _g2=vmGen;
+    vmCustomers(list2=>{if(_g2!==vmGen)return;const c=(list2||[]).filter(x=>x.id===sel)[0];if(c)vmRenderConfirm(c);});
+  };
 }
 
 /* ── ☁️ 내 금고 연결 UI (프리미엄 톤 · 최초 1회 → 폴더 자동생성 검증까지) ── */
@@ -7426,6 +7608,16 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   }
   function custLoad(){return openCustDB().then(custAll).then(function(a){customers=a||[];customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(){customers=[];return customers;});}
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
+  window.__vmSaveMeeting=function(custId,note,next,nextContact,cb){try{   /* ★ 🎙 음성 미팅 기록 저장 (2026-07-18): id 지정 — 동명이인 안전, 다음연락일 갱신 지원 */
+    var c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===custId){c=customers[i];break;}
+    if(!c){if(cb)cb(false);return;}
+    c.meetings=c.meetings||[];
+    c.meetings.push({id:"m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),date:mpcTodayStr(),place:"",note:String(note||"").slice(0,4000),next:String(next||"").slice(0,300),ts:Date.now(),src:"voice"});
+    if(nextContact&&/^\d{4}-\d{2}-\d{2}$/.test(nextContact))c.nextContact=nextContact;
+    c.createdAt=Date.now();custPut(c);mpcGdPush();
+    try{mpcRenderList();}catch(_e2){}
+    try{var _d=$("mpcDetail");if(_d&&_d.style.display==="flex")mpcDetailRender(c);}catch(_e3){}
+    if(cb)cb(true,c.name||"");}catch(_e){if(cb)cb(false);}};
   window.__mpcAddMeeting=function(name,note,cb){try{var hits=customers.filter(function(c){return (c.name||"")===name;});if(hits.length!==1){if(cb)cb(false,hits.length);return;}var c=hits[0];c.meetings=c.meetings||[];c.meetings.push({id:"m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),date:mpcTodayStr(),place:"",note:String(note||"").slice(0,2000),next:"",ts:Date.now(),src:"ai"});c.createdAt=Date.now();custPut(c);mpcGdPush();if(cb)cb(true,1);}catch(_e){if(cb)cb(false,0);}};   /* ★ AI 브리핑 → 미팅기록 승격 (2026-07-17) */
   window.__mpcQuickAdd=function(openForm){try{   /* ★ 꾹 퀵메뉴: 내 고객 직행 (2026-07-17) */
     window.myPlacesOpen&&window.myPlacesOpen();
