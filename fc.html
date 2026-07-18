@@ -5298,7 +5298,7 @@ window.fccBridge={
              ② 서버 aiChat 함수가 호출자 uid → consultants.aiEnabled 재검증 + 일일 상한 (실방어선)
    컨텍스트: 질문에서 고객명 매칭 → 해당 고객만 조립(지도+미팅+fc_clients+활동) = 비용 통제 2단 구조
    저장: 대화는 컨설턴트 Drive '대화저장/AI대화' 암호화 — 회사 서버 무저장 원칙 */
-let aiHist=[],aiBusy=false,aiUsage=null;
+let aiHist=[],aiBusy=false,aiUsage=null,aiNoSeed=false;   /* aiNoSeed: 새 대화 시작 후 지난 대화 자동 주입 차단 */
 const _aiEsc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function aiAge(b){if(!b||b.length!==10)return null;const t=new Date();let a=t.getFullYear()-parseInt(b.slice(0,4),10);if((t.getMonth()+1)*100+t.getDate()<parseInt(b.slice(5,7),10)*100+parseInt(b.slice(8,10),10))a--;return a;}
 function aiDday(ymd){if(!ymd||String(ymd).length<10)return null;const t=new Date();const base=new Date(t.getFullYear(),t.getMonth(),t.getDate());return Math.round((new Date(String(ymd).slice(0,10)+'T00:00:00')-base)/86400000);}
@@ -5368,6 +5368,7 @@ function aiOpen(){
     +'<i class="ti ti-sparkles" style="font-size:17px;color:#C9A96E"></i>'
     +'<div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">나의 AI 비서</div>'
     +'<div style="font-size:9.5px;color:#9AA3B8">'+_aiEsc((fcData&&fcData.name)||loginId||'')+'님 전용 · 베타 · <span id="aiUsageTxt">오늘 -/50회</span></div></div>'
+    +'<button type="button" id="aiNewBtn" title="새 대화" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-plus"></i></button>'
     +'<button type="button" id="aiHistBtn" title="지난 대화" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-history"></i></button>'
     +'<button type="button" id="aiCloseBtn" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
     +'<div id="aiChips" style="display:flex;gap:6px;padding:9px 11px;overflow-x:auto;flex-shrink:0">'
@@ -5384,6 +5385,7 @@ function aiOpen(){
   document.body.appendChild(m);
   document.getElementById('aiCloseBtn').onclick=()=>{m.style.display='none';};
   document.getElementById('aiHistBtn').onclick=aiHistMenu;
+  document.getElementById('aiNewBtn').onclick=aiNewChat;
   m.addEventListener('click',ev=>{if(ev.target===m)m.style.display='none';});
   document.getElementById('aiSendBtn').onclick=aiSend;
   document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();aiSend();}});
@@ -5495,12 +5497,20 @@ async function aiRestoreRecent(){
     last.forEach(it=>{aiMsgOld('user',it.q||'');aiMsgOld('assistant',it.a||'');});
     aiDivider('여기서 이어가세요 — 지난 주제를 기억한 채 답해드려요');
     /* ★ 이어가기 (2026-07-17): 최근 2문답을 대화 맥락에 주입 — 사실관계는 매 질문 최신 데이터가 우선 */
-    if(!aiHist.length)aiHist=last.slice(-2).reduce((arr,it)=>{arr.push({role:'user',content:String(it.q||'').slice(0,1500)},{role:'assistant',content:String(it.a||'').slice(0,1500)});return arr;},[]);
+    if(!aiNoSeed&&!aiHist.length)aiHist=last.slice(-2).reduce((arr,it)=>{arr.push({role:'user',content:String(it.q||'').slice(0,1500)},{role:'assistant',content:String(it.a||'').slice(0,1500)});return arr;},[]);
   }catch(_e){}
 }
 function aiResume(q0,a0,label){
   aiHist=[{role:'user',content:String(q0||'').slice(0,1500)},{role:'assistant',content:String(a0||'').slice(0,1500)}];
   aiDivider('↩ '+(label||'선택한 대화')+'를 이어서 물어보세요');
+  const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
+}
+/* ★ 새 대화 (2026-07-18): 맥락 초기화 + 화면 비움 — 이전 대화는 드라이브에 저장돼 있어 🕘에서 언제든 열람 */
+function aiNewChat(){
+  if(aiBusy)return;
+  aiHist=[];aiNoSeed=true;
+  const box=document.getElementById('aiMsgs');if(box)box.innerHTML='';
+  aiMsgAdd('assistant','새 대화를 시작했어요. 이전 대화는 상단 🕘 지난 대화에서 언제든 다시 보거나 이어갈 수 있어요.\n위 추천 질문을 누르거나 자유롭게 물어보세요.');
   const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
 }
 function aiPinBtn(w,cust,q,a){
@@ -5533,13 +5543,45 @@ async function aiShowMonth(ym){
   aiDivider('— '+ym+' 기록 끝 —');
   if(box)box.scrollTop=box.scrollHeight;
 }
-function aiHistMenu(){
+async function aiHistMenu(){   /* ★ v2 (2026-07-18): Claude 스타일 최근 대화 목록 — 날짜·첫 질문 미리보기·문답 수 */
   if(!window.ccStorage||!ccStorage.connected()){aiMsgAdd('assistant','지난 대화는 나만의 보관함(드라이브) 연결 시 저장·열람할 수 있어요.');return;}
   const box=document.getElementById('aiMsgs');if(!box)return;
-  const w=document.createElement('div');w.style.cssText='display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin:10px 0';
-  let h='';for(let i=0;i<6;i++){const ym=aiYm(i);h+='<button type="button" data-aim="'+ym+'" style="border:1px solid #D8DCE5;background:#fff;border-radius:12px;padding:5px 11px;font-size:10.5px;color:#5C6678;font-weight:700">'+ym+'</button>';}
-  w.innerHTML=h;box.appendChild(w);box.scrollTop=box.scrollHeight;
-  Array.prototype.forEach.call(w.querySelectorAll('[data-aim]'),b=>{b.onclick=()=>aiShowMonth(b.getAttribute('data-aim'));});
+  aiDivider('🕘 최근 대화 불러오는 중…');
+  let items=[];
+  try{const a=(await aiLoadMonth(aiYm(0)))||[];const b=(await aiLoadMonth(aiYm(1)))||[];items=[].concat(b,a);}catch(_e){}
+  const days={},ord=[];
+  items.forEach(it=>{if(!it||!it.ts)return;const d=new Date(it.ts);const key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');if(!days[key]){days[key]=[];ord.push(key);}days[key].push(it);});
+  ord.reverse();
+  const w=document.createElement('div');w.style.cssText='margin:8px 0;display:flex;flex-direction:column;gap:6px';
+  if(!ord.length){const e=document.createElement('div');e.style.cssText='text-align:center;font-size:11px;color:#8A93A8;padding:4px 0';e.textContent='최근 2개월 저장된 대화가 없어요';w.appendChild(e);}
+  ord.slice(0,14).forEach(key=>{
+    const g=days[key];const first=g[0];
+    const md=key.slice(5).replace('-','/');
+    const prev=String(first.q||'').replace(/\s+/g,' ').slice(0,34);
+    const row=document.createElement('button');row.type='button';
+    row.style.cssText='display:flex;align-items:center;gap:8px;border:1px solid #E4E7EE;background:#fff;border-radius:11px;padding:9px 12px;cursor:pointer;text-align:left;width:100%';
+    row.innerHTML='<i class="ti ti-message" style="font-size:13px;color:#9AA3B8;flex-shrink:0"></i><span style="flex:1;min-width:0;font-size:11.5px;color:#3A4457;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><span style="font-size:9.5px;color:#9AA3B8;flex-shrink:0"></span>';
+    const sp=row.querySelectorAll('span');sp[0].textContent=md+' · '+(prev||'(질문 없음)');sp[1].textContent=g.length+'문답';
+    row.onclick=()=>aiShowDay(key,g);
+    w.appendChild(row);});
+  const mrow=document.createElement('div');mrow.style.cssText='display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin-top:4px';
+  let mh='<span style="flex-basis:100%;text-align:center;font-size:9.5px;color:#9AA3B8;margin-bottom:2px">더 오래된 기록 — 월별 보기</span>';
+  for(let i=2;i<6;i++){const ym=aiYm(i);mh+='<button type="button" data-aim="'+ym+'" style="border:1px solid #D8DCE5;background:#fff;border-radius:12px;padding:5px 11px;font-size:10.5px;color:#5C6678;font-weight:700">'+ym+'</button>';}
+  mrow.innerHTML=mh;
+  Array.prototype.forEach.call(mrow.querySelectorAll('[data-aim]'),b=>{b.onclick=()=>aiShowMonth(b.getAttribute('data-aim'));});
+  w.appendChild(mrow);
+  box.appendChild(w);box.scrollTop=box.scrollHeight;
+}
+function aiShowDay(key,list){   /* 선택한 날짜의 대화 전체 표시 — ↩ 이어가기 유지 */
+  aiDivider('📂 '+key+' 대화 '+list.length+'건 — 각 대화의 ↩로 이어갈 수 있어요');
+  const box=document.getElementById('aiMsgs');
+  list.forEach(it=>{
+    aiMsgOld('user',(it.cust?('('+it.cust+') '):'')+(it.q||''));
+    aiMsgOld('assistant',it.a||'');
+    if(box){const r=document.createElement('div');r.style.cssText='display:flex;justify-content:flex-start;margin:-4px 0 8px';r.innerHTML='<button type="button" style="border:1px solid #D8DCE5;background:#fff;border-radius:9px;padding:4px 9px;font-size:9.5px;color:#5C6678;font-weight:700;cursor:pointer">↩ 이어가기</button>';r.querySelector('button').onclick=()=>aiResume(it.q,it.a,(it.cust?it.cust+'님 대화':key+' 대화'));box.appendChild(r);}
+  });
+  aiDivider('— '+key+' 끝 —');
+  if(box)box.scrollTop=box.scrollHeight;
 }
 /* ★ 고객별 AI 대화 열람 (2026-07-17) — 고객 상세에서 호출, 최근 3개월에서 이름표 필터 */
 window.__aiCustHist=async function(name){
@@ -7431,6 +7473,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(c.birthDate&&!c.birthUnknown){var bd=mpcDdayFromMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=30)evs.push({d:bd,t:"🎂 D-"+bd});
       var sg=mpcDdayFromMmdd(mpcSangMmdd(c.birthDate));if(sg!=null&&sg<=30)evs.push({d:sg,t:"상령 D-"+sg});}
     var cts=(c.contracts||[]);if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    var _seen={};cts=cts.filter(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(_seen[k])return false;_seen[k]=1;return true;});   /* ★ 중복 제거 (2026-07-18): 완전동기로 카드·자비아 계약이 동일 — 같은 계약 이중 집계로 만기 배지가 2번 뜨고 상령 배지가 밀려나던 문제 해소 */
     cts.forEach(function(ct){var ex=ct.expiry||ct.expireDate||"";var dd=mpcDdayFromDate(String(ex).slice(0,10));if(dd!=null&&dd>=0&&dd<=30)evs.push({d:dd,t:"만기 D-"+dd});});
     if(c.nextContact){var nc=mpcDdayFromDate(c.nextContact);if(nc!=null&&nc<=7)evs.push({d:nc,t:(nc<0?"연락 지남":"연락 D-"+nc)});}
     evs.sort(function(a,b){return a.d-b.d;});evs.slice(0,2).forEach(function(e){out.push('<span style="background:#FAEEDA;color:#633806;border-radius:7px;padding:1px 6px;font-size:9.5px;font-weight:700">'+e.t+'</span>');});
