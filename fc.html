@@ -7211,6 +7211,9 @@ init();
   .mp-note{font-size:10.5px;color:#9AA3B2;text-align:center;line-height:1.7;padding:0 16px calc(28px + env(safe-area-inset-bottom))}
   .mp-pickbox{padding:0 16px}
   .mp-pickmap{height:38vh;min-height:150px;max-height:240px;border-radius:11px;overflow:hidden;border:1px solid #E6E2D9;margin-top:7px;background:#E7EAEF}
+.mp-pickhandle{display:flex;align-items:center;justify-content:center;gap:7px;padding:6px 4px 2px;cursor:ns-resize;touch-action:none;user-select:none;position:relative} /* ★ 폼 픽 지도 크기 조절 (2026-07-18) */
+.mp-pickhandle .mp-phtxt{font-size:10px;color:#9099AD;font-weight:700}
+.mp-phfs{position:absolute;right:0;top:2px;border:1px solid #D8DCE5;background:#fff;color:#5C6678;border-radius:9px;padding:3px 9px;font-size:10px;font-weight:800;font-family:inherit;cursor:pointer}
   .mp-pickres{background:#fff;border:1px solid #E6E2D9;border-radius:10px;margin-top:7px;max-height:130px;overflow-y:auto;display:none}
   .mp-pickres div{padding:9px 12px;font-size:12px;border-bottom:1px solid #F2EFE8;cursor:pointer}
   .mp-pickres div b{font-weight:700;color:#1B2430}.mp-pickres div span{color:#9AA3B2;font-size:10.5px;display:block}
@@ -7296,7 +7299,7 @@ init();
       <span style="width:18px"></span>
     </div>
     <div class="mp-scroll">
-      <div class="mp-fld"><span class="mp-lbl">위치 <small style="color:#9099AD;font-weight:400">— 검색하면 이름·주소가 자동 입력돼요</small></span>
+      <div class="mp-fld"><span class="mp-lbl">위치 <small style="color:#9099AD;font-weight:400">— 검색하거나 <b>지도를 탭</b>하면 주소가 자동 입력돼요</small></span>
         <div class="mp-pickbox" style="padding:0">
           <div style="display:flex;gap:6px;align-items:stretch">
             <input class="mp-in" id="mpfPlaceKw" type="text" style="flex:1;min-width:0" placeholder="🔍 상호·건물명 검색 (예: 연남 화덕피자)">
@@ -7304,6 +7307,7 @@ init();
           </div>
           <div class="mp-pickres" id="mpfPickRes"></div>
           <div class="mp-pickmap" id="mpfPickMap"></div>
+          <div class="mp-pickhandle" id="mpfPickHandle"><span class="mp-mhgrip"></span><span class="mp-phtxt">↕ 당겨서 지도 크기 조절</span><button type="button" class="mp-phfs" data-fs="mpf">⛶ 크게</button></div>
           <div style="font-size:11px;color:#5C6678;margin-top:6px" id="mpfAddr">위치 미설정</div>
           <div id="mpfRoadview" style="display:none;height:150px;border-radius:10px;overflow:hidden;margin-top:7px;background:#EEF1F6"></div>
           <a id="mpfPhotoLink" target="_blank" rel="noopener" style="display:none;margin-top:7px;text-align:center;border:1px solid #C9A96E;background:#FFF8E7;color:#8B6914;border-radius:10px;padding:9px;font-size:12px;font-weight:800;text-decoration:none">📷 이 장소 사진·리뷰 보기 (카카오맵)</a>
@@ -7353,6 +7357,7 @@ init();
           <input class="mp-in" id="mpcPlaceKw" type="text" placeholder="🔍 상호·건물명으로 찾기 (예: 강남 삼성생명)">
           <div class="mp-pickres" id="mpcPickRes"></div>
           <div class="mp-pickmap" id="mpcPickMap"></div>
+          <div class="mp-pickhandle" id="mpcPickHandle"><span class="mp-mhgrip"></span><span class="mp-phtxt">↕ 당겨서 지도 크기 조절</span><button type="button" class="mp-phfs" data-fs="mpc">⛶ 크게</button></div>
         </div>
       </div>
       <div class="mp-fld"><span class="mp-lbl">상세주소 <small style="color:#9099AD;font-weight:400">(동·호수 등, 선택)</small></span><input class="mp-in" id="mpcAddrDetail" type="text" placeholder="예) 101동 1203호"></div>
@@ -8277,6 +8282,25 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     $("mpfWish").onclick=function(){edWish=true;$("mpfWish").classList.add("on");$("mpfGo").classList.remove("on");};
     $("mpfFile").onchange=function(e){var files=Array.prototype.slice.call(e.target.files||[]);var chain=Promise.resolve();files.forEach(function(f){chain=chain.then(function(){if(f.type.indexOf("video")===0&&f.size>524288000){toast("영상은 500MB까지 저장할 수 있어요 — "+f.name,"warn");return;}return (f.type.indexOf("video")===0?videoThumb(f):compressImg(f,1280,.82)).then(function(r){if(r)edPhotos.push(r);else toast((f.name||"파일")+" — 사진을 읽지 못했습니다. 아이폰 HEIC 형식이면 갤러리에서 \'JPEG로 저장\' 또는 스크린샷으로 다시 시도해 주세요.","warn");});   /* 2026-07-15: 무언 실패 → 안내 */});});chain.then(function(){renderEdPhotos();});e.target.value="";};
     var kwT;$("mpfPlaceKw").addEventListener("input",function(){clearTimeout(kwT);kwT=setTimeout(doPlaceSearch,400);});
+    /* ★ 폼 픽 지도 크기 조절·크게 보기 (2026-07-18): 메인 지도 핸들과 동일 조작 — 장소·고객 폼 공통 */
+    function attachPickResize(handleId,mapElId,getMapObj){
+      var hd=$(handleId),mapEl=$(mapElId);if(!hd||!mapEl)return;
+      var y0=null,h0=0;
+      function maxH(){return Math.round((window.innerHeight||600)*0.78);}
+      function setH(px){px=Math.max(150,Math.min(px,maxH()));mapEl.style.maxHeight="none";mapEl.style.height=px+"px";var m2=getMapObj();if(m2&&m2.relayout)m2.relayout();}
+      hd.addEventListener("pointerdown",function(ev){if(ev.target&&ev.target.classList&&ev.target.classList.contains("mp-phfs"))return;y0=ev.clientY;h0=mapEl.getBoundingClientRect().height;try{hd.setPointerCapture(ev.pointerId);}catch(_e){}ev.preventDefault();});
+      hd.addEventListener("pointermove",function(ev){if(y0==null)return;setH(h0+(ev.clientY-y0));});
+      hd.addEventListener("pointerup",function(){y0=null;});
+      hd.addEventListener("pointercancel",function(){y0=null;});
+      var fs=hd.querySelector(".mp-phfs");
+      if(fs)fs.onclick=function(){
+        var big=fs.getAttribute("data-big")==="1";
+        if(big){setH(Math.round((window.innerHeight||600)*0.38));fs.setAttribute("data-big","0");fs.textContent="⛶ 크게";}
+        else{setH(maxH());fs.setAttribute("data-big","1");fs.textContent="⛶ 작게";var m2=getMapObj();if(m2&&m2.getCenter){var c2=m2.getCenter();setTimeout(function(){m2.relayout&&m2.relayout();m2.setCenter(c2);},80);}}
+      };
+    }
+    attachPickResize("mpfPickHandle","mpfPickMap",function(){return (typeof pickMap!=="undefined")?pickMap:null;});
+    attachPickResize("mpcPickHandle","mpcPickMap",function(){return (typeof mpcPickMap!=="undefined")?mpcPickMap:null;});
     /* ★ 지금 여기 (2026-07-18): GPS → 핀+주소 자동 (placePin이 역지오코딩까지 수행) */
     var _hb=$("mpfHereBtn");
     if(_hb)_hb.onclick=function(){
