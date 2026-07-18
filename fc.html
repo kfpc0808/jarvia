@@ -7561,7 +7561,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   window.__mpCustOpen=function(){mpcLoadCustomRels();custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
     mpcDedup().then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
-    /* ★ 100% 동기화 조인 v4 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
+    /* ★ 100% 동기화 조인 v5 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
        ①fccId 마이그레이션 → ①b 최초링크 계약 합집합 통일(충돌 시 지도 우선) → ②조인 → ③역방향 삭제 → ⑤미링크 전원 등록 → ④신규 편입 */
     if(window.fccBridge&&window.fccBridge.pullDocs){window.fccBridge.pullDocs().then(function(pd){if(!pd)return;
       var dirty=false,removed=0,firstLink={};
@@ -7584,6 +7584,27 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
         pd.list=pd.list.filter(function(d){return !delDoc[d.id];});
         Object.keys(pd.idx).forEach(function(k){if(delDoc[pd.idx[k].id])delete pd.idx[k];});
         toast("중복 등록 "+delIds.length+"건을 자동 정리했어요");
+      })();
+      /* ⓪b 쌍둥이 카드 병합 (2026-07-18 v5): 편입 부산물(영업데이터 없는 카드)이 문서 링크를 선점해
+         실데이터 카드가 병합되지 못하는 케이스 — 동명 카드가 정확히 [빈 카드 1 + 무생일·미링크 데이터 카드 1]일 때만
+         링크·생일·관계를 데이터 카드로 이관하고 빈 카드 삭제. 그 외 조합(동명이인 가능성)은 불가침 */
+      (function(){
+        var hasSales=function(c){return !!(c.addr||c.memo||c.phone||c.company||c.email||c.referrer||c.status||c.nextContact||c.mgTitle||(c.meetings&&c.meetings.length)||(c.files&&c.files.length)||(c.family&&c.family.length)||(c.needs&&c.needs.length));};
+        var byName={};customers.forEach(function(c){if(!c.name)return;(byName[c.name]=byName[c.name]||[]).push(c);});
+        var mergedN=0;
+        Object.keys(byName).forEach(function(nm){
+          var g=byName[nm];if(g.length!==2)return;
+          var empt=g.filter(function(c){return !hasSales(c);});
+          var data=g.filter(function(c){return hasSales(c);});
+          if(empt.length!==1||data.length!==1)return;
+          var E=empt[0],D=data[0];
+          if(D.birthDate||D.fccId)return;   /* 데이터 카드가 이미 확정(생일·링크 보유) = 별개 인물 가능 → 불가침 */
+          if(E.fccId)D.fccId=E.fccId;
+          if(E.birthDate){D.birthDate=E.birthDate;D.birthUnknown=false;}
+          (E.rels||[]).forEach(function(k){D.rels=D.rels||[];if(D.rels.indexOf(k)<0)D.rels.push(k);});
+          for(var mi=0;mi<customers.length;mi++){if(customers[mi].id===E.id){customers.splice(mi,1);break;}}
+          custDel(E.id);custPut(D);dirty=true;mergedN++;});
+        if(mergedN)toast("같은 고객으로 확인된 카드 "+mergedN+"건을 병합했어요");
       })();
       mpcFccIdx=pd.idx;var byId={};pd.list.forEach(function(d){byId[d.id]=d;});
       /* ① 링크 없는 지도 고객 ← 이름+생일 1회 매칭으로 fccId 부여 (기존 데이터 마이그레이션) */
