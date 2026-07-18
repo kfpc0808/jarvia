@@ -5257,7 +5257,8 @@ window.fccBridge={
       if(!isOwnerView||!fcUid||!Array.isArray(list)||!list.length)return null;
       const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',fcUid)));
       const byId={},byKey={};
-      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};});
+      const nameAny={};
+      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};});
       const outIds=[];
       for(const s of list){
         if(!s.name){outIds.push(null);continue;}
@@ -5274,6 +5275,9 @@ window.fccBridge={
           await updateDoc(doc(db,'fc_clients',exId),core);
           outIds.push(exId);
         }else{
+          /* ★ 중복 가드 (2026-07-18): 생일 없는 신규 등록인데 같은 이름의 문서(생일 보유 포함)가 이미 있으면 생성하지 않음
+             — 명함 고객(무생일)과 기존 고객(생일)이 동일인일 가능성이 높아, 빈 중복 문서 생성을 원천 차단. 편입 단계의 생일 승격이 자연 병합 처리 */
+          if(!s.birthDate&&nameAny[s.name]){outIds.push(null);continue;}
           const ref=doc(collection(db,'fc_clients'));
           await setDoc(ref,Object.assign({fcAuthUid:fcUid,fcLoginId:(typeof loginId!=='undefined'&&loginId)||'',contracts:inc.slice(0,20),createdAt:serverTimestamp()},core));
           byKey[s.name+'|'+(s.birthDate||'')]={id:ref.id,contracts:inc};byId[ref.id]={contracts:inc};
@@ -7018,7 +7022,7 @@ init();
     </div>
     <div class="mp-lhead"><span id="mpCount">내 장소</span><span>최근 추가순</span></div>
     <div class="mp-list" id="mpList"></div>
-    <div class="mp-cust" id="mpCustPane"><div class="mpc-lctl" id="mpcLctl" style="display:none"><input id="mpcSearchIn" class="mpc-search" type="text" placeholder="🔍 이름·회사·연락처 검색" inputmode="search"><select id="mpcSortSel" class="mpc-sort"><option value="recent">최근순</option><option value="name">이름순</option><option value="rel">관계순</option></select></div><div id="mpcListRows"></div></div>
+    <div class="mp-cust" id="mpCustPane"><div class="mpc-lctl" id="mpcLctl" style="display:none"><input id="mpcSearchIn" class="mpc-search" type="text" placeholder="🔍 이름·회사·연락처 검색" inputmode="search"><select id="mpcSortSel" class="mpc-sort"><option value="recent">최근순</option><option value="name">이름순</option><option value="rel">관계순</option></select><select id="mpcPgSize" class="mpc-sort" title="한 번에 보여줄 고객 수"><option value="10">10개</option><option value="20">20개</option><option value="30">30개</option><option value="40">40개</option><option value="50">50개</option><option value="100">100개</option></select></div><div id="mpcListRows"></div><div id="mpcPager" style="display:none;justify-content:center;align-items:center;gap:5px;flex-wrap:wrap;padding:12px 0 4px"></div></div>
   </div>
   <button class="mp-fab" id="mpAddFab">＋ 장소 추가</button>
   <button class="mp-fab" id="mpCustFab">＋ 고객 추가</button>
@@ -7363,8 +7367,9 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcSaveCustomRels(){try{localStorage.setItem("mpc_custom_rels",JSON.stringify(mpcCustomRels));}catch(e){}}
   function mpcAddCustomRel(name){name=(name||"").trim();if(!name)return;for(var i=0;i<REL_DEFS.length;i++)if(REL_DEFS[i].k===name)return;if(mpcCustomRels.indexOf(name)<0){mpcCustomRels.push(name);mpcSaveCustomRels();}}
   var mpcEditId=null,mpcRelsSel=[],mpcCoord=null,custFilter="all",mpcCountBound=false,mpcSearch="",mpcSort="recent";
+  var mpcPage=1,mpcPageSize=(function(){var v=parseInt(localStorage.getItem("mpc_pgsize")||"10",10);return [10,20,30,40,50,100].indexOf(v)>=0?v:10;})();   /* ★ 리스트 페이지네이션 (2026-07-18) */
   function mpcMatch(c){return custFilter==="all"||((c.rels||[]).indexOf(custFilter)>=0);}
-  function mpcRenderFilter(){var w=$("mpcbFilters");if(!w)return;var opts=[["all","전체"]].concat(REL_DEFS.map(function(r){return [r.k,r.k];})).concat(mpcCustomRels.map(function(k){return [k,k];}));w.innerHTML="";opts.forEach(function(o){var b=document.createElement("button");b.type="button";b.className="mpcb-f"+(custFilter===o[0]?" on":"");b.textContent=o[1];b.onclick=function(){custFilter=o[0];mpcRenderFilter();mpcRenderList();mpcDrawMarkers(false);mpcUpdateCount();};w.appendChild(b);});}
+  function mpcRenderFilter(){var w=$("mpcbFilters");if(!w)return;var opts=[["all","전체"]].concat(REL_DEFS.map(function(r){return [r.k,r.k];})).concat(mpcCustomRels.map(function(k){return [k,k];}));w.innerHTML="";opts.forEach(function(o){var b=document.createElement("button");b.type="button";b.className="mpcb-f"+(custFilter===o[0]?" on":"");b.textContent=o[1];b.onclick=function(){custFilter=o[0];mpcPage=1;mpcRenderFilter();mpcRenderList();mpcDrawMarkers(false);mpcUpdateCount();};w.appendChild(b);});}
   function mpcUpdateCount(){var el=$("mpcbCount");if(!el)return;var b=(map&&map.getBounds)?map.getBounds():null;var tot=0,per={};customers.forEach(function(c){if(!c.lat||!c.lng||!mpcMatch(c))return;if(b&&!b.contain(new kakao.maps.LatLng(c.lat,c.lng)))return;tot++;(c.rels||[]).forEach(function(k){per[k]=(per[k]||0)+1;});});var pills=REL_DEFS.filter(function(r){return per[r.k];}).map(function(r){return '<span class="cpill" style="background:'+r.c+'">'+r.k+' '+per[r.k]+'</span>';}).join("");el.innerHTML="이 화면: 총 "+tot+"명"+pills;}
   function mpcGeocode(address){return new Promise(function(resolve){var addr=String(address||"").trim().replace(/\([^)]*\)/g,"").replace(/\s+/g," ").trim();if(!addr||addr.length<4){resolve({lat:0,lng:0,ok:false});return;}ensureKakao(function(){try{var gc=new kakao.maps.services.Geocoder();gc.addressSearch(addr,function(r,s){if(s===kakao.maps.services.Status.OK&&r&&r.length){resolve({lat:+r[0].y,lng:+r[0].x,ok:true});}else{try{new kakao.maps.services.Places().keywordSearch(addr,function(r2,s2){if(s2===kakao.maps.services.Status.OK&&r2&&r2.length){resolve({lat:+r2[0].y,lng:+r2[0].x,ok:true});}else{resolve({lat:0,lng:0,ok:false});}});}catch(e){resolve({lat:0,lng:0,ok:false});}}});}catch(e){resolve({lat:0,lng:0,ok:false});}});});}
   function mpcRenderRels(){var w=$("mpcRels");if(!w)return;w.innerHTML="";var all=REL_DEFS.map(function(r){return r.k;}).concat(mpcCustomRels);all.forEach(function(k){var on=mpcRelsSel.indexOf(k)>=0;var b=document.createElement("button");b.type="button";b.className="mpc-rel"+(on?" on":"");b.textContent=k;if(on){var c=mpcRelColor(k);b.style.background=c;b.style.borderColor=c;}b.onclick=function(){var i=mpcRelsSel.indexOf(k);if(i>=0)mpcRelsSel.splice(i,1);else mpcRelsSel.push(k);mpcRenderRels();};w.appendChild(b);});var add=document.createElement("button");add.type="button";add.className="mpc-rel mpc-rel-add";add.textContent="＋ 직접 입력";add.onclick=function(){var nm=prompt("관계를 직접 입력하세요 (예: 거래처, 동창, VIP)");if(nm&&nm.trim()){nm=nm.trim();mpcAddCustomRel(nm);if(mpcRelsSel.indexOf(nm)<0)mpcRelsSel.push(nm);mpcRenderRels();}};w.appendChild(add);}
@@ -7401,7 +7406,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       var exact=null,birthless=[];
       for(var j=0;j<customers.length;j++){var c=customers[j];if((c.name||"")!==nm)continue;
         if(bd&&c.birthDate===bd){exact=c;break;}
-        if(!c.birthDate)birthless.push(c);}
+        if(!c.birthDate&&!c.fccId)birthless.push(c);}   /* ★ 링크된 카드는 승격 후보 제외 (2026-07-18) — fccId 탈취 방지 */
       if(exact){if(!exact.fccId){exact.fccId=fid;custPut(exact);}return;}   /* 링크만 부여 */
       var _cts=(ix[k].contracts||[]).map(function(x){return {product:x.product||"",expiry:x.expiry||"",ptype:x.ptype||"",yearly:!!x.yearly,insurer:x.insurer||"",premium:x.premium||""};});
       var _mg=ix[k].mgTitle||"";
@@ -7517,7 +7522,29 @@ if(i>=0){if(customers[i].fccId&&!o.fccId)o.fccId=customers[i].fccId;customers[i]
 var _fin=function(){closeCustForm();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();};
 if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:_prevB,replaceContracts:true,mgTitle:o.mgTitle||"",contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(x){return x.productName;})}]).then(function(ids){if(ids&&ids[0]&&o.fccId!==ids[0]){o.fccId=ids[0];custPut(o).then(_fin,_fin);}else _fin();},function(){_fin();});}catch(_e){_fin();}}else _fin();});}
   function mpcSaveCust(){if(!$("mpcName").value.trim()){alert("이름을 입력하세요.");return;}var addr=$("mpcAddr").value.trim();if(addr.length>=4&&!mpcCoord){$("mpcAddrStat").textContent="좌표 확인 중…";mpcGeocode(addr).then(function(g){if(g.ok)mpcCoord={lat:g.lat,lng:g.lng};mpcDoSave();});}else{mpcDoSave();}}
-  function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)return;if(!customers.length){if(lctl)lctl.style.display="none";rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-map-pin" style="font-size:32px;color:#C9A96E"></i><b>내 고객 지도</b><span>아직 등록된 고객이 없어요.<br>＋ 고객 추가로 한 명씩, 또는 위 <b>양식 받기 → 엑셀 업로드</b>로 한 번에 등록하세요.</span></div>';return;}if(lctl)lctl.style.display="flex";var q=(mpcSearch||"").toLowerCase().trim();var arr=customers.filter(function(c){if(!mpcMatch(c))return false;if(q){var hay=((c.name||"")+" "+(c.company||"")+" "+(c.title||"")+" "+(c.phone||"")).toLowerCase();if(hay.indexOf(q)<0)return false;}return true;});if(mpcSort==="name"){arr.sort(function(a,b){return (a.name||"").localeCompare(b.name||"","ko");});}else if(mpcSort==="rel"){arr.sort(function(a,b){return (((a.rels&&a.rels[0])||"힐")).localeCompare(((b.rels&&b.rels[0])||"힐"),"ko");});}else{arr.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});}if(!arr.length){rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-search" style="font-size:28px;color:#C9A96E"></i><b>결과가 없어요</b><span>다른 검색어나 관계를 선택해 보세요.</span></div>';return;}var html='<div class="mpc-list">';arr.forEach(function(c){var pills=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("");var subP=[c.company,c.title].filter(Boolean).join(" · ");var phoneL=c.phone?'<a class="mpc-cph-tel" href="tel:'+c.phone+'" onclick="event.stopPropagation()">'+c.phone+'</a>':"";var subHtml=subP+(subP&&phoneL?" · ":"")+phoneL;if(!subHtml)subHtml="연락처 없음";var noloc=(!c.lat||!c.lng)?' <span style="color:#C0392B;font-size:10px">· 위치 미등록</span>':"";html+='<div class="mpc-card" data-cid="'+c.id+'"><div class="mpc-cmain"><div class="mpc-crow"><span class="mpc-cnm">'+(c.name||"")+'</span>'+pills+' '+mpcBadges(c)+'</div><div class="mpc-csub">'+subHtml+noloc+'</div></div><button class="mpc-cedit" type="button" data-edit="'+c.id+'">수정</button></div>';});html+="</div>";rows.innerHTML=html;Array.prototype.forEach.call(rows.querySelectorAll(".mpc-card"),function(el){el.onclick=function(){var id=el.getAttribute("data-cid"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c){mpcHighlightList(c);mpcFocusMap(c);mpcShowInfo(c);}};});Array.prototype.forEach.call(rows.querySelectorAll(".mpc-cedit"),function(el){el.onclick=function(ev){ev.stopPropagation();var id=el.getAttribute("data-edit"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c)openCustForm(c);};});}
+  function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)return;if(!customers.length){if(lctl)lctl.style.display="none";rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-map-pin" style="font-size:32px;color:#C9A96E"></i><b>내 고객 지도</b><span>아직 등록된 고객이 없어요.<br>＋ 고객 추가로 한 명씩, 또는 위 <b>양식 받기 → 엑셀 업로드</b>로 한 번에 등록하세요.</span></div>';return;}if(lctl)lctl.style.display="flex";var q=(mpcSearch||"").toLowerCase().trim();var arr=customers.filter(function(c){if(!mpcMatch(c))return false;if(q){var hay=((c.name||"")+" "+(c.company||"")+" "+(c.title||"")+" "+(c.phone||"")).toLowerCase();if(hay.indexOf(q)<0)return false;}return true;});if(mpcSort==="name"){arr.sort(function(a,b){return (a.name||"").localeCompare(b.name||"","ko");});}else if(mpcSort==="rel"){arr.sort(function(a,b){return (((a.rels&&a.rels[0])||"힐")).localeCompare(((b.rels&&b.rels[0])||"힐"),"ko");});}else{arr.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});}if(!arr.length){rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-search" style="font-size:28px;color:#C9A96E"></i><b>결과가 없어요</b><span>다른 검색어나 관계를 선택해 보세요.</span></div>';mpcRenderPager(0,0);return;}
+    /* ★ 페이지네이션 (2026-07-18): 표시개수 단위 슬라이스 — 리스트가 한도 없이 길어지지 않게 */
+    var _tp=Math.max(1,Math.ceil(arr.length/mpcPageSize));if(mpcPage>_tp)mpcPage=_tp;if(mpcPage<1)mpcPage=1;
+    var _total=arr.length;arr=arr.slice((mpcPage-1)*mpcPageSize,mpcPage*mpcPageSize);
+    var html='<div class="mpc-list">';arr.forEach(function(c){var pills=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("");var subP=[c.company,c.title].filter(Boolean).join(" · ");var phoneL=c.phone?'<a class="mpc-cph-tel" href="tel:'+c.phone+'" onclick="event.stopPropagation()">'+c.phone+'</a>':"";var subHtml=subP+(subP&&phoneL?" · ":"")+phoneL;if(!subHtml)subHtml="연락처 없음";var noloc=(!c.lat||!c.lng)?' <span style="color:#C0392B;font-size:10px">· 위치 미등록</span>':"";html+='<div class="mpc-card" data-cid="'+c.id+'"><div class="mpc-cmain"><div class="mpc-crow"><span class="mpc-cnm">'+(c.name||"")+'</span>'+pills+' '+mpcBadges(c)+'</div><div class="mpc-csub">'+subHtml+noloc+'</div></div><button class="mpc-cedit" type="button" data-edit="'+c.id+'">수정</button></div>';});html+="</div>";rows.innerHTML=html;Array.prototype.forEach.call(rows.querySelectorAll(".mpc-card"),function(el){el.onclick=function(){var id=el.getAttribute("data-cid"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c){mpcHighlightList(c);mpcFocusMap(c);mpcShowInfo(c);}};});Array.prototype.forEach.call(rows.querySelectorAll(".mpc-cedit"),function(el){el.onclick=function(ev){ev.stopPropagation();var id=el.getAttribute("data-edit"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c)openCustForm(c);};});
+    mpcRenderPager(_total,_tp);}
+  /* ★ 하단 페이저 (2026-07-18): ‹ 1 … 4 [5] 6 … N › — 창 폭 최대 5개, 첫·끝 페이지 상시 노출 */
+  function mpcRenderPager(total,tp){var w=$("mpcPager");if(!w)return;
+    if(!total||tp<=1){w.style.display="none";w.innerHTML="";return;}
+    w.style.display="flex";
+    var btn=function(label,page,cur,dis){return '<button type="button" data-pg="'+page+'" '+(dis?'disabled ':'')+'style="min-width:32px;height:32px;padding:0 8px;border-radius:8px;border:1px solid '+(cur?'#15294A':'#E1E5EC')+';background:'+(cur?'#15294A':'#fff')+';color:'+(cur?'#fff':(dis?'#C5CAD6':'#3A4457'))+';font-size:12px;font-weight:700;font-family:inherit;cursor:'+(dis?'default':'pointer')+'">'+label+'</button>';};
+    var dots='<span style="font-size:12px;color:#9099AD;padding:0 2px">…</span>';
+    var h=btn("‹",mpcPage-1,false,mpcPage<=1);
+    var s=Math.max(2,mpcPage-1),e=Math.min(tp-1,mpcPage+1);
+    h+=btn("1",1,mpcPage===1,false);
+    if(s>2)h+=dots;
+    for(var p=s;p<=e;p++)h+=btn(String(p),p,mpcPage===p,false);
+    if(e<tp-1)h+=dots;
+    if(tp>1)h+=btn(String(tp),tp,mpcPage===tp,false);
+    h+=btn("›",mpcPage+1,false,mpcPage>=tp);
+    h+='<span style="flex-basis:100%;text-align:center;font-size:10.5px;color:#9099AD;margin-top:4px">총 '+total+'명 · '+((mpcPage-1)*mpcPageSize+1)+'–'+Math.min(mpcPage*mpcPageSize,total)+'번 표시</span>';
+    w.innerHTML=h;
+    Array.prototype.forEach.call(w.querySelectorAll("[data-pg]"),function(b){b.onclick=function(){if(b.disabled)return;var p2=parseInt(b.getAttribute("data-pg"),10);if(!p2||p2===mpcPage)return;mpcPage=p2;mpcRenderList();var pane=$("mpCustPane");if(pane&&pane.scrollIntoView)pane.scrollIntoView({behavior:"smooth",block:"start"});};});}
   function mpcFocusMap(c){if(!map||!c||!c.lat||!c.lng)return;var ll=new kakao.maps.LatLng(c.lat,c.lng);if(map.getLevel&&map.getLevel()>5)map.setLevel(5);if(map.panTo)map.panTo(ll);else map.setCenter(ll);}
   function mpcFmtPhone(v){var d=(v||"").replace(/[^0-9]/g,"").slice(0,11);if(d.length<4)return d;if(d.slice(0,2)==="02"){if(d.length<6)return d.slice(0,2)+"-"+d.slice(2);if(d.length<10)return d.slice(0,2)+"-"+d.slice(2,5)+"-"+d.slice(5);return d.slice(0,2)+"-"+d.slice(2,6)+"-"+d.slice(6,10);}if(d.length<8)return d.slice(0,3)+"-"+d.slice(3);if(d.length<11)return d.slice(0,3)+"-"+d.slice(3,6)+"-"+d.slice(6);return d.slice(0,3)+"-"+d.slice(3,7)+"-"+d.slice(7,11);}
   var mpcInfoOv=null;
@@ -7534,11 +7561,31 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   window.__mpCustOpen=function(){mpcLoadCustomRels();custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
     mpcDedup().then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
-    /* ★ 100% 동기화 조인 v3 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
+    /* ★ 100% 동기화 조인 v4 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
        ①fccId 마이그레이션 → ①b 최초링크 계약 합집합 통일(충돌 시 지도 우선) → ②조인 → ③역방향 삭제 → ⑤미링크 전원 등록 → ④신규 편입 */
     if(window.fccBridge&&window.fccBridge.pullDocs){window.fccBridge.pullDocs().then(function(pd){if(!pd)return;
-      mpcFccIdx=pd.idx;var byId={};pd.list.forEach(function(d){byId[d.id]=d;});
       var dirty=false,removed=0,firstLink={};
+      /* ⓪ 중복 자동 정리 (2026-07-18): ⑤단계 결함으로 생성된 빈 고아 문서(무생일·무계약·무호칭 + 동명의 생일 문서 존재) 삭제.
+         고아에 링크된 지도 카드는 — 데이터 없고 동명·생일 카드가 따로 있으면 카드도 삭제(편입 부산물), 데이터 있으면 링크만 해제해 재연결 유도 */
+      (function(){
+        var nwb={};pd.list.forEach(function(d){if(d.birthDate)nwb[d.name]=1;});
+        var delDoc={};
+        pd.list.forEach(function(d){
+          if(d.birthDate)return;if((d.contracts||[]).length)return;if(d.mgTitle)return;
+          if(nwb[d.name])delDoc[d.id]=1;});
+        var delIds=Object.keys(delDoc);
+        if(!delIds.length)return;
+        for(var ci=customers.length-1;ci>=0;ci--){var cc=customers[ci];if(!cc.fccId||!delDoc[cc.fccId])continue;
+          var hasData=!!(cc.birthDate||cc.addr||cc.memo||cc.phone||cc.company||(cc.meetings&&cc.meetings.length)||(cc.files&&cc.files.length)||(cc.contracts&&cc.contracts.length));
+          var twin=false;for(var tj=0;tj<customers.length;tj++){if(customers[tj]!==cc&&customers[tj].name===cc.name&&customers[tj].birthDate){twin=true;break;}}
+          if(!hasData&&twin){custDel(cc.id);customers.splice(ci,1);dirty=true;}
+          else{cc.fccId="";custPut(cc);dirty=true;}}
+        delIds.forEach(function(idd){try{if(window.fccBridge.remove)window.fccBridge.remove(idd);}catch(_e){}});
+        pd.list=pd.list.filter(function(d){return !delDoc[d.id];});
+        Object.keys(pd.idx).forEach(function(k){if(delDoc[pd.idx[k].id])delete pd.idx[k];});
+        toast("중복 등록 "+delIds.length+"건을 자동 정리했어요");
+      })();
+      mpcFccIdx=pd.idx;var byId={};pd.list.forEach(function(d){byId[d.id]=d;});
       /* ① 링크 없는 지도 고객 ← 이름+생일 1회 매칭으로 fccId 부여 (기존 데이터 마이그레이션) */
       customers.forEach(function(c){if(!c.fccId&&c.name&&c.birthDate){var k=c.name+"|"+c.birthDate;if(pd.idx[k]){c.fccId=pd.idx[k].id;firstLink[c.id]=1;custPut(c);dirty=true;}}});
       var upList=[],upRef=[];
@@ -7801,8 +7848,9 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     if($("mpcAddrChk"))$("mpcAddrChk").onclick=mpcCheckAddr;
     if($("mpcSave"))$("mpcSave").onclick=mpcSaveCust;
     if($("mpcPhone"))$("mpcPhone").oninput=function(){this.value=mpcFmtPhone(this.value);};
-    if($("mpcSearchIn"))$("mpcSearchIn").oninput=function(){mpcSearch=this.value;mpcRenderList();};
-    if($("mpcSortSel"))$("mpcSortSel").onchange=function(){mpcSort=this.value;mpcRenderList();};
+    if($("mpcSearchIn"))$("mpcSearchIn").oninput=function(){mpcSearch=this.value;mpcPage=1;mpcRenderList();};
+    if($("mpcSortSel"))$("mpcSortSel").onchange=function(){mpcSort=this.value;mpcPage=1;mpcRenderList();};
+    if($("mpcPgSize")){$("mpcPgSize").value=String(mpcPageSize);$("mpcPgSize").onchange=function(){mpcPageSize=parseInt(this.value,10)||10;try{localStorage.setItem("mpc_pgsize",String(mpcPageSize));}catch(_e){}mpcPage=1;mpcRenderList();};}
     if($("mpcPlaceKw")){var _mpcKwT;$("mpcPlaceKw").oninput=function(){clearTimeout(_mpcKwT);_mpcKwT=setTimeout(mpcDoPlaceSearch,400);};$("mpcPlaceKw").onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();clearTimeout(_mpcKwT);mpcDoPlaceSearch();}};}
     if($("mpcdBack"))$("mpcdBack").onclick=function(){$("mpCustDetail").classList.remove("show");};
     if($("mpcXlsxBtn"))$("mpcXlsxBtn").onclick=mpcXlsxPick;
@@ -7861,15 +7909,18 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
       after();
     });
   }
-  /* 통합 연결 판정 (2026-07-15): 나의 장소 자체 연결 이력 또는 "내 금고(ccStorage)" 연결 중 하나면 ON
-     — 구글 연결 한 번으로 자산관리·캘린더·금고·문서함·나의 장소가 전부 구동 */
+  /* 통합 연결 판정 (2026-07-15 → 2026-07-18 완성): 나의 장소 자체 연결 이력 또는 "내 금고(ccStorage)" 연결 중 하나면 ON
+     — 구글 연결 한 번으로 자산관리·캘린더·금고·문서함·나의 장소가 전부 구동. ★설계사 본인 화면에도 적용 (_ccSlug 게이트 제거) */
   function gdOn(){
     if(localStorage.getItem(GD_FLAG)==="1")return true;
-    try{return !!(window._ccSlug&&window.ccStorage&&ccStorage.connected());}catch(_e){return false;}
+    try{return !!(window.ccStorage&&ccStorage.connected());}catch(_e){return false;}
   }
   function gdGetToken(silent,cb){
-    // ★ 2-A 전환: 고객 홈페이지에서는 "내 금고" 연결을 재사용 (서버 토큰 — 카톡 인앱에서도 유지, 재로그인·끊김 없음)
-    if(window._ccSlug&&window.ccStorage){
+    // ★ 2-A 전환 → 2026-07-18 통합 완성: 보관함(내 금고) 연결 시 고객·설계사 화면 모두 서버 토큰 재사용
+    //   (서버가 리프레시로 발급 — 폰 서드파티 쿠키 차단·재배포·재로그인과 무관하게 "다시 연결" 없음)
+    //   보관함 미연결 설계사는 기존 GIS 임시토큰 방식 그대로 폴백 (회귀 없음)
+    var _useVault=false;try{_useVault=!!(window.ccStorage&&(window._ccSlug||ccStorage.connected()));}catch(_e){_useVault=!!(window._ccSlug&&window.ccStorage);}
+    if(_useVault){
       if(silent&&!window.ccStorage.connected()){cb(false);return;} // 자동 동기화 시도는 미연결이면 조용히 통과
       (async function(){
         try{
