@@ -7503,6 +7503,88 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcSangMmdd(birth){if(!birth||birth.length!==10)return "";var m=parseInt(birth.slice(5,7),10),d=parseInt(birth.slice(8,10),10);m+=6;if(m>12)m-=12;var dim=[31,28,31,30,31,30,31,31,30,31,30,31];if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}return String(m).padStart(2,"0")+String(d).padStart(2,"0");}
   function mpcDdayFromMmdd(mmdd){if(!mmdd||mmdd.length!==4)return null;var now=new Date();var y=now.getFullYear();var t=new Date(y,parseInt(mmdd.slice(0,2),10)-1,parseInt(mmdd.slice(2,4),10));var base=new Date(now.getFullYear(),now.getMonth(),now.getDate());if(t<base)t=new Date(y+1,parseInt(mmdd.slice(0,2),10)-1,parseInt(mmdd.slice(2,4),10));return Math.round((t-base)/86400000);}
   function mpcDdayFromDate(ymd){if(!ymd||ymd.length!==10)return null;var now=new Date();var base=new Date(now.getFullYear(),now.getMonth(),now.getDate());var t=new Date(ymd+"T00:00:00");return Math.round((t-base)/86400000);}
+  /* ═══ 👤 고객 상세(읽기 전용) 시트 (2026-07-18): 카드 탭 = 열람 전용 — 임박 일정 스트립 · 계약 · 니즈 · 메모 · 미팅 · 위치. 수정은 ✏ 버튼으로만 진입 ═══ */
+  var mpcDtMtAll=false;
+  function mpcDetailClose(){var s=$("mpcDetail");if(s)s.style.display="none";}
+  function mpcDetailOpen(c){
+    if(!c)return;
+    var s=$("mpcDetail");
+    if(!s){s=document.createElement("div");s.id="mpcDetail";s.style.cssText="position:absolute;inset:0;z-index:1270;background:#F7F5EF;display:none;flex-direction:column";var host=$("mpCustForm")&&$("mpCustForm").parentNode?$("mpCustForm").parentNode:document.body;host.appendChild(s);}
+    mpcDtMtAll=false;
+    mpcDetailRender(c);
+    s.style.display="flex";
+  }
+  function mpcDetailRender(c){
+    var s=$("mpcDetail");if(!s||!c)return;
+    var relPills=(c.rels||[]).map(function(k){return '<span style="font-size:10px;font-weight:800;border-radius:9px;padding:2px 8px;background:'+mpcRelColor(k)+';color:#fff">'+esc(k)+'</span>';}).join(" ");
+    var stPill=c.status?('<span style="font-size:10px;font-weight:800;border-radius:9px;padding:2px 8px;background:'+(c.status==="VIP"?"#FBF3DC;color:#8B6914":c.status==="가망"?"#E6F1FB;color:#185FA5":"#EEF1F6;color:#5A6484")+'">'+esc(c.status)+'</span>'):"";
+    var subs=[];if(c.company||c.title)subs.push(esc([c.company,c.title].filter(Boolean).join(" · ")));if(c.referrer)subs.push("소개: "+esc(c.referrer)+" 님");if(c.fccId)subs.push("마이페이지 연동됨");
+    /* 임박 일정 타일 */
+    var tiles=[];
+    var cts=(c.contracts||[]).slice();
+    if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    var _seen={};cts=cts.filter(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(_seen[k])return false;_seen[k]=1;return true;});
+    var matBest=null;cts.forEach(function(ct){var dd=mpcDdayFromDate(String(ct.expiry||ct.expireDate||"").slice(0,10));if(dd!=null&&dd>=0&&(matBest==null||dd<matBest.d))matBest={d:dd,p:ct.product||""};});
+    if(matBest)tiles.push({b:"D-"+matBest.d,s:"만기 · "+matBest.p,cls:matBest.d<=7?"due":(matBest.d<=30?"hot":"")});
+    if(c.birthDate&&!c.birthUnknown){
+      var sgm=mpcSangMmdd(c.birthDate),sg=mpcDdayFromMmdd(sgm);
+      if(sg!=null)tiles.push({b:"D-"+sg,s:"상령일 "+parseInt(sgm.slice(0,2),10)+"/"+parseInt(sgm.slice(2,4),10),cls:sg<=30?"hot":""});
+      var bd=mpcDdayFromMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));
+      var age=(function(b){var t=new Date();var a=t.getFullYear()-parseInt(b.slice(0,4),10);if((t.getMonth()+1)*100+t.getDate()<parseInt(b.slice(5,7),10)*100+parseInt(b.slice(8,10),10))a--;return a;})(c.birthDate);
+      tiles.push({b:parseInt(c.birthDate.slice(5,7),10)+"/"+parseInt(c.birthDate.slice(8,10),10),s:"🎂 생일 · 만 "+age+"세"+(bd!=null&&bd<=30?" · D-"+bd:""),cls:(bd!=null&&bd<=30)?"hot":""});
+    }
+    if(c.nextContact){var nc=mpcDdayFromDate(c.nextContact);if(nc!=null)tiles.push({b:nc<0?"지남":"D-"+nc,s:"다음 연락 "+parseInt(c.nextContact.slice(5,7),10)+"/"+parseInt(c.nextContact.slice(8,10),10),cls:(nc!=null&&nc<=7)?"hot":""});}
+    var tileH=tiles.slice(0,4).map(function(t){var bg=t.cls==="due"?"background:#FBEAEA;border-color:#F2D7D7":(t.cls==="hot"?"background:#FFF8E7;border-color:#E0C36B":"background:#fff;border-color:#ECEEF2");var fg=t.cls==="due"?"#A23B3B":(t.cls==="hot"?"#8B6914":"#1B2430");return '<div style="border:1px solid;border-radius:12px;padding:8px 5px;text-align:center;'+bg+'"><b style="display:block;font-size:14px;font-weight:800;color:'+fg+'">'+esc(t.b)+'</b><span style="display:block;font-size:9px;font-weight:700;color:#8A93A8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.s)+'</span></div>';}).join("");
+    /* 계약 */
+    var TB={실손:"#FBEAEA;color:#A23B3B",자동차:"#FFF3D9;color:#8B6914",보장성:"#E6F1FB;color:#185FA5",저축성:"#E1F5EE;color:#0F6E56",연금:"#EFEAFB;color:#5B3FA8"};
+    var premSum=0,premAny=false;
+    var ctH=cts.map(function(ct){
+      var dd=mpcDdayFromDate(String(ct.expiry||ct.expireDate||"").slice(0,10));
+      var pn=parseInt(String(ct.premium||"").replace(/[^0-9]/g,""),10);if(pn>0){premSum+=pn;premAny=true;}
+      return '<div style="border:1px solid #ECEEF2;border-radius:11px;padding:9px 11px;margin-top:8px">'
+        +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+(ct.ptype?'<span style="font-size:9px;font-weight:800;border-radius:7px;padding:2px 6px;background:'+(TB[ct.ptype]||"#EEF1F6;color:#5A6484")+'">'+esc(ct.ptype)+'</span>':"")+'<span style="font-size:13px;font-weight:800;color:#1B2430">'+esc(ct.product||"(상품명 없음)")+'</span>'+(ct.insurer?'<span style="font-size:11px;color:#8A93A8;font-weight:600">'+esc(ct.insurer)+'</span>':"")+(ct.yearly?'<span style="margin-left:auto;font-size:9px;font-weight:800;color:#0F6E56;background:#E1F5EE;border-radius:8px;padding:1px 7px">매년</span>':"")+'</div>'
+        +((ct.expiry||ct.premium)?('<div style="display:flex;gap:12px;font-size:11px;color:#8A93A8;margin-top:5px">'+(ct.expiry?('<span>'+(ct.yearly?"갱신 ":"만기 ")+'<b style="'+((dd!=null&&dd>=0&&dd<=30)?"color:#A23B3B;font-weight:800":"color:#3A4457;font-weight:700")+'">'+esc(ct.expiry)+((dd!=null&&dd>=0&&dd<=30)?" · D-"+dd:"")+'</b></span>'):"")+(ct.premium?('<span>월 <b style="color:#3A4457;font-weight:700">'+esc(ct.premium)+'</b></span>'):"")+'</div>'):"")+'</div>';}).join("");
+    /* 미팅내역 */
+    var ms=(c.meetings||[]).slice().sort(function(a,b){return (b.date||"").localeCompare(a.date||"");});
+    var mShow=mpcDtMtAll?ms:ms.slice(0,3);
+    var mtH=mShow.map(function(m,i){var t=String(m.note||"").split("\n")[0].trim()||(m.place?"📍 "+m.place:"(내용 없음)");if(t.length>28)t=t.slice(0,28)+"…";
+      return '<div data-dtmt="'+i+'" style="border:1px solid #ECEEF2;border-radius:10px;padding:8px 11px;margin-top:7px;cursor:pointer"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:10.5px;font-weight:800;color:#15294A;flex-shrink:0">📅 '+esc((m.date||"").slice(5))+'</span><span style="flex:1;min-width:0;font-size:11.5px;font-weight:600;color:#3A4457;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t)+'</span><span style="font-size:10px;color:#B7BDC9">▾</span></div><div data-dtmtb="'+i+'" style="display:none;margin-top:6px;border-top:1px dashed #ECEEF2;padding-top:6px">'+(m.place?'<div style="font-size:11px;font-weight:700;color:#15294A">📍 '+esc(m.place)+'</div>':"")+'<div style="font-size:12px;color:#3A4457;line-height:1.6;margin-top:3px;white-space:pre-wrap">'+esc(m.note||"")+'</div>'+(m.next?'<div style="font-size:11px;color:#8B6914;margin-top:4px">→ 다음: '+esc(m.next)+'</div>':"")+'</div></div>';}).join("");
+    var famH=(c.family||[]).map(function(f){return esc([f.rel,f.name,f.year?("('"+String(f.year).slice(-2)+")"):""].filter(Boolean).join(" "));}).join(" · ");
+    var fileH=(c.files||[]).map(function(f){return esc(f.name||"");}).filter(Boolean).join(" · ");
+    var sec=function(title,cnt,inner){return '<div style="background:#fff;border:1px solid #ECEEF2;border-radius:14px;padding:12px 13px;margin-top:9px"><div style="font-size:10px;font-weight:800;color:#8A93A8;letter-spacing:.4px;display:flex;gap:5px">'+title+(cnt?'<span style="margin-left:auto;font-weight:700;color:#B7BDC9">'+cnt+'</span>':"")+'</div>'+inner+'</div>';};
+    var body="";
+    if(c.phone||c.email||c.prefChannel||c.prefTime){
+      body+=sec("연락","",(c.phone?'<div style="display:flex;align-items:center;gap:10px;margin-top:9px"><a href="tel:'+esc(c.phone)+'" style="font-size:17px;font-weight:800;color:#15294A;letter-spacing:.2px;flex:1;text-decoration:none">'+esc(c.phone)+'</a><a href="tel:'+esc(c.phone)+'" style="border:1px solid #15294A;background:#15294A;color:#C9A96E;border-radius:11px;width:40px;height:40px;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none;flex-shrink:0">📞</a><a href="sms:'+esc(c.phone)+'" style="border:1px solid #ECEEF2;background:#fff;border-radius:11px;width:40px;height:40px;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none;flex-shrink:0">💬</a></div>':"")
+        +(c.email?'<div style="display:flex;font-size:12px;margin-top:8px"><b style="width:62px;flex-shrink:0;font-weight:700;color:#8A93A8;font-size:11px">이메일</b><span style="color:#3A4457">'+esc(c.email)+'</span></div>':"")
+        +((c.prefChannel||c.prefTime)?'<div style="display:flex;font-size:12px;margin-top:8px"><b style="width:62px;flex-shrink:0;font-weight:700;color:#8A93A8;font-size:11px">선호</b><span style="color:#3A4457">'+esc([c.prefChannel,c.prefTime].filter(Boolean).join(" · "))+'</span></div>':""));
+    }
+    if(cts.length)body+=sec("계약",cts.length+"건",ctH+(premAny?'<div style="display:flex;justify-content:flex-end;font-size:11px;color:#8A93A8;margin-top:8px">월보험료 합계 <b style="color:#15294A;margin-left:5px">'+premSum.toLocaleString()+'원</b></div>':""));
+    if((c.needs&&c.needs.length)||famH){
+      body+=sec("니즈 · 가족","",((c.needs&&c.needs.length)?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">'+c.needs.map(function(n){return '<span style="font-size:10.5px;font-weight:700;color:#8B6914;background:#FFF8E7;border:1px solid #EBD9A8;border-radius:9px;padding:3px 9px">'+esc(n)+'</span>';}).join("")+'</div>':"")
+        +(famH?'<div style="display:flex;font-size:12px;color:#3A4457;gap:10px;margin-top:8px"><b style="font-weight:700;color:#8A93A8;font-size:11px">가족</b><span>'+famH+'</span></div>':""));
+    }
+    if(c.memo)body+=sec("메모","",'<div style="background:#FFFDF2;border:1px solid #F0E6C0;border-radius:11px;padding:10px 12px;font-size:12px;line-height:1.65;color:#3A4457;margin-top:8px;white-space:pre-wrap">'+esc(c.memo)+'</div>');
+    if(ms.length)body+=sec("미팅내역",ms.length+"건",mtH+((!mpcDtMtAll&&ms.length>3)?'<button type="button" id="mpcDtMtMore" style="width:100%;margin-top:8px;border:1px dashed #D8DCE5;background:none;border-radius:10px;padding:8px;font-size:11px;font-weight:700;color:#8A93A8;cursor:pointer">전체 '+ms.length+'건 보기</button>':""));
+    if(c.addr||fileH){
+      body+=sec("위치 · 첨부",(c.files&&c.files.length)?("파일 "+c.files.length):"",(c.addr?'<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:#3A4457"><span style="flex:1;min-width:0">📍 '+esc(c.addr)+(c.addrDetail?" "+esc(c.addrDetail):"")+'</span>'+((c.lat&&c.lng)?'<button type="button" id="mpcDtMap" style="font-size:10.5px;font-weight:800;color:#185FA5;background:#E6F1FB;border:0;border-radius:9px;padding:5px 10px;cursor:pointer;flex-shrink:0">지도에서 보기</button>':"")+'</div>':"")
+        +(fileH?'<div style="display:flex;font-size:12px;margin-top:9px"><b style="width:62px;flex-shrink:0;font-weight:700;color:#8A93A8;font-size:11px">첨부</b><span style="color:#3A4457">'+fileH+'</span></div>':""));
+    }
+    if(!body)body='<div style="text-align:center;font-size:12px;color:#9099AD;padding:30px 0">등록된 상세 정보가 아직 없어요.<br>아래 ✏ 수정에서 채워보세요.</div>';
+    var s2=$("mpcDetail");
+    s2.innerHTML='<div style="background:#15294A;padding:14px 16px 12px;color:#fff;flex-shrink:0">'
+      +'<div style="display:flex;align-items:flex-start;gap:10px"><div style="flex:1;min-width:0"><div style="font-size:19px;font-weight:800;letter-spacing:-.2px">'+esc(c.name||"")+(c.mgTitle?' <small style="font-size:11px;font-weight:600;color:#C9A96E">'+esc(c.mgTitle)+'</small>':"")+'</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+relPills+" "+stPill+'</div></div><button type="button" id="mpcDtX" style="background:none;border:0;color:#9AA3B8;font-size:19px;cursor:pointer;line-height:1;padding:2px">✕</button></div>'
+      +(subs.length?'<div style="font-size:10.5px;color:#9AA3B8;margin-top:6px">'+subs.join(" &nbsp;|&nbsp; ")+'</div>':"")+'</div>'
+      +(tiles.length?'<div style="display:grid;grid-template-columns:repeat('+Math.min(4,tiles.length)+',1fr);gap:6px;padding:11px 12px 2px;flex-shrink:0">'+tileH+'</div>':"")
+      +'<div style="flex:1;overflow-y:auto;padding:6px 12px 90px">'+body+'</div>'
+      +'<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #ECEEF2;padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px">'
+      +(c.phone?'<a href="tel:'+esc(c.phone)+'" style="flex:1;border:1px solid #15294A;background:#15294A;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#fff;text-align:center;text-decoration:none">📞 전화하기</a><a href="sms:'+esc(c.phone)+'" style="flex:1;border:1px solid #ECEEF2;background:#fff;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#3A4457;text-align:center;text-decoration:none">💬 문자</a>':"")
+      +'<button type="button" id="mpcDtEdit" style="flex:1;border:1px solid #ECEEF2;background:#fff;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#3A4457;cursor:pointer;font-family:inherit">✏ 수정</button></div>';
+    var xb=$("mpcDtX");if(xb)xb.onclick=mpcDetailClose;
+    var eb=$("mpcDtEdit");if(eb)eb.onclick=function(){mpcDetailClose();openCustForm(c);};
+    var mb=$("mpcDtMap");if(mb)mb.onclick=function(){mpcDetailClose();mpcFocusMap(c);mpcShowInfo(c);};
+    var mo=$("mpcDtMtMore");if(mo)mo.onclick=function(){mpcDtMtAll=true;mpcDetailRender(c);};
+    Array.prototype.forEach.call(s2.querySelectorAll("[data-dtmt]"),function(el){el.onclick=function(){var b=s2.querySelector('[data-dtmtb="'+el.getAttribute("data-dtmt")+'"]');if(b)b.style.display=(b.style.display==="none")?"block":"none";};});
+  }
   function mpcBadges(c){var out=[];   /* 30일 내 임박 이벤트만 배지 */
     if(c.birthUnknown||!c.birthDate)out.push('<span style="background:#FBEAEA;color:#A23B3B;border-radius:7px;padding:1px 6px;font-size:9.5px;font-weight:700">생일 미입력</span>');
     if(c.status)out.push('<span style="background:'+(c.status==="VIP"?"#FBF3DC;color:#8B6914":c.status==="가망"?"#E6F1FB;color:#185FA5":"#EEF1F6;color:#5A6484")+';border-radius:7px;padding:1px 6px;font-size:9.5px;font-weight:700">'+c.status+'</span>');
@@ -7622,7 +7704,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     /* ★ 페이지네이션 (2026-07-18): 표시개수 단위 슬라이스 — 리스트가 한도 없이 길어지지 않게 */
     var _tp=Math.max(1,Math.ceil(arr.length/mpcPageSize));if(mpcPage>_tp)mpcPage=_tp;if(mpcPage<1)mpcPage=1;
     var _total=arr.length;arr=arr.slice((mpcPage-1)*mpcPageSize,mpcPage*mpcPageSize);
-    var html='<div class="mpc-list">';arr.forEach(function(c){var pills=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("");var subP=[c.company,c.title].filter(Boolean).join(" · ");var phoneL=c.phone?'<a class="mpc-cph-tel" href="tel:'+c.phone+'" onclick="event.stopPropagation()">'+c.phone+'</a>':"";var subHtml=subP+(subP&&phoneL?" · ":"")+phoneL;if(!subHtml)subHtml="연락처 없음";var noloc=(!c.lat||!c.lng)?' <span style="color:#C0392B;font-size:10px">· 위치 미등록</span>':"";html+='<div class="mpc-card" data-cid="'+c.id+'"><div class="mpc-cmain"><div class="mpc-crow"><span class="mpc-cnm">'+(c.name||"")+'</span>'+pills+' '+mpcBadges(c)+'</div><div class="mpc-csub">'+subHtml+noloc+'</div></div><button class="mpc-cedit" type="button" data-edit="'+c.id+'">수정</button></div>';});html+="</div>";rows.innerHTML=html;Array.prototype.forEach.call(rows.querySelectorAll(".mpc-card"),function(el){el.onclick=function(){var id=el.getAttribute("data-cid"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c){mpcHighlightList(c);mpcFocusMap(c);mpcShowInfo(c);}};});Array.prototype.forEach.call(rows.querySelectorAll(".mpc-cedit"),function(el){el.onclick=function(ev){ev.stopPropagation();var id=el.getAttribute("data-edit"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c)openCustForm(c);};});
+    var html='<div class="mpc-list">';arr.forEach(function(c){var pills=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("");var subP=[c.company,c.title].filter(Boolean).join(" · ");var phoneL=c.phone?'<a class="mpc-cph-tel" href="tel:'+c.phone+'" onclick="event.stopPropagation()">'+c.phone+'</a>':"";var subHtml=subP+(subP&&phoneL?" · ":"")+phoneL;if(!subHtml)subHtml="연락처 없음";var noloc=(!c.lat||!c.lng)?' <span style="color:#C0392B;font-size:10px">· 위치 미등록</span>':"";html+='<div class="mpc-card" data-cid="'+c.id+'"><div class="mpc-cmain"><div class="mpc-crow"><span class="mpc-cnm">'+(c.name||"")+'</span>'+pills+' '+mpcBadges(c)+'</div><div class="mpc-csub">'+subHtml+noloc+'</div></div><button class="mpc-cedit" type="button" data-edit="'+c.id+'">수정</button></div>';});html+="</div>";rows.innerHTML=html;Array.prototype.forEach.call(rows.querySelectorAll(".mpc-card"),function(el){el.onclick=function(){var id=el.getAttribute("data-cid"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c){mpcHighlightList(c);mpcDetailOpen(c);}};});Array.prototype.forEach.call(rows.querySelectorAll(".mpc-cedit"),function(el){el.onclick=function(ev){ev.stopPropagation();var id=el.getAttribute("data-edit"),c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}if(c)openCustForm(c);};});
     mpcRenderPager(_total,_tp);}
   /* ★ 하단 페이저 (2026-07-18): ‹ 1 … 4 [5] 6 … N › — 창 폭 최대 5개, 첫·끝 페이지 상시 노출 */
   function mpcRenderPager(total,tp){var w=$("mpcPager");if(!w)return;
