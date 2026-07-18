@@ -7097,9 +7097,10 @@ init();
   .mp-tab{flex:1;text-align:center;font-size:13px;font-weight:700;padding:9px 0;border-radius:10px;border:none;background:#EDF0F5;color:#8A93A8;cursor:pointer;font-family:inherit}
   .mp-tab.on{background:#1B3A6B;color:#fff}
   #mpOverlay.custMode .mp-search,#mpOverlay.custMode .mp-chips,#mpOverlay.custMode .mp-lhead,#mpOverlay.custMode .mp-list{display:none}
-  .mpc-pin{display:flex;align-items:center;gap:3px;cursor:pointer;transform:translateX(-6px)}
-  .mpc-pindot{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);flex:none}
-  .mpc-pinlab{font-size:10px;font-weight:700;background:rgba(255,255,255,.94);padding:1px 5px;border-radius:5px;color:#1A2233;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+  .mpc-pin{display:flex;align-items:center;gap:6px;cursor:pointer;transform:translateX(-6px);background:#15294A;border:1.5px solid #fff;border-radius:20px;padding:3px 10px 3px 5px;box-shadow:0 3px 9px rgba(15,27,51,.35)} /* ★ A안 (2026-07-18): 지도 팔레트에 없는 네이비 배경 — 고객 라벨이 지명에 묻히지 않게 */
+  .mpc-pindot{width:10px;height:10px;border-radius:50%;border:1.5px solid #fff;flex:none}
+  .mpc-pinlab{font-size:12px;font-weight:800;color:#fff;letter-spacing:.2px;white-space:nowrap}
+.mpc-pindday{font-size:8.5px;font-weight:800;color:#15294A;background:#C9A96E;border-radius:7px;padding:1px 5px;margin-left:1px;white-space:nowrap} /* 만기·상령 D-30 이내 미니 배지 */
   .mpcd-row{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid #F1F3F7}
   .mpcd-lb{font-size:12px;color:#9099AD;width:50px;flex:none;font-weight:600}
   .mpcd-vl{font-size:13px;color:#1A2233;flex:1}
@@ -7931,7 +7932,14 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   var custMarkers=[];
   function mpcClearMarkers(){custMarkers.forEach(function(m){m.setMap(null);});custMarkers=[];}
   function mpcCellSize(l){var m={1:0.0006,2:0.0012,3:0.0025,4:0.005,5:0.01,6:0.022,7:0.045,8:0.09,9:0.18,10:0.36,11:0.72,12:1.5,13:3,14:6};return m[l]||0.05;}
-  function mpcPinEl(c){var color=(c.rels&&c.rels.length)?mpcRelColor(c.rels[0]):"#8A93A8";var el=document.createElement("div");el.className="mpc-pin";el.innerHTML='<span class="mpc-pindot" style="background:'+color+'"></span><span class="mpc-pinlab"></span>';el.querySelector(".mpc-pinlab").textContent=c.name||"";(function(cc){el.onclick=function(){mpcHighlightList(cc);mpcShowInfo(cc);};})(c);return el;}
+  function mpcPinDday(c){   /* ★ 지도 라벨 임박 배지 (2026-07-18): 만기(중복 제거)·상령 중 D-30 이내 최솟값 — 리스트 배지와 동일 규칙 */
+    var best=null;
+    var cts=(c.contracts||[]).slice();
+    if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    var seen={};cts.forEach(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(seen[k])return;seen[k]=1;var dd=mpcDdayFromDate(String(ct.expiry||ct.expireDate||"").slice(0,10));if(dd!=null&&dd>=0&&dd<=30&&(best==null||dd<best))best=dd;});
+    if(c.birthDate&&!c.birthUnknown){var sg=mpcDdayFromMmdd(mpcSangMmdd(c.birthDate));if(sg!=null&&sg<=30&&(best==null||sg<best))best=sg;}
+    return best;}
+  function mpcPinEl(c){var color=(c.rels&&c.rels.length)?mpcRelColor(c.rels[0]):"#8A93A8";var el=document.createElement("div");el.className="mpc-pin";var dd=mpcPinDday(c);el.innerHTML='<span class="mpc-pindot" style="background:'+color+'"></span><span class="mpc-pinlab"></span>'+(dd!=null?'<span class="mpc-pindday">D-'+dd+'</span>':"");el.querySelector(".mpc-pinlab").textContent=c.name||"";(function(cc){el.onclick=function(){mpcHighlightList(cc);mpcShowInfo(cc);};})(c);return el;}
   function mpcDrawMarkers(fit){if(!map)return;mpcClearMarkers();try{if(typeof markers!=="undefined"&&markers&&markers.length){markers.forEach(function(m){m.setMap&&m.setMap(null);});markers.length=0;}}catch(e){}var lvl=(map.getLevel?map.getLevel():6),cell=mpcCellSize(lvl),groups={},bounds=new kakao.maps.LatLngBounds(),any=false;customers.forEach(function(c){if(!c.lat||!c.lng||!mpcMatch(c))return;var key=Math.floor(c.lng/cell)+"_"+Math.floor(c.lat/cell);(groups[key]=groups[key]||[]).push(c);bounds.extend(new kakao.maps.LatLng(c.lat,c.lng));any=true;});Object.keys(groups).forEach(function(k){var g=groups[k];if(g.length<4){g.forEach(function(c){var ov=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(c.lat,c.lng),content:mpcPinEl(c),yAnchor:.5,clickable:true});ov.setMap(map);custMarkers.push(ov);});}else{var la=0,ln=0;g.forEach(function(x){la+=x.lat;ln+=x.lng;});la/=g.length;ln/=g.length;var cpos=new kakao.maps.LatLng(la,ln);var el=document.createElement("div");el.className="mpc-clus";el.textContent=g.length;(function(p){el.onclick=function(){var nl=Math.max(1,(map.getLevel?map.getLevel():6)-2);map.setLevel(nl);setTimeout(function(){map.setCenter(p);},60);};})(cpos);var ov=new kakao.maps.CustomOverlay({position:cpos,content:el,yAnchor:.5,clickable:true,zIndex:6});ov.setMap(map);custMarkers.push(ov);}});if(fit&&any)map.setBounds(bounds);}
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
