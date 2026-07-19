@@ -5992,6 +5992,7 @@ async function aiBuildContext(q){
 async function aiSend(){
   const inp=document.getElementById('aiInput');if(!inp)return;
   const q=(inp.value||'').trim();if(!q||aiBusy)return;
+  if(!(await aiPaidConfirm()))return;   /* ★ 첫 유료 질문 전 확인 (2026-07-19): 예고 없이 차감되지 않게 — 월 1회만 묻는다 */
   inp.value='';aiMsgAdd('user',q);aiBusy=true;aiTyping(true);
   const _q2=(aiPinned&&q.indexOf(aiPinned)<0)?(aiPinned+' 님 '+q):q;   /* ★ 고정 고객 문맥 자동 부여 (2026-07-19): 이름 반복 입력 불필요 */
   try{
@@ -6104,6 +6105,38 @@ function aiRecLinks(w,recs){
       bubble.appendChild(box);
     }
   }catch(_e){}
+}
+/* ═══ 💳 첫 유료 질문 확인 (2026-07-19) ═══
+   무료 30회를 모두 쓴 뒤 첫 질문에서 한 번만 묻는다. 확인하면 그 달에는 다시 묻지 않는다.
+   ※ aiBill은 질문을 한 번 주고받아야 채워지므로, 앱을 새로 켠 직후 첫 질문은 이 확인을 건너뛸 수 있다.
+      그 경우에도 답변 아래 "100원 차감" 표시는 그대로 나온다. */
+function aiPaidKey(){const d=new Date(Date.now()+9*3600*1000);return 'ai_paid_ok_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0');}
+function aiPaidConfirm(){
+  return new Promise(res=>{
+    try{
+      if(!aiBill||aiBill.freeQuota==null){res(true);return;}
+      if((aiBill.freeUsed||0)<(aiBill.freeQuota||0)){res(true);return;}   /* 아직 무료 구간 */
+      if(localStorage.getItem(aiPaidKey())==='1'){res(true);return;}      /* 이번 달 확인 완료 */
+    }catch(_e){res(true);return;}
+    const tot=((aiBill.point||0)+(aiBill.balance||0));
+    const cnt=Math.floor(tot/100);
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;z-index:2400;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:22px';
+    ov.innerHTML='<div style="background:#fff;border-radius:16px;max-width:330px;width:100%;padding:20px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25)">'
+      +'<div style="font-size:26px;text-align:center">💳</div>'
+      +'<div style="font-size:15px;font-weight:800;color:#15294A;text-align:center;margin-top:9px">무료 '+(aiBill.freeQuota||30)+'회를 모두 사용하셨어요</div>'
+      +'<div style="font-size:12px;color:#5C6678;line-height:1.7;margin-top:10px;text-align:center">이제부터 질문 1건당 <b style="color:#15294A">100원</b>이 부과됩니다.<br>현재 잔액 <b style="color:#15294A">'+tot.toLocaleString()+'원</b>'+(cnt>0?' · 약 '+cnt+'회 사용 가능':'')+'</div>'
+      +'<div style="background:#FBFAF6;border:1px solid #EFEDE6;border-radius:10px;padding:9px 11px;margin-top:12px;font-size:10.5px;color:#8A8578;line-height:1.6">확인하시면 이번 달에는 다시 묻지 않아요. 매월 1일에 무료 '+(aiBill.freeQuota||30)+'회가 새로 지급됩니다.</div>'
+      +'<div style="display:flex;gap:8px;margin-top:14px">'
+      +'<button type="button" id="aiPcNo" style="flex:1;border:1px solid #E1E5EC;background:#fff;color:#5C6678;border-radius:11px;padding:12px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">취소</button>'
+      +'<button type="button" id="aiPcYes" style="flex:1.4;border:0;background:#15294A;color:#fff;border-radius:11px;padding:12px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">계속하기</button>'
+      +'</div></div>';
+    document.body.appendChild(ov);
+    const close=(v)=>{try{ov.remove();}catch(_e){}res(v);};
+    ov.querySelector('#aiPcNo').onclick=()=>close(false);
+    ov.querySelector('#aiPcYes').onclick=()=>{try{localStorage.setItem(aiPaidKey(),'1');}catch(_e){}close(true);};
+    ov.onclick=(e)=>{if(e.target===ov)close(false);};
+  });
 }
 function aiChargeLine(w,d){   /* ★ 유료 질문에 차감 내역 한 줄 (2026-07-19): 돈이 나가는 것을 숨기지 않는다 */
   try{
