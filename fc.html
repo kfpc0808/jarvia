@@ -5806,7 +5806,7 @@ async function aiChkSummary(nm){
   return head+'\n'+(L.length?L.join('\n'):'· 등록된 임박 일정이 없어요')+'\n\n무엇을 도와드릴까요? 아래 버튼을 누르거나 자유롭게 물어보세요.';
 }
 async function aiChkPick(nm){
-  aiPinned=nm;
+  aiPinned=nm;aiSavedAt=aiHist.length;   /* ★ 이 고객 이전의 대화는 이 고객 기록에 넣지 않는다 (2026-07-19) */
   const w=document.getElementById('aiChkWrap');if(w)w.style.display='none';
   aiPinBarRender();aiChipsRender();
   const sum=await aiChkSummary(nm);
@@ -5990,16 +5990,20 @@ async function aiBuildContext(q){
       const last=(c.meetings&&c.meetings.length)?Math.max.apply(null,c.meetings.map(mm=>{const t=Date.parse(mm.date||'');return isNaN(t)?0:t;})):0;
       return !last||Date.now()-last>90*86400000;
     }).slice(0,15).map(c=>c.name+((c.meetings&&c.meetings.length)?'':' (기록 없음)'));
-    /* ★ 관심사 색인 (2026-07-19): 고객 폼의 니즈 태그 15종을 이름과 함께 전달 —
-       "상속 관심 고객 찾아줘" 같은 주제 기반 질문에 AI가 실제 명단으로 답할 수 있게 한다.
-       이름과 태그만 보내므로 용량·비용 부담이 작다(고객 300명 ≈ 3~4천 자). */
-    const needIdx=[];
+    /* ★ 관심사 색인 (2026-07-19): 고객 폼의 니즈 태그 15종을 '태그 → 고객명' 형태로 전달.
+       "상속 관심 고객 찾아줘" 같은 주제 질문에 AI가 실제 명단으로 답할 수 있게 한다.
+       고객별 나열보다 태그별 묶음이 3배 이상 짧다 — 300명 기준 약 4천 자. 태그당 40명까지. */
+    const needByTag={};
     (customers||[]).forEach(c=>{
-      const nm=(c.name||'').trim();const tg=(c.needs||[]).filter(Boolean).slice(0,6);
-      if(nm&&tg.length)needIdx.push({name:nm,needs:tg});
+      const nm=(c.name||'').trim();if(!nm)return;
+      (c.needs||[]).forEach(t=>{
+        if(!t)return;
+        if(!needByTag[t])needByTag[t]=[];
+        if(needByTag[t].length<40&&needByTag[t].indexOf(nm)<0)needByTag[t].push(nm);
+      });
     });
     ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,20),noMeetingOver90days:noMeet,
-                  needsIndex:needIdx.slice(0,300)};
+                  needsByTag:needByTag};
   }
   return ctx;
 }
@@ -6021,9 +6025,9 @@ async function aiSend(){
       if(_w&&d.charged>0)aiChargeLine(_w,d);                   /* ★ 차감 표시 (2026-07-19) */
       if(d.freeQuota!=null){aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:d.charged};aiUsageRender();}
       if(_custNm&&_w)aiPinBtn(_w,_custNm,_q2,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
-      if(_custNm&&!aiPinned){aiPinned=_custNm;aiPinBarRender();aiChipsRender();}   /* ★ 이름으로 물으면 자동 고정 (2026-07-19) */
+      if(_custNm&&!aiPinned){aiPinned=_custNm;aiSavedAt=aiHist.length;aiPinBarRender();aiChipsRender();}   /* ★ 이름으로 물으면 자동 고정 — 이전 대화는 제외 (2026-07-19) */
       aiHist.push({role:'user',content:_q2},{role:'assistant',content:(d.answer||'').slice(0,2000)});
-      if(aiHist.length>12)aiHist=aiHist.slice(-12);
+      if(aiHist.length>12){const _cut=aiHist.length-12;aiHist=aiHist.slice(-12);aiSavedAt=Math.max(0,aiSavedAt-_cut);}   /* ★ 이력이 잘리면 저장 기준점도 함께 당긴다 (2026-07-19) */
       if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};aiUsageRender();}
       aiSaveDrive(_q2,d.answer||'',_custNm);
     }else if(d.reason==='insufficient'){aiChargeNotice(d,q);}   /* ★ 잔액 부족 — 차감 없이 안내만 (2026-07-19) */
@@ -6059,6 +6063,7 @@ async function aiRestoreRecent(){
 }
 function aiResume(q0,a0,label){
   aiHist=[{role:'user',content:String(q0||'').slice(0,1500)},{role:'assistant',content:String(a0||'').slice(0,1500)}];
+  aiSavedAt=aiHist.length;   /* ★ 불러온 옛 대화는 저장 대상이 아니다 — 이어서 물은 것부터 센다 (2026-07-19) */
   aiDivider('↩ '+(label||'선택한 대화')+'를 이어서 물어보세요');
   const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
 }
