@@ -5231,9 +5231,11 @@ window.ccStorage=(function(){
     return new Uint8Array(await r.arrayBuffer());
   }
   /* ── VAULT 데이터 저장/불러오기 (암호화 .safe) — 기기 캐시 + 드라이브 백업 ── */
-  async function saveJson(folderKey,name,obj){
+  async function saveJson(folderKey,name,obj,noCache){
     const raw=new TextEncoder().encode(JSON.stringify(obj));
-    try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(obj));}catch(_e){}
+    /* ★ noCache (2026-07-19): 비밀번호금고 등 민감 데이터는 기기에 평문 캐시를 남기지 않는다 */
+    if(noCache){try{localStorage.removeItem('cc_v_'+slug()+'_'+name);}catch(_e){}}
+    else{try{localStorage.setItem('cc_v_'+slug()+'_'+name,JSON.stringify(obj));}catch(_e){}}
     const ct=await enc(raw);
     return upsert(folderKey,name+'.safe',ct,'application/octet-stream');
   }
@@ -5274,6 +5276,139 @@ window.ccStorage=(function(){
   return {connect:connect,connected:connected,token:token,ensureFolders:ensureFolders,
           saveJson:saveJson,loadJson:loadJson,uploadBytes:upsert,download:download,enc:enc,dec:dec,listFiles:listFiles};
 })();
+
+/* ═══════════ 💾 공통 저장 모듈 ccSync (2026-07-19) ═══════════
+   대원칙: 저장은 기기에서 즉시(빠르게), 원본은 반드시 구글 드라이브로(안전하게).
+   ① 기기 기록은 항상 성공 → 사용자에겐 즉시 "저장됨"
+   ② 드라이브 업로드는 백그라운드 — 실패·미연결이면 대기열에 넣고 자동 재시도(연결·복귀·3분 주기)
+   ③ 상태를 숨기지 않는다 — ✅ 백업됨 / ⏳ 대기 N건 / ⚠️ 연결 필요
+   ※ 서버(Firestore) 데이터(진단 신청·내고객관리 명단·열람 로그)는 대상 아님 — 주고받는 데이터라 서버가 정본.
+   ※ 예외: 비밀번호금고는 기기에 남기지 않음(공용 PC·분실 대비), 문서함 파일 실물은 드라이브 직행. */
+const ccSync=(function(){
+  const MAX=200;
+  const DRIVE_ONLY={'비밀번호금고':1};
+  let flushing=false;
+  function QK(){try{return 'cc_syncq_'+(ccVaultId()||'');}catch(_e){return 'cc_syncq_';}}   /* 채널별 분리 — 계정 전환 시 섞임 방지 */
+  function qGet(){try{return JSON.parse(localStorage.getItem(QK())||'[]');}catch(_e){return [];}}
+  function qSet(a){try{localStorage.setItem(QK(),JSON.stringify(a.slice(-MAX)));}catch(_e){}}
+  function qAdd(folder,name){const a=qGet();const k=folder+'/'+name;if(!a.some(x=>x.k===k))a.push({k:k,folder:folder,name:name,at:Date.now()});qSet(a);render();}
+  function qDel(folder,name){const k=folder+'/'+name;qSet(qGet().filter(x=>x.k!==k));render();}
+  function pending(){return qGet().length;}
+  function on(){try{return !!(window.ccStorage&&ccStorage.connected&&ccStorage.connected());}catch(_e){return false;}}
+  /* ── 자동 연결 감지 (2026-07-19) ──
+     connected()는 '이 기기의 표시'일 뿐이라 기기 교체·캐시 삭제 시 연결됐는데도 false로 나온다.
+     실제 판정은 서버 토큰 발급(무음, 팝업 없음)으로 한다 — 성공하면 자동 복구, 실패해야 수동 연결 안내. */
+  let probeAt=0,probeVal=null,probing=null;
+  async function probe(force){
+    /* 성공은 5분 캐시, 실패는 20초만 캐시 — 연결이 살아나면 빨리 자동 복구되도록 */
+    const ttl=(probeVal===true)?300000:60000;   /* 실패는 60초 캐시 — 연결 복구는 online·시작·연결버튼에서 force로 즉시 반영 */
+    if(!force&&probeVal!=null&&(Date.now()-probeAt)<ttl)return probeVal;
+    if(probing)return probing;
+    probing=(async function(){
+      let ok=false;
+      try{ if(window.ccStorage&&ccStorage.token){ await ccStorage.token(); ok=true; } }catch(_e){ ok=false; }
+      probeVal=ok;probeAt=Date.now();probing=null;
+      try{ if(ok)localStorage.setItem('cc_gd_'+(ccVaultId()||''),'1'); }catch(_e){}   /* 무음 복구 성공 → 기기 표시 갱신 */
+      render();
+      return ok;
+    })();
+    return probing;
+  }
+  async function ready(){ if(on())return true; return await probe(); }   /* 저장·읽기 직전 호출 */
+  function localKey(name){try{return 'cc_v_'+(ccVaultId()||'')+'_'+name;}catch(_e){return null;}}   /* ccStorage.saveJson의 캐시 키와 반드시 동일 (slug=ccVaultId) */
+  function localPut(name,obj){try{const k=localKey(name);if(!k)return false;localStorage.setItem(k,JSON.stringify(obj));return true;}catch(_e){return false;}}
+  function localGet(name){try{const k=localKey(name);if(!k)return null;const c=localStorage.getItem(k);return c?JSON.parse(c):null;}catch(_e){return null;}}
+  function localDel(name){try{const k=localKey(name);if(k)localStorage.removeItem(k);}catch(_e){}}
+  /* ── 저장: 기기 즉시 + 드라이브 보장 ── */
+  async function put(folder,name,obj){
+    const driveOnly=!!DRIVE_ONLY[folder];
+    if(!driveOnly)localPut(name,obj);                                   /* ① 기기 — 즉시·항상 성공 */
+    if(!await ready()){ if(driveOnly){notify();return {ok:false,backup:'need_connect'};}
+      qAdd(folder,name); notify(); return {ok:true,backup:'pending'}; }   /* 무음 연결도 실패 → 대기 + 안내 */
+    try{ await ccStorage.saveJson(folder,name,obj,driveOnly); if(driveOnly)localDel(name); qDel(folder,name); render(); return {ok:true,backup:'ok'}; }
+    catch(_e){ if(driveOnly)return {ok:false,backup:'fail'};
+      qAdd(folder,name); return {ok:true,backup:'pending'}; }
+  }
+  /* ── 읽기: 기기 우선 → 없으면 드라이브 → 기기에 캐시 ── */
+  async function get(folder,name){
+    if(!DRIVE_ONLY[folder]){const c=localGet(name);if(c)return c;}
+    if(!await ready()){notify();return null;}   /* 기기에 없고 연결도 안 됨 → 안내 */
+    try{const d=await ccStorage.loadJson(folder,name);if(d&&!DRIVE_ONLY[folder])localPut(name,d);return d;}catch(_e){return null;}
+  }
+  /* ── 대기분 일괄 전송 ── */
+  async function flush(){
+    if(flushing)return 0;
+    const a=qGet();if(!a.length)return 0;        /* 보낼 게 없으면 서버 확인도 하지 않는다 */
+    if(!on()&&!(await probe()))return 0;
+    flushing=true;let done=0;
+    for(const it of a){
+      if(DRIVE_ONLY[it.folder]){qDel(it.folder,it.name);continue;}      /* 금고는 기기에 원본이 없으므로 재전송 대상 아님 */
+      const obj=localGet(it.name);
+      if(obj==null){qDel(it.folder,it.name);continue;}                  /* 원본이 사라졌으면 대기열에서 제거 */
+      try{await ccStorage.saveJson(it.folder,it.name,obj);qDel(it.folder,it.name);done++;}
+      catch(_e){break;}                                                 /* 한 건 실패 시 중단 — 다음 기회에 재시도 */
+    }
+    flushing=false;render();
+    return done;
+  }
+  /* ── 상태 표시 ── */
+  function badge(){
+    const n=pending();
+    if(!on())return {icon:'⚠️',text:n?('백업 대기 '+n+'건 · 연결 필요'):'드라이브 연결 필요',cls:'warn'};
+    if(n)return {icon:'⏳',text:'백업 대기 '+n+'건',cls:'pend'};
+    return {icon:'✅',text:'백업됨',cls:'ok'};
+  }
+  function render(){
+    const el=document.getElementById('ccSyncBadge');if(!el)return;
+    const b=badge();
+    el.innerHTML='<span>'+b.icon+'</span><span>'+b.text+'</span>';
+    el.style.color=(b.cls==='ok')?'#0F6E56':(b.cls==='pend'?'#8B6914':'#A23B3B');
+    el.style.background=(b.cls==='ok')?'#E7F5F0':(b.cls==='pend'?'#FFF8E7':'#FBEAEA');
+    el.style.borderColor=(b.cls==='ok')?'#BFE3D6':(b.cls==='pend'?'#E0C36B':'#F2D7D7');
+    el.title=(b.cls==='ok')?'모든 기록이 구글 드라이브에 백업됐어요':(b.cls==='pend'?'탭하면 지금 백업합니다':'탭하면 구글 드라이브를 연결합니다');
+    el.onclick=(b.cls==='warn')?function(){try{if(window.__ccSyncConnect)window.__ccSyncConnect();}catch(_e){}}
+                               :function(){flush().then(function(n){if(n)try{toast(n+'건을 드라이브에 백업했어요');}catch(_e){}});};
+  }
+  /* ── 자동 연결이 실패했을 때만 뜨는 전역 안내 (닫으면 이 세션에선 다시 안 뜸) ── */
+  let noticeOff=false;
+  function notify(){
+    try{
+      if(noticeOff)return;
+      if(probeVal===true)return;
+      if(document.getElementById('ccSyncNotice'))return;
+      if(document.getElementById('aiChkConn'))return;   /* AI 첫 화면에 연결 안내가 이미 떠 있으면 중복 노출 방지 */
+      const b=document.createElement('div');b.id='ccSyncNotice';
+      b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:9700;width:calc(100% - 24px);max-width:456px;background:#15294A;border:1px solid #C9A96E;border-radius:14px;padding:12px 14px;box-shadow:0 10px 28px rgba(0,0,0,.32);display:flex;align-items:center;gap:10px';
+      b.innerHTML='<span style="font-size:17px;flex-shrink:0">⚠️</span>'
+        +'<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:800;color:#fff">구글 드라이브 연결이 필요해요</div>'
+        +'<div style="font-size:10.5px;color:#9AA3B8;line-height:1.5;margin-top:2px">기록은 이 기기에 안전하게 보관 중이에요. 연결하면 드라이브에 백업됩니다.</div></div>'
+        +'<button type="button" id="ccSyncNoticeBtn" style="border:0;background:#C9A96E;color:#15294A;border-radius:10px;padding:8px 12px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer;flex-shrink:0">연결</button>'
+        +'<button type="button" id="ccSyncNoticeX" style="border:0;background:none;color:#9AA3B8;font-size:15px;padding:2px 4px;cursor:pointer;flex-shrink:0">✕</button>';
+      document.body.appendChild(b);
+      const bt=document.getElementById('ccSyncNoticeBtn');
+      if(bt)bt.onclick=function(){try{if(window.__ccSyncConnect)window.__ccSyncConnect();}catch(_e){}};
+      const xb=document.getElementById('ccSyncNoticeX');
+      if(xb)xb.onclick=function(){noticeOff=true;b.remove();};
+    }catch(_e){}
+  }
+  function noticeHide(){try{const b=document.getElementById('ccSyncNotice');if(b)b.remove();}catch(_e){}}
+  function mount(el){if(!el)return;el.id='ccSyncBadge';el.style.cssText='display:inline-flex;align-items:center;gap:3px;border:1px solid #BFE3D6;border-radius:99px;padding:1px 7px;font-size:9px;font-weight:800;cursor:pointer;font-family:inherit';render();}
+  try{
+    window.addEventListener('online',function(){probe(true).then(function(ok){if(ok){noticeHide();flush();}});});
+    document.addEventListener('visibilitychange',function(){if(!document.hidden)flush();});
+    setInterval(function(){flush();},180000);
+    setTimeout(function(){if(pending()>0)probe(true).then(function(ok){if(ok){noticeHide();flush();}else notify();});},4000);   /* ★ 시작 후 무음 자동 연결 시도 (대기분 있을 때만) */
+  }catch(_e){}
+  return {put:put,get:get,flush:flush,pending:pending,badge:badge,render:render,mount:mount,probe:probe,ready:ready,notify:notify,noticeHide:noticeHide};
+})();
+window.ccSync=ccSync;
+window.__ccSyncConnect=function(){   /* ★ 배지 '연결 필요' 클릭 → 드라이브 연결 → 대기분 자동 전송 (2026-07-19) */
+  try{
+    if(!window.ccStorage||!ccStorage.connect){toast('저장소 모듈을 불러오지 못했어요','warn');return;}
+    ccStorage.connect().then(function(){ccSync.probe(true).then(function(){ccSync.noticeHide();ccSync.flush().then(function(n){ccSync.render();toast(n?('백업 대기 '+n+'건을 드라이브에 저장했어요'):'구글 드라이브가 연결됐어요');});});})
+      .catch(function(e){toast(((e&&e.message)==='inapp')?'카카오톡·인스타 등 앱 안 브라우저에서는 구글 로그인이 막혀요 — Chrome·Safari로 열어주세요':'연결하지 못했어요. 잠시 후 다시 시도해주세요','warn');});
+  }catch(_e){}
+};
 
 /* ═══ 📊 Drive-First 이용기록 공통 모듈 (2026-07-17) ═══
    원칙: 사용자가 만든 데이터(계산·진단·선택)는 본인 드라이브 '이용기록'에 암호화 저장.
@@ -5475,19 +5610,232 @@ function aiQuickMenu(){
   const closer=ev=>{if(!qm.contains(ev.target)&&ev.target.id!=='aiFabBtn'&&!document.getElementById('aiFabBtn').contains(ev.target)){try{qm.remove();}catch(_e){}document.removeEventListener('pointerdown',closer,true);}};
   setTimeout(()=>document.addEventListener('pointerdown',closer,true),80);
 }
+/* ═══════════ 📋 점검하면 좋을 고객 (2026-07-19) ═══════════
+   원칙: 선별은 기기가(AI 호출 0회·즉시·무료), 해석과 문안 작성만 AI가.
+   채팅창을 열면 묻지 않고 먼저 보여준다 — 만기·상령·연락예정·생일·뜸한 고객. */
+let aiPinned='',aiChkData=null;
+const AI_CHK_GROUPS=[
+  {k:'exp',ic:'🔴',label:'보험 만기',urg:1},
+  {k:'sang',ic:'📅',label:'상령일',urg:1},
+  {k:'next',ic:'📞',label:'연락 예정'},
+  {k:'bday',ic:'🎂',label:'생일'},
+  {k:'cold',ic:'🔕',label:'연락이 뜸한 고객'}
+];
+function aiChkMd(mmdd){return (mmdd&&mmdd.length===4)?(parseInt(mmdd.slice(0,2),10)+'/'+parseInt(mmdd.slice(2,4),10)):'';}
+function aiChkYmd(ymd){return (ymd&&ymd.length>=10)?(parseInt(ymd.slice(5,7),10)+'/'+parseInt(ymd.slice(8,10),10)):'';}
+let aiFccCache=null,aiFccAt=0;
+async function aiFccGet(){   /* ★ 5분 캐시 (2026-07-19): 채팅창을 열 때마다 fc_clients 재조회하지 않도록 */
+  if(aiFccCache&&(Date.now()-aiFccAt)<300000)return aiFccCache;
+  try{const r=window.fccBridge?await window.fccBridge.pull():null;if(r){aiFccCache=r;aiFccAt=Date.now();}return r;}catch(_e){return aiFccCache;}
+}
+async function aiChkBuild(){
+  const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
+  let fcc=null;try{fcc=await aiFccGet();}catch(_e){}
+  const g={exp:[],sang:[],bday:[],next:[],cold:[]};const now=Date.now();
+  (customers||[]).forEach(c=>{
+    const nm=(c.name||'').trim();if(!nm)return;
+    const sub=[c.company,c.title].filter(Boolean).join(' ')||((c.rels&&c.rels[0])||'');
+    /* ① 만기 — 카드 + 내고객관리 계약, 상품+만기 중복 제거 (리스트·지도 배지와 동일 규칙) */
+    let cts=(c.contracts||[]).slice();
+    const key=nm+'|'+(c.birthDate||'');
+    if(fcc&&fcc[key]&&fcc[key].contracts)cts=cts.concat(fcc[key].contracts);
+    const seen={};let bx=null;
+    cts.forEach(x=>{
+      const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
+      if(!p||ex.length<10)return;const kk=p+'|'+ex;if(seen[kk])return;seen[kk]=1;
+      const dd=aiDday(ex);if(dd==null||dd<0||dd>45)return;
+      if(!bx||dd<bx.dd)bx={dd:dd,p:p,ex:ex};});
+    if(bx)g.exp.push({nm:nm,sub:sub,dd:bx.dd,why:_aiEsc(bx.p)+' <b>'+aiChkYmd(bx.ex)+' 만기</b>'});
+    /* ② 상령일 ③ 생일 */
+    if(c.birthDate&&c.birthDate.length===10&&!c.birthUnknown){
+      const sm=aiSangMmdd(c.birthDate),sd=aiDdayMmdd(sm);
+      if(sd!=null&&sd<=30)g.sang.push({nm:nm,sub:sub,dd:sd,why:'상령일 <b>'+aiChkMd(sm)+'</b> · 지나면 보험료가 오릅니다'});
+      const bm=c.birthDate.slice(5,7)+c.birthDate.slice(8,10),bd=aiDdayMmdd(bm),ag=aiAge(c.birthDate);
+      if(bd!=null&&bd<=30)g.bday.push({nm:nm,sub:sub,dd:bd,why:'생일 <b>'+aiChkMd(bm)+'</b>'+(ag!=null?' · 만 '+(ag+1)+'세':'')});
+    }
+    /* ④ 다음 연락 예정 — 지났거나 7일 내 */
+    if(c.nextContact&&c.nextContact.length>=10){
+      const nd=aiDday(c.nextContact);
+      if(nd!=null&&nd<=7)g.next.push({nm:nm,sub:sub,dd:nd,why:'다음 연락 <b>'+aiChkYmd(c.nextContact)+'</b>'+(nd<0?' · <b>'+(-nd)+'일 지났어요</b>':'')});
+    }
+    /* ⑤ 연락이 뜸한 고객 — 마지막 미팅 60일 초과 */
+    const last=(c.meetings||[]).reduce((a,m)=>Math.max(a,(m&&m.ts)||0),0);
+    if(last){const days=Math.floor((now-last)/86400000);
+      if(days>=60)g.cold.push({nm:nm,sub:sub,dd:9999,days:days,why:'마지막 미팅 <b>'+days+'일 전</b>'});}
+  });
+  ['exp','sang','bday','next'].forEach(k=>g[k].sort((a,b)=>a.dd-b.dd));
+  g.cold.sort((a,b)=>b.days-a.days);
+  g._total=(customers||[]).length;   /* ★ 등록 고객 수 (2026-07-19): 0이면 '임박 없음'이 아니라 '아직 못 불러옴' */
+  aiChkData=g;return g;
+}
+function aiChkRender(){
+  const box=document.getElementById('aiMsgs');if(!box)return;
+  let w0=document.getElementById('aiChkWrap');   /* ★ aiMsgs를 비우지 않는다 (2026-07-19): 지난 대화 복원분과 공존 */
+  if(!w0){w0=document.createElement('div');w0.id='aiChkWrap';box.appendChild(w0);}
+  w0.style.display='';
+  w0.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:12px 2px">고객 현황을 살펴보는 중…</div>';
+  aiChkBuild().then(g=>{
+    const w=document.getElementById('aiChkWrap');if(!w)return;
+    let total=0;AI_CHK_GROUPS.forEach(x=>{total+=(g[x.k]||[]).length;});
+    let h='<div style="display:flex;align-items:baseline;gap:7px;margin:6px 2px 3px"><b style="font-size:15px;color:#15294A;font-weight:800">📋 점검하면 좋을 고객</b>'+(total?'<span style="font-size:10.5px;color:#8A93A8;font-weight:600">'+total+'명</span>':'')+'</div>';
+    if(!total&&!g._total){aiChkRecover();return;}   /* ★ 기기 저장소가 비었다 → 드라이브에서 자동 복원 시도 (2026-07-19) */
+    if(!total){
+      h+='<div style="background:#fff;border:1px solid #ECE7DA;border-radius:13px;padding:16px 14px;font-size:12px;color:#5C6678;line-height:1.7;margin-top:6px">지금 급히 챙길 고객은 없어요 👍 <span style="color:#8A93A8">(등록 고객 '+g._total+'명 확인)</span><br>고객 이름을 입력하면 그 고객의 기록으로 브리핑·제안을 도와드릴게요.</div>';
+    }else{
+      h+='<div style="font-size:10.5px;color:#8A93A8;margin:0 2px 10px">탭하면 그 고객으로 바로 대화를 시작해요</div>';
+      AI_CHK_GROUPS.forEach(grp=>{
+        const arr=g[grp.k]||[];if(!arr.length)return;
+        h+='<div style="font-size:10.5px;font-weight:800;color:#8B6914;margin:13px 2px 7px">'+grp.ic+' '+grp.label+' <span style="background:#EFE7D3;border-radius:99px;padding:1px 7px;font-size:9.5px">'+arr.length+'</span></div>';
+        arr.slice(0,6).forEach(it=>{
+          const urg=!!(grp.urg&&it.dd<=14);
+          const dlab=(grp.k==='cold')?(it.days+'일'):(it.dd<0?((-it.dd)+'일 지남'):(it.dd===0?'오늘':'D-'+it.dd));
+          h+='<button type="button" data-aichk="'+_aiEsc(it.nm)+'" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid '+(urg?'#F0D4D1':'#ECE7DA')+';border-left:3px solid '+(urg?'#C0392B':'#C9A96E')+';border-radius:13px;padding:11px 12px;margin-bottom:7px;cursor:pointer;font-family:inherit;text-align:left">'
+            +'<span style="width:32px;height:32px;border-radius:50%;background:'+(urg?'#FBEAEA':'#EEF1F6')+';color:'+(urg?'#C0392B':'#15294A')+';font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+_aiEsc(it.nm.slice(0,1))+'</span>'
+            +'<span style="flex:1;min-width:0"><span style="display:block;font-size:13px;font-weight:800;color:#15294A">'+_aiEsc(it.nm)+(it.sub?' <em style="font-style:normal;font-size:9.5px;color:#8A93A8;font-weight:600">'+_aiEsc(it.sub)+'</em>':'')+'</span>'
+            +'<span style="display:block;font-size:11px;color:#3A4457;margin-top:2px;line-height:1.45">'+it.why+'</span></span>'
+            +'<span style="font-size:10px;font-weight:800;border-radius:8px;padding:2px 7px;white-space:nowrap;flex-shrink:0;background:'+(urg?'#C0392B':'#F0E6CE')+';color:'+(urg?'#fff':'#15294A')+'">'+dlab+'</span></button>';
+        });
+        if(arr.length>6)h+='<div style="text-align:center;font-size:10.5px;color:#8A93A8;padding:1px 0 6px">외 '+(arr.length-6)+'명</div>';
+      });
+    }
+    h+='<div style="margin-top:14px;padding-top:11px;border-top:1px solid #E7E2D6"><div style="font-size:10.5px;font-weight:800;color:#8A93A8;margin:0 2px 7px">이렇게 물어봐도 돼요</div>'
+      +'<button type="button" data-aiq2="오늘 누구부터 연락하면 좋을지 이유와 함께 알려줘" style="background:#fff;border:1.5px solid #E9E4D8;border-radius:99px;padding:7px 12px;font-size:11px;font-weight:700;color:#15294A;margin:0 5px 6px 0;cursor:pointer;font-family:inherit">오늘 누구부터 연락할까?</button>'
+      +'<button type="button" data-aiq2="이번 주에 챙겨야 할 고객 우선순위를 정리해줘" style="background:#fff;border:1.5px solid #E9E4D8;border-radius:99px;padding:7px 12px;font-size:11px;font-weight:700;color:#15294A;margin:0 5px 6px 0;cursor:pointer;font-family:inherit">이번 주 우선순위</button>'
+      +'</div>';
+    w.innerHTML=h;
+    Array.prototype.forEach.call(w.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
+    Array.prototype.forEach.call(w.querySelectorAll('[data-aiq2]'),b=>{b.onclick=()=>{const i2=document.getElementById('aiInput');if(i2){i2.value=b.getAttribute('data-aiq2');aiSend();}};});
+  }).catch(()=>{const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:12px 2px">고객 현황을 불러오지 못했어요. 고객 이름을 입력해 물어보셔도 돼요.</div>';});
+}
+/* ── 기기 저장소가 비었을 때: 드라이브에서 자동 복원 → 미연결이면 연결 유도 (2026-07-19) ── */
+function aiChkBox(html){const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="display:flex;align-items:baseline;gap:7px;margin:6px 2px 8px"><b style="font-size:15px;color:#15294A;font-weight:800">📋 점검하면 좋을 고객</b></div>'+html;}
+function aiChkRecover(){
+  aiChkBox('<div style="background:#fff;border:1px solid #ECE7DA;border-radius:13px;padding:15px 14px;font-size:12px;color:#5C6678;line-height:1.7"><b>구글 드라이브에서 고객 정보를 불러오는 중…</b><br><span style="font-size:11px;color:#8A93A8">이 기기에 저장된 목록이 비어 있어 백업에서 복원하고 있어요.</span></div>');
+  if(!window.__mpcDriveSync){aiChkRecoverFail('nostore');return;}
+  window.__mpcDriveSync(function(state,cnt){
+    if((state==='ok'||state==='empty')&&cnt>0){aiChkData=null;aiChkRender();return;}   /* 복원 성공 → 리스트 재구성 */
+    if(state==='disconnected'){aiChkRecoverFail('disconnected');return;}
+    if(state==='ok'||state==='empty'){aiChkRecoverFail('nodata');return;}
+    aiChkRecoverFail('error');
+  });
+}
+function aiChkRecoverFail(why){
+  if(why==='disconnected'){
+    aiChkBox('<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:13px;padding:15px 14px;font-size:12px;color:#8B6914;line-height:1.75">'
+      +'<b>구글 드라이브 연결이 필요해요.</b><br>고객 정보는 <b>이 기기</b>와 <b>내 구글 드라이브(암호화)</b> 두 곳에 보관됩니다. 지금 이 기기에는 목록이 없어서, 드라이브 백업에서 가져와야 해요.<br>'
+      +'<div style="margin-top:11px"><button type="button" id="aiChkConn" style="border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:9px 15px;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer">구글 드라이브 연결하기 ›</button></div>'
+      +'<div style="font-size:10.5px;color:#A08B4F;margin-top:8px">연결하면 고객·미팅 기록이 이 기기로 복원됩니다.</div></div>');
+    const b=document.getElementById('aiChkConn');
+    if(b)b.onclick=()=>{
+      b.disabled=true;b.textContent='연결 중…';
+      window.__mpcDriveConnect(function(ok,err){
+        if(ok){aiChkRecover();return;}
+        b.disabled=false;b.textContent='구글 드라이브 연결하기 ›';
+        toast(err==='inapp'?'카카오톡·인스타 등 앱 안 브라우저에서는 구글 로그인이 막혀요 — Chrome·Safari로 열어주세요':'연결하지 못했어요. 잠시 후 다시 시도해주세요','warn');
+      });
+    };
+    return;
+  }
+  if(why==='nodata'){
+    aiChkBox('<div style="background:#fff;border:1px solid #ECE7DA;border-radius:13px;padding:15px 14px;font-size:12px;color:#5C6678;line-height:1.7"><b>아직 등록된 고객이 없어요.</b><br>내 고객 지도에서 고객을 추가하면 이곳에서 만기·상령일·생일을 자동으로 챙겨드릴게요.<div style="margin-top:10px"><button type="button" id="aiChkOpenMap" style="border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:8px 14px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">내 고객 지도 열기 ›</button></div></div>');
+  }else{
+    aiChkBox('<div style="background:#FBEAEA;border:1px solid #F2D7D7;border-radius:13px;padding:15px 14px;font-size:12px;color:#A23B3B;line-height:1.7"><b>고객 정보를 불러오지 못했어요.</b><br>잠시 후 다시 열어보시거나, <b>내 고객 지도</b>를 한 번 열어주세요.<div style="margin-top:10px"><button type="button" id="aiChkOpenMap" style="border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:8px 14px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">내 고객 지도 열기 ›</button></div></div>');
+  }
+  const om=document.getElementById('aiChkOpenMap');
+  if(om)om.onclick=()=>{const s=document.getElementById('aiSheet');if(s)s.style.display='none';try{if(window.__mpcQuickAdd)window.__mpcQuickAdd(false);}catch(_e){}};
+}
+/* ── 고객 고정: 탭 한 번에 기기 내 요약(무료) + 행동 칩 ── */
+async function aiChkSummary(nm){
+  const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
+  const c=(customers||[]).filter(x=>(x.name||'').trim()===nm)[0];
+  if(!c)return nm+' 님 정보를 이 기기에서 찾지 못했어요.\n내 고객 지도를 한 번 열면 드라이브 백업에서 복원됩니다.';
+  const L=[];
+  let cts=(c.contracts||[]).slice();
+  try{const fcc=await aiFccGet();const key=nm+'|'+(c.birthDate||'');if(fcc&&fcc[key]&&fcc[key].contracts)cts=cts.concat(fcc[key].contracts);}catch(_e){}
+  const seen={};
+  cts.forEach(x=>{const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
+    if(!p||ex.length<10)return;const kk=p+'|'+ex;if(seen[kk])return;seen[kk]=1;
+    const dd=aiDday(ex);if(dd!=null&&dd>=0&&dd<=60)L.push('· '+p+' '+aiChkYmd(ex)+' 만기 (D-'+dd+')');});
+  if(c.birthDate&&c.birthDate.length===10&&!c.birthUnknown){
+    const sd=aiDdayMmdd(aiSangMmdd(c.birthDate));if(sd!=null&&sd<=45)L.push('· 상령일 '+aiChkMd(aiSangMmdd(c.birthDate))+' (D-'+sd+') — 지나면 보험료 인상');
+    const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=45)L.push('· 생일 '+aiChkMd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10))+' (D-'+bd+')');
+  }
+  if(c.nextContact&&c.nextContact.length>=10){const nd=aiDday(c.nextContact);if(nd!=null)L.push('· 다음 연락 예정 '+aiChkYmd(c.nextContact)+(nd<0?' ('+(-nd)+'일 지남)':' (D-'+nd+')'));}
+  if((c.needs||[]).length)L.push('· 니즈: '+c.needs.slice(0,4).join(', '));
+  const ms=(c.meetings||[]).slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
+  if(ms.length){const m0=ms[0];L.push('· 최근 미팅 '+(m0.date||'')+' — '+String(m0.note||'').replace(/\s+/g,' ').slice(0,40));}
+  const head=nm+' 님'+([c.company,c.title].filter(Boolean).join(' ')?' · '+[c.company,c.title].filter(Boolean).join(' '):'')+(ms.length?' · 기록 '+ms.length+'건':'');
+  return head+'\n'+(L.length?L.join('\n'):'· 등록된 임박 일정이 없어요')+'\n\n무엇을 도와드릴까요? 아래 버튼을 누르거나 자유롭게 물어보세요.';
+}
+async function aiChkPick(nm){
+  aiPinned=nm;
+  const w=document.getElementById('aiChkWrap');if(w)w.style.display='none';
+  aiPinBarRender();aiChipsRender();
+  const sum=await aiChkSummary(nm);
+  aiMsgAdd('assistant',sum);
+}
+function aiPinBarRender(){
+  const bar=document.getElementById('aiPinBar');if(!bar)return;
+  if(!aiPinned){bar.style.display='none';bar.innerHTML='';return;}
+  bar.style.display='flex';
+  bar.innerHTML='<span style="font-size:12px">👤</span><span style="font-size:12.5px;color:#C9A96E;font-weight:800">'+_aiEsc(aiPinned)+' 님</span>'
+    +'<span style="flex:1;min-width:0;font-size:9.5px;color:#9AA3B8">과의 대화 · 핵심은 이 고객 기록에 저장돼요</span>'
+    +'<button type="button" id="aiPinClear" style="font-size:9.5px;color:#9AA3B8;border:1px solid #3A4E75;background:none;border-radius:8px;padding:3px 8px;font-family:inherit;cursor:pointer">목록으로</button>';
+  const b=document.getElementById('aiPinClear');
+  if(b)b.onclick=()=>{aiPinned='';aiPinBarRender();aiChipsRender();const w2=document.getElementById('aiChkWrap');if(w2)w2.style.display='';const bx=document.getElementById('aiMsgs');if(bx)bx.scrollTop=0;};
+}
+function aiChipsRender(){
+  const box=document.getElementById('aiChips');if(!box)return;
+  const mk=(q,label,gold)=>'<button type="button" data-aiq="'+_aiEsc(q)+'" style="border:1px solid '+(gold?'#E0C36B':'#D8DCE5')+';background:'+(gold?'#FFF8E7':'#fff')+';border-radius:13px;padding:6px 11px;font-size:11px;color:'+(gold?'#8B6914':'#5C6678')+';font-weight:'+(gold?'700':'400')+';white-space:nowrap;font-family:inherit;cursor:pointer">'+_aiEsc(label)+'</button>';
+  box.innerHTML=aiPinned
+    ?(mk('미팅 전 브리핑해줘','미팅 전 브리핑',1)+mk('연락할 때 쓸 문자 초안을 써줘','문자 초안')+mk('무엇을 제안하면 좋을까?','뭘 제안할까?')+mk('전화로 이야기할 멘트를 짜줘','전화 멘트'))
+    :(mk('내일 미팅 있는 고객 브리핑해줘','내일 미팅 브리핑',1)+mk('오늘 연락하면 좋을 고객을 이유와 함께 알려줘','오늘 연락할 고객')+mk('상령일이나 만기가 임박한 고객을 정리해줘','상령일·만기 임박')+mk('3개월 넘게 미팅 기록이 없는 고객은 누구야?','오래 못 만난 고객'));
+  Array.prototype.forEach.call(box.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{const i2=document.getElementById('aiInput');if(i2){i2.value=b.getAttribute('data-aiq');aiSend();}};});
+}
+/* ── ❓ 가이드: 원칙 설명이 아니라 "무엇을 해주는지" 먼저 ── */
+function aiGuide(){
+  let m=document.getElementById('aiGuideSheet');
+  if(!m){
+    m=document.createElement('div');m.id='aiGuideSheet';
+    m.style.cssText='position:fixed;inset:0;z-index:9680;background:rgba(15,27,51,.45);display:flex;align-items:flex-end';
+    m.innerHTML='<div style="background:#F7F5EF;width:100%;max-width:480px;margin:0 auto;max-height:92%;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden">'
+      +'<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:15px">❓</span><b style="flex:1;font-size:13.5px;color:#fff;font-weight:800">AI 비서, 이렇게 쓰세요</b><button type="button" id="aiGdX" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
+      +'<div style="overflow-y:auto;padding:12px 13px 20px">'
+      +'<div style="background:linear-gradient(135deg,#15294A,#1E3560);border:1.5px solid #C9A96E;border-radius:14px;padding:14px;margin-bottom:10px"><b style="display:block;font-size:13px;color:#C9A96E;font-weight:800">📋 열면 오늘 점검할 고객이 먼저 보여요</b><p style="font-size:11.5px;color:#DDE4F0;line-height:1.7;margin-top:5px">만기·상령일·연락 예정·생일·오래 못 만난 고객을 <b>자동으로 골라</b> 보여드려요. 찾을 필요 없이 <b>탭만</b> 하세요.</p></div>'
+      +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:13px;padding:12px;margin-bottom:8px;display:flex;gap:10px"><span style="font-size:18px">👤</span><div><b style="display:block;font-size:12.5px;color:#15294A;font-weight:800">고객을 고르면 준비가 끝나요</b><p style="font-size:11px;color:#8A93A8;line-height:1.6;margin-top:3px">그 고객의 기록·일정을 바로 정리해 드리고, <i style="font-style:normal;color:#8B6914;font-weight:700">미팅 전 브리핑 · 문자 초안 · 전화 멘트</i>까지 이어서 만들어 드려요.</p></div></div>'
+      +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:13px;padding:12px;margin-bottom:8px;display:flex;gap:10px"><span style="font-size:18px">⌨️</span><div><b style="display:block;font-size:12.5px;color:#15294A;font-weight:800">이름만 쳐도 알아들어요</b><p style="font-size:11px;color:#8A93A8;line-height:1.6;margin-top:3px">"<i style="font-style:normal;color:#8B6914;font-weight:700">이규선 브리핑해줘</i>"처럼 물으면 그 고객으로 자동 연결돼요. 목록에서 고르지 않아도 됩니다.</p></div></div>'
+      +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:13px;padding:12px;margin-bottom:8px;display:flex;gap:10px"><span style="font-size:18px">🤖</span><div><b style="display:block;font-size:12.5px;color:#15294A;font-weight:800">대화 핵심은 고객 기록에 남아요</b><p style="font-size:11px;color:#8A93A8;line-height:1.6;margin-top:3px">중요한 내용은 그 고객의 <i style="font-style:normal;color:#8B6914;font-weight:700">미팅·AI 기록</i>으로 저장되고, 다음에 물으면 이어서 기억해요.</p></div></div>'
+      +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:11px 13px;margin-top:12px"><b style="font-size:11.5px;color:#8B6914">💡 알아두면 좋아요</b><ul style="margin:6px 0 0 2px;list-style:none">'
+      +'<li style="font-size:11px;color:#6b5b2e;line-height:1.7;padding-left:13px;position:relative">· 대화는 <b>내 드라이브에 암호화 저장</b> — 🕘에서 다시 볼 수 있어요</li>'
+      +'<li style="font-size:11px;color:#6b5b2e;line-height:1.7;padding-left:13px">· 고객이 바뀌면 <b>＋ 새 대화</b> — 답이 더 정확하고 빨라져요</li>'
+      +'<li style="font-size:11px;color:#6b5b2e;line-height:1.7;padding-left:13px">· 세법·상품 일반 정보는 <b>데일리 리포트와 계산기</b>가 더 정확해요</li>'
+      +'<li style="font-size:11px;color:#6b5b2e;line-height:1.7;padding-left:13px">· 말로 남긴 미팅 기록은 <b>🎙 미팅기록</b> 버튼을 이용하세요</li></ul></div>'
+      +'<div style="display:flex;align-items:center;gap:8px;background:#E6F1FB;border:1px solid #C9DEF2;border-radius:11px;padding:10px 12px;margin-top:10px;font-size:11px;color:#185FA5;font-weight:700;line-height:1.55">🎁 정규회원 <b>베타 기간 무료 제공</b> · 🎙 미팅기록도 무료예요</div>'
+      +'</div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click',ev=>{if(ev.target===m)m.style.display='none';});
+    const x=document.getElementById('aiGdX');if(x)x.onclick=()=>{m.style.display='none';};
+  }
+  m.style.display='flex';
+  try{localStorage.setItem('ai_guide_seen','1');}catch(_e){}
+  const d=document.getElementById('aiGuideDot');if(d)d.style.display='none';
+}
 function aiOpen(){
   let m=document.getElementById('aiSheet');
-  if(m){m.style.display='flex';if(aiSideOpen)aiSideLoad(true);const inp=document.getElementById('aiInput');if(inp)setTimeout(()=>inp.focus(),120);return;}
+  if(m){m.style.display='flex';if(aiSideOpen)aiSideLoad(true);if(!aiPinned)aiChkRender();   /* ★ 다시 열면 최신 현황으로 갱신 (2026-07-19) */
+    const inp=document.getElementById('aiInput');if(inp)setTimeout(()=>inp.focus(),120);return;}
   m=document.createElement('div');m.id='aiSheet';
   m.style.cssText='position:fixed;inset:0;z-index:9600;background:rgba(15,27,51,.45);display:flex;align-items:flex-end';
   m.innerHTML='<div style="background:#F7F5EF;width:100%;height:93%;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden">'
     +'<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:9px;flex-shrink:0">'
     +'<i class="ti ti-sparkles" style="font-size:17px;color:#C9A96E"></i>'
     +'<div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">나의 AI 비서</div>'
-    +'<div style="font-size:9.5px;color:#9AA3B8">'+_aiEsc((fcData&&fcData.name)||loginId||'')+'님 전용 · 베타 · <span id="aiUsageTxt">오늘 -/50회</span></div></div>'
+    +'<div style="font-size:9.5px;color:#9AA3B8;display:flex;align-items:center;gap:5px;flex-wrap:wrap">'+_aiEsc((fcData&&fcData.name)||loginId||'')+'님 전용 · <span id="aiUsageTxt">오늘 -/50회</span><span id="ccSyncBadge"></span></div></div>'
+    +'<button type="button" id="aiGuideBtn" title="사용 안내" style="position:relative;border:0;background:none;color:#9AA3B8;font-size:16px;padding:4px 5px;cursor:pointer"><i class="ti ti-help-circle"></i><span id="aiGuideDot" style="display:none;position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:#C9A96E"></span></button>'
     +'<button type="button" id="aiNewBtn" title="새 대화" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-plus"></i></button>'
     +'<button type="button" id="aiHistBtn" title="대화 목록 접기/펴기" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-history"></i></button>'
     +'<button type="button" id="aiCloseBtn" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
+    +'<div id="aiPinBar" style="display:none;align-items:center;gap:7px;background:#0F1E3A;border-bottom:1px solid #C9A96E44;padding:7px 13px;flex-shrink:0"></div>'
     +'<div id="aiBody" style="display:flex;flex:1;min-height:0;position:relative;overflow:hidden">'
     +'<div id="aiSide" style="flex:0 0 238px;max-width:82%;background:#FBFAF6;border-right:1px solid #E4E0D6;display:none;flex-direction:column;min-height:0">'
     +'<div style="padding:10px 12px 4px;font-size:10.5px;font-weight:800;color:#8A93A8;flex-shrink:0;display:flex;align-items:center;gap:5px"><i class="ti ti-history" style="font-size:11px"></i>지난 대화</div>'
@@ -5512,8 +5860,12 @@ function aiOpen(){
   document.getElementById('aiSendBtn').onclick=aiSend;
   document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();aiSend();}});
   Array.prototype.forEach.call(m.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{document.getElementById('aiInput').value=b.getAttribute('data-aiq');aiSend();};});
-  aiMsgAdd('assistant','안녕하세요, '+((fcData&&fcData.name)||'컨설턴트')+'님. 고객지도·미팅내역·내고객관리 기록을 바탕으로 답해드려요.\n위 추천 질문을 누르거나, "김OO 고객 미팅 준비해줘"처럼 물어보세요.');
-  aiRestoreRecent();   /* ★ 이번 달 지난 대화 자동 복원 (2026-07-17) */
+  try{ccSync.mount(document.getElementById('ccSyncBadge'));ccSync.flush();}catch(_e){}   /* ★ 백업 상태 표시 + 대기분 자동 전송 (2026-07-19) */
+  aiChkRender();   /* ★ 첫 화면 = 점검하면 좋을 고객 (2026-07-19): 묻지 않고 먼저 보여준다 */
+  aiChipsRender();
+  document.getElementById('aiGuideBtn').onclick=aiGuide;
+  try{if(!localStorage.getItem('ai_guide_seen')){const _gd=document.getElementById('aiGuideDot');if(_gd)_gd.style.display='block';}}catch(_e){}
+  Promise.resolve(aiRestoreRecent()).then(()=>{const _bx=document.getElementById('aiMsgs');if(_bx&&!aiPinned)_bx.scrollTop=0;}).catch(()=>{});   /* ★ 복원분이 화면을 끌어내리므로 점검 리스트로 되돌린다 (2026-07-19) */
   if(!aiSideNarrow())aiSideToggle(true);   /* ★ PC = 대화 목록 사이드바 기본 펼침 (2026-07-18) */
   setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
 }
@@ -5586,19 +5938,21 @@ async function aiSend(){
   const inp=document.getElementById('aiInput');if(!inp)return;
   const q=(inp.value||'').trim();if(!q||aiBusy)return;
   inp.value='';aiMsgAdd('user',q);aiBusy=true;aiTyping(true);
+  const _q2=(aiPinned&&q.indexOf(aiPinned)<0)?(aiPinned+' 님 '+q):q;   /* ★ 고정 고객 문맥 자동 부여 (2026-07-19): 이름 반복 입력 불필요 */
   try{
-    const ctx=await aiBuildContext(q);
+    const ctx=await aiBuildContext(_q2);
     const _custNm=(ctx.customer&&ctx.customer.name)||'';
-    const r=await httpsCallable(fns,'aiChat')({question:q,context:ctx,history:aiHist.slice(-6)});
+    const r=await httpsCallable(fns,'aiChat')({question:_q2,context:ctx,history:aiHist.slice(-6)});
     const d=r.data||{};
     aiTyping(false);
     if(d.ok){
       const _w=aiMsgAdd('assistant',d.answer||'');
-      if(_custNm&&_w)aiPinBtn(_w,_custNm,q,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
-      aiHist.push({role:'user',content:q},{role:'assistant',content:(d.answer||'').slice(0,2000)});
+      if(_custNm&&_w)aiPinBtn(_w,_custNm,_q2,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
+      if(_custNm&&!aiPinned){aiPinned=_custNm;aiPinBarRender();aiChipsRender();}   /* ★ 이름으로 물으면 자동 고정 (2026-07-19) */
+      aiHist.push({role:'user',content:_q2},{role:'assistant',content:(d.answer||'').slice(0,2000)});
       if(aiHist.length>12)aiHist=aiHist.slice(-12);
       if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};aiUsageRender();}
-      aiSaveDrive(q,d.answer||'',_custNm);
+      aiSaveDrive(_q2,d.answer||'',_custNm);
     }else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
     else if(d.reason==='disabled'){aiMsgAdd('assistant','AI 베타 이용 권한이 없는 계정이에요.');}
     else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
@@ -5638,7 +5992,8 @@ function aiNewChat(){
   if(aiBusy)return;
   aiHist=[];aiNoSeed=true;aiSideDay='';try{if(aiSideOpen)aiSideRender();}catch(_e){}
   const box=document.getElementById('aiMsgs');if(box)box.innerHTML='';
-  aiMsgAdd('assistant','새 대화를 시작했어요. 이전 대화는 상단 🕘 지난 대화에서 언제든 다시 보거나 이어갈 수 있어요.\n위 추천 질문을 누르거나 자유롭게 물어보세요.');
+  aiPinned='';aiPinBarRender();aiChipsRender();   /* ★ 새 대화 = 고정 해제 + 점검 리스트 (2026-07-19) */
+  aiChkRender();
   const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
 }
 function aiPinBtn(w,cust,q,a){
@@ -5764,16 +6119,18 @@ window.__aiCustHist=async function(name){
   }catch(_e){}
 };
 async function aiSaveDrive(q,a,cust){
+  /* ★ 공통 저장 모듈 이관 (2026-07-19): 미연결이어도 기기에 남기고 → 연결 시 드라이브로 자동 전송 (유실 없음) */
   try{
-    if(!window.ccStorage||!ccStorage.connected())return;   /* 보관함 미연결 = 저장 생략 (무음) */
     /* ★ 월별 파일 분할 + 고객 이름표(cust) 자동 부착 (2026-07-17) */
     const fname='AI대화_'+new Date().toISOString().slice(0,7);
-    let env=null;try{env=await ccStorage.loadJson('대화저장',fname);}catch(_e){env=null;}
+    let env=null;try{env=await ccSync.get('대화저장',fname);}catch(_e){env=null;}
     if(!env||!Array.isArray(env.items))env={v:1,kind:'ai_chat',month:new Date().toISOString().slice(0,7),updatedAt:0,items:[]};
     env.items.push({ts:Date.now(),q:String(q).slice(0,1000),a:String(a).slice(0,4000),cust:String(cust||'').slice(0,30)});
     env.updatedAt=Date.now();
-    await ccStorage.saveJson('대화저장',fname,env);
+    const _r=await ccSync.put('대화저장',fname,env);
     try{aiSideCache=null;if(aiSideOpen)aiSideLoad(true);}catch(_e2){}   /* ★ 사이드바 실시간 갱신 (2026-07-18) */
+    try{ccSync.render();}catch(_e3){}
+    return _r;
   }catch(_e){}
 }
 
@@ -7747,6 +8104,29 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       .then(function(){mpcGdPush();return pairs.length;});
   }
   function custLoad(){return openCustDB().then(custAll).then(function(a){customers=a||[];customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(){customers=[];return customers;});}
+  window.__mpcDriveSync=function(cb){   /* ★ 드라이브 → 기기 복원 (2026-07-19): AI 비서가 기기 저장소 비었을 때 직접 복원 */
+    try{
+      /* ★ 연결 판정 일원화 (2026-07-19): 로컬 플래그가 아니라 서버 토큰으로 판정 — 기기 교체·캐시 삭제 시 자동 복구 */
+      const _go=function(){
+        if(!mpcGdOn()){cb&&cb('disconnected',0);return;}
+        custLoad().then(function(){
+        mpcGdPull(function(synced){
+          try{if(map){mpcRenderFilter();mpcRenderList();mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e2){}
+          cb&&cb(synced?'ok':'empty',customers.length);
+        });
+        }).catch(function(){cb&&cb('error',0);});
+      };
+      if(mpcGdOn()){_go();return;}
+      if(window.ccSync&&window.ccSync.ready){window.ccSync.ready().then(function(){_go();}).catch(function(){_go();});return;}
+      _go();
+    }catch(_e){cb&&cb('error',0);}
+  };
+  window.__mpcDriveConnect=function(cb){   /* ★ 드라이브 연결 (2026-07-19) */
+    try{
+      if(!window.ccStorage||!window.ccStorage.connect){cb&&cb(false,'nostore');return;}
+      window.ccStorage.connect().then(function(){cb&&cb(true,'');}).catch(function(e){cb&&cb(false,(e&&e.message)||'fail');});
+    }catch(_e){cb&&cb(false,'fail');}
+  };
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
   window.__vmSaveMeeting=function(custId,note,next,nextContact,cb){try{   /* ★ 🎙 음성 미팅 기록 저장 (2026-07-18): id 지정 — 동명이인 안전, 다음연락일 갱신 지원 */
     var c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===custId){c=customers[i];break;}
