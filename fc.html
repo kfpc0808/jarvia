@@ -5312,16 +5312,28 @@ const ccSync=(function(){
     if(!force&&probeVal!=null&&(Date.now()-probeAt)<ttl)return probeVal;
     if(probing)return probing;
     probing=(async function(){
-      let ok=false;
-      try{ if(window.ccStorage&&ccStorage.token){ await ccStorage.token(); ok=true; } }catch(_e){ ok=false; }
-      probeVal=ok;probeAt=Date.now();probing=null;
-      try{ if(ok)localStorage.setItem('cc_gd_'+(ccVaultId()||''),'1'); }catch(_e){}   /* 무음 복구 성공 → 기기 표시 갱신 */
-      render();
-      return ok;
+      /* ★ 연결 지속 원칙 (2026-07-19): 한 번 연결되면 사용자가 해제하기 전까지 유지된다.
+         서버가 '권한 없음'을 명시(Error 'token')할 때만 미연결로 판정하고,
+         네트워크 장애·타임아웃 등 일시적 오류는 기존 연결 상태를 그대로 둔다. */
+      let ok=false,hard=false;
+      try{ if(window.ccStorage&&ccStorage.token){ await ccStorage.token(); ok=true; } else { hard=true; } }
+      catch(e){ hard=!!(e&&e.message==='token'); }
+      if(ok){
+        probeVal=true;probeAt=Date.now();
+        try{ localStorage.setItem('cc_gd_'+(ccVaultId()||''),'1'); }catch(_e){}   /* 무음 복구 성공 → 기기 표시 갱신 */
+      }else if(hard){
+        probeVal=false;probeAt=Date.now();                                        /* 서버가 권한 없음 확인 = 진짜 미연결 */
+      }else{
+        probeAt=Date.now()-45000;                                                 /* 일시적 오류 → 15초 뒤 재확인, 상태는 유지 */
+        if(probeVal==null)probeVal=on()?true:null;                                /* 알 수 없으면 기기 표시를 따른다 */
+      }
+      probing=null;render();
+      return probeVal===true;
     })();
     return probing;
   }
-  async function ready(){ if(on())return true; return await probe(); }   /* 저장·읽기 직전 호출 */
+  async function ready(){ if(on())return true; const r=await probe(); return r===true; }   /* 저장·읽기 직전 호출 */
+  function knownOff(){ return probeVal===false&&!on(); }   /* '진짜 미연결'이 확인된 상태만 true */
   function markOk(){   /* ★ 드라이브 작업이 실제로 성공 = 연결 확실 (2026-07-19): 남아 있던 '실패' 기억을 즉시 해제 */
     probeVal=true;probeAt=Date.now();
     try{if(!isOff())localStorage.setItem('cc_gd_'+(ccVaultId()||''),'1');}catch(_e){}
@@ -5365,7 +5377,7 @@ const ccSync=(function(){
   /* ── 상태 표시 ── */
   function badge(){
     const n=pending();
-    if(!on())return {icon:'⚠️',text:n?('백업 대기 '+n+'건 · 연결 필요'):'드라이브 연결 필요',cls:'warn'};
+    if(!on()&&probeVal!==true)return {icon:'⚠️',text:n?('백업 대기 '+n+'건 · 연결 필요'):'드라이브 연결 필요',cls:'warn'};
     if(n)return {icon:'⏳',text:'백업 대기 '+n+'건',cls:'pend'};
     return {icon:'✅',text:'백업됨',cls:'ok'};
   }
@@ -5385,7 +5397,7 @@ const ccSync=(function(){
   function notify(){
     try{
       if(noticeOff)return;
-      if(probeVal===true)return;
+      if(probeVal!==false)return;   /* ★ 확정된 미연결일 때만 안내 (2026-07-19) — 일시적 오류로 놀라게 하지 않는다 */
       if(document.getElementById('ccSyncNotice'))return;
       if(document.getElementById('aiChkConn'))return;   /* AI 첫 화면에 연결 안내가 이미 떠 있으면 중복 노출 방지 */
       const b=document.createElement('div');b.id='ccSyncNotice';
@@ -5410,9 +5422,20 @@ const ccSync=(function(){
     setInterval(function(){flush();},180000);
     setTimeout(function(){if(pending()>0)probe(true).then(function(ok){if(ok){noticeHide();flush();}else notify();});},4000);   /* ★ 시작 후 무음 자동 연결 시도 (대기분 있을 때만) */
   }catch(_e){}
-  return {put:put,get:get,flush:flush,pending:pending,badge:badge,render:render,mount:mount,probe:probe,ready:ready,notify:notify,noticeHide:noticeHide,setOff:setOff,isOff:isOff};
+  return {put:put,get:get,flush:flush,pending:pending,badge:badge,render:render,mount:mount,probe:probe,ready:ready,knownOff:knownOff,notify:notify,noticeHide:noticeHide,setOff:setOff,isOff:isOff};
 })();
 window.ccSync=ccSync;
+/* ★ 잔여 평문 캐시 정리 (2026-07-19): 이전 버전이 기기에 남긴 비밀번호 캐시를 즉시 제거 — 드라이브 원본은 그대로 */
+try{
+  const _purge=function(){
+    try{
+      const rm=[];
+      for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.indexOf('cc_v_')===0&&k.indexOf('_금고')===k.length-3)rm.push(k);}
+      rm.forEach(function(k){try{localStorage.removeItem(k);}catch(_e){}});
+    }catch(_e){}
+  };
+  _purge();
+}catch(_e){}
 window.__ccSyncConnect=function(){   /* ★ 배지 '연결 필요' 클릭 → 드라이브 연결 → 대기분 자동 전송 (2026-07-19) */
   try{
     if(!window.ccStorage||!ccStorage.connect){toast('저장소 모듈을 불러오지 못했어요','warn');return;}
@@ -5775,7 +5798,7 @@ async function aiChkSummary(nm){
     const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=45)L.push('· 생일 '+aiChkMd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10))+' (D-'+bd+')');
   }
   if(c.nextContact&&c.nextContact.length>=10){const nd=aiDday(c.nextContact);if(nd!=null)L.push('· 다음 연락 예정 '+aiChkYmd(c.nextContact)+(nd<0?' ('+(-nd)+'일 지남)':' (D-'+nd+')'));}
-  if((c.needs||[]).length)L.push('· 니즈: '+c.needs.slice(0,4).join(', '));
+  if((c.needs||[]).length)L.push('· 니즈: '+c.needs.slice(0,8).join(', '));
   const ms=(c.meetings||[]).slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
   if(ms.length){const m0=ms[0];L.push('· 최근 미팅 '+(m0.date||'')+' — '+String(m0.note||'').replace(/\s+/g,' ').slice(0,40));}
   const head=nm+' 님'+([c.company,c.title].filter(Boolean).join(' ')?' · '+[c.company,c.title].filter(Boolean).join(' '):'')+(ms.length?' · 기록 '+ms.length+'건':'');
@@ -7136,7 +7159,11 @@ async function ccPwdView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cpwQ=q.value.trim();cpwRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cpwSort=b.dataset.s;cpwRender();}});
   if(!_cpwData){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cpwData=(await ccStorage.loadJson('비밀번호금고','금고'))||{items:[]};}
+    try{
+      let _on=false;try{_on=await ccSync.ready();}catch(_e2){_on=false;}
+      /* 진짜 미연결일 때만 연결 안내 — 네트워크 일시 장애는 아래 catch(다시 시도)로 흐른다 */
+      if(!_on&&ccSync.knownOff&&ccSync.knownOff()){_cpwData=null;ov.querySelector('[data-cv="body"]').innerHTML='';cpwNeedConnect('금고를 열려면 구글 드라이브 연결이 필요해요');return;}
+      _cpwData=(await ccSync.get('비밀번호금고','금고'))||{items:[]};}
     catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccPwdView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button><button onclick="ccVaultGate(function(){ccPwdView()})" style="margin-top:10px;margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:9px;padding:9px 14px;font-size:12px;font-weight:700"><b>G</b> 구글 연결</button></div>';return;}}
   cpwRender();
   ccvOnceGuide('cc_g_pwd',cpwGuide);
@@ -7225,8 +7252,27 @@ function cpwEdit(item){
   };
 }
 async function cpwSave(){cpwRender();
-  try{await ccStorage.saveJson('비밀번호금고','금고',_cpwData);toast('저장됨 · 암호화되어 내 드라이브 동기화','info');}
-  catch(_e){toast('기기에 저장됨 · 드라이브 동기화는 다음에 재시도','warn');}}
+  /* ★ 금고 이관 (2026-07-19): 비밀번호는 기기에 평문으로 남기지 않는다 (공용 PC·분실 대비).
+     ccSync가 '비밀번호금고'를 drive-only로 처리 — 저장 성공 시에만 보관되고, 미연결이면 저장하지 않고 알린다. */
+  try{
+    const r=await ccSync.put('비밀번호금고','금고',_cpwData);
+    if(r&&r.ok){toast('저장됨 · 암호화되어 내 드라이브에만 보관','info');return;}
+    if(r&&r.backup==='need_connect'){cpwNeedConnect('저장하려면 구글 드라이브 연결이 필요해요');return;}
+    cpwNeedConnect('저장하지 못했어요 — 연결 상태를 확인해주세요');
+  }catch(_e){cpwNeedConnect('저장하지 못했어요 — 연결 상태를 확인해주세요');}}
+function cpwNeedConnect(msg){   /* ★ 금고 전용 안내 (2026-07-19): 비밀번호는 기기에 보관하지 않으므로 연결이 필수 */
+  try{toast(msg,'warn');}catch(_e){}
+  const ov=document.getElementById('cpwView');if(!ov)return;
+  const b=ov.querySelector('[data-cv="body"]');if(!b)return;
+  const w=document.createElement('div');
+  w.style.cssText='margin:14px 0 0;background:#FFF8E7;border:1.5px solid #E0C36B;border-radius:14px;padding:16px 14px;text-align:center';
+  w.innerHTML='<div style="font-size:20px">🔐</div>'
+    +'<b style="display:block;font-size:12.5px;margin-top:6px;color:#8B6914">'+ccvEsc(msg)+'</b>'
+    +'<small style="display:block;font-size:10.5px;color:#8a877f;margin-top:6px;line-height:1.65">비밀번호는 보안을 위해 <b>이 기기에 남기지 않고</b><br>내 구글 드라이브에만 암호화 보관합니다.</small>'
+    +'<button type="button" id="cpwConnBtn" style="margin-top:11px;border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:9px 15px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">구글 드라이브 연결하기 ›</button>';
+  b.insertBefore(w,b.firstChild);
+  const cb=document.getElementById('cpwConnBtn');
+  if(cb)cb.onclick=function(){try{if(window.__ccSyncConnect)window.__ccSyncConnect();}catch(_e){}};}
 function cpwGuide(){ccvGuide('cpwGuideM','비밀번호 금고,<br>이렇게 쓰세요',[
  ['이 공간은 무엇인가요','은행·홈택스·쇼핑몰 비밀번호부터 <b style="color:#E8C97A">현관문·와이파이</b>까지 — 수첩 대신 안전하게 보관하는 나만의 금고입니다.'],
  ['처음 30초','우측 위 <b style="color:#fff">＋</b> → 분류 선택 → 이름과 비밀번호만 넣고 저장. 아이디·계좌번호·사이트 주소는 필요할 때만.'],
@@ -7240,6 +7286,20 @@ const CDC_CATS=['보험·증권','계약서','신분증·증명','세금·영수
 const cdcType=mime=>/^image\//.test(mime)?'img':(/^video\//.test(mime)?'vid':(/^audio\//.test(mime)?'aud':'doc'));
 const cdcTypeIc={img:'🖼️',vid:'🎬',aud:'🎙️',doc:'📄'};
 function cdcFmtSize(b){b=Number(b)||0;return b>1048576?(b/1048576).toFixed(1)+'MB':Math.max(1,Math.round(b/1024))+'KB';}
+function cdcNeedConnect(){   /* ★ 문서함 연결 안내 (2026-07-19): 파일 실물은 기기에 담지 않으므로 연결 필수 */
+  try{toast('파일을 담으려면 구글 드라이브 연결이 필요해요','warn');}catch(_e){}
+  const ov=document.getElementById('cdcView');if(!ov)return;
+  const b=ov.querySelector('[data-cv="body"]');if(!b)return;
+  if(document.getElementById('cdcConnBox'))return;
+  const w=document.createElement('div');w.id='cdcConnBox';
+  w.style.cssText='margin:14px 0 0;background:#FFF8E7;border:1.5px solid #E0C36B;border-radius:14px;padding:16px 14px;text-align:center';
+  w.innerHTML='<div style="font-size:20px">📂</div>'
+    +'<b style="display:block;font-size:12.5px;margin-top:6px;color:#8B6914">구글 드라이브 연결이 필요해요</b>'
+    +'<small style="display:block;font-size:10.5px;color:#8a877f;margin-top:6px;line-height:1.65">파일 원본은 <b>내 구글 드라이브에만</b> 저장됩니다.<br>기기에는 목록만 보관해 용량을 차지하지 않아요.</small>'
+    +'<button type="button" id="cdcConnBtn" style="margin-top:11px;border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:9px 15px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">구글 드라이브 연결하기 ›</button>';
+  b.insertBefore(w,b.firstChild);
+  const cb=document.getElementById('cdcConnBtn');
+  if(cb)cb.onclick=function(){try{if(window.__ccSyncConnect)window.__ccSyncConnect();}catch(_e){}};}
 async function ccDocsView(){
   const ov=ccvShell('cdcView','ti-folder','비공개 문서함','100% 내 드라이브 저장 · 회사 서버 미경유');
   ov.querySelector('[data-cv="guide"]').onclick=cdcGuide;
@@ -7247,7 +7307,7 @@ async function ccDocsView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cdcQ=q.value.trim();cdcRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cdcSort=b.dataset.s;cdcRender();}});
   if(!_cdcIdx){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cdcIdx=(await ccStorage.loadJson('문서함','문서색인'))||{files:[]};}
+    try{_cdcIdx=(await ccSync.get('문서함','문서색인'))||{files:[]};}
     catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccDocsView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button><button onclick="ccVaultGate(function(){ccDocsView()})" style="margin-top:10px;margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:9px;padding:9px 14px;font-size:12px;font-weight:700"><b>G</b> 구글 연결</button></div>';return;}}
   cdcRender();
   ccvOnceGuide('cc_g_docs',cdcGuide);
@@ -7357,6 +7417,9 @@ function cdcThumb(file,type){ // 사진=축소본 / 영상=첫 장면 (96px JPEG
   });
 }
 async function cdcUpload(files){
+  /* ★ 파일 실물은 드라이브에만 보관 — 연결이 없으면 업로드 자체가 불가하므로 먼저 알린다 (2026-07-19) */
+  let _on=false;try{_on=await ccSync.ready();}catch(_e){_on=false;}
+  if(!_on&&ccSync.knownOff&&ccSync.knownOff()){cdcNeedConnect();return;}   /* 진짜 미연결만 차단 — 일시 장애는 업로드 시도 후 개별 안내 */
   const upIds=[];
   for(const f of files){
     const type=cdcType(f.type||'');
@@ -7464,7 +7527,8 @@ function cdcPreview(f,url){
   document.getElementById('cdcPrevX').onclick=()=>{m.remove();try{URL.revokeObjectURL(url);}catch(_e){}};
 }
 async function cdcSaveIdx(){cdcRender();
-  try{await ccStorage.saveJson('문서함','문서색인',_cdcIdx);}catch(_e){}}
+  /* ★ 문서함 이관 (2026-07-19): 색인(목록)만 기기 캐시 — 파일 실물은 드라이브 직행(용량·보안) */
+  try{await ccSync.put('문서함','문서색인',_cdcIdx);}catch(_e){}}
 function cdcGuide(){ccvGuide('cdcGuideM','비공개 문서함,<br>이렇게 쓰세요',[
  ['이 공간은 무엇인가요','보험증권·계약서·신분증·영수증 같은 소중한 문서를 <b style="color:#E8C97A">100% 회원님의 구글드라이브</b>에 정리해 두는 나만의 서류함입니다. 서랍 속 종이를 찾아 헤매지 않아도 돼요.'],
  ['처음 30초 — 촬영 한 번','우측 위 <b style="color:#fff">＋</b> → <b style="color:#fff">촬영하기</b> → 계약서를 찍으면 끝. 이어서 뜨는 창에서 분류(보험·계약서 등)만 눌러주면 드라이브 폴더에도 자동 정리됩니다.'],
@@ -7970,6 +8034,8 @@ init();
       <button id="mpcdRoute" class="mpcd-tmap">티맵 길안내</button>
       <div class="mpcd-row" style="margin-top:14px;border:none"><span class="mpcd-lb">메모</span></div>
       <div id="mpcdMemo" style="font-size:12.5px;color:#3A4457;line-height:1.6;background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:11px;margin-top:2px">-</div>
+      <div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-top:12px">니즈</div>
+      <div id="mpcdNeeds" style="margin-top:5px"></div>
       <div id="mpcdSales" style="display:none;background:#FFF8E7;border:1px solid #E0C36B;border-radius:10px;padding:9px 11px;margin-top:8px"></div>
       <button type="button" id="mpcdAiBtn" style="display:none;width:100%;border:1px solid #D8DCE5;background:#fff;border-radius:10px;padding:9px;font-size:11.5px;color:#15294A;font-weight:700;margin-top:8px">🤖 이 고객과의 AI 대화 보기</button>
       <div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-top:12px">미팅 · AI 기록</div>
@@ -8190,7 +8256,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcLoadCustomRels(){try{mpcCustomRels=JSON.parse(localStorage.getItem("mpc_custom_rels")||"[]")||[];}catch(e){mpcCustomRels=[];}}
   function mpcSaveCustomRels(){try{localStorage.setItem("mpc_custom_rels",JSON.stringify(mpcCustomRels));}catch(e){}}
   function mpcAddCustomRel(name){name=(name||"").trim();if(!name)return;for(var i=0;i<REL_DEFS.length;i++)if(REL_DEFS[i].k===name)return;if(mpcCustomRels.indexOf(name)<0){mpcCustomRels.push(name);mpcSaveCustomRels();}}
-  var mpcEditId=null,mpcRelsSel=[],mpcCoord=null,custFilter="all",mpcCountBound=false,mpcSearch="",mpcSort="recent";
+  var mpcEditId=null,mpcRelsSel=[],mpcCoord=null,custFilter="all",mpcCountBound=false,mpcSearch="",mpcSort=(function(){try{var v=localStorage.getItem("mpc_sort")||"recent";return ["recent","name","rel"].indexOf(v)>=0?v:"recent";}catch(_e){return "recent";}})();   /* ★ 정렬 선택 유지 (2026-07-19) */
   var mpcPage=1,mpcPageSize=(function(){var v=parseInt(localStorage.getItem("mpc_pgsize")||"10",10);return [10,20,30,40,50,100].indexOf(v)>=0?v:10;})();   /* ★ 리스트 페이지네이션 (2026-07-18) */
   function mpcMatch(c){return custFilter==="all"||((c.rels||[]).indexOf(custFilter)>=0);}
   function mpcRenderFilter(){var w=$("mpcbFilters");if(!w)return;var opts=[["all","전체"]].concat(REL_DEFS.map(function(r){return [r.k,r.k];})).concat(mpcCustomRels.map(function(k){return [k,k];}));w.innerHTML="";opts.forEach(function(o){var b=document.createElement("button");b.type="button";b.className="mpcb-f"+(custFilter===o[0]?" on":"");b.textContent=o[1];b.onclick=function(){custFilter=o[0];mpcPage=1;mpcRenderFilter();mpcRenderList();mpcDrawMarkers(false);mpcUpdateCount();};w.appendChild(b);});}
@@ -8216,7 +8282,16 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   /* ★ 영업정보 (2026-07-17): 가족·계약·니즈 작업 배열 + D-day */
   var mpcFamily=[],mpcContracts=[],mpcNeedsSel=[];
   var mpcCtRO=[];   /* ★ 내고객관리(fc_clients) 계약 읽기 전용 표시분 (2026-07-17) — 지도에 복사하지 않음 */
-  var MPC_NEEDS=["연금","상속","절세","보장","투자","법인"];
+  /* ★ 니즈 확장 (2026-07-19): 15개 4그룹 + 직접입력.
+     MPC_NEEDS_OLD(폐기)는 기존 저장분만 회색으로 표시하고 재선택 불가 — 데이터 변환 없이 자연 소멸 */
+  var MPC_NEED_GROUPS=[
+    {g:"보장",items:["실손","암·진단비","종신·사망","간병·치매","어린이·태아","운전자"]},
+    {g:"저축·노후",items:["연금","저축","은퇴설계","투자"]},
+    {g:"세무·자산",items:["절세","상속","증여"]},
+    {g:"법인",items:["CEO플랜","법인컨설팅"]}
+  ];
+  var MPC_NEEDS=MPC_NEED_GROUPS.reduce(function(a,g){return a.concat(g.items);},[]);
+  var MPC_NEEDS_OLD=["보장","법인"];
   var mpcFccIdx=null;   /* fc_clients 인덱스 (이름|생일 → 계약·호칭) */
   var MPC_PT2CODE={'실손':'silson','자동차':'auto','보장성':'protect','저축성':'saving','연금':'pension','기타':'etc'};   /* ★ 유형 한글→코드 (fc_clients 정본=영문코드, 2026-07-18) */
   /* ★ 내고객관리 → 지도 이름+생년월일 동기화 (2026-07-17)
@@ -8251,17 +8326,20 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcDdayFromDate(ymd){if(!ymd||ymd.length!==10)return null;var now=new Date();var base=new Date(now.getFullYear(),now.getMonth(),now.getDate());var t=new Date(ymd+"T00:00:00");return Math.round((t-base)/86400000);}
   /* ═══ 👤 고객 상세(읽기 전용) 시트 (2026-07-18): 카드 탭 = 열람 전용 — 임박 일정 스트립 · 계약 · 니즈 · 메모 · 미팅 · 위치. 수정은 ✏ 버튼으로만 진입 ═══ */
   var mpcDtMtAll=false;
+  var mpcDtNeedsOpen=false;   /* ★ 카드시트 니즈 펼침 상태 (2026-07-19) */
   function mpcDetailClose(){var s=$("mpcDetail");if(s)s.style.display="none";}
   function mpcDetailOpen(c){
     if(!c)return;
     var s=$("mpcDetail");
     if(!s){s=document.createElement("div");s.id="mpcDetail";s.style.cssText="position:absolute;inset:0;z-index:1270;background:#F7F5EF;display:none;flex-direction:column";var host=$("mpCustForm")&&$("mpCustForm").parentNode?$("mpCustForm").parentNode:document.body;host.appendChild(s);}
     mpcDtMtAll=false;
+    mpcDtNeedsOpen=false;
     mpcDetailRender(c);
     s.style.display="flex";
   }
   function mpcDetailRender(c){
     var s=$("mpcDetail");if(!s||!c)return;
+    var _keepTop=(function(){var e=$("mpcDtScroll");return e?e.scrollTop:0;})();   /* ★ 재렌더 시 스크롤 유지 (2026-07-19): 니즈 칩 탭마다 맨 위로 튀는 문제 */
     var relPills=(c.rels||[]).map(function(k){return '<span style="font-size:10px;font-weight:800;border-radius:9px;padding:2px 8px;background:'+mpcRelColor(k)+';color:#fff">'+esc(k)+'</span>';}).join(" ");
     var stPill=c.status?('<span style="font-size:10px;font-weight:800;border-radius:9px;padding:2px 8px;background:'+(c.status==="VIP"?"#FBF3DC;color:#8B6914":c.status==="가망"?"#E6F1FB;color:#185FA5":"#EEF1F6;color:#5A6484")+'">'+esc(c.status)+'</span>'):"";
     var subs=[];if(c.company||c.title)subs.push(esc([c.company,c.title].filter(Boolean).join(" · ")));if(c.referrer)subs.push("소개: "+esc(c.referrer)+" 님");if(c.fccId)subs.push("마이페이지 연동됨");
@@ -8305,30 +8383,41 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
         +((c.prefChannel||c.prefTime)?'<div style="display:flex;font-size:12px;margin-top:8px"><b style="width:62px;flex-shrink:0;font-weight:700;color:#8A93A8;font-size:11px">선호</b><span style="color:#3A4457">'+esc([c.prefChannel,c.prefTime].filter(Boolean).join(" · "))+'</span></div>':""));
     }
     if(cts.length)body+=sec("계약",cts.length+"건",ctH+(premAny?'<div style="display:flex;justify-content:flex-end;font-size:11px;color:#8A93A8;margin-top:8px">월보험료 합계 <b style="color:#15294A;margin-left:5px">'+premSum.toLocaleString()+'원</b></div>':""));
-    if((c.needs&&c.needs.length)||famH){
-      body+=sec("니즈 · 가족","",((c.needs&&c.needs.length)?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">'+c.needs.map(function(n){return '<span style="font-size:10.5px;font-weight:700;color:#8B6914;background:#FFF8E7;border:1px solid #EBD9A8;border-radius:9px;padding:3px 9px">'+esc(n)+'</span>';}).join("")+'</div>':"")
+    var _bodyPreNeeds=body;   /* ★ 빈 상태 판정용 (2026-07-19): 니즈 섹션은 상시 노출이라 별도 보관 */
+    body+=sec("니즈 · 가족","",'<div id="mpcDtNeeds" style="margin-top:8px"></div>'
         +(famH?'<div style="display:flex;font-size:12px;color:#3A4457;gap:10px;margin-top:8px"><b style="font-weight:700;color:#8A93A8;font-size:11px">가족</b><span>'+famH+'</span></div>':""));
-    }
     if(c.memo)body+=sec("메모","",'<div style="background:#FFFDF2;border:1px solid #F0E6C0;border-radius:11px;padding:10px 12px;font-size:12px;line-height:1.65;color:#3A4457;margin-top:8px;white-space:pre-wrap">'+esc(c.memo)+'</div>');
     if(ms.length)body+=sec("미팅 · AI 기록",ms.length+"건",mtH+((!mpcDtMtAll&&ms.length>3)?'<button type="button" id="mpcDtMtMore" style="width:100%;margin-top:8px;border:1px dashed #D8DCE5;background:none;border-radius:10px;padding:8px;font-size:11px;font-weight:700;color:#8A93A8;cursor:pointer">전체 '+ms.length+'건 보기</button>':""));
     if(c.addr||fileH){
       body+=sec("위치 · 첨부",(c.files&&c.files.length)?("파일 "+c.files.length):"",(c.addr?'<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:#3A4457"><span style="flex:1;min-width:0">📍 '+esc(c.addr)+(c.addrDetail?" "+esc(c.addrDetail):"")+'</span>'+((c.lat&&c.lng)?'<button type="button" id="mpcDtMap" style="font-size:10.5px;font-weight:800;color:#185FA5;background:#E6F1FB;border:0;border-radius:9px;padding:5px 10px;cursor:pointer;flex-shrink:0">지도에서 보기</button>':"")+'</div>':"")
         +(fileH?'<div style="display:flex;font-size:12px;margin-top:9px"><b style="width:62px;flex-shrink:0;font-weight:700;color:#8A93A8;font-size:11px">첨부</b><span style="color:#3A4457">'+fileH+'</span></div>':""));
     }
-    if(!body)body='<div style="text-align:center;font-size:12px;color:#9099AD;padding:30px 0">등록된 상세 정보가 아직 없어요.<br>아래 ✏ 수정에서 채워보세요.</div>';
+    if(!_bodyPreNeeds&&!famH&&!(c.needs&&c.needs.length))body='<div style="text-align:center;font-size:12px;color:#9099AD;padding:22px 0 6px">등록된 상세 정보가 아직 없어요.<br>아래 니즈를 고르거나 ✏ 수정에서 채워보세요.</div>'+body;
     var s2=$("mpcDetail");
     s2.innerHTML='<div style="background:#15294A;padding:14px 16px 12px;color:#fff;flex-shrink:0">'
       +'<div style="display:flex;align-items:flex-start;gap:10px"><div style="flex:1;min-width:0"><div style="font-size:19px;font-weight:800;letter-spacing:-.2px">'+esc(c.name||"")+(c.mgTitle?' <small style="font-size:11px;font-weight:600;color:#C9A96E">'+esc(c.mgTitle)+'</small>':"")+'</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+relPills+" "+stPill+'</div></div><button type="button" id="mpcDtX" style="background:none;border:0;color:#9AA3B8;font-size:19px;cursor:pointer;line-height:1;padding:2px">✕</button></div>'
       +(subs.length?'<div style="font-size:10.5px;color:#9AA3B8;margin-top:6px">'+subs.join(" &nbsp;|&nbsp; ")+'</div>':"")+'</div>'
       +(tiles.length?'<div style="display:grid;grid-template-columns:repeat('+Math.min(4,tiles.length)+',1fr);gap:6px;padding:11px 12px 2px;flex-shrink:0">'+tileH+'</div>':"")
-      +'<div style="flex:1;overflow-y:auto;padding:6px 12px 90px">'+body+'</div>'
+      +'<div id="mpcDtScroll" style="flex:1;overflow-y:auto;padding:6px 12px 90px">'+body+'</div>'
       +'<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #ECEEF2;padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px">'
       +(c.phone?'<a href="tel:'+esc(c.phone)+'" style="flex:1;border:1px solid #15294A;background:#15294A;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#fff;text-align:center;text-decoration:none">📞 전화하기</a><a href="sms:'+esc(c.phone)+'" style="flex:1;border:1px solid #ECEEF2;background:#fff;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#3A4457;text-align:center;text-decoration:none">💬 문자</a>':"")
       +'<button type="button" id="mpcDtEdit" style="flex:1;border:1px solid #ECEEF2;background:#fff;border-radius:12px;padding:12px 0;font-size:13px;font-weight:800;color:#3A4457;cursor:pointer;font-family:inherit">✏ 수정</button></div>';
     var xb=$("mpcDtX");if(xb)xb.onclick=mpcDetailClose;
+    if(_keepTop){var _sc=$("mpcDtScroll");if(_sc)_sc.scrollTop=_keepTop;}
     var eb=$("mpcDtEdit");if(eb)eb.onclick=function(){mpcDetailClose();openCustForm(c);};
     var mb=$("mpcDtMap");if(mb)mb.onclick=function(){mpcDetailClose();mpcFocusMap(c);mpcShowInfo(c);};
     var mo=$("mpcDtMtMore");if(mo)mo.onclick=function(){mpcDtMtAll=true;mpcDetailRender(c);};
+    (function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
+      var nb=$("mpcDtNeeds");if(!nb)return;
+      var sel=(c.needs||[]).slice();
+      nb.innerHTML=mpcDtNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
+      mpcNeedsWire(nb,sel,function(ns){
+        c.needs=ns.slice();c.createdAt=Date.now();custPut(c);mpcGdPushSoon();
+        try{mpcRenderList();}catch(_e){}
+        mpcDetailRender(c);
+      },function(){mpcDtNeedsOpen=true;mpcDetailRender(c);}
+       ,function(){mpcDtNeedsOpen=false;mpcDetailRender(c);});
+    })();
     Array.prototype.forEach.call(s2.querySelectorAll("[data-dtmt]"),function(el){el.onclick=function(){var b=s2.querySelector('[data-dtmtb="'+el.getAttribute("data-dtmt")+'"]');if(b)b.style.display=(b.style.display==="none")?"block":"none";};});
   }
   function mpcBadges(c){var out=[];   /* 30일 내 임박 이벤트만 배지 */
@@ -8343,8 +8432,51 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(c.nextContact){var nc=mpcDdayFromDate(c.nextContact);if(nc!=null&&nc<=7)evs.push({d:nc,t:(nc<0?"연락 지남":"연락 D-"+nc)});}
     evs.sort(function(a,b){return a.d-b.d;});evs.slice(0,2).forEach(function(e){out.push('<span style="background:#FAEEDA;color:#633806;border-radius:7px;padding:1px 6px;font-size:9.5px;font-weight:700">'+e.t+'</span>');});
     return out.join(" ");}
-  function mpcNeedsRender(){var box=$("mpcNeeds");if(!box)return;box.innerHTML=MPC_NEEDS.map(function(n){var on=mpcNeedsSel.indexOf(n)>=0;return '<button type="button" data-need="'+n+'" style="border:1px solid '+(on?"#15294A":"#D8DCE5")+';background:'+(on?"#15294A":"#fff")+';color:'+(on?"#fff":"#5C6678")+';border-radius:14px;padding:5px 12px;font-size:11.5px;font-weight:600">'+n+'</button>';}).join("");
-    Array.prototype.forEach.call(box.querySelectorAll("[data-need]"),function(b){b.onclick=function(){var n=b.getAttribute("data-need");var i=mpcNeedsSel.indexOf(n);if(i>=0)mpcNeedsSel.splice(i,1);else mpcNeedsSel.push(n);mpcNeedsRender();};});}
+  /* ★ 니즈 공용 칩 (2026-07-19): 수정폼·카드시트·지도상세 3곳 공용 — 렌더/와이어 1벌만 유지 */
+  function mpcNeedOld(n){return MPC_NEEDS_OLD.indexOf(n)>=0;}
+  function mpcNeedsCustomAll(){   /* 별도 저장소 없음 — 전 고객 needs에서 기본·폐기 외 값만 수집 */
+    var known={},seen={},out=[];
+    MPC_NEEDS.forEach(function(n){known[n]=1;});MPC_NEEDS_OLD.forEach(function(n){known[n]=1;});
+    (customers||[]).forEach(function(c){(c.needs||[]).forEach(function(n){if(!n||known[n]||seen[n])return;seen[n]=1;out.push(n);});});
+    return out.sort(function(a,b){return String(a).localeCompare(String(b),"ko");});}
+  function mpcNeedBtn(n,on,old){
+    var bd=old?"#D3D1C7":(on?"#15294A":"#D8DCE5"),bg=old?"#F1EFE8":(on?"#15294A":"#fff"),fg=old?"#5F5E5A":(on?"#fff":"#5C6678");
+    return '<button type="button" data-need="'+esc(n)+'"'+(old?' data-needold="1"':"")+' style="border:1px solid '+bd+';background:'+bg+';color:'+fg+';border-radius:14px;padding:5px 12px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer">'+esc(n)+'</button>';}
+  function mpcNeedsPalette(sel,withDone){   /* 펼친 상태 — 그룹 전체 + 직접 추가. withDone=상세화면에서만 접기 버튼 */
+    sel=sel||[];var m={};sel.forEach(function(n){m[n]=1;});var h="";
+    MPC_NEED_GROUPS.forEach(function(g){
+      h+='<div style="font-size:10px;color:#8A93A8;font-weight:700;margin-top:9px">'+g.g+'</div><div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:4px">'+g.items.map(function(n){return mpcNeedBtn(n,!!m[n],false);}).join("")+'</div>';});
+    var cus=mpcNeedsCustomAll(),cm={};cus.forEach(function(n){cm[n]=1;});
+    sel.forEach(function(n){if(MPC_NEEDS.indexOf(n)<0&&!mpcNeedOld(n)&&!cm[n]){cm[n]=1;cus.push(n);}});
+    var olds=sel.filter(mpcNeedOld);
+    if(cus.length||olds.length)h+='<div style="font-size:10px;color:#8A93A8;font-weight:700;margin-top:9px">직접 추가</div><div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:4px">'+cus.map(function(n){return mpcNeedBtn(n,!!m[n],false);}).join("")+olds.map(function(n){return mpcNeedBtn(n,true,true);}).join("")+'</div>';
+    h+='<div style="display:flex;gap:5px;margin-top:9px"><input type="text" data-neednew="1" maxlength="12" placeholder="새 항목 (쉼표로 여러 개)" style="flex:1;min-width:0;border:1px solid #D8DCE5;border-radius:10px;padding:7px 10px;font-size:11.5px;font-family:inherit;outline:0"><button type="button" data-needadd="1" style="border:1px solid #15294A;background:#15294A;color:#fff;border-radius:10px;padding:7px 14px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer">추가</button></div>';
+    if(withDone)h+='<button type="button" data-needless="1" style="width:100%;margin-top:9px;border:1px solid #D8DCE5;background:#fff;color:#5C6678;border-radius:10px;padding:8px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer">완료</button>';
+    return h;}
+  function mpcNeedsCompact(sel){   /* 접힌 상태 — 선택분 + ＋ */
+    sel=sel||[];
+    return '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center">'+sel.map(function(n){return mpcNeedBtn(n,true,mpcNeedOld(n));}).join("")+'<button type="button" data-needmore="1" style="border:1px dashed #B7BDC9;background:#fff;color:#5C6678;border-radius:14px;padding:5px 12px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer">＋</button></div>'+(sel.some(mpcNeedOld)?'<div style="font-size:9.5px;color:#9099AD;margin-top:5px">회색은 예전 항목 · 탭하면 해제돼요</div>':"");}
+  function mpcNeedsWire(box,sel,onChange,onMore,onLess){
+    if(!box)return;
+    Array.prototype.forEach.call(box.querySelectorAll("[data-need]"),function(b){b.onclick=function(){
+      var n=b.getAttribute("data-need"),i=sel.indexOf(n);
+      if(i>=0)sel.splice(i,1);
+      else if(b.getAttribute("data-needold")==="1")return;   /* 폐기 항목은 해제만 가능 */
+      else sel.push(n);
+      onChange(sel);};});
+    var ip=box.querySelector("[data-neednew]"),ad=box.querySelector("[data-needadd]");
+    if(ad)ad.onclick=function(){
+      if(!ip)return;var added=0;
+      String(ip.value||"").split(",").forEach(function(t){t=t.trim().slice(0,12);if(!t||mpcNeedOld(t)||sel.indexOf(t)>=0)return;sel.push(t);added++;});
+      ip.value="";
+      if(added)onChange(sel);else toast("추가할 새 항목을 입력해 주세요","warn");};
+    if(ip)ip.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();if(ad)ad.onclick();}};
+    var mb=box.querySelector("[data-needmore]");
+    if(mb&&onMore)mb.onclick=onMore;
+    var lb=box.querySelector("[data-needless]");
+    if(lb&&onLess)lb.onclick=onLess;}
+  function mpcNeedsRender(){var box=$("mpcNeeds");if(!box)return;box.style.display="block";box.innerHTML=mpcNeedsPalette(mpcNeedsSel);
+    mpcNeedsWire(box,mpcNeedsSel,function(){mpcNeedsRender();});}
   function mpcFamRender(){var L=$("mpcFamList");if(!L)return;L.innerHTML=mpcFamily.length?mpcFamily.map(function(f,i){return '<div style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #ECEEF2;border-radius:9px;padding:7px 10px;margin-top:5px;font-size:11.5px;color:#3A4457"><b>'+esc(f.rel||"")+'</b><span style="flex:1">'+esc(f.name||"")+(f.birth?' ('+esc(f.birth)+')':'')+'</span><button type="button" data-famdel="'+i+'" style="border:0;background:none;color:#B7BDC9;font-size:14px">×</button></div>';}).join(""):"";
     Array.prototype.forEach.call(L.querySelectorAll("[data-famdel]"),function(b){b.onclick=function(){mpcFamily.splice(parseInt(b.getAttribute("data-famdel"),10),1);mpcFamRender();};});}
   function mpcFamAddFn(){var rel=$("mpcFamRel").value.trim(),nm=$("mpcFamName").value.trim(),bt=$("mpcFamBirth").value.trim();if(!rel&&!nm){alert("관계 또는 이름을 입력해 주세요.");return;}mpcFamily.push({rel:rel,name:nm,birth:bt});$("mpcFamRel").value="";$("mpcFamName").value="";$("mpcFamBirth").value="";mpcFamRender();}
@@ -8596,7 +8728,18 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     });
   });ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();}});mpcCountBound=true;}mpcUpdateCount();}},180);});});};
   window.__mpPlacesRedraw=function(){mpcCloseInfo();mpcClearMarkers();if(map){map.relayout&&map.relayout();drawMarkers();}};
-  function openCustDetail(c){if(!c)return;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title].filter(Boolean).join(" · ")||"-";$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.needs&&c.needs.length)_sl.push("니즈: "+c.needs.join("·"));if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}var _mtb=$("mpcdMeet");if(_mtb){var _ms=(c.meetings||[]).slice().sort(function(a2,b2){return (b2.date||"").localeCompare(a2.date||"");});_mtb.innerHTML=_ms.length?_ms.map(function(m){return '<div style="background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;margin-top:5px"><div style="font-size:11px;font-weight:700;color:#15294A">📅 '+esc(m.date||"")+(m.place?' · 📍 '+esc(m.place):'')+'</div><div style="font-size:12px;color:#3A4457;line-height:1.55;margin-top:3px;white-space:pre-wrap">'+esc(m.note||"")+'</div>'+(m.next?'<div style="font-size:11px;color:#8B6914;margin-top:4px">→ 다음: '+esc(m.next)+'</div>':'')+'</div>';}).join(""):'<span style="font-size:11px;color:#9099AD">미팅 기록 없음</span>';}var _flb=$("mpcdFiles");if(_flb){var _fs=c.files||[];_flb.innerHTML=_fs.length?('<div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-bottom:4px">첨부파일</div>'+_fs.map(function(f,i){var isImg=/^image\//.test(f.mime||"");return '<button type="button" data-fi="'+i+'" style="display:block;width:100%;text-align:left;border:1px solid #ECEEF2;background:#fff;border-radius:9px;padding:9px 11px;font-size:11.5px;color:#15294A;margin-top:4px"><span style="font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(isImg?"📷 ":"📎 ")+esc(f.name||"파일")+'</span>'+(f.desc?'<span style="display:block;font-size:10.5px;color:#8A93A8;margin-top:2px">'+esc(f.desc)+'</span>':'')+'</button>';}).join("")):"";_flb.style.display=_fs.length?"block":"none";Array.prototype.forEach.call(_flb.querySelectorAll("[data-fi]"),function(b){b.onclick=function(){mpcFileOpen(_fs[parseInt(b.getAttribute("data-fi"),10)]);};});}$("mpcdEdit").onclick=function(){$("mpCustDetail").classList.remove("show");openCustForm(c);};$("mpcdDel").onclick=function(){mpcDeleteCust(c,function(){$("mpCustDetail").classList.remove("show");});};$("mpCustDetail").classList.add("show");}
+  var mpcdNeedsOpen=false;   /* ★ 지도 상세 니즈 펼침 상태 (2026-07-19) */
+  function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title].filter(Boolean).join(" · ")||"-";$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
+    var nb=$("mpcdNeeds");if(!nb)return;
+    var sel=(c.needs||[]).slice();
+    nb.innerHTML=mpcdNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
+    mpcNeedsWire(nb,sel,function(ns){
+      c.needs=ns.slice();c.createdAt=Date.now();custPut(c);mpcGdPushSoon();
+      try{mpcRenderList();}catch(_e){}
+      openCustDetail(c,true);
+    },function(){mpcdNeedsOpen=true;openCustDetail(c,true);}
+     ,function(){mpcdNeedsOpen=false;openCustDetail(c,true);});
+  })();var _mtb=$("mpcdMeet");if(_mtb){var _ms=(c.meetings||[]).slice().sort(function(a2,b2){return (b2.date||"").localeCompare(a2.date||"");});_mtb.innerHTML=_ms.length?_ms.map(function(m){return '<div style="background:#F7F8FA;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;margin-top:5px"><div style="font-size:11px;font-weight:700;color:#15294A">📅 '+esc(m.date||"")+(m.place?' · 📍 '+esc(m.place):'')+'</div><div style="font-size:12px;color:#3A4457;line-height:1.55;margin-top:3px;white-space:pre-wrap">'+esc(m.note||"")+'</div>'+(m.next?'<div style="font-size:11px;color:#8B6914;margin-top:4px">→ 다음: '+esc(m.next)+'</div>':'')+'</div>';}).join(""):'<span style="font-size:11px;color:#9099AD">미팅 기록 없음</span>';}var _flb=$("mpcdFiles");if(_flb){var _fs=c.files||[];_flb.innerHTML=_fs.length?('<div style="font-size:10.5px;color:#8A93A8;font-weight:700;margin-bottom:4px">첨부파일</div>'+_fs.map(function(f,i){var isImg=/^image\//.test(f.mime||"");return '<button type="button" data-fi="'+i+'" style="display:block;width:100%;text-align:left;border:1px solid #ECEEF2;background:#fff;border-radius:9px;padding:9px 11px;font-size:11.5px;color:#15294A;margin-top:4px"><span style="font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(isImg?"📷 ":"📎 ")+esc(f.name||"파일")+'</span>'+(f.desc?'<span style="display:block;font-size:10.5px;color:#8A93A8;margin-top:2px">'+esc(f.desc)+'</span>':'')+'</button>';}).join("")):"";_flb.style.display=_fs.length?"block":"none";Array.prototype.forEach.call(_flb.querySelectorAll("[data-fi]"),function(b){b.onclick=function(){mpcFileOpen(_fs[parseInt(b.getAttribute("data-fi"),10)]);};});}$("mpcdEdit").onclick=function(){$("mpCustDetail").classList.remove("show");openCustForm(c);};$("mpcdDel").onclick=function(){mpcDeleteCust(c,function(){$("mpCustDetail").classList.remove("show");});};$("mpCustDetail").classList.add("show");}
   // ── 내 고객: 엑셀 대량 업로드 (index.html 로직 이식 + 좌표캐시 + 자동 헤더매핑) ──
   var mpcXlsxStop=false;
   function mpcLoadXLSX(cb){if(window.XLSX){cb(true);return;}var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";s.onload=function(){cb(!!window.XLSX);};s.onerror=function(){cb(false);};document.head.appendChild(s);}
@@ -8675,6 +8818,10 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   /* ★ 2026-07-17 암호화 전환: 내고객 데이터는 '고객관리/내고객.safe'(AES-GCM)로 저장.
      레거시 평문 내고객.json은 최초 1회 읽어 이전 후 드라이브에서 제거 (Drive-First 암호화 원칙). */
   function mpcGdPush(){mpcGdPushQ(0);}   /* ★ 유실 방지 재작성 (2026-07-17): 실패 무음 금지 — 재시도 + 미완료 플래그 + 알림 */
+  var _mpcGdT=null;
+  function mpcGdPushSoon(){   /* ★ 묶음 업로드 (2026-07-19): 칩 연속 탭 시 매번 전체 업로드하지 않도록 1.5초 합침 */
+    try{localStorage.setItem("mpc_dirty","1");}catch(_e){}
+    clearTimeout(_mpcGdT);_mpcGdT=setTimeout(function(){_mpcGdT=null;mpcGdPush();},1500);}
   function mpcGdPushQ(retry){
     try{localStorage.setItem("mpc_dirty","1");}catch(_e){}   /* 성공 확인 전까지 '백업 미완료' 표시 */
     if(!mpcGdOn())return;   /* 미연결: 플래그만 남김 → 다음 연결 시 자동 백업 */
@@ -8693,9 +8840,11 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     ["meetings","files"].forEach(function(k){var seen={},m=[];((w&&w[k])||[]).concat((l&&l[k])||[]).forEach(function(x){if(!x)return;var id=x.id;if(id){if(seen[id])return;seen[id]=1;}m.push(x);});out[k]=m;});
     var seenP={};out.contracts=(((w&&w.contracts)||[]).concat((l&&l.contracts)||[])).filter(function(x){var p=x&&x.product;if(!p||seenP[p])return false;seenP[p]=1;return true;});
     ["birthDate","phone","email","status","referrer","nextContact","memo","addr","addrDetail","company","title","prefChannel","prefTime"].forEach(function(k){if((out[k]==null||out[k]==="")&&l&&l[k])out[k]=l[k];});
-    if((!out.needs||!out.needs.length)&&l&&l.needs&&l.needs.length)out.needs=l.needs;
-    if((!out.family||!out.family.length)&&l&&l.family&&l.family.length)out.family=l.family;
-    if((!out.rels||!out.rels.length)&&l&&l.rels&&l.rels.length)out.rels=l.rels;
+    /* ★ 유실 차단 (2026-07-19): 니즈·가족·관계도 미팅과 동일하게 합집합 — 두 기기가 각각 추가한 값이 서로를 덮지 않는다.
+       (해제와 미추가를 구분하지 못하는 한계는 감수 — 사라지는 것보다 되살아나는 편이 안전) */
+    out.needs=(((w&&w.needs)||[]).concat((l&&l.needs)||[])).filter(function(x,i,a){return x&&a.indexOf(x)===i;});
+    (function(){var seenF={};out.family=(((w&&w.family)||[]).concat((l&&l.family)||[])).filter(function(x){if(!x)return false;var k=(x.rel||"")+"|"+(x.name||"")+"|"+(x.birth||"");if(seenF[k])return false;seenF[k]=1;return true;});})();
+    out.rels=(((w&&w.rels)||[]).concat((l&&l.rels)||[])).filter(function(x,i,a){return x&&a.indexOf(x)===i;});
     return out;
   }
   function mpcMergeRemote(remote){
@@ -8808,7 +8957,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     if($("mpcSave"))$("mpcSave").onclick=mpcSaveCust;
     if($("mpcPhone"))$("mpcPhone").oninput=function(){this.value=mpcFmtPhone(this.value);};
     if($("mpcSearchIn"))$("mpcSearchIn").oninput=function(){mpcSearch=this.value;mpcPage=1;mpcRenderList();};
-    if($("mpcSortSel"))$("mpcSortSel").onchange=function(){mpcSort=this.value;mpcPage=1;mpcRenderList();};
+    if($("mpcSortSel")){$("mpcSortSel").value=mpcSort;$("mpcSortSel").onchange=function(){mpcSort=this.value;try{localStorage.setItem("mpc_sort",mpcSort);}catch(_e){}mpcPage=1;mpcRenderList();};}
     if($("mpcPgSize")){$("mpcPgSize").value=String(mpcPageSize);$("mpcPgSize").onchange=function(){mpcPageSize=parseInt(this.value,10)||10;try{localStorage.setItem("mpc_pgsize",String(mpcPageSize));}catch(_e){}mpcPage=1;mpcRenderList();};}
     if($("mpcPlaceKw")){var _mpcKwT;$("mpcPlaceKw").oninput=function(){clearTimeout(_mpcKwT);_mpcKwT=setTimeout(mpcDoPlaceSearch,400);};$("mpcPlaceKw").onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();clearTimeout(_mpcKwT);mpcDoPlaceSearch();}};}
     if($("mpcdBack"))$("mpcdBack").onclick=function(){$("mpCustDetail").classList.remove("show");};
