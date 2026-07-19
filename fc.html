@@ -5920,7 +5920,24 @@ function aiTyping(on){
   if(on){if(t)return;t=document.createElement('div');t.id='aiTypingBubble';t.style.cssText='display:flex;justify-content:flex-start;margin:8px 0';t.innerHTML='<div style="background:#fff;border:1px solid #E4E0D6;border-radius:4px 13px 13px 13px;padding:10px 14px;font-size:12.5px;color:#8A93A8">기록을 살펴보는 중…</div>';box.appendChild(t);box.scrollTop=box.scrollHeight;}
   else if(t)t.remove();
 }
-function aiUsageRender(){const el=document.getElementById('aiUsageTxt');if(el&&aiUsage)el.textContent='오늘 '+aiUsage.used+'/'+aiUsage.limit+'회';}
+let aiBill=null;   /* ★ 과금 상태 (2026-07-19): {freeUsed,freeQuota,point,balance,charged} */
+function aiUsageRender(){
+  const el=document.getElementById('aiUsageTxt');if(!el)return;
+  if(aiBill&&aiBill.freeQuota!=null){
+    const left=Math.max(0,(aiBill.freeQuota||0)-(aiBill.freeUsed||0));
+    if(left>0){
+      el.textContent='이번 달 '+(aiBill.freeUsed||0)+'/'+aiBill.freeQuota+'회';
+      el.style.color=(left<=5)?'#E0C36B':'';          /* 5회 이하만 눈에 띄게 — 평소엔 아껴 쓰게 만들지 않는다 */
+      el.style.fontWeight=(left<=5)?'800':'';
+    }else{
+      const tot=(aiBill.point||0)+(aiBill.balance||0);
+      el.textContent='잔액 '+tot.toLocaleString()+'원 · 질문당 100원';
+      el.style.color='#E0C36B';el.style.fontWeight='800';
+    }
+    return;
+  }
+  if(aiUsage)el.textContent='오늘 '+aiUsage.used+'/'+aiUsage.limit+'회';
+}
 async function aiBuildContext(q){
   const ctx={consultant:(fcData&&fcData.name)||loginId||'',today:new Date().toISOString().slice(0,10)};
   const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
@@ -5985,13 +6002,17 @@ async function aiSend(){
     aiTyping(false);
     if(d.ok){
       const _w=aiMsgAdd('assistant',d.answer||'');
+      if(_w&&d.recs&&d.recs.length)aiRecLinks(_w,d.recs);      /* ★ 추천 자료 → 클릭 가능 (2026-07-19) */
+      if(_w&&d.charged>0)aiChargeLine(_w,d);                   /* ★ 차감 표시 (2026-07-19) */
+      if(d.freeQuota!=null){aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:d.charged};aiUsageRender();}
       if(_custNm&&_w)aiPinBtn(_w,_custNm,_q2,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
       if(_custNm&&!aiPinned){aiPinned=_custNm;aiPinBarRender();aiChipsRender();}   /* ★ 이름으로 물으면 자동 고정 (2026-07-19) */
       aiHist.push({role:'user',content:_q2},{role:'assistant',content:(d.answer||'').slice(0,2000)});
       if(aiHist.length>12)aiHist=aiHist.slice(-12);
       if(d.usedToday!=null){aiUsage={used:d.usedToday,limit:d.limit||50};aiUsageRender();}
       aiSaveDrive(_q2,d.answer||'',_custNm);
-    }else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
+    }else if(d.reason==='insufficient'){aiChargeNotice(d,q);}   /* ★ 잔액 부족 — 차감 없이 안내만 (2026-07-19) */
+    else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
     else if(d.reason==='disabled'){aiMsgAdd('assistant','AI 베타 이용 권한이 없는 계정이에요.');}
     else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
   }catch(e){aiTyping(false);aiMsgAdd('assistant','AI 서버에 연결하지 못했어요. 잠시 후 다시 시도해주세요.\n(aiChat 함수가 아직 배포 전이면 배포 후 이용 가능합니다)');}
@@ -6034,6 +6055,84 @@ function aiNewChat(){
   aiPinned='';aiPinBarRender();aiChipsRender();   /* ★ 새 대화 = 고정 해제 + 점검 리스트 (2026-07-19) */
   aiChkRender();
   const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
+}
+/* ═══ 📎 추천 자료 링크 (2026-07-19) ═══
+   서버가 내려준 recs(제목·링크)만 링크로 만든다. 답변에 없는 제목은 링크가 되지 않으므로 잘못된 링크가 생길 수 없다.
+   제목 문구가 미묘하게 달라 변환되지 않은 자료는 아래 버튼으로 따로 붙여 어떤 경우에도 열 수 있게 한다. */
+function aiRecNorm(s){return String(s==null?'':s).replace(/[\s《》"'“”‘’`·,.\-—~!?()\[\]]/g,'').toLowerCase();}
+function aiRecLinks(w,recs){
+  try{
+    if(!w||!recs||!recs.length)return;
+    const bubble=w.firstChild;if(!bubble)return;
+    const text=bubble.textContent||'';
+    const map=[];let norm='';
+    for(let i=0;i<text.length;i++){const n=aiRecNorm(text[i]);if(n){norm+=n;map.push(i);}}
+    const ranges=[],left=[];
+    recs.forEach(r=>{
+      const tn=aiRecNorm(r&&r.title);
+      if(!tn||tn.length<4){if(r)left.push(r);return;}
+      const at=norm.indexOf(tn);
+      if(at<0){left.push(r);return;}
+      ranges.push({s:map[at],e:map[at+tn.length-1]+1,r:r});
+    });
+    ranges.sort((a,b)=>a.s-b.s);
+    const use=[];let last=-1;
+    ranges.forEach(x=>{if(x.s>=last){use.push(x);last=x.e;}});
+    if(use.length){
+      let html='',p=0;
+      use.forEach(x=>{
+        html+=_aiEsc(text.slice(p,x.s));
+        const url=(x.r.url||x.r.audioUrl||'');
+        html+='<a href="'+_aiEsc(url)+'" target="_blank" rel="noopener" style="color:#1B3A6B;font-weight:800;text-decoration:underline;text-underline-offset:2px">'
+             +_aiEsc(text.slice(x.s,x.e))+(x.r.audioUrl?' 🎧':'')+'</a>';
+        p=x.e;
+      });
+      html+=_aiEsc(text.slice(p));
+      bubble.innerHTML=html;
+    }
+    if(left.length){
+      const box=document.createElement('div');
+      box.style.cssText='margin-top:9px;padding-top:8px;border-top:1px dashed #E0DACB';
+      box.innerHTML='<div style="font-size:9.5px;font-weight:800;color:#8A93A8;margin-bottom:5px">📎 자료 열기</div>';
+      left.forEach(r=>{
+        const a=document.createElement('a');
+        a.href=(r.url||r.audioUrl||'');a.target='_blank';a.rel='noopener';
+        a.style.cssText='display:block;background:#FFFDF7;border:1px solid #E9E0C8;border-radius:10px;padding:8px 10px;margin-bottom:5px;font-size:11px;font-weight:700;color:#15294A;text-decoration:none;line-height:1.45';
+        a.innerHTML=_aiEsc(r.title)+(r.audioUrl?' 🎧':'')+'<span style="display:block;font-size:9.5px;color:#8A93A8;font-weight:600;margin-top:2px">'+_aiEsc([r.type,r.date].filter(Boolean).join(' · '))+'</span>';
+        box.appendChild(a);
+      });
+      bubble.appendChild(box);
+    }
+  }catch(_e){}
+}
+function aiChargeLine(w,d){   /* ★ 유료 질문에 차감 내역 한 줄 (2026-07-19): 돈이 나가는 것을 숨기지 않는다 */
+  try{
+    const bubble=w&&w.firstChild;if(!bubble)return;
+    const el=document.createElement('div');
+    el.style.cssText='margin-top:7px;font-size:9.5px;color:#8A93A8;text-align:right';
+    const tot=((d.point||0)+(d.balance||0));
+    el.textContent=(d.charged||0)+'원 차감 · 잔액 '+tot.toLocaleString()+'원';
+    bubble.appendChild(el);
+  }catch(_e){}
+}
+function aiChargeNotice(d,keepQ){   /* ★ 잔액 부족 안내 (2026-07-19): AI 호출 전 차단이므로 차감은 발생하지 않았다 */
+  try{
+    const box=document.getElementById('aiMsgs');if(!box)return;
+    const w=document.createElement('div');
+    w.style.cssText='display:flex;justify-content:flex-start;margin:8px 0';
+    const tot=((d.point||0)+(d.balance||0));
+    w.innerHTML='<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:4px 13px 13px 13px;padding:12px 13px;max-width:88%">'
+      +'<div style="font-size:12.5px;font-weight:800;color:#8B6914">💳 이번 달 무료 '+(d.freeQuota||30)+'회를 모두 사용했어요</div>'
+      +'<div style="font-size:11.5px;color:#6b5b2e;line-height:1.65;margin-top:6px">이후 질문은 1건당 '+(d.price||100)+'원입니다.<br>현재 포인트 '+((d.point||0).toLocaleString())+'원 · 잔액 '+((d.balance||0).toLocaleString())+'원 (합계 '+tot.toLocaleString()+'원)</div>'
+      +'<button type="button" id="aiChargeBtn" style="margin-top:10px;border:0;background:#15294A;color:#C9A96E;border-radius:10px;padding:9px 15px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">충전하러 가기 ›</button>'
+      +'<div style="font-size:9.5px;color:#A08B4F;margin-top:7px;line-height:1.55">마이페이지 → 내 정보에서 충전하실 수 있어요.<br>이번 질문은 <b>차감되지 않았습니다.</b></div></div>';
+    box.appendChild(w);box.scrollTop=box.scrollHeight;
+    const b=document.getElementById('aiChargeBtn');
+    if(b)b.onclick=function(){try{window.open('https://jarvia.co.kr/','_blank','noopener');}catch(_e){location.href='https://jarvia.co.kr/';}};
+    const inp=document.getElementById('aiInput');
+    if(inp&&keepQ&&!inp.value)inp.value=keepQ;   /* 질문을 되돌려 놓아 충전 후 바로 보낼 수 있게 */
+    aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:0};aiUsageRender();
+  }catch(_e){}
 }
 function aiPinBtn(w,cust,q,a){
   try{
