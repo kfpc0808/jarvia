@@ -2134,7 +2134,7 @@ async function init(){
       // ★ 2026-07: 구조 통일 — 컨설턴트 채널 방문자에게도 사적 영역(나의 장소·나만의 보관함)을 고객홈페이지와 동일하게 노출.
       //   단 🔒 잠금 — 클릭 시 안내 토스트만 뜨고 내용에는 절대 접근 불가 (ccIsLocked 관문).
       try{ccInjectVaultZone();ccApplyLockUI();}catch(_e){}
-      try{aiInit();}catch(_e){}   /* ★ AI 비서 게이트 (aiEnabled 소유자만, 2026-07-17) */
+      try{aiInit();}catch(_e){}   /* ★ AI 비서 노출 (본인 화면이면 노출 · 정규회원 판정은 서버, 2026-07-19) */
       try{setTimeout(ccQuotaBannerMaybe,4000);}catch(_e){}   /* ★ Drive 용량 90%↑ 안내 배너 (세션 1회, 2026-07-17) */
       if(isOwnerView&&!window._ccSlug){ // ★ channelV2: 고객 채널 화면에서는 컨설턴트 도구(편집·매뉴얼·⋮·새요청 알림바) 미표시
         // ★ 자가치유: loginIdLower 미보유/불일치 시 본인 users 문서에만 조용히 보강 (대소문자 무시 조회 완결 — 새 파일·관리자 작업 불필요)
@@ -5574,8 +5574,9 @@ window.fccBridge={
 };
 
 /* ═══ 🤖 AI 비서 — gildong 전용 베타 (2026-07-17) ═══
-   게이트 2중: ① 여기서 isOwnerView && fcData.aiEnabled 확인(미해당자는 렌더링 자체 없음)
-             ② 서버 aiChat 함수가 호출자 uid → consultants.aiEnabled 재검증 + 일일 상한 (실방어선)
+   게이트: ① 여기서는 본인 화면(isOwnerView)만 확인해 버튼을 노출한다 — 정규회원 여부는 화면에서 판정하지 않는다
+          ② 서버 aiChat 함수가 users.role(정규회원 4종) 또는 consultants.aiEnabled(베타)로 판정 + 일일 상한 (실방어선)
+             미해당자는 첫 질문 시 '정규회원 전용' 안내를 받는다 (2026-07-19 정식 오픈)
    컨텍스트: 질문에서 고객명 매칭 → 해당 고객만 조립(지도+미팅+fc_clients+활동) = 비용 통제 2단 구조
    저장: 대화는 컨설턴트 Drive '대화저장/AI대화' 암호화 — 회사 서버 무저장 원칙 */
 let aiHist=[],aiBusy=false,aiUsage=null,aiNoSeed=false;   /* aiNoSeed: 새 대화 시작 후 지난 대화 자동 주입 차단 */
@@ -5586,7 +5587,10 @@ function aiDdayMmdd(mmdd){if(!mmdd||mmdd.length!==4)return null;const t=new Date
 function aiSangMmdd(b){if(!b||b.length!==10)return '';let m=parseInt(b.slice(5,7),10),d=parseInt(b.slice(8,10),10);m+=6;if(m>12)m-=12;const dim=[31,28,31,30,31,30,31,31,30,31,30,31];if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}return String(m).padStart(2,'0')+String(d).padStart(2,'0');}
 function aiInit(){
   try{
-    const _aiOn=!!((typeof consultantData!=='undefined'&&consultantData&&consultantData.aiEnabled===true)||(fcData&&fcData.aiEnabled===true));   /* ★ 정본=consultants (서버 게이트와 동일), users는 보조 */
+    /* ★ 정규회원 정식 오픈 (2026-07-19): AI 비서도 🎙와 동일하게 본인 화면이면 노출한다.
+       정규회원 여부는 서버(aiChat)가 판정하며, 미해당자는 첫 질문 시 안내를 받는다.
+       (기존 베타 지정 계정은 서버에서 role과 무관하게 계속 허용) */
+    const _aiOn=isOwnerView&&!window._ccSlug;
     /* ★ 🎙 정규회원 전체 오픈 (2026-07-18): AI 베타 게이트와 분리 — 본인 화면이면 노출, 정규회원 판정은 서버(aiChat)가 수행 */
     const _vfEx=document.getElementById('vmFab');
     if(isOwnerView&&!window._ccSlug&&_vfEx){_vfEx.style.bottom=(_aiOn?'144':'82')+'px';}   /* 재호출(인증 이벤트) 시 위치 재계산 — AI 버튼과 겹침 방지 */
@@ -5876,6 +5880,9 @@ function aiOpen(){
     +'<button type="button" id="aiNewBtn" title="새 대화" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-plus"></i></button>'
     +'<button type="button" id="aiHistBtn" title="대화 목록 접기/펴기" style="border:0;background:none;color:#9AA3B8;font-size:17px;padding:4px;cursor:pointer"><i class="ti ti-history"></i></button>'
     +'<button type="button" id="aiCloseBtn" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
+    +'<div style="background:#FDECEC;border-bottom:1px solid #F3C9C9;padding:7px 13px;display:flex;align-items:center;gap:7px;flex-shrink:0">'
+      +'<span style="font-size:12px;flex-shrink:0">⚗️</span>'
+      +'<span style="font-size:10.5px;color:#B3261E;font-weight:800;line-height:1.5">본 프로그램은 <b>실험실 버전</b>입니다 — 정규회원은 <b>월 30회 무료</b>로 이용하실 수 있어요</span></div>'   /* ★ 실험실 안내 (2026-07-19) */
     +'<div id="aiPinBar" style="display:none;align-items:center;gap:7px;background:#0F1E3A;border-bottom:1px solid #C9A96E44;padding:7px 13px;flex-shrink:0"></div>'
     +'<div id="aiBody" style="display:flex;flex:1;min-height:0;position:relative;overflow:hidden">'
     +'<div id="aiSide" style="flex:0 0 238px;max-width:82%;background:#FBFAF6;border-right:1px solid #E4E0D6;display:none;flex-direction:column;min-height:0">'
@@ -6032,7 +6039,7 @@ async function aiSend(){
       aiSaveDrive(_q2,d.answer||'',_custNm);
     }else if(d.reason==='insufficient'){aiChargeNotice(d,q);}   /* ★ 잔액 부족 — 차감 없이 안내만 (2026-07-19) */
     else if(d.reason==='limit'){aiMsgAdd('assistant','오늘 사용 한도('+(d.limit||50)+'회)에 도달했어요. 내일 다시 이용할 수 있어요.');}
-    else if(d.reason==='disabled'){aiMsgAdd('assistant','AI 베타 이용 권한이 없는 계정이에요.');}
+    else if(d.reason==='membership'||d.reason==='disabled'){aiMembershipNotice();}   /* ★ 정규회원 안내 (2026-07-19) */
     else{aiMsgAdd('assistant','응답을 받지 못했어요 — 잠시 후 다시 시도해주세요.');}
   }catch(e){aiTyping(false);aiMsgAdd('assistant','AI 서버에 연결하지 못했어요. 잠시 후 다시 시도해주세요.\n(aiChat 함수가 아직 배포 전이면 배포 후 이용 가능합니다)');}
   aiBusy=false;
@@ -6279,6 +6286,19 @@ function aiChargeLine(w,d){   /* ★ 유료 질문에 차감 내역 한 줄 (202
     bubble.appendChild(el);
   }catch(_e){}
 }
+function aiMembershipNotice(){   /* ★ 정규회원 전용 안내 (2026-07-19) */
+  try{
+    const box=document.getElementById('aiMsgs');if(!box)return;
+    const w=document.createElement('div');
+    w.style.cssText='display:flex;justify-content:flex-start;margin:8px 0';
+    w.innerHTML='<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:4px 13px 13px 13px;padding:13px 14px;max-width:88%">'
+      +'<div style="font-size:20px">🔐</div>'
+      +'<div style="font-size:12.5px;font-weight:800;color:#15294A;margin-top:5px">정규회원 전용 기능이에요</div>'
+      +'<div style="font-size:11.5px;color:#8B6914;line-height:1.7;margin-top:6px">AI 비서는 <b>자비아 멤버십 · 컨홈 · 지사장 · 이너</b> 회원에게<br>월 30회 무료로 제공됩니다.</div>'
+      +'<div style="font-size:10.5px;color:#A08B4F;margin-top:8px;line-height:1.6">멤버십은 마이페이지에서 안내받으실 수 있어요.</div></div>';
+    box.appendChild(w);box.scrollTop=box.scrollHeight;
+  }catch(_e){}
+}
 function aiChargeNotice(d,keepQ){   /* ★ 잔액 부족 안내 (2026-07-19): AI 호출 전 차단이므로 차감은 발생하지 않았다 */
   try{
     const box=document.getElementById('aiMsgs');if(!box)return;
@@ -6461,7 +6481,10 @@ function vmOpen(){
   m.style.display='flex';vmData=null;vmPickId=null;
   vmRenderInput();
 }
-function vmHead(withGuide){return '<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:9px;flex-shrink:0"><span style="width:30px;height:30px;border-radius:50%;background:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-microphone" style="font-size:16px;color:#15294A"></i></span><div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">음성입력</div><div style="font-size:9.5px;color:#9AA3B8">말하면 고객 기록과 정보가 함께 정리돼요</div></div>'+(withGuide?'<button type="button" id="vmGuideBtn" style="border:1px solid #3A4A6B;background:none;border-radius:8px;padding:5px 9px;font-size:10.5px;font-weight:700;color:#C9A96E;font-family:inherit;cursor:pointer;flex-shrink:0"><i class="ti ti-help-circle" style="font-size:12px"></i> 가이드</button>':'')+'<button type="button" id="vmX" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>';}
+function vmHead(withGuide){return '<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:9px;flex-shrink:0"><span style="width:30px;height:30px;border-radius:50%;background:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-microphone" style="font-size:16px;color:#15294A"></i></span><div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">음성입력</div><div style="font-size:9.5px;color:#9AA3B8">말하면 고객 기록과 정보가 함께 정리돼요</div></div>'+(withGuide?'<button type="button" id="vmGuideBtn" style="border:1px solid #3A4A6B;background:none;border-radius:8px;padding:5px 9px;font-size:10.5px;font-weight:700;color:#C9A96E;font-family:inherit;cursor:pointer;flex-shrink:0"><i class="ti ti-help-circle" style="font-size:12px"></i> 가이드</button>':'')+'<button type="button" id="vmX" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
+  +'<div style="background:#FDECEC;border-bottom:1px solid #F3C9C9;padding:7px 13px;display:flex;align-items:center;gap:7px;flex-shrink:0">'
+   +'<span style="font-size:12px;flex-shrink:0">⚗️</span>'
+   +'<span style="font-size:10.5px;color:#B3261E;font-weight:800;line-height:1.5">본 프로그램은 <b>실험실 버전</b>입니다 — 정규회원은 <b>하루 30회 무료</b>로 이용하실 수 있어요</span></div>';}   /* ★ 실험실 안내 (2026-07-19) */
 function vmFoot(btns){return '<div style="border-top:1px solid #E4E0D6;background:#fff;padding:10px 12px;display:flex;gap:8px;flex-shrink:0">'+btns+'</div>';}
 function vmBtn(id,label,pri){return '<button type="button" id="'+id+'" style="flex:1;border:1px solid '+(pri?'#15294A':'#E1E5EC')+';background:'+(pri?'#15294A':'#fff')+';color:'+(pri?'#fff':'#3A4457')+';border-radius:12px;padding:12px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">'+label+'</button>';}
 function vmWire(){const x=vmEl('vmX');if(x)x.onclick=vmClose;}
