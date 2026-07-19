@@ -5820,7 +5820,10 @@ function aiPinBarRender(){
     +'<span style="flex:1;min-width:0;font-size:9.5px;color:#9AA3B8">과의 대화 · 핵심은 이 고객 기록에 저장돼요</span>'
     +'<button type="button" id="aiPinClear" style="font-size:9.5px;color:#9AA3B8;border:1px solid #3A4E75;background:none;border-radius:8px;padding:3px 8px;font-family:inherit;cursor:pointer">목록으로</button>';
   const b=document.getElementById('aiPinClear');
-  if(b)b.onclick=()=>{aiPinned='';aiPinBarRender();aiChipsRender();const w2=document.getElementById('aiChkWrap');if(w2)w2.style.display='';const bx=document.getElementById('aiMsgs');if(bx)bx.scrollTop=0;};
+  if(b)b.onclick=()=>{
+    const go=()=>{aiPinned='';aiPinBarRender();aiChipsRender();const w2=document.getElementById('aiChkWrap');if(w2)w2.style.display='';const bx=document.getElementById('aiMsgs');if(bx)bx.scrollTop=0;};
+    if(aiSaveNeeded())aiSaveAsk(go);else go();   /* ★ 고객 변경 전 저장 확인 (2026-07-19) */
+  };
 }
 function aiChipsRender(){
   const box=document.getElementById('aiChips');if(!box)return;
@@ -5891,10 +5894,10 @@ function aiOpen(){
     +'<button type="button" id="aiSendBtn" style="width:38px;height:38px;border-radius:50%;background:#15294A;border:0;color:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-arrow-up" style="font-size:17px"></i></button></div>'
     +'<div style="font-size:9px;color:#B7BDC9;text-align:center;margin-top:6px"><i class="ti ti-lock" style="font-size:9px"></i> 대화는 내 드라이브에 암호화 저장 · 회사 서버에는 남지 않아요</div></div></div></div></div>';
   document.body.appendChild(m);
-  document.getElementById('aiCloseBtn').onclick=()=>{m.style.display='none';};
+  document.getElementById('aiCloseBtn').onclick=()=>{aiSaveAsk(()=>{m.style.display='none';});};   /* ★ 닫기 전 저장 확인 (2026-07-19) */
   document.getElementById('aiHistBtn').onclick=function(){aiSideToggle();};
   document.getElementById('aiNewBtn').onclick=aiNewChat;
-  m.addEventListener('click',ev=>{if(ev.target===m)m.style.display='none';});
+  m.addEventListener('click',ev=>{if(ev.target===m)aiSaveAsk(()=>{m.style.display='none';});});   /* ★ 배경 탭으로 닫을 때도 확인 (2026-07-19) */
   document.getElementById('aiSendBtn').onclick=aiSend;
   document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();aiSend();}});
   Array.prototype.forEach.call(m.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{document.getElementById('aiInput').value=b.getAttribute('data-aiq');aiSend();};});
@@ -5903,7 +5906,9 @@ function aiOpen(){
   aiChipsRender();
   document.getElementById('aiGuideBtn').onclick=aiGuide;
   try{if(!localStorage.getItem('ai_guide_seen')){const _gd=document.getElementById('aiGuideDot');if(_gd)_gd.style.display='block';}}catch(_e){}
-  Promise.resolve(aiRestoreRecent()).then(()=>{const _bx=document.getElementById('aiMsgs');if(_bx&&!aiPinned)_bx.scrollTop=0;}).catch(()=>{});   /* ★ 복원분이 화면을 끌어내리므로 점검 리스트로 되돌린다 (2026-07-19) */
+  /* ★ 첫 화면은 점검 리스트만 (2026-07-19): 지난 대화는 🕘 사이드바에서 날짜를 골라 열람·이어가기.
+     자동 삽입하면 화면이 길어지고 오늘 할 일이 아래로 밀린다. (aiRestoreRecent는 유지 — 필요 시 재사용) */
+  try{const _bx=document.getElementById('aiMsgs');if(_bx&&!aiPinned)_bx.scrollTop=0;}catch(_e){}
   if(!aiSideNarrow())aiSideToggle(true);   /* ★ PC = 대화 목록 사이드바 기본 펼침 (2026-07-18) */
   setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
 }
@@ -5985,7 +5990,16 @@ async function aiBuildContext(q){
       const last=(c.meetings&&c.meetings.length)?Math.max.apply(null,c.meetings.map(mm=>{const t=Date.parse(mm.date||'');return isNaN(t)?0:t;})):0;
       return !last||Date.now()-last>90*86400000;
     }).slice(0,15).map(c=>c.name+((c.meetings&&c.meetings.length)?'':' (기록 없음)'));
-    ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,20),noMeetingOver90days:noMeet};
+    /* ★ 관심사 색인 (2026-07-19): 고객 폼의 니즈 태그 15종을 이름과 함께 전달 —
+       "상속 관심 고객 찾아줘" 같은 주제 기반 질문에 AI가 실제 명단으로 답할 수 있게 한다.
+       이름과 태그만 보내므로 용량·비용 부담이 작다(고객 300명 ≈ 3~4천 자). */
+    const needIdx=[];
+    (customers||[]).forEach(c=>{
+      const nm=(c.name||'').trim();const tg=(c.needs||[]).filter(Boolean).slice(0,6);
+      if(nm&&tg.length)needIdx.push({name:nm,needs:tg});
+    });
+    ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,20),noMeetingOver90days:noMeet,
+                  needsIndex:needIdx.slice(0,300)};
   }
   return ctx;
 }
@@ -6051,12 +6065,124 @@ function aiResume(q0,a0,label){
 /* ★ 새 대화 (2026-07-18): 맥락 초기화 + 화면 비움 — 이전 대화는 드라이브에 저장돼 있어 🕘에서 언제든 열람 */
 function aiNewChat(){
   if(aiBusy)return;
-  aiHist=[];aiNoSeed=true;aiSideDay='';try{if(aiSideOpen)aiSideRender();}catch(_e){}
+  if(aiSaveNeeded()){aiSaveAsk(()=>aiNewChat());return;}   /* ★ 새 대화 전 저장 확인 (2026-07-19) */
+  aiHist=[];aiNoSeed=true;aiSavedAt=0;aiSideDay='';try{if(aiSideOpen)aiSideRender();}catch(_e){}
   const box=document.getElementById('aiMsgs');if(box)box.innerHTML='';
   aiPinned='';aiPinBarRender();aiChipsRender();   /* ★ 새 대화 = 고정 해제 + 점검 리스트 (2026-07-19) */
   aiChkRender();
   const inp=document.getElementById('aiInput');if(inp){try{inp.focus();}catch(_e){}}
 }
+/* ═══════════ 💾 대화 기록 저장 (2026-07-19) ═══════════
+   원칙: 팝업으로 물어본다. 물어볼 수 없으면(탭 닫기 등) 저장한다.
+   · ✕ 닫기 · ＋ 새 대화 · 목록으로 → 확인 팝업 [저장 안 함] / [기록에 저장]
+   · 탭 닫기·뒤로가기 → 자동 저장 (원문, "자동 저장" 표시)
+   · 질문이 없거나 이미 저장한 뒤 새 대화가 없으면 아무것도 하지 않는다
+   · 3턴 이상이면 요약해서, 짧으면 원문 그대로 저장 · 저장 직후 3초간 취소 가능 */
+let aiSavedAt=0,aiSaveBusy=false;   /* aiSavedAt: 이 지점까지 저장 완료(aiHist 길이) */
+function aiUnsaved(){ try{ return Math.max(0,(aiHist.length-aiSavedAt))/2; }catch(_e){ return 0; } }
+function aiSaveNeeded(){ return !!(aiPinned && aiUnsaved()>=1); }
+function aiRawNote(auto){
+  const turns=aiHist.slice(aiSavedAt);
+  let s='🤖 AI 대화'+(auto?' (자동 저장)':'')+'\n';
+  for(let i=0;i<turns.length;i+=2){
+    const q=(turns[i]&&turns[i].content)||'';
+    const a=(turns[i+1]&&turns[i+1].content)||'';
+    s+='\n질문: '+String(q).slice(0,200)+'\n'+String(a).slice(0,1200)+'\n';
+  }
+  return s.slice(0,3800);
+}
+function aiDoSave(note,auto,cb){
+  if(!aiPinned){if(cb)cb(false);return;}
+  const nm=aiPinned;
+  const run=()=>{
+    if(!window.__mpcSaveChat){if(cb)cb(false);return;}
+    window.__mpcSaveChat(nm,note,(ok,n,mid)=>{
+      if(ok){
+        aiSavedAt=aiHist.length;
+        if(!auto)aiSavedToast(nm,mid);
+        else{try{toast('🤖 '+nm+'님 기록에 대화를 저장했어요');}catch(_e){}}
+      }else{
+        try{toast(n>1?('동명이인이 '+n+'명이라 자동 저장하지 못했어요 — 고객 상세에서 직접 등록해주세요'):'고객을 찾지 못해 저장하지 못했어요','warn');}catch(_e){}
+      }
+      if(cb)cb(!!ok);
+    });
+  };
+  if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(()=>run());else run();
+}
+function aiSavedToast(nm,mid){   /* 저장 직후 3초간 되돌리기 */
+  try{
+    const old=document.getElementById('aiUndoBar');if(old)old.remove();
+    const b=document.createElement('div');b.id='aiUndoBar';
+    b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:9720;background:#15294A;color:#fff;border-radius:12px;padding:11px 14px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.3);font-size:12px;font-weight:700';
+    b.innerHTML='<span>🤖 '+_aiEsc(nm)+'님 기록에 저장했어요</span><button type="button" id="aiUndoBtn" style="border:1px solid #C9A96E;background:none;color:#C9A96E;border-radius:9px;padding:5px 11px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">취소</button>';
+    document.body.appendChild(b);
+    const t=setTimeout(()=>{try{b.remove();}catch(_e){}},3000);
+    const ub=document.getElementById('aiUndoBtn');
+    if(ub)ub.onclick=function(){
+      clearTimeout(t);try{b.remove();}catch(_e){}
+      if(window.__mpcDropMeeting)window.__mpcDropMeeting(nm,mid,(ok)=>{try{toast(ok?'저장을 취소했어요':'취소하지 못했어요 — 고객 상세에서 삭제해주세요',ok?'info':'warn');}catch(_e){}});
+    };
+  }catch(_e){}
+}
+/* 3턴 이상이면 요약(무과금 경로) — 실패하면 원문으로 저장 */
+async function aiSummarizeSave(cb){
+  const turns=aiHist.slice(aiSavedAt);
+  if(turns.length<6){aiDoSave(aiRawNote(false),false,cb);return;}   /* 2문답 이하는 원문 */
+  let txt='';
+  for(let i=0;i<turns.length;i+=2)txt+='Q: '+String((turns[i]&&turns[i].content)||'').slice(0,200)+'\nA: '+String((turns[i+1]&&turns[i+1].content)||'').slice(0,600)+'\n\n';
+  try{
+    const today=new Date().toISOString().slice(0,10);
+    const q='다음은 보험 컨설턴트가 AI 비서와 나눈 대화다. 오늘은 '+today+'이다. 반드시 JSON만 출력하라(설명·마크다운 금지). 형식: {"custName":"","title":"핵심 제목 22자 이내","summary":"· 로 시작하는 정리 불릿 2~4줄(줄바꿈 구분)","todo":"다음 할 일 한 줄(없으면 빈 문자열)","nextDate":""}\n--- 대화 ---\n'+txt.slice(0,2000)+'\n--- 끝 ---';
+    const r=await httpsCallable(fns,'aiChat')({question:q,context:{task:'voice_meeting_note',today:today},history:[]});
+    const d=r.data||{};
+    let p=null;
+    if(d.ok){const raw=String(d.answer||'').replace(/```json|```/g,'').trim();
+      try{p=JSON.parse(raw);}catch(_e){const s=raw.indexOf('{'),e=raw.lastIndexOf('}');if(s>=0&&e>s){try{p=JSON.parse(raw.slice(s,e+1));}catch(_e2){p=null;}}}}
+    if(p&&p.title){
+      const note='🤖 AI 대화 요약 — '+String(p.title).slice(0,40)+'\n'+String(p.summary||'').slice(0,900)
+        +(p.todo?'\n\n다음 할 일: '+String(p.todo).slice(0,200):'')
+        +'\n\n— 대화 원문 —\n'+aiRawNote(false).replace(/^🤖 AI 대화\n/,'');
+      aiDoSave(note.slice(0,3800),false,cb);return;
+    }
+  }catch(_e){}
+  aiDoSave(aiRawNote(false),false,cb);   /* 요약 실패 = 원문 저장 (유실 없음) */
+}
+/* 확인 팝업 — [저장 안 함] / [기록에 저장] */
+function aiSaveAsk(next){
+  if(aiSaveBusy){if(next)next();return;}
+  if(!aiSaveNeeded()){if(next)next();return;}
+  const old=document.getElementById('aiSaveAsk');if(old)old.remove();
+  const cnt=Math.round(aiUnsaved());
+  const m=document.createElement('div');m.id='aiSaveAsk';
+  m.style.cssText='position:fixed;inset:0;z-index:9730;background:rgba(15,27,51,.45);display:flex;align-items:center;justify-content:center;padding:18px';
+  m.innerHTML='<div style="background:#fff;border-radius:16px;padding:18px 16px;width:100%;max-width:320px;box-shadow:0 14px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:14px;font-weight:800;color:#15294A;line-height:1.5">'+_aiEsc(aiPinned)+' 님과의 대화를<br>기록에 남길까요?</div>'
+    +'<div style="font-size:11px;color:#8A93A8;margin-top:6px">질문 '+cnt+'건 · 고객 상세에서 언제든 수정·삭제할 수 있어요</div>'
+    +'<div style="display:flex;gap:8px;margin-top:14px">'
+    +'<button type="button" id="aiSaveNo" style="flex:1;border:1px solid #E1E5EC;background:#fff;color:#5C6678;border-radius:11px;padding:11px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">저장 안 함</button>'
+    +'<button type="button" id="aiSaveYes" style="flex:1.3;border:0;background:#15294A;color:#C9A96E;border-radius:11px;padding:11px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">기록에 저장</button>'
+    +'</div>'
+    +'<div style="font-size:9.5px;color:#A6ADBB;margin-top:9px;line-height:1.55">저장하지 않아도 대화는 🕘 지난 대화에 그대로 남아요.</div></div>';
+  document.body.appendChild(m);
+  const done=()=>{try{m.remove();}catch(_e){}if(next)next();};
+  const no=document.getElementById('aiSaveNo');
+  if(no)no.onclick=()=>{aiSavedAt=aiHist.length;done();};   /* 이번 대화는 다시 묻지 않는다 */
+  const yes=document.getElementById('aiSaveYes');
+  if(yes)yes.onclick=()=>{
+    yes.disabled=true;yes.textContent='저장 중…';aiSaveBusy=true;
+    aiSummarizeSave(()=>{aiSaveBusy=false;done();});
+  };
+  m.addEventListener('click',ev=>{if(ev.target===m)done();});
+}
+/* 탭 닫기·뒤로가기 — 물어볼 수 없으므로 원문 자동 저장 */
+function aiSaveOnLeave(){
+  try{ if(!aiSaveNeeded())return; aiDoSave(aiRawNote(true),true,null); }catch(_e){}
+}
+try{
+  window.addEventListener('pagehide',aiSaveOnLeave);
+  document.addEventListener('visibilitychange',function(){if(document.hidden)aiSaveOnLeave();});
+}catch(_e){}
+
 /* ═══ 📎 추천 자료 링크 (2026-07-19) ═══
    서버가 내려준 recs(제목·링크)만 링크로 만든다. 답변에 없는 제목은 링크가 되지 않으므로 잘못된 링크가 생길 수 없다.
    제목 문구가 미묘하게 달라 변환되지 않은 자료는 아래 버튼으로 따로 붙여 어떤 경우에도 열 수 있게 한다. */
@@ -8680,6 +8806,32 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(ad.length>=4)mpcGeocode(ad).then(function(g){if(g.ok){c.lat=g.lat;c.lng=g.lng;}done();});   /* 좌표 실패해도 저장은 진행 */
     else done();
   }catch(_e){if(cb)cb(false);}};
+  window.__mpcSaveChat=function(name,note,cb){   /* ★ AI 대화 저장 (2026-07-19): 저장한 기록 id를 돌려줘 '취소'가 가능하게 한다 */
+    try{
+      var hits=customers.filter(function(c){return (c.name||"")===name;});
+      if(hits.length!==1){if(cb)cb(false,hits.length,'');return;}
+      var c=hits[0];c.meetings=c.meetings||[];
+      var mid="m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
+      c.meetings.push({id:mid,date:mpcTodayStr(),place:"",note:String(note||"").slice(0,4000),next:"",ts:Date.now(),src:"ai_chat"});
+      c.createdAt=Date.now();custPut(c);mpcGdPush();
+      try{mpcRenderList();}catch(_e2){}
+      try{var _d=$("mpcDetail");if(_d&&_d.style.display==="flex")mpcDetailRender(c);}catch(_e3){}
+      if(cb)cb(true,1,mid);
+    }catch(_e){if(cb)cb(false,0,'');}
+  };
+  window.__mpcDropMeeting=function(name,mid,cb){   /* ★ 방금 저장한 기록 되돌리기 (2026-07-19) */
+    try{
+      var hits=customers.filter(function(c){return (c.name||"")===name;});
+      if(hits.length!==1||!mid){if(cb)cb(false);return;}
+      var c=hits[0];var before=(c.meetings||[]).length;
+      c.meetings=(c.meetings||[]).filter(function(m){return m.id!==mid;});
+      if(c.meetings.length===before){if(cb)cb(false);return;}
+      c.createdAt=Date.now();custPut(c);mpcGdPush();
+      try{mpcRenderList();}catch(_e2){}
+      try{var _d2=$("mpcDetail");if(_d2&&_d2.style.display==="flex")mpcDetailRender(c);}catch(_e3){}
+      if(cb)cb(true);
+    }catch(_e){if(cb)cb(false);}
+  };
   window.__mpcAddMeeting=function(name,note,cb){try{var hits=customers.filter(function(c){return (c.name||"")===name;});if(hits.length!==1){if(cb)cb(false,hits.length);return;}var c=hits[0];c.meetings=c.meetings||[];c.meetings.push({id:"m_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),date:mpcTodayStr(),place:"",note:String(note||"").slice(0,2000),next:"",ts:Date.now(),src:"ai"});c.createdAt=Date.now();custPut(c);mpcGdPush();if(cb)cb(true,1);}catch(_e){if(cb)cb(false,0);}};   /* ★ AI 브리핑 → 미팅기록 승격 (2026-07-17) */
   window.__mpcQuickAdd=function(openForm){try{   /* ★ 꾹 퀵메뉴: 내 고객 직행 (2026-07-17) */
     window.myPlacesOpen&&window.myPlacesOpen();
