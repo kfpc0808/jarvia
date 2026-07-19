@@ -5416,7 +5416,11 @@ window.ccSync=ccSync;
 window.__ccSyncConnect=function(){   /* ★ 배지 '연결 필요' 클릭 → 드라이브 연결 → 대기분 자동 전송 (2026-07-19) */
   try{
     if(!window.ccStorage||!ccStorage.connect){toast('저장소 모듈을 불러오지 못했어요','warn');return;}
-    ccStorage.connect().then(function(){ccSync.setOff(false);ccSync.probe(true).then(function(){ccSync.noticeHide();ccSync.flush().then(function(n){ccSync.render();toast(n?('백업 대기 '+n+'건을 드라이브에 저장했어요'):'구글 드라이브가 연결됐어요');});});})
+    ccStorage.connect().then(function(){ccSync.setOff(false);ccSync.probe(true).then(function(){ccSync.noticeHide();ccSync.flush().then(function(n){
+      ccSync.render();
+      try{if(window.ccGdChipsRefresh)ccGdChipsRefresh();}catch(_e){}                    /* 연결 표시 갱신 */
+      try{if(window.__aiSideRefresh)window.__aiSideRefresh();}catch(_e){}               /* ★ 지난 대화 사이드바 갱신 (2026-07-19) */
+      toast(n?('백업 대기 '+n+'건을 드라이브에 저장했어요'):'구글 드라이브가 연결됐어요');});});})
       .catch(function(e){toast(((e&&e.message)==='inapp')?'카카오톡·인스타 등 앱 안 브라우저에서는 구글 로그인이 막혀요 — Chrome·Safari로 열어주세요':'연결하지 못했어요. 잠시 후 다시 시도해주세요','warn');});
   }catch(_e){}
 };
@@ -5426,7 +5430,7 @@ window.__ccSyncConnect=function(){   /* ★ 배지 '연결 필요' 클릭 → �
    미연결 시 no-op — 기존 동작 무변화. 실패는 무음(UX 차단 금지). 파일당 300건 상한.
    AI프로필: 각 이력의 최신 요약 마스터 — 향후 AI 컨텍스트 1차 로드 대상. */
 async function ccUpdateAiProfile(kind,rec){
-  let p=null;try{p=await ccStorage.loadJson('이용기록','AI프로필');}catch(_e){p=null;}
+  let p=null;try{p=await ccSync.get('이용기록','AI프로필');}catch(_e){p=null;}
   if(!p||p.kind!=='ai_profile')p={v:1,kind:'ai_profile',role:(ccVaultId().indexOf('fc:')===0?'consultant':'customer'),quiz:{},calc:{topUsed:[],lastResults:[]},dailyChoice:{fieldCounts:{},recent:[]}};
   if(kind==='calc_history'){
     p.calc=p.calc||{topUsed:[],lastResults:[]};
@@ -5442,13 +5446,13 @@ async function ccUpdateAiProfile(kind,rec){
     p.dailyChoice.recent=[rec.pickShort||rec.pick||''].concat(p.dailyChoice.recent||[]).slice(0,10);
   }
   p.updatedAt=Date.now();
-  await ccStorage.saveJson('이용기록','AI프로필',p);
+  await ccSync.put('이용기록','AI프로필',p);
 }
 window.ccAppendRecord=async function(name,kind,item,opt){
+  /* ★ 공통 저장 모듈 이관 (2026-07-19): 미연결이어도 기기에 기록하고 → 연결 시 드라이브로 자동 전송 */
   try{
-    if(!window.ccStorage||!ccStorage.connected())return null;   // 미연결 = no-op
     opt=opt||{};
-    let env=null;try{env=await ccStorage.loadJson('이용기록',name);}catch(_e){env=null;}
+    let env=null;try{env=await ccSync.get('이용기록',name);}catch(_e){env=null;}
     if(!env||!Array.isArray(env.items))env={v:1,kind:kind,updatedAt:0,items:[]};
     const rec=Object.assign({id:'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ts:Date.now()},item);
     if(opt.dedupKey&&opt.dedupMs){   // 같은 항목 단기 재계산 = 마지막 값으로 덮어쓰기 (스팸 누적 방지)
@@ -5458,20 +5462,19 @@ window.ccAppendRecord=async function(name,kind,item,opt){
     }else env.items.unshift(rec);
     if(env.items.length>300)env.items.length=300;
     env.updatedAt=Date.now();env.kind=kind;
-    await ccStorage.saveJson('이용기록',name,env);
+    await ccSync.put('이용기록',name,env);
     try{await ccUpdateAiProfile(kind,rec);}catch(_e){}
     return rec.id;
   }catch(_e){return null;}
 };
 window.ccMarkQuizSent=async function(quizType){   // 진단 결과 '설계사 전송됨' 표시 (본인 기록)
   try{
-    if(!window.ccStorage||!ccStorage.connected())return;
-    let env=null;try{env=await ccStorage.loadJson('이용기록','진단이력');}catch(_e){return;}
+    let env=null;try{env=await ccSync.get('이용기록','진단이력');}catch(_e){return;}
     if(!env||!Array.isArray(env.items))return;
     const it=env.items.find(x=>x.quizType===quizType);
     if(!it||it.sentToConsultant)return;
     it.sentToConsultant=true;env.updatedAt=Date.now();
-    await ccStorage.saveJson('이용기록','진단이력',env);
+    await ccSync.put('이용기록','진단이력',env);
   }catch(_e){}
 };
 
@@ -5973,8 +5976,9 @@ async function aiSend(){
 /* ★ 지난 대화 복원·열람 (2026-07-17) — Drive 월별 파일(AI대화_YYYY-MM) 읽기 전용 표시 */
 function aiYm(off){const d=new Date();d.setMonth(d.getMonth()-(off||0));return d.toISOString().slice(0,7);}
 async function aiLoadMonth(ym){
-  try{if(!window.ccStorage||!ccStorage.connected())return null;
-    const env=await ccStorage.loadJson('대화저장','AI대화_'+ym);
+  /* ★ 공통 저장 모듈 이관 (2026-07-19): 미연결이어도 기기에 저장된 대화는 열람 가능 */
+  try{
+    const env=await ccSync.get('대화저장','AI대화_'+ym);
     return (env&&Array.isArray(env.items))?env.items:null;
   }catch(_e){return null;}
 }
@@ -6050,9 +6054,10 @@ function aiSideToggle(force){
     s.style.display='flex';aiSideLoad();
   }else{s.style.display='none';}
 }
+window.__aiSideRefresh=function(){try{aiSideCache=null;if(typeof aiSideOpen!=='undefined'&&aiSideOpen)aiSideLoad(true);}catch(_e){}};   /* ★ 외부(연결 완료 등)에서 사이드바 갱신 (2026-07-19) */
 async function aiSideLoad(force){
   const L=document.getElementById('aiSideList');if(!L)return;
-  if(!window.ccStorage||!ccStorage.connected()){L.innerHTML='<div style="font-size:10.5px;color:#8A93A8;padding:8px 3px;line-height:1.6">지난 대화는 나만의 보관함(드라이브) 연결 시 저장·열람할 수 있어요.</div>';return;}
+  /* ★ 미연결이어도 이 기기에 저장된 대화를 보여준다 (2026-07-19) — 비어 있을 때만 연결 안내 */
   if(aiSideCache&&!force){aiSideRender();return;}
   if(aiSideBusy)return;aiSideBusy=true;
   L.innerHTML='<div style="font-size:10.5px;color:#8A93A8;padding:8px 3px">불러오는 중…</div>';
@@ -6069,7 +6074,9 @@ function aiSideRender(){
   ord.reverse();
   L.innerHTML='';
   const todayKey=(function(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})();
-  if(!ord.length){const e=document.createElement('div');e.style.cssText='font-size:10.5px;color:#8A93A8;padding:8px 3px';e.textContent='최근 2개월 저장된 대화가 없어요';L.appendChild(e);}
+  if(!ord.length){const e=document.createElement('div');e.style.cssText='font-size:10.5px;color:#8A93A8;padding:8px 3px;line-height:1.6';
+    let _on=false;try{_on=!!(window.ccStorage&&ccStorage.connected&&ccStorage.connected());}catch(_e2){}
+    e.innerHTML=_on?'최근 2개월 저장된 대화가 없어요':'최근 2개월 저장된 대화가 없어요.<br>구글 드라이브를 연결하면 다른 기기에서도 볼 수 있어요.';L.appendChild(e);}
   ord.slice(0,30).forEach(key=>{
     const g=days[key];const first=g[0];
     const md=key.slice(5).replace('-','/')+(key===todayKey?' 오늘':'');
@@ -6694,7 +6701,7 @@ async function ccAssetView(){
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_ccaSort=b.dataset.s;ccaRender();}});
   if(!_ccaData){
     document.getElementById('ccaBody').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_ccaData=(await ccStorage.loadJson('자산관리','자산'))||{items:[]};}
+    try{_ccaData=(await ccSync.get('자산관리','자산'))||{items:[]};}
     catch(_e){document.getElementById('ccaBody').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccAssetView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button><button onclick="ccVaultGate(function(){ccAssetView()})" style="margin-top:10px;margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:9px;padding:9px 14px;font-size:12px;font-weight:700"><b>G</b> 구글 연결</button></div>';return;}
   }
   // ★ 원 단위 전환 마이그레이션 (기존 만원 입력분 ×10,000 — 1회)
@@ -6702,7 +6709,7 @@ async function ccAssetView(){
     if((_ccaData.items||[]).length){
       _ccaData.items.forEach(i=>{i.amt=(Number(i.amt)||0)*10000;const d=i.detail||{};
         ['monthly','principal','year','buy'].forEach(k=>{const n=Number(String(d[k]||'').replace(/[^0-9]/g,''));if(n)d[k]=n*10000;});});
-      _ccaData.v=2;try{ccStorage.saveJson('자산관리','자산',_ccaData);}catch(_e){}
+      _ccaData.v=2;try{ccSync.put('자산관리','자산',_ccaData);}catch(_e){}
     }else{_ccaData.v=2;} // ★ 빈 데이터는 저장하지 않음 — 드라이브 원본 보호
   }
   ccaRender();
@@ -6760,7 +6767,7 @@ function ccaRender(){
 }
 async function ccaSave(){
   ccaRender();
-  try{await ccStorage.saveJson('자산관리','자산',_ccaData);toast('저장됨 · 내 드라이브 동기화 완료','info');}
+  try{const _r2=await ccSync.put('자산관리','자산',_ccaData);toast(_r2&&_r2.backup==='pending'?'저장됨 · 드라이브 백업 대기 중':'저장됨 · 내 드라이브 동기화 완료','info');}
   catch(_e){toast('기기에 저장됨 · 드라이브 동기화는 연결 확인 후 재시도','warn');}
 }
 function ccaEdit(item){
@@ -6971,10 +6978,10 @@ async function ccCalView(){
   const q=ov.querySelector('[data-cv="q"]');q.oninput=()=>{_cclQ=q.value.trim();cclRender();};
   ov.querySelector('[data-cv="sort"]').addEventListener('click',ev=>{const b=ev.target.closest('[data-s]');if(b){_cclOnly=!_cclOnly;cclRender();}});
   if(!_cclData){ov.querySelector('[data-cv="body"]').innerHTML='<div style="padding:40px 0;text-align:center;color:#8a877f;font-size:12px">불러오는 중…</div>';
-    try{_cclData=(await ccStorage.loadJson('머니캘린더','일정'))||{items:[]};}
+    try{_cclData=(await ccSync.get('머니캘린더','일정'))||{items:[]};}
     catch(_e){ov.querySelector('[data-cv="body"]').innerHTML='<div style="margin-top:24px;background:#FFF7F5;border:1.5px dashed #D9A0A0;border-radius:14px;padding:24px 16px;text-align:center"><div style="font-size:20px">⚠️</div><b style="display:block;font-size:12.5px;margin-top:6px;color:#A32D2D">보관함을 불러오지 못했어요</b><small style="display:block;font-size:10px;color:#8a877f;margin-top:4px">인터넷·드라이브 연결을 확인해주세요</small><button onclick="ccCalView()" style="margin-top:10px;border:0;background:#1B3A6B;color:#fff;border-radius:9px;padding:9px 18px;font-size:12px;font-weight:700">다시 시도</button><button onclick="ccVaultGate(function(){ccCalView()})" style="margin-top:10px;margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:9px;padding:9px 14px;font-size:12px;font-weight:700"><b>G</b> 구글 연결</button></div>';return;}}
   if(_cclData&&_cclData.v!==2){
-    if((_cclData.items||[]).length){(_cclData.items||[]).forEach(i=>{i.amt=(Number(i.amt)||0)*10000;});_cclData.v=2;try{ccStorage.saveJson('머니캘린더','일정',_cclData);}catch(_e){}}
+    if((_cclData.items||[]).length){(_cclData.items||[]).forEach(i=>{i.amt=(Number(i.amt)||0)*10000;});_cclData.v=2;try{ccSync.put('머니캘린더','일정',_cclData);}catch(_e){}}
     else{_cclData.v=2;} // ★ 빈 데이터 저장 금지 — 드라이브 원본 보호
   }
   cclRender();
@@ -7107,7 +7114,7 @@ function cclEdit(item,tpl,kindPre){
   };
 }
 async function cclSave(){cclRender();
-  try{await ccStorage.saveJson('머니캘린더','일정',_cclData);toast('저장됨 · 내 드라이브 동기화 완료','info');}
+  try{const _r=await ccSync.put('머니캘린더','일정',_cclData);toast(_r&&_r.backup==='pending'?'저장됨 · 드라이브 백업 대기 중':'저장됨 · 내 드라이브 동기화 완료','info');}
   catch(_e){toast('기기에 저장됨 · 드라이브 동기화는 다음에 재시도','warn');}}
 function cclGuide(){ccvGuide('cclGuideM','캘린더(머니/일정),<br>이렇게 쓰세요',[
  ['이 공간은 무엇인가요','카드값·재산세 같은 <b style="color:#E8C97A">나갈 돈·들어올 돈</b>에 더해, 가족 생신·계약 갱신·회사 일정 같은 <b style="color:#E8C97A">중요한 일정</b>까지 — 전부 D-day로 챙겨주는 나만의 달력입니다. ＋를 누르면 셋 중 무엇을 넣을지 먼저 물어봐요.'],
@@ -7419,9 +7426,9 @@ function cdcEdit(f){
     }else f.cat=newCat;
     if(newExp&&newExp!==f.expiry){f.expiry=newExp;
       try{ // 머니캘린더 자동 등록
-        if(!_cclData)_cclData=(await ccStorage.loadJson('머니캘린더','일정'))||{items:[]};
+        if(!_cclData)_cclData=(await ccSync.get('머니캘린더','일정'))||{items:[]};
         _cclData.items.push({id:'c'+Date.now(),name:f.name.replace(/\.[^.]+$/,'')+' 만기',cat:'기타',kind:'evt',amt:0,time:'',memo:'비공개 문서함에서 자동 등록',repeat:'once',date:newExp,alarm:'7일 전',done:{}});
-        await ccStorage.saveJson('머니캘린더','일정',_cclData);
+        await ccSync.put('머니캘린더','일정',_cclData);
         toast('만기일이 머니캘린더에 등록됐어요','info');
       }catch(_e){}
     }else f.expiry=newExp;
