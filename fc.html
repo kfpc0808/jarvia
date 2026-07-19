@@ -6639,7 +6639,7 @@ async function vmAiFlow(){
     const list=await new Promise(res=>vmCustomers(res));   /* 이름 확정용 — AI에는 보내지 않음 (프라이버시·용량) */
     const today=new Date();const ymd=today.toISOString().slice(0,10);const dow=['일','월','화','수','목','금','토'][today.getDay()];
     const q='다음은 보험 컨설턴트가 고객에 대해 말로 남긴 기록이다. 오늘은 '+ymd+'('+dow+')이다. 반드시 JSON만 출력하라(설명·마크다운 금지).\n'
-      +'형식: {"kind":"meeting|info|both","custName":"원문에서 고객 이름으로 보이는 것(없으면 빈 문자열)","title":"핵심 제목 22자 이내","summary":"· 로 시작하는 정리 불릿 2~4줄(줄바꿈 구분)","todo":"다음 할 일 한 줄(없으면 빈 문자열)","fields":{"company":"회사명","jobTitle":"직함(부장·대표 등)","addr":"주소","birthDate":"","contractProduct":"보험 상품명"}}\n'
+      +'형식: {"kind":"meeting|info|both","custName":"원문에서 고객 이름으로 보이는 것(없으면 빈 문자열)","title":"핵심 제목 22자 이내","summary":"· 로 시작하는 정리 불릿 2~4줄(줄바꿈 구분)","todo":"다음 할 일 한 줄(없으면 빈 문자열)","fields":{"company":"회사명","jobTitle":"직함(부장·대표 등)","addr":"주소","birthDate":"생년월일(원문에 있으면 YYYY-MM-DD로 변환)","contractProduct":"보험 상품명"}}\n'
       +'규칙:\n'
       +'1) kind — 만남·통화·상담 등 접촉 사실이나 대화 내용이 있으면 meeting, 단순 사실 갱신만 있으면 info, 둘 다면 both. 애매하면 both.\n'
       +'2) fields — 원문에 명시된 것만 채운다. 말하지 않은 항목은 반드시 빈 문자열로 둔다. 절대 추측하지 말 것.\n'
@@ -6804,14 +6804,29 @@ function vmReferrerOf(t){
   const m=String(t||'').match(/([가-힣]{2,4})\s*(?:사장님|대표님|부장님|과장님|팀장님|이사님|님)?\s*소개(?:로|를|해|받)/);
   return m?m[1]:'';
 }
+function vmBirthOf(t){   /* ★ 생년월일 코드 추출 (2026-07-20): '생일·생년월일·출생·태어·~생' 키워드 인접 날짜만 — 만기·연락일과 혼동 방지 */
+  t=String(t||'');
+  const re=/((?:19|20)\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*일?/g;
+  let m;
+  while((m=re.exec(t))){
+    const y=+m[1],mo=+m[2],da=+m[3];
+    if(mo<1||mo>12||da<1||da>31)continue;
+    const pre=t.slice(Math.max(0,m.index-14),m.index);
+    const post=t.slice(m.index+m[0].length,m.index+m[0].length+6);
+    if(/생일|생년월일|출생|태어/.test(pre)||/^\s*(?:에\s*)?(생(?!명|보)|출생|태어)/.test(post))
+      return y+'-'+String(mo).padStart(2,'0')+'-'+String(da).padStart(2,'0');
+  }
+  return '';
+}
 function vmCodeFields(t,base){
   const dp=vmDatePick(String(t||''),base||new Date());
   return {phone:vmPhoneOf(t),email:vmEmailOf(t),nextContact:dp.next,referrer:vmReferrerOf(t),
+    birthDate:vmBirthOf(t),
     needs:vmNeedsOf(t),contract:{product:'',expiry:dp.expiry}};
 }
 function vmMergeFields(aiF,codeF){   /* 코드가 찾으면 코드 우선 — 원문에 실제로 있는 값이기 때문 */
   const out=vmNormFields(aiF);
-  ['phone','email','nextContact','referrer'].forEach(k=>{if(codeF[k])out[k]=codeF[k];});
+  ['phone','email','nextContact','referrer','birthDate'].forEach(k=>{if(codeF[k])out[k]=codeF[k];});
   if(codeF.contract&&codeF.contract.expiry)out.contract.expiry=codeF.contract.expiry;
   (codeF.needs||[]).forEach(n=>{if(out.needs.indexOf(n)<0)out.needs.push(n);});
   out.needs=out.needs.slice(0,8);
@@ -6824,10 +6839,19 @@ const VM_FIELDS=[
   {k:'birthDate',label:'생년월일',ph:'YYYY-MM-DD'},{k:'referrer',label:'소개자'},
   {k:'nextContact',label:'다음 연락일',ph:'YYYY-MM-DD'}
 ];
+function vmDateNorm(v){   /* ★ 관용 날짜 정규화 (2026-07-20): "1985년 3월 2일"·"1985.3.2"·"1985-3-2" → YYYY-MM-DD, 불가하면 '' */
+  v=String(v==null?'':v).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v;
+  const m=v.match(/^((?:19|20)\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*일?$/);
+  if(!m)return '';
+  const mo=+m[2],da=+m[3];
+  if(mo<1||mo>12||da<1||da>31)return '';
+  return m[1]+'-'+String(mo).padStart(2,'0')+'-'+String(da).padStart(2,'0');
+}
 function vmNormFields(f){
   f=f||{};const out={};
   VM_FIELDS.forEach(d=>{out[d.k]=String(f[d.k]==null?'':f[d.k]).trim().slice(0,120);});
-  ['birthDate','nextContact'].forEach(k=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(out[k]))out[k]='';});
+  ['birthDate','nextContact'].forEach(k=>{out[k]=vmDateNorm(out[k]);});
   let pool=[];try{pool=(window.__mpcNeedsAll&&window.__mpcNeedsAll())||[];}catch(_e){pool=[];}
   out.needs=(Array.isArray(f.needs)?f.needs:[]).map(x=>String(x||'').trim()).filter((x,i,a)=>x&&pool.indexOf(x)>=0&&a.indexOf(x)===i).slice(0,8);
   const ct=f.contract||{};
@@ -6847,7 +6871,7 @@ function vmCollectFields(){   /* 화면에 있는 값이 정본 — 사용자가
     if(k==='ctProduct')f.contract.product=String(el.value||'').trim().slice(0,60);
     else if(k==='ctExpiry'){const v=String(el.value||'').trim();f.contract.expiry=/^\d{4}-\d{2}-\d{2}$/.test(v)?v:'';}
     else f[k]=String(el.value||'').trim().slice(0,120);});
-  ['birthDate','nextContact'].forEach(k=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(f[k]))f[k]='';});
+  ['birthDate','nextContact'].forEach(k=>{f[k]=vmDateNorm(f[k]);});
   f.needs=(vmData&&vmData.fields&&vmData.fields.needs)?vmData.fields.needs.slice():[];
   return f;
 }
