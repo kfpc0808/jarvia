@@ -5299,7 +5299,14 @@ const ccSync=(function(){
      connected()는 '이 기기의 표시'일 뿐이라 기기 교체·캐시 삭제 시 연결됐는데도 false로 나온다.
      실제 판정은 서버 토큰 발급(무음, 팝업 없음)으로 한다 — 성공하면 자동 복구, 실패해야 수동 연결 안내. */
   let probeAt=0,probeVal=null,probing=null;
+  function offKey(){try{return 'cc_gd_off_'+(ccVaultId()||'');}catch(_e){return 'cc_gd_off_';}}
+  function isOff(){try{return localStorage.getItem(offKey())==='1';}catch(_e){return false;}}
+  function setOff(v){
+    try{if(v){localStorage.setItem(offKey(),'1');localStorage.removeItem('cc_gd_'+(ccVaultId()||''));}   /* 해제 시 연결 표시도 함께 정리 — 호출자에 의존하지 않는다 */
+        else localStorage.removeItem(offKey());}catch(_e){}
+    probeVal=v?false:null;probeAt=v?Date.now():0;render();}   /* ★ 사용자가 직접 해제한 상태 (2026-07-19): 자동 재연결 금지 */
   async function probe(force){
+    if(isOff()){probeVal=false;return false;}   /* 사용자가 해제함 — 서버에 묻지 않는다 */
     /* 성공은 5분 캐시, 실패는 20초만 캐시 — 연결이 살아나면 빨리 자동 복구되도록 */
     const ttl=(probeVal===true)?300000:60000;   /* 실패는 60초 캐시 — 연결 복구는 online·시작·연결버튼에서 force로 즉시 반영 */
     if(!force&&probeVal!=null&&(Date.now()-probeAt)<ttl)return probeVal;
@@ -5315,6 +5322,10 @@ const ccSync=(function(){
     return probing;
   }
   async function ready(){ if(on())return true; return await probe(); }   /* 저장·읽기 직전 호출 */
+  function markOk(){   /* ★ 드라이브 작업이 실제로 성공 = 연결 확실 (2026-07-19): 남아 있던 '실패' 기억을 즉시 해제 */
+    probeVal=true;probeAt=Date.now();
+    try{if(!isOff())localStorage.setItem('cc_gd_'+(ccVaultId()||''),'1');}catch(_e){}
+  }
   function localKey(name){try{return 'cc_v_'+(ccVaultId()||'')+'_'+name;}catch(_e){return null;}}   /* ccStorage.saveJson의 캐시 키와 반드시 동일 (slug=ccVaultId) */
   function localPut(name,obj){try{const k=localKey(name);if(!k)return false;localStorage.setItem(k,JSON.stringify(obj));return true;}catch(_e){return false;}}
   function localGet(name){try{const k=localKey(name);if(!k)return null;const c=localStorage.getItem(k);return c?JSON.parse(c):null;}catch(_e){return null;}}
@@ -5325,7 +5336,7 @@ const ccSync=(function(){
     if(!driveOnly)localPut(name,obj);                                   /* ① 기기 — 즉시·항상 성공 */
     if(!await ready()){ if(driveOnly){notify();return {ok:false,backup:'need_connect'};}
       qAdd(folder,name); notify(); return {ok:true,backup:'pending'}; }   /* 무음 연결도 실패 → 대기 + 안내 */
-    try{ await ccStorage.saveJson(folder,name,obj,driveOnly); if(driveOnly)localDel(name); qDel(folder,name); render(); return {ok:true,backup:'ok'}; }
+    try{ await ccStorage.saveJson(folder,name,obj,driveOnly); markOk(); if(driveOnly)localDel(name); qDel(folder,name); render(); return {ok:true,backup:'ok'}; }
     catch(_e){ if(driveOnly)return {ok:false,backup:'fail'};
       qAdd(folder,name); return {ok:true,backup:'pending'}; }
   }
@@ -5333,7 +5344,7 @@ const ccSync=(function(){
   async function get(folder,name){
     if(!DRIVE_ONLY[folder]){const c=localGet(name);if(c)return c;}
     if(!await ready()){notify();return null;}   /* 기기에 없고 연결도 안 됨 → 안내 */
-    try{const d=await ccStorage.loadJson(folder,name);if(d&&!DRIVE_ONLY[folder])localPut(name,d);return d;}catch(_e){return null;}
+    try{const d=await ccStorage.loadJson(folder,name);markOk();if(d&&!DRIVE_ONLY[folder])localPut(name,d);return d;}catch(_e){return null;}
   }
   /* ── 대기분 일괄 전송 ── */
   async function flush(){
@@ -5345,7 +5356,7 @@ const ccSync=(function(){
       if(DRIVE_ONLY[it.folder]){qDel(it.folder,it.name);continue;}      /* 금고는 기기에 원본이 없으므로 재전송 대상 아님 */
       const obj=localGet(it.name);
       if(obj==null){qDel(it.folder,it.name);continue;}                  /* 원본이 사라졌으면 대기열에서 제거 */
-      try{await ccStorage.saveJson(it.folder,it.name,obj);qDel(it.folder,it.name);done++;}
+      try{await ccStorage.saveJson(it.folder,it.name,obj);markOk();qDel(it.folder,it.name);done++;}
       catch(_e){break;}                                                 /* 한 건 실패 시 중단 — 다음 기회에 재시도 */
     }
     flushing=false;render();
@@ -5399,13 +5410,13 @@ const ccSync=(function(){
     setInterval(function(){flush();},180000);
     setTimeout(function(){if(pending()>0)probe(true).then(function(ok){if(ok){noticeHide();flush();}else notify();});},4000);   /* ★ 시작 후 무음 자동 연결 시도 (대기분 있을 때만) */
   }catch(_e){}
-  return {put:put,get:get,flush:flush,pending:pending,badge:badge,render:render,mount:mount,probe:probe,ready:ready,notify:notify,noticeHide:noticeHide};
+  return {put:put,get:get,flush:flush,pending:pending,badge:badge,render:render,mount:mount,probe:probe,ready:ready,notify:notify,noticeHide:noticeHide,setOff:setOff,isOff:isOff};
 })();
 window.ccSync=ccSync;
 window.__ccSyncConnect=function(){   /* ★ 배지 '연결 필요' 클릭 → 드라이브 연결 → 대기분 자동 전송 (2026-07-19) */
   try{
     if(!window.ccStorage||!ccStorage.connect){toast('저장소 모듈을 불러오지 못했어요','warn');return;}
-    ccStorage.connect().then(function(){ccSync.probe(true).then(function(){ccSync.noticeHide();ccSync.flush().then(function(n){ccSync.render();toast(n?('백업 대기 '+n+'건을 드라이브에 저장했어요'):'구글 드라이브가 연결됐어요');});});})
+    ccStorage.connect().then(function(){ccSync.setOff(false);ccSync.probe(true).then(function(){ccSync.noticeHide();ccSync.flush().then(function(n){ccSync.render();toast(n?('백업 대기 '+n+'건을 드라이브에 저장했어요'):'구글 드라이브가 연결됐어요');});});})
       .catch(function(e){toast(((e&&e.message)==='inapp')?'카카오톡·인스타 등 앱 안 브라우저에서는 구글 로그인이 막혀요 — Chrome·Safari로 열어주세요':'연결하지 못했어요. 잠시 후 다시 시도해주세요','warn');});
   }catch(_e){}
 };
@@ -6460,11 +6471,26 @@ async function ccVaultUI(next){
   if(offBtn)offBtn.onclick=async()=>{
     if(!confirm('나만의 보관함 연결을 해제할까요?\n드라이브의 자료는 그대로 남고, 다시 연결하면 복원됩니다.'))return;
     const pin=await ccRequirePin();if(!pin)return;
-    try{await httpsCallable(fns,'gdDisconnect')({slug:ccVaultId(),pin:pin});}catch(_e){}
+    let _srvOk=true;
+    try{await httpsCallable(fns,'gdDisconnect')({slug:ccVaultId(),pin:pin});}catch(_e){_srvOk=false;}
     try{localStorage.removeItem('cc_gd_'+ccVaultId());localStorage.removeItem('cc_gdf_'+ccVaultId());localStorage.removeItem('myplaces_drive_on');}catch(_e){}   /* 나의 장소 플래그도 동시 해제 (2026-07-15) */
-    m.remove();toast('연결이 해제되었습니다','info');
+    try{if(window.ccSync)ccSync.setOff(true);}catch(_e){}   /* ★ 자동 재연결 금지 (2026-07-19) */
+    try{ccGdChipsRefresh();}catch(_e){}                      /* ★ 화면의 '드라이브 연결됨' 표시 즉시 갱신 (2026-07-19) */
+    m.remove();
+    toast(_srvOk?'연결이 해제되었습니다':'이 기기에서는 해제됐지만 서버 해제를 확인하지 못했어요 — 네트워크 확인 후 다시 시도해주세요',_srvOk?'info':'warn');
   };
 }
+
+/* ★ 연결 상태 표시 일괄 갱신 (2026-07-19): 해제·연결 직후 화면이 옛 상태로 남지 않도록 */
+function ccGdChipsRefresh(){
+  let con=false;try{con=!!(window.ccStorage&&ccStorage.connected&&ccStorage.connected());}catch(_e){}
+  const html=con?'<button type="button" style="border:0;background:none;padding:0;color:#2e7d52;font-size:10.5px;font-weight:800;cursor:pointer">☁ 드라이브 연결됨</button>'
+                :'<button type="button" style="border:0;background:none;padding:0;color:#8B6914;font-size:10.5px;font-weight:800;cursor:pointer">☁ 드라이브 연결하기</button>';
+  try{const c=document.getElementById('ccGdHomeChip');if(c){c.innerHTML=html;if(c.firstChild)c.firstChild.onclick=function(){if(window.ccVaultUI&&con)ccVaultUI();else if(window.ccVaultGate)ccVaultGate(function(){try{ccGdChipsRefresh();}catch(_e){}});};}}catch(_e){}
+  try{Array.prototype.forEach.call(document.querySelectorAll('[data-ccgdchip]'),function(g){g.innerHTML=html;if(g.firstChild)g.firstChild.onclick=function(){if(window.ccVaultUI&&con)ccVaultUI();else if(window.ccVaultGate)ccVaultGate(function(){try{ccGdChipsRefresh();}catch(_e){}});};});}catch(_e){}
+  try{if(window.ccSync)ccSync.render();}catch(_e){}
+}
+window.ccGdChipsRefresh=ccGdChipsRefresh;
 
 /* ═══════════ ★ 2-B/2-C: MY VAULT 존 + My 자산관리 (1호) — 2026-07 ═══════════ */
 /* 고객 채널에만 동적 주입: 데일리 카드 바로 아래 4버튼 존 · 재무대시보드 카드 삭제 · 아침독서 풀폭 */
@@ -6867,6 +6893,7 @@ function ccvShell(id,emoji,title,sub){
   (function(){
     var g=ov.querySelector('[data-cv="gd"]');if(!g)return;
     var con=false;try{con=window.ccStorage&&ccStorage.connected();}catch(_e){}
+    try{g.setAttribute('data-ccgdchip','1');}catch(_e){}   /* ★ 일괄 갱신 대상 표시 (2026-07-19) */
     if(con){g.innerHTML='<button type="button" style="border:0;background:none;padding:0;color:#2e7d52;font-weight:700;font-size:inherit;cursor:pointer;text-decoration:underline dotted">☁ 드라이브 연결됨</button>';
       g.firstChild.onclick=function(){if(window.ccVaultUI)ccVaultUI();};   /* 클릭 → 상태·점검·연결 해제 모달 (2026-07-15) */
       return;}
