@@ -1341,7 +1341,7 @@
       <p id="crSaveQuota" style="font-size:12px;color:#96783C;font-weight:700;margin-bottom:14px"></p>
       <p style="font-size:11px;color:#8A8577;line-height:1.65;margin-bottom:14px">저장하면 앞면 리포트·화법 카드·카톡 표지 이미지 3개 파일이 내려받아지고, 이후 편집·재생성·재저장·인쇄는 추가 차감 없이 자유롭습니다. <b style="color:#0F1B33">저장 전에는 편집·인쇄 등 모든 작업이 잠겨</b> 있습니다.</p>
       <div style="display:flex;gap:8px">
-        <button onclick="crHideSavePrompt();crSave()" style="flex:1;padding:13px;border:none;border-radius:10px;background:#96783C;color:#fff;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit">💾 저장하고 이용 시작</button>
+        <button id="crSaveGoBtn" onclick="crSave()" style="flex:1;padding:13px;border:none;border-radius:10px;background:#96783C;color:#fff;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit">💾 저장하고 이용 시작</button>
       </div>
     </div>
   </div>
@@ -4529,15 +4529,16 @@ async function jbGetIdToken(force){
   if(t){_jbIdTok=t;_jbIdTokExp=now+45*60*1000;}
   return t||null;
 }
-async function jbApi(payload){
+async function jbApi(payload,timeoutMs){
   payload=payload||{};
   if(TRIAL.on&&TRIAL.token)payload.trialToken=TRIAL.token;
   var tk=await jbGetIdToken(false);
   var hd={'content-type':'application/json'};if(tk)hd.authorization='Bearer '+tk;
-  var r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload)});
+  var sg;if(timeoutMs){var _ac=new AbortController();sg=_ac.signal;setTimeout(function(){_ac.abort();},timeoutMs);}   /* 선택 타임아웃 — 미지정 시 기존 동작 (2026-07-20) */
+  var r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload),signal:sg});
   if(r.status===401&&!TRIAL.on){                             // 토큰 만료·경합 → 재발급 1회 재시도
     var tk2=await jbGetIdToken(true);
-    if(tk2&&tk2!==tk){hd.authorization='Bearer '+tk2;r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload)});}
+    if(tk2&&tk2!==tk){hd.authorization='Bearer '+tk2;r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload),signal:sg});}
   }
   return r;
 }
@@ -6112,9 +6113,15 @@ function crDownload(html,fn){
 }
 async function crSave(){
   if(!CEO.teaser){toast('리포트를 먼저 생성해 주세요.');return;}
+  if(CEO.saving)return;CEO.saving=true;                                   /* 재진입 가드 (2026-07-20) */
+  var _gb=document.getElementById('crSaveGoBtn'),_gt=_gb?_gb.textContent:'';
+  if(_gb){_gb.disabled=true;_gb.textContent='⏳ 확정 중…';}               /* 클릭 즉시 피드백 — 팝업은 성공 시에만 닫힘 */
+  var _t0=Date.now();
+  try{
   if(!CEO.paid){
+    if(!TRIAL.on&&!window.opener&&!(_jbIdTok&&Date.now()<_jbIdTokExp)){toast('자비아 메인 탭이 닫혀 있어요 — 메인 화면에서 CEO리포트를 다시 열어주세요.');return;}   /* opener 소실 조기 안내 (2026-07-20) */
     try{
-      var resp=await jbApi({action:'teaserCharge',reportUid:CEO.reportUid});
+      var resp=await jbApi({action:'teaserCharge',reportUid:CEO.reportUid},30000);   /* 30초 타임아웃 — 확정 호출 한정 (2026-07-20) */
       var cr=null;try{cr=await resp.json();}catch(_){}
       if(resp.status===402&&cr&&cr.insufficient){toast('잔액 부족 — 필요 '+Number(cr.charge||0).toLocaleString()+'원 / 잔액 '+Number(cr.balance||0).toLocaleString()+'원. 마이페이지에서 충전해 주세요.');crShowSavePrompt();return;}
       if(!resp.ok||!cr||cr.error){toast('X '+((cr&&cr.error)||'저장 확정 실패 — 다시 시도해 주세요.'));return;}
@@ -6123,13 +6130,17 @@ async function crSave(){
       else if(cr.trial)toast('이용 확정 · 무료 체험 1회 (저장 무료)');
       else toast(cr.charged>0?('이용 확정 · '+Number(cr.charged).toLocaleString()+'원 차감 (잔액 '+Number(cr.balance||0).toLocaleString()+'원)')
                              :('이용 확정 · 이번 달 '+cr.freeUsed+'/'+cr.freeQuota+'회 (무료)'));
-    }catch(e){toast('X 저장 확정 실패 — 네트워크를 확인해 주세요.');return;}
+    }catch(e){toast('X 저장 확정 실패 — '+(e&&e.name==='AbortError'?'응답 지연(30초 초과). 잠시 후 다시 시도해 주세요.':'네트워크를 확인해 주세요.'));return;}
   }
+  crHideSavePrompt();                                                     /* 확정 성공 시에만 팝업 닫힘 (2026-07-20) */
   var dl=document.getElementById('crDlRows'); if(dl)dl.style.display='flex';   /* 안전망: 개별 다운로드 상시 노출 */
-  toast('파일 3건을 내려받습니다 — 브라우저가 "여러 파일 다운로드 허용"을 물으면 허용을 눌러주세요.');
+  toast(Date.now()-_t0>4500                                               /* 확정 지연 시 브라우저가 자동 다운로드를 막을 수 있음 — 폴백 안내 (2026-07-20) */
+    ?'확정 완료 — 자동 다운로드가 차단될 수 있어요. 파일이 안 내려오면 위 ⬇ 버튼 3개로 받아주세요.'
+    :'파일 3건을 내려받습니다 — 브라우저가 "여러 파일 다운로드 허용"을 물으면 허용을 눌러주세요.');
   crDlOne('front');
   setTimeout(function(){crDlOne('back');},700);
   setTimeout(function(){crDlOne('png',true);},1500);
+  }finally{CEO.saving=false;if(_gb){_gb.disabled=false;_gb.textContent=_gt;}}
 }
 function crBaseName(){
   var d=new Date(),ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
