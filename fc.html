@@ -6495,7 +6495,7 @@ async function aiSaveDrive(q,a,cust){
    흐름: 🎙 FAB → ①말하기(키보드 마이크) → [그대로 저장]=무료 / [AI 정리]=1회 차감
         → ③확인(제목·정리·다음할일·다음연락일) → 해당 고객 미팅·AI 기록에 저장
    분기: 동명이인=후보 선택 · 이름 미발견=검색 선택 · AI 불가=원문 폴백 — 어떤 경우에도 기록 유실 없음 */
-let vmText='',vmBusy=false,vmData=null,vmPickId=null,vmGen=0;   /* vmGen: 취소·닫기 후 늦게 도착한 응답 폐기용 세대 토큰 */
+let vmText='',vmBusy=false,vmData=null,vmPickId=null,vmGen=0,vmCfExtra=[];   /* vmGen: 취소·닫기 후 늦게 도착한 응답 폐기용 세대 토큰 · vmCfExtra: 기존 고객 확인 화면 '직접 채워 넣을 항목' (2026-07-20) */
 function vmEl(id){return document.getElementById(id);}
 function vmClose(){vmGen++;vmBusy=false;const s=vmEl('vmSheet');if(s)s.style.display='none';}
 function vmOpen(){
@@ -6507,7 +6507,7 @@ function vmOpen(){
     document.body.appendChild(m);
     m.addEventListener('click',ev=>{if(ev.target===m)vmClose();});
   }
-  m.style.display='flex';vmData=null;vmPickId=null;vmNewExtra=[];   /* ★ 신규 화면 '항목 추가' 상태도 초기화 (2026-07-19) */
+  m.style.display='flex';vmData=null;vmPickId=null;vmNewExtra=[];vmCfExtra=[];   /* ★ 신규 화면 '항목 추가' 상태도 초기화 (2026-07-19) · 기존 고객 '직접 채우기' 상태 초기화 (2026-07-20) */
   vmRenderInput();
 }
 function vmHead(withGuide){return '<div style="background:#15294A;padding:12px 15px;display:flex;align-items:center;gap:9px;flex-shrink:0"><span style="width:30px;height:30px;border-radius:50%;background:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-microphone" style="font-size:16px;color:#15294A"></i></span><div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:800">음성입력</div><div style="font-size:9.5px;color:#9AA3B8">말하면 고객 기록과 정보가 함께 정리돼요</div></div>'+(withGuide?'<button type="button" id="vmGuideBtn" style="border:1px solid #3A4A6B;background:none;border-radius:8px;padding:5px 9px;font-size:10.5px;font-weight:700;color:#C9A96E;font-family:inherit;cursor:pointer;flex-shrink:0"><i class="ti ti-help-circle" style="font-size:12px"></i> 가이드</button>':'')+'<button type="button" id="vmX" style="border:0;background:none;color:#9AA3B8;font-size:18px;padding:4px;cursor:pointer"><i class="ti ti-x"></i></button></div>'
@@ -6530,7 +6530,7 @@ function vmExCard(k,icon,ic,tc,label,text){
     +'<div style="font-size:12px;color:#3A4457;line-height:1.6;margin-top:5px">'+_aiEsc(text)+'</div></div>';}
 /* ── ① 입력 ── */
 function vmRenderInput(){
-  vmGen++;vmBusy=false;   /* 입력 화면 복귀(취소·다시 말하기) = 진행 중이던 요청 무효화 */
+  vmGen++;vmBusy=false;vmCfExtra=[];   /* 입력 화면 복귀(취소·다시 말하기) = 진행 중이던 요청 무효화 · 직접 채우기 상태 초기화 (2026-07-20) */
   const b=vmEl('vmBox');if(!b)return;
   const _mob=vmIsMobile();
   const _step2=_mob?'키보드의 <i class="ti ti-microphone" style="font-size:14px;vertical-align:-2px"></i> 를 누르고 말하세요'
@@ -6901,6 +6901,10 @@ function vmCompanyTitleOf(t){   /* ★ 회사·직함 코드 추출 (2026-07-20,
   if(!m)return out;
   const pre=t.slice(0,m.index);
   if(/(?:^|\s)[가-힣]$/.test(pre))return out;   /* "김대표"류 성+호칭 — 직함 아닌 사람 지칭이므로 둘 다 비움 */
+  if(m[1]==='이사'){   /* ★ 이사(移徙) 오추출 방어 (2026-07-20): "이사 준비/이사 갈/역삼동으로 이사"는 직함이 아니다 */
+    const _aft=t.slice(m.index+2);
+    if(/^\s*(?:준비|예정|계획|했|한|할|하|함|갈|간|감|가|를|왔|온|오|다니)/.test(_aft)||/(?:으로|로)\s*$/.test(pre))return out;
+  }
   out.title=m[1];
   const cm=pre.match(/([가-힣A-Za-z0-9&()㈜.]{2,20})\s*$/);
   if(cm){
@@ -6979,9 +6983,11 @@ function vmNormFields(f){
   return out;
 }
 function vmFieldRow(k,label,cur,val,ph){
-  const changed=!!(cur&&cur!==val);
+  const changed=!!(cur&&val&&cur!==val);
   const bd=changed?'#E24B4A':'#D8DCE5';
-  const tag=changed?'<span style="color:#A32D2D"> · 기존 '+_aiEsc(cur)+' 에서 변경</span>':'<span style="color:#1D9E75"> · 새로 입력</span>';
+  const tag=changed?'<span style="color:#A32D2D"> · 기존 '+_aiEsc(cur)+' 에서 변경</span>'
+    :(val?'<span style="color:#1D9E75"> · 새로 입력</span>'
+    :(cur?'<span style="color:#8A93A8"> · 현재 '+_aiEsc(cur)+'</span>':'<span style="color:#8A93A8"> · 직접 입력</span>'));   /* ★ 직접 채우기 빈 행 (2026-07-20) */
   return '<div style="margin-top:9px"><div style="font-size:10.5px;color:#8A93A8;margin-bottom:3px;font-weight:700">'+label+tag+'</div>'
     +'<input type="text" data-vmf="'+k+'" value="'+_aiEsc(val)+'"'+(ph?' placeholder="'+ph+'"':'')+' style="width:100%;border:1px solid '+bd+';border-radius:9px;padding:8px 10px;font-size:12.5px;color:#15294A;font-family:inherit;background:#fff;outline:0;box-sizing:border-box"></div>';
 }
@@ -7005,10 +7011,11 @@ function vmRenderConfirm(c){
   const d=vmData;const sub=[c.company,c.title].filter(Boolean).join(' · ');
   const F=d.fields||vmNormFields(null);
   const kind=d.kind||'both';
-  const rows=VM_FIELDS.filter(x=>F[x.k]).map(x=>vmFieldRow(x.k,x.label,c[x.k]||'',F[x.k],x.ph||'')).join('');
+  const rows=VM_FIELDS.filter(x=>F[x.k]||vmCfExtra.indexOf(x.k)>=0).map(x=>vmFieldRow(x.k,x.label,c[x.k]||'',F[x.k]||'',x.ph||'')).join('');   /* ★ 직접 채우기 행 포함 (2026-07-20) */
   const newNeeds=(F.needs||[]).filter(n=>((c.needs||[]).indexOf(n)<0));
   const hasCt=!!(F.contracts&&F.contracts.length);
-  const hasInfo=!!(rows||newNeeds.length||hasCt);
+  const addable=VM_FIELDS.filter(x=>!F[x.k]&&vmCfExtra.indexOf(x.k)<0);   /* ★ 직접 채워 넣을 항목 후보 (2026-07-20) */
+  const _cfPre=(typeof d._cfMemo==='string')?d._cfMemo:(function(){const ns=vmSalesNotesOf(vmText||'');return ns.length?('· '+ns.join('\n· ')):'';})();   /* ★ 영업 메모 프리필 — 편집값 보존, 없으면 자동 추출 (2026-07-20) */
   const kindTag=kind==='info'?'<span style="font-size:10px;font-weight:800;background:#E6F1FB;color:#185FA5;border-radius:8px;padding:3px 8px">정보만 수정</span>'
     :(kind==='meeting'?'<span style="font-size:10px;font-weight:800;background:#E1F5EE;color:#0F6E56;border-radius:8px;padding:3px 8px">미팅 기록</span>'
     :'<span style="font-size:10px;font-weight:800;background:#E1F5EE;color:#0F6E56;border-radius:8px;padding:3px 8px">미팅 + 정보</span>');
@@ -7023,7 +7030,7 @@ function vmRenderConfirm(c){
     +(d.todo?'<div style="margin-top:11px"><div style="font-size:10px;font-weight:800;color:#8A93A8">다음 할 일</div><div style="font-size:12.5px;color:#3A4457;line-height:1.7;background:#FBFAF6;border:1px solid #ECEEF2;border-radius:10px;padding:10px 12px;margin-top:4px">'+_aiEsc(d.todo)+'</div></div>':'')
     +(d.mode==='ai'?'<details style="margin-top:11px"><summary style="font-size:10.5px;color:#8A93A8;font-weight:700;cursor:pointer">말한 원문 보기</summary><div style="font-size:11.5px;color:#8A93A8;line-height:1.65;margin-top:6px;background:#fff;border:1px solid #ECEEF2;border-radius:10px;padding:9px 11px;white-space:pre-wrap">'+_aiEsc(vmText)+'</div></details>':'')
     +'</div>'
-    +(hasInfo?('<div style="background:#fff;border:1px solid #ECEEF2;border-radius:14px;padding:13px;margin-top:10px">'
+    +'<div style="background:#fff;border:1px solid #ECEEF2;border-radius:14px;padding:13px;margin-top:10px">'
       +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-weight:800;color:#8A93A8">고객 정보 업데이트</span><span style="font-size:9.5px;color:#8B6914;background:#FFF8E7;border:1px solid #E0C36B;border-radius:7px;padding:2px 7px;font-weight:700">말씀에서 찾은 내용</span></div>'
       +rows
       +(newNeeds.length?'<div style="margin-top:11px"><div style="font-size:10.5px;color:#8A93A8;margin-bottom:4px;font-weight:700">니즈 <span style="color:#1D9E75">· 추가돼요</span></div><div id="vmNdBox" style="display:flex;flex-wrap:wrap;gap:5px"></div></div>':'')
@@ -7032,20 +7039,37 @@ function vmRenderConfirm(c){
           +'<input type="text" data-vmf="ctProduct'+i+'" value="'+_aiEsc(ct.product)+'" placeholder="상품명" style="width:100%;border:1px solid #D8DCE5;border-radius:9px;padding:8px 10px;font-size:12.5px;color:#15294A;font-family:inherit;outline:0;box-sizing:border-box">'
           +'<input type="text" data-vmf="ctExpiry'+i+'" value="'+_aiEsc(ct.expiry)+'" placeholder="만기일 YYYY-MM-DD (모르면 비워두세요)" style="width:100%;border:1px solid #D8DCE5;border-radius:9px;padding:8px 10px;font-size:12.5px;color:#15294A;font-family:inherit;outline:0;box-sizing:border-box;margin-top:5px">'
         +'</div>').join('')+'</div>':'')
+      /* ★ 영업 메모 (기존 고객, 2026-07-20): 저장 시 기존 메모를 덮지 않고 아래에 추가 */
+      +'<div style="margin-top:11px"><div style="font-size:10.5px;color:#8A93A8;margin-bottom:4px;font-weight:700">영업 메모 <span style="color:#1D9E75">· 기존 메모 아래에 추가돼요</span></div>'
+      +'<textarea id="vmCfMemo" maxlength="2000" placeholder="예: 연봉·은퇴 계획·가족 등 영업 참고사항 (비워두면 메모는 그대로예요)" style="width:100%;min-height:56px;border:1px solid #D8DCE5;border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.6;color:#3A4457;background:#fff;font-family:inherit;resize:none;outline:0;box-sizing:border-box">'+_aiEsc(_cfPre)+'</textarea></div>'
+      /* ★ 직접 채워 넣을 항목 (기존 고객, 2026-07-20): 음성 추출이 놓친 연락처 등을 수동 추가 */
+      +(addable.length?'<div style="border-top:1px solid #ECEEF2;margin-top:12px;padding-top:10px"><div style="font-size:10px;color:#8A93A8;font-weight:800;margin-bottom:6px">직접 채워 넣을 항목</div><div style="display:flex;flex-wrap:wrap;gap:5px">'
+        +addable.map(x=>'<button type="button" data-vmcfadd="'+x.k+'" style="border:1px solid #D8DCE5;background:#fff;color:#5C6678;border-radius:13px;padding:5px 11px;font-size:11px;font-family:inherit;cursor:pointer">'+x.label+'</button>').join('')
+        +'</div></div>':'')
       +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:9px;padding:8px 10px;margin-top:11px;font-size:10.5px;color:#8B6914;line-height:1.6">숫자·이름은 잘못 들릴 수 있어요. 저장 전에 한 번 확인해 주세요.</div>'
-      +'</div>'):'')
+      +'</div>'
     +'<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#8A93A8;margin-top:10px;justify-content:center"><i class="ti ti-lock" style="font-size:10px"></i> 드라이브 암호화 저장'+(d.mode==='ai'?' · AI 사용 1회 차감됨':' · AI 미사용(차감 없음)')+'</div>'
     +'</div>'
     +vmFoot(vmBtn('vmBack','다시 말하기')+vmBtn('vmSave','확인 · 저장',1));
   vmWire();
   vmEl('vmBack').onclick=vmRenderInput;
-  vmEl('vmChg').onclick=()=>{vmData.fields=vmCollectFields();vmCustomers(list=>vmRenderPick(list,{name:'',hits:[]},'어느 고객의 기록인지 골라주세요.'));};
+  vmEl('vmChg').onclick=()=>{vmData.fields=vmCollectFields();const _m2=vmEl('vmCfMemo');if(_m2)vmData._cfMemo=_m2.value.slice(0,2000);vmCustomers(list=>vmRenderPick(list,{name:'',hits:[]},'어느 고객의 기록인지 골라주세요.'));};   /* ★ 메모 편집값 보존 (2026-07-20) */
   const ndRender=()=>{const w=vmEl('vmNdBox');if(!w)return;
     w.innerHTML=(vmData.fields.needs||[]).filter(n=>((c.needs||[]).indexOf(n)<0)).map(n=>'<button type="button" data-vmnd="'+_aiEsc(n)+'" style="border:1px solid #15294A;background:#15294A;color:#fff;border-radius:14px;padding:5px 11px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer">'+_aiEsc(n)+' ×</button>').join('')||'<span style="font-size:10.5px;color:#9099AD">추가할 니즈 없음</span>';
     Array.prototype.forEach.call(w.querySelectorAll('[data-vmnd]'),el=>{el.onclick=()=>{const n=el.getAttribute('data-vmnd');vmData.fields.needs=(vmData.fields.needs||[]).filter(x=>x!==n);ndRender();};});};
   ndRender();
+  /* ★ 영업 메모·직접 채우기 배선 (2026-07-20): 편집값은 vmData._cfMemo에 보존 — 재렌더에도 유지 */
+  const _cfM=vmEl('vmCfMemo');
+  if(_cfM){_cfM.oninput=()=>{if(vmData)vmData._cfMemo=_cfM.value.slice(0,2000);vmTaGrow(_cfM,200);};vmTaGrow(_cfM,200);}
+  Array.prototype.forEach.call(b.querySelectorAll('[data-vmcfadd]'),el=>{el.onclick=()=>{
+    const k=el.getAttribute('data-vmcfadd');
+    vmData.fields=vmCollectFields();   /* 재렌더 전 사용자가 고친 값 보존 */
+    if(_cfM&&vmData)vmData._cfMemo=_cfM.value.slice(0,2000);
+    if(vmCfExtra.indexOf(k)<0)vmCfExtra.push(k);
+    vmRenderConfirm(c);};});
   vmEl('vmSave').onclick=()=>{
     const f=vmCollectFields();vmData.fields=f;
+    const _mEl=vmEl('vmCfMemo');f.memo=((_mEl&&_mEl.value)||'').trim().slice(0,2000);   /* ★ 영업 메모 — 기존 메모에 추가 반영 (2026-07-20) */
     const saveMeeting=(kind!=='info');
     if(saveMeeting&&!window.__vmSaveMeeting){toast('저장 모듈을 불러오지 못했어요 — 새로고침 후 다시 시도해주세요','warn');return;}
     const btn=vmEl('vmSave');if(btn){btn.disabled=true;btn.textContent='저장 중…';}
@@ -9148,6 +9172,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(f.birthDate&&/^\d{4}-\d{2}-\d{2}$/.test(f.birthDate)){c.birthDate=f.birthDate;c.birthUnknown=false;}
     if(f.nextContact&&/^\d{4}-\d{2}-\d{2}$/.test(f.nextContact))c.nextContact=f.nextContact;
     if(f.needs&&f.needs.length){c.needs=c.needs||[];f.needs.forEach(function(n){n=String(n||"").trim();if(n&&c.needs.indexOf(n)<0)c.needs.push(n);});}
+    if(f.memo){var _nm9=String(f.memo).trim().slice(0,2000);var _om9=String(c.memo||"").trim();if(_nm9&&_om9.indexOf(_nm9)<0)c.memo=(_om9?_om9+"\n":"")+_nm9;}   /* ★ 영업 메모 추가 반영 (2026-07-20): 덮지 않고 뒤에 추가, 재시도 중복 방지 */
     var _cts=(f.contracts&&f.contracts.length)?f.contracts:((f.contract&&f.contract.product)?[f.contract]:[]);
     for(var q3=0;q3<_cts.length&&q3<3;q3++){var fc3=_cts[q3];
       if(!fc3||!fc3.product)continue;
