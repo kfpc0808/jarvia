@@ -3755,18 +3755,22 @@ function finTextToPending(text){
   if(!head)return null;
   const stmt=head[1],unit=head[2],baseYear=+head[3],compYear=head[4]?+head[4]:null;
   const SCALE={'원':0.0001,'천원':0.1,'만원':1,'백만원':100,'억원':10000}[unit]||100;   // → 만원 환산배수
-  const num=v=>{const n=parseFloat(String(v).replace(/,/g,''));return Number.isFinite(n)?Math.round(n*SCALE):null;};
+  /* ★ 접미사 인식 (2026-07-20): "80억 원"처럼 사람 표기가 섞이면 접미사가 헤더 단위보다 우선.
+     접미사 없으면 기존대로 헤더 단위 적용 — 기계 생성 포맷(순수 숫자)은 종전과 동일 동작. */
+  const SUF={'억':10000,'천만':1000,'백만':100,'만':1};   // → 만원 환산배수
+  const num=(v,suf)=>{const n=parseFloat(String(v).replace(/,/g,''));return Number.isFinite(n)?Math.round(n*(suf?SUF[suf]:SCALE)):null;};
   const KEYMAP={'연매출':'revenue','매출액':'revenue','영업이익':'operatingProfit','당기순이익':'netProfit','순이익':'netProfit','자산총계':'totalAssets','부채총계':'totalLiabilities','자본총계':'totalEquity','미처분이익잉여금':'retainedEarnings','이익잉여금':'retainedEarnings','현금및현금성자산':'cashAndCashEquivalents','차입금':'borrowings'};
   const extracted={};
-  const re=/^-\s*([^:\n]+?)\s*:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)/gm;
+  const re=/^-\s*([^:\n]+?)\s*:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)\s*(억|천만|백만|만)?/gm;
   let m;
   while((m=re.exec(s))!==null){
+    if(m[3]&&/^\s*원?\s*\d/.test(s.slice(m.index+m[0].length)))return null;   /* "80억 5천" 복합 표기 — 결정적 파싱 범위 밖 → AI 폴백 (2026-07-20) */
     const label=m[1].replace(/\(.*?\)/g,'').replace(/\s+/g,'');
     const k=KEYMAP[label];
-    if(k&&extracted[k]==null){const v=num(m[2]);if(v!=null)extracted[k]=v;}
+    if(k&&extracted[k]==null){const v=num(m[2],m[3]);if(v!=null)extracted[k]=v;}
   }
-  const g=s.match(/대표 가지급금\(단기대여금\) 잔액:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)/);
-  if(g){const v=num(g[1]);if(v!=null&&v>0)extracted.loanAmount=v;}
+  const g=s.match(/대표\s*가지급금(?:\s*\(단기대여금\))?\s*잔액\s*:\s*\d{4}년\s*(-?[\d,]+(?:\.\d+)?)\s*(억|천만|백만|만)?/);   /* 라벨 완화 + 접미사 (2026-07-20) */
+  if(g){if(g[2]&&/^\s*원?\s*\d/.test(s.slice(g.index+g[0].length)))return null;const v=num(g[1],g[2]);if(v!=null&&v>0)extracted.loanAmount=v;}
   const core=['revenue','totalAssets','totalLiabilities','totalEquity'].filter(k=>extracted[k]!=null).length;
   if(core<3)return null;
   const unc=[];
