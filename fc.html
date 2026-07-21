@@ -3247,6 +3247,9 @@ async function lcEnsureAnonAuth(){if(currentUser&&currentUser.uid)return current
 function lcSafeCt(t){if(/^image\//.test(t)||/^text\//.test(t))return t;if(['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(t))return t;return 'application/octet-stream';}
 function lcPickAndSendFiles(){if(!$('lcFileConsent')||!$('lcFileConsent').checked){toast('첨부 자료 전송 동의에 체크해 주세요','warning');return;}if(!lcState.reqId){toast('요청 정보를 찾을 수 없습니다','error');return;}const inp=document.createElement('input');inp.type='file';inp.multiple=true;inp.style.display='none';inp.onchange=async()=>{const files=Array.from(inp.files||[]);inp.remove();if(!files.length)return;const big=files.find(f=>f.size>10*1024*1024);if(big){toast('파일 1건당 10MB 이하만 가능합니다: '+big.name,'warning');return;}const zero=files.find(f=>!f.size);if(zero){toast('빈 파일은 전송할 수 없습니다: '+zero.name,'warning');return;}await lcSendFiles(files);};document.body.appendChild(inp);inp.click();}
 const LC_P2P_CHUNK=16384;
+/* ★ [2026-07-21] 보안채팅 파일 전송 상한 — 기기 메모리 보호. 초과 시 보관함 링크 공유 안내 */
+const SC_MAX_FILE=100*1024*1024;      // 100MB
+const SC_RX_FLUSH=4*1024*1024;        // 수신 4MB마다 디스크 위임(메모리 누적 방지)
 async function lcFcOnline(){try{const s=await getDoc(doc(db,'p2p_presence','fc_'+loginId));const d=s.exists()?s.data():null;if(!d||d.online!==true)return false;if(d.ts&&d.ts.toDate){if(Date.now()-d.ts.toDate().getTime()>60000)return false;}return true;}catch(e){return false;}}
 async function lcSendFileStorage(file,clientId,fcAuthUid,stEl,notice){const ts=Date.now();const safe=String(file.name||'file').replace(/[^\w.\-가-힣]/g,'_').slice(0,120);const path='p2p_request_files/'+fcAuthUid+'/'+clientId+'/'+ts+'_'+safe;await uploadBytes(storageRef(storage,path),file,{contentType:lcSafeCt(file.type||''),customMetadata:{fcAuthUid:fcAuthUid,clientId:clientId,requestId:lcState.reqId,consentCredit:'true'}});await setDoc(doc(db,'life_request_files',gid()),{clientId:clientId,requestId:lcState.reqId,fcId:loginId,fcAuthUid:fcAuthUid,fileName:String(file.name||'파일').slice(0,180),fileSize:file.size,transferMode:'storage',transferStatus:'pending',storagePath:path,fileConsentPersonal:true,fileConsentCredit:true,fileConsentSensitive:true,fileConsentVersion:LC_CONSENT_VERSION,fileConsentAt:serverTimestamp(),fileConsentNotice:notice,createdAt:serverTimestamp()});if(stEl){stEl.textContent='전송 완료 ✓';stEl.style.color='var(--success)';}}
 function lcSendFileP2P(file,clientId,fcAuthUid,stEl,notice){return new Promise(resolve=>{const room=loginId+'_'+clientId;const sigRef=doc(db,'p2p_signals',room);let settled=false,pc=null,sigUnsub=null,candUnsub=null,timer=null,metaId=null;const finish=async ok=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);try{sigUnsub&&sigUnsub();}catch(e){}try{candUnsub&&candUnsub();}catch(e){}try{pc&&pc.close();}catch(e){}try{const a=await getDocs(collection(db,'p2p_signals',room,'offerCandidates'));for(const x of a.docs)await deleteDoc(x.ref);}catch(e){}try{const b=await getDocs(collection(db,'p2p_signals',room,'answerCandidates'));for(const x of b.docs)await deleteDoc(x.ref);}catch(e){}try{await deleteDoc(sigRef);}catch(e){}if(!ok&&metaId){try{await deleteDoc(doc(db,'life_request_files',metaId));}catch(e){}}resolve(ok);};(async()=>{try{if(stEl){stEl.textContent='컨설턴트 수락 대기...';stEl.style.color='var(--text-mute)';}metaId=gid();await setDoc(doc(db,'life_request_files',metaId),{clientId:clientId,requestId:lcState.reqId,fcId:loginId,fcAuthUid:fcAuthUid,fileName:String(file.name||'파일').slice(0,180),fileSize:file.size,transferMode:'p2p',transferStatus:'sending',fileConsentPersonal:true,fileConsentCredit:true,fileConsentSensitive:true,fileConsentVersion:LC_CONSENT_VERSION,fileConsentAt:serverTimestamp(),fileConsentNotice:notice,createdAt:serverTimestamp()});try{const cs=await getDocs(collection(db,'p2p_signals',room,'offerCandidates'));for(const x of cs.docs)await deleteDoc(x.ref);const as=await getDocs(collection(db,'p2p_signals',room,'answerCandidates'));for(const x of as.docs)await deleteDoc(x.ref);}catch(e){}pc=new RTCPeerConnection({iceServers:LC_OWNER_P2P_ICE});const dc=pc.createDataChannel('file');dc.binaryType='arraybuffer';pc.onicecandidate=e=>{if(e.candidate)addDoc(collection(db,'p2p_signals',room,'offerCandidates'),e.candidate.toJSON()).catch(()=>{});};dc.onopen=async()=>{if(settled)return;if(stEl){stEl.textContent='직접 전송 중...';}try{dc.send(JSON.stringify({name:file.name,type:file.type||'application/octet-stream',size:file.size,metaId:metaId,requestId:lcState.reqId}));const ab=await file.arrayBuffer();const total=ab.byteLength;let off=0;const pump=()=>{if(settled)return;if(dc.readyState!=='open'){finish(false);return;}while(off<total){if(dc.bufferedAmount>LC_P2P_CHUNK*8){setTimeout(pump,50);return;}const end=Math.min(off+LC_P2P_CHUNK,total);dc.send(ab.slice(off,end));off=end;}try{dc.send('__EOF__');}catch(e){}};pump();}catch(e){finish(false);}};dc.onmessage=ev=>{if(typeof ev.data==='string'){try{const m=JSON.parse(ev.data);if(m&&m.type==='file_received'){if(stEl){stEl.textContent='직접 전송 완료 ✓';stEl.style.color='var(--success)';}finish(true);}}catch(e){}}};dc.onerror=()=>{};const offer=await pc.createOffer();await pc.setLocalDescription(offer);await setDoc(sigRef,{from:'client',clientId:clientId,fcAuthUid:fcAuthUid,fileName:String(file.name||'파일').slice(0,180),fileSize:file.size,contextLabel:'생활변화 맞춤점검 자료',requestId:lcState.reqId,offer:{type:offer.type,sdp:offer.sdp},status:'pending',ts:serverTimestamp()});sigUnsub=onSnapshot(sigRef,snap=>{const d=snap.data();if(!d)return;if(d.answer&&pc&&!pc.currentRemoteDescription){pc.setRemoteDescription(new RTCSessionDescription(d.answer)).catch(()=>{});}if(d.status==='rejected'){if(stEl){stEl.textContent='컨설턴트가 거절함';stEl.style.color='var(--text-mute)';}finish(false);}else if(d.status==='failed'){finish(false);}else if(d.status==='received'){if(stEl){stEl.textContent='직접 전송 완료 ✓';stEl.style.color='var(--success)';}finish(true);}},()=>finish(false));candUnsub=onSnapshot(collection(db,'p2p_signals',room,'answerCandidates'),snap=>{snap.docChanges().forEach(ch=>{if(ch.type==='added'&&pc)pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{});});},()=>{});timer=setTimeout(()=>{if(!settled){if(stEl){stEl.textContent='응답 없음 — 보관함으로 전환';stEl.style.color='var(--text-mute)';}finish(false);}},45000);}catch(e){console.error('[life-send p2p]',e);finish(false);}})();});}
@@ -4348,9 +4351,18 @@ function scShowTyping(on){
 function scWirePc(pc){
   pc.oniceconnectionstatechange=()=>{
     const st=pc.iceConnectionState;
-    if(st==='disconnected')scSetStatus('연결이 불안정해요…');
-    else if(st==='failed'||st==='closed')scSetStatus('연결이 끊어졌어요');
-    else if(st==='connected'||st==='completed'){scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');}
+    if(st==='disconnected'){                       /* ★ 일시 끊김: 6초 유예 후에도 미복구면 재연결 */
+      scSetStatus('연결이 불안정해요…');
+      if(_scDiscT)clearTimeout(_scDiscT);
+      _scDiscT=setTimeout(()=>{
+        _scDiscT=null;
+        if(!_scConn||_scConn.pc!==pc)return;
+        const s=pc.iceConnectionState;
+        if(s!=='connected'&&s!=='completed')scScheduleReconnect();
+      },6000);
+    }
+    else if(st==='failed'||st==='closed'){scSetStatus('연결이 끊어졌어요');scScheduleReconnect();}
+    else if(st==='connected'||st==='completed'){scResetRetry();scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');}
   };
 }
 
@@ -4375,10 +4387,65 @@ function scIceServers(){
   return (Array.isArray(window.__SC_TURN)&&window.__SC_TURN.length)?base.concat(window.__SC_TURN):base;
 }
 let _scConn=null;              // {pc,dc,room,sigUnsub,candUnsub,role}
+let _scTxReject=null;          // ★ 수신측 용량 거부 신호(전송 중단용)
+/* ★★ [2026-07-21] 재연결 보강 — 네트워크 전환·순간 끊김에서 자동 복구 (고객이 offer 주체) */
+let _scRe={tries:0,timer:null,busy:false};
+let _scDiscT=null;             // '불안정' 상태 유예 타이머
+let _scLastOfferSdp='';        // FC: 마지막으로 응답한 offer (재offer 감지용)
+let _scAnswering=false;        // FC: 응답 처리 중복 방지
+const SC_RE_WAIT=[2000,4000,8000,15000,20000];
+function scChatOpen(){const cb=document.getElementById('scChatBody');return !!(cb&&cb.style.display!=='none');}
+function scConnAlive(){const c=_scConn;if(!c||!c.pc)return false;const s=c.pc.iceConnectionState;return !(s==='failed'||s==='closed'||s==='disconnected');}
+function scCloseConnOnly(){    /* 시그널링 문서는 보존하고 연결만 정리 — 재연결 전용 */
+  const c=_scConn;_scConn=null;if(!c)return;
+  try{c.sigUnsub&&c.sigUnsub();}catch(e){}
+  try{c.candUnsub&&c.candUnsub();}catch(e){}
+  try{c.dc&&c.dc.close();}catch(e){}
+  try{c.pc&&c.pc.close();}catch(e){}
+}
+function scResetRetry(){_scRe.tries=0;if(_scRe.timer){clearTimeout(_scRe.timer);_scRe.timer=null;}if(_scDiscT){clearTimeout(_scDiscT);_scDiscT=null;}}
+function scRetryNow(){scResetRetry();scScheduleReconnect(true);}
+window.scRetryNow=scRetryNow;
+/* ★ 네트워크 복귀·화면 복귀 시 즉시 재연결 (지하·엘리베이터·앱 전환 후 복구) */
+try{
+  window.addEventListener('online',function(){if(scChatOpen()&&!(_scConn&&_scConn.dc&&_scConn.dc.readyState==='open')){scResetRetry();scScheduleReconnect(true);}});
+  document.addEventListener('visibilitychange',function(){if(!document.hidden&&scChatOpen()&&!(_scConn&&_scConn.dc&&_scConn.dc.readyState==='open')){scResetRetry();scScheduleReconnect(true);}});
+}catch(_e){}
+function scRetryPrompt(){      /* 자동 재시도 소진 — 수동 재시도 버튼 제시 */
+  const cb=document.getElementById('scChatBody');if(!cb)return;
+  const d=document.createElement('div');
+  d.style.cssText='align-self:center;background:#FEF6E7;border:1px solid #F0E2BE;color:#8B6914;font-size:10px;border-radius:999px;padding:4px 12px;margin:2px 0;display:flex;align-items:center;gap:7px';
+  const t=document.createElement('span');t.textContent='연결이 계속 끊겨요.';d.appendChild(t);
+  const b=document.createElement('button');b.type='button';b.textContent='다시 연결';
+  b.style.cssText='border:none;background:#1B3A6B;color:#fff;border-radius:999px;padding:3px 10px;font-size:10px;font-weight:700;cursor:pointer';
+  b.onclick=()=>{d.remove();scRetryNow();};d.appendChild(b);
+  cb.appendChild(d);cb.scrollTop=cb.scrollHeight;
+}
+function scScheduleReconnect(force){
+  if(!scChatOpen()||!_scPeer)return;
+  if(_scPeer.type!=='fc'){        /* 상담사(FC)는 offer 주체가 아님 → 상대의 재연결을 대기 */
+    scSetStatus('연결이 끊어졌어요 · 상대가 다시 연결하면 이어져요');return;
+  }
+  if(_scRe.busy||_scRe.timer)return;
+  if(!force&&_scRe.tries>=SC_RE_WAIT.length){scSetStatus('연결이 끊어졌어요');scRetryPrompt();return;}
+  const wait=force?300:(SC_RE_WAIT[_scRe.tries]||20000);
+  _scRe.tries++;
+  scSetStatus('다시 연결 중… ('+_scRe.tries+')');
+  _scRe.timer=setTimeout(async()=>{
+    _scRe.timer=null;
+    if(!scChatOpen()||!_scPeer||_scPeer.type!=='fc')return;
+    if(_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){scResetRetry();return;}
+    _scRe.busy=true;
+    try{scCloseConnOnly();await scClientConnect(_scPeer.id);}
+    catch(e){setTimeout(scScheduleReconnect,1200);}
+    finally{_scRe.busy=false;}
+  },wait);
+}
 let _scOwnerPending=new Map(); // clientSlug -> {room,data}
 let _scOwnerWatchStarted=false;
 
 function scTeardown(){
+  scResetRetry();_scLastOfferSdp='';   /* ★ 사용자가 나가면 자동 재연결 중단 */
   const c=_scConn;_scConn=null;
   if(!c)return;
   try{c.sigUnsub&&c.sigUnsub();}catch(e){}
@@ -4398,22 +4465,41 @@ function scRecvBubble(txt){
 }
 function scWireDc(dc){
   dc.binaryType='arraybuffer';
-  dc.onopen=()=>scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');
+  dc.onopen=()=>{scResetRetry();scSetStatus('🔒 실시간 연결됨 · 대화는 저장되지 않아요');};
   dc.onmessage=ev=>{
     if(typeof ev.data==='string'){
       try{const m=JSON.parse(ev.data);if(!m)return;
         if(m.t==='msg'){scRecvBubble(String(m.x||''));if(m.id&&_scConn&&_scConn.dc&&_scConn.dc.readyState==='open'){try{_scConn.dc.send(JSON.stringify({t:'ack',id:m.id}));}catch(_e){}}}
         else if(m.t==='ack'){scMarkDelivered(m.id);}
         else if(m.t==='typing'){scShowTyping(m.on===true);}
-        else if(m.t==='file-start'){_scRx={id:m.id,name:String(m.name||'파일'),mime:m.mime||'application/octet-stream',size:m.size||0,received:0,chunks:[],bubble:scFileBubble('in','📎 '+String(m.name||'파일')+' 받는 중 0%')};}
+        else if(m.t==='file-start'){
+          var _rn=String(m.name||'파일'),_rs=m.size||0;
+          if(_rs>SC_MAX_FILE){                                   /* ★ 상한 초과 — 수신 거부(메모리 보호) */
+            _scRx=null;scSysMsg('상대가 보낸 「'+_rn+'」('+scHumanSize(_rs)+')은 최대 '+scHumanSize(SC_MAX_FILE)+'을 넘어 받을 수 없어요.');
+            try{if(_scConn&&_scConn.dc&&_scConn.dc.readyState==='open')_scConn.dc.send(JSON.stringify({t:'file-reject',id:m.id,reason:'size'}));}catch(_e){}
+          }else{
+            _scRx={id:m.id,name:_rn,mime:m.mime||'application/octet-stream',size:_rs,received:0,chunks:[],parts:[],buf:0,bubble:scFileBubble('in','📎 '+_rn+' 받는 중 0%')};
+          }
+        }
+        else if(m.t==='file-reject'){                            /* ★ 상대가 거부 — 전송측 안내 */
+          _scTxReject=m.id;scSysMsg('상대 기기에서 파일을 받을 수 없어요. 최대 '+scHumanSize(SC_MAX_FILE)+'까지 보낼 수 있어요.');
+        }
         else if(m.t==='file-end'){scFinishRx();}
       }catch(_e){}
     }else if(_scRx){
-      _scRx.chunks.push(ev.data);_scRx.received+=(ev.data.byteLength||0);
+      _scRx.chunks.push(ev.data);
+      var _bl=(ev.data.byteLength||0);_scRx.received+=_bl;_scRx.buf+=_bl;
+      if(_scRx.buf>=SC_RX_FLUSH){                                /* ★ 일정량마다 Blob으로 넘겨 메모리 점유 최소화 */
+        try{_scRx.parts.push(new Blob(_scRx.chunks));}catch(_e){}
+        _scRx.chunks=[];_scRx.buf=0;
+      }
+      if(_scRx.received>SC_MAX_FILE+SC_RX_FLUSH){                /* ★ 신고 크기보다 실제가 큰 경우 방어 */
+        var _n=_scRx.name;_scRx=null;scSysMsg('「'+_n+'」 수신을 중단했어요 — 허용 용량을 초과했습니다.');return;
+      }
       if(_scRx.bubble&&_scRx.size)_scRx.bubble.textContent='📎 '+_scRx.name+' 받는 중 '+Math.floor(_scRx.received/_scRx.size*100)+'%';
     }
   };
-  dc.onclose=()=>scSetStatus('연결이 종료되었어요');
+  dc.onclose=()=>{scSetStatus('연결이 종료되었어요');scScheduleReconnect();};
   dc.onerror=()=>{};
 }
 /* ══ 보안채팅 파일 전송 (같은 dataChannel · P2P 직전송, 서버 미경유) ══ */
@@ -4436,23 +4522,34 @@ async function scSendFile(file){
   const name=String(file.name||'파일').slice(0,180);
   const size=file.size;
   const mime=file.type||'application/octet-stream';
+  /* ★ [2026-07-21] 용량 안내 — 상한 초과 시 전송 대신 대안 안내 */
+  if(size>SC_MAX_FILE){
+    scSysMsg('「'+name+'」은 '+scHumanSize(size)+'이라 보낼 수 없어요. 파일은 최대 '+scHumanSize(SC_MAX_FILE)+'까지 보낼 수 있어요. 큰 파일은 보관함에 올린 뒤 링크를 붙여넣어 보내주세요.');
+    return;
+  }
+  _scTxReject=null;
   const bub=scFileBubble('out','📎 '+name+' 보내는 중 0%');
   try{
     dc.send(JSON.stringify({t:'file-start',id:id,name:name,size:size,mime:mime}));
-    const ab=await file.arrayBuffer();
-    const total=ab.byteLength;let off=0;
+    /* ★ 스트리밍 전송: 파일 전체를 메모리에 올리지 않고 조각 단위로 읽어 보냄 (대용량 안정성) */
+    const total=size;let off=0;
     await new Promise((res,rej)=>{
-      const pump=()=>{
-        if(dc.readyState!=='open'){rej(new Error('closed'));return;}
-        while(off<total){
-          if(dc.bufferedAmount>LC_P2P_CHUNK*8){setTimeout(pump,50);return;}
-          const end=Math.min(off+LC_P2P_CHUNK,total);
-          try{dc.send(ab.slice(off,end));}catch(e){rej(e);return;}
-          off=end;
-          if(bub)bub.textContent='📎 '+name+' 보내는 중 '+Math.floor(off/total*100)+'%';
-        }
-        try{dc.send(JSON.stringify({t:'file-end',id:id}));}catch(e){}
-        res();
+      const pump=async()=>{
+        try{
+          while(off<total){
+            if(dc.readyState!=='open'){rej(new Error('closed'));return;}
+            if(_scTxReject===id){rej(new Error('rejected'));return;}
+            if(dc.bufferedAmount>LC_P2P_CHUNK*8){setTimeout(pump,50);return;}
+            const end=Math.min(off+LC_P2P_CHUNK,total);
+            const buf=await file.slice(off,end).arrayBuffer();
+            if(dc.readyState!=='open'){rej(new Error('closed'));return;}
+            dc.send(buf);
+            off=end;
+            if(bub)bub.textContent='📎 '+name+' 보내는 중 '+Math.floor(off/total*100)+'%';
+          }
+          try{dc.send(JSON.stringify({t:'file-end',id:id}));}catch(e){}
+          res();
+        }catch(e){rej(e);}
       };
       pump();
     });
@@ -4477,7 +4574,7 @@ window.scSendFile=scSendFile;
 function scFinishRx(){
   const rx=_scRx;_scRx=null;if(!rx)return;
   try{
-    const blob=new Blob(rx.chunks,{type:rx.mime});
+    const blob=new Blob((rx.parts||[]).concat(rx.chunks||[]),{type:rx.mime});   /* ★ 디스크 위임분 + 잔여분 합성 */
     const url=URL.createObjectURL(blob);
     if(!rx.bubble)return;
     rx.bubble.textContent='';
@@ -4517,6 +4614,7 @@ window.scViewImage=scViewImage;
 
 /* 고객 → FC : 연결 개시(offer) */
 async function scClientConnect(fcLoginId){
+  scCloseConnOnly();                   /* ★ 재연결 시 이전 pc/구독 정리 (시그널 문서는 새 offer로 덮어씀) */
   const myUid=await lcEnsureAnonAuth();
   const room=fcLoginId+'_'+myUid;
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
@@ -4535,6 +4633,9 @@ async function scClientConnect(fcLoginId){
 }
 /* FC → 고객 : offer에 응답(answer) */
 async function scOwnerAnswer(room,offerData){
+  _scAnswering=true;
+  try{_scLastOfferSdp=(offerData&&offerData.offer&&offerData.offer.sdp)||'';}catch(_e){}
+  scCloseConnOnly();                   /* ★ 재연결 시 이전 연결 정리 (시그널 문서는 보존) */
   const pc=new RTCPeerConnection({iceServers:scIceServers()});
   const conn={pc,dc:null,room,sigUnsub:null,candUnsub:null,role:'fc'};_scConn=conn;
   scWirePc(pc);
@@ -4544,6 +4645,7 @@ async function scOwnerAnswer(room,offerData){
   const answer=await pc.createAnswer();await pc.setLocalDescription(answer);
   await setDoc(doc(db,'chat_signals',room),{answer:{type:answer.type,sdp:answer.sdp},status:'accepted',acceptedAt:serverTimestamp()},{merge:true});
   conn.candUnsub=onSnapshot(collection(db,'chat_signals',room,'offerCandidates'),snap=>{snap.docChanges().forEach(ch=>{if(ch.type==='added')pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{});});},()=>{});
+  _scAnswering=false;
   return conn;
 }
 /* 노크 남기기 (chat_knocks — 대화내용 없음, 규칙에서 message/body/text 차단) */
@@ -4585,7 +4687,8 @@ function scStartOwnerChatWatch(){
       const d=ch.doc.data();const room=ch.doc.id;
       if((ch.type==='added'||ch.type==='modified')&&d&&d.from==='client'&&d.status==='pending'&&d.offer){
         const slug=d.clientSlug||'';
-        if(document.getElementById('scOverlay')&&document.getElementById('scOverlay').style.display!=='none'&&_scPeer&&_scPeer.type==='client'&&_scPeer.id===slug&&(!_scConn||_scConn.room!==room)){
+        if(document.getElementById('scOverlay')&&document.getElementById('scOverlay').style.display!=='none'&&_scPeer&&_scPeer.type==='client'&&_scPeer.id===slug&&(!_scConn||_scConn.room!==room||!scConnAlive()||(d.offer&&d.offer.sdp!==_scLastOfferSdp))&&!_scAnswering){
+          scSetStatus('다시 연결 중…');
           scOwnerAnswer(room,d).catch(()=>{});
         }else{
           _scOwnerPending.set(slug,{room,data:d});
@@ -8595,9 +8698,10 @@ init();
   </div>
   <div id="scListBody" style="flex:1;overflow-y:auto;padding:12px"></div>
   <div id="scChatBody" style="flex:1;overflow-y:auto;padding:14px;display:none;flex-direction:column;gap:9px;background:#F5F7FA"></div>
-  <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center">
+  <div id="scInputBar" style="display:none;padding:9px 11px calc(9px + env(safe-area-inset-bottom));gap:7px;border-top:1px solid #EDEFF3;background:#fff;align-items:center;flex-wrap:wrap">
+    <div style="flex:0 0 100%;font-size:10px;color:#8A93A6;margin-bottom:5px;line-height:1.4">📎 파일은 최대 <b style="color:#1B3A6B">100MB</b>까지 보낼 수 있어요 · 더 큰 파일은 보관함에 올린 뒤 링크를 보내주세요</div>
     <input id="scFileInput" type="file" style="display:none" onchange="if(this.files&&this.files[0]){scSendFile(this.files[0]);this.value='';}">
-    <button onclick="scPickFile()" title="파일 첨부" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
+    <button onclick="scPickFile()" title="파일 첨부 (최대 100MB)" style="width:36px;height:36px;border-radius:50%;background:#EEF2F8;color:#1B3A6B;border:none;font-size:16px;cursor:pointer;flex-shrink:0">📎</button>
     <input id="scInput" placeholder="메시지 입력…" oninput="scOnInputTyping()" onkeydown="if(event.key==='Enter')scSend()" style="flex:1;min-width:0;border:1px solid #E1E6EF;border-radius:999px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit">
     <button onclick="scSend()" style="width:36px;height:36px;border-radius:50%;background:#1B3A6B;color:#fff;border:none;font-size:15px;cursor:pointer;flex-shrink:0">↑</button>
   </div>
