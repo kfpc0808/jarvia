@@ -3239,10 +3239,11 @@ function finIsLabelLike(s){
   return /[가-힣A-Za-zⅠ-Ⅹ]/.test(t);
 }
 /** 숫자 행 — 라벨 오른쪽에서 금액 n개. 구성비(%·소수)는 버리고, 라벨을 만나면 중단 */
-function finCells(items,labels,n){
+function finCells(items,labels,n,below){
   const arr=Array.isArray(labels)?labels:[labels];
+  const pool=below?items.filter(i=>i.y<below.y):items;   /* below: 이 라벨(앵커)보다 아래 구간에서만 라벨 탐색 — 미지정 시 기존과 동일 (2026-07-21) */
   for(const lb of arr){
-    const L=finFind(items,lb); if(!L)continue;
+    const L=finFind(pool,lb); if(!L)continue;
     const vals=[];
     for(const it of finRowAfter(items,L)){
       const t=it.s.replace(/\s/g,'');
@@ -3332,9 +3333,9 @@ function finParse(pages,fmt){
   const P=fmt==='NICE'?{
     자본금:['자본금','(자본금)'],이익잉여금:'이익잉여금',단기차입금:['(단기차입금)','단기차입금'],장기차입금:['(장기차입금)','장기차입금'],
     사채:['(장기사채)','단기사채'],매출채권:['(매출채권, 공사/영업미수금)','매출채권및기타채권','(매출채권)'],현금:['(현금 및 현금등가물)','현금및현금성자산'],
-    유동자산:'유동자산',유동부채:'유동부채',재고자산:'재고자산',매입채무:'(매입채무)',
+    유동자산:'유동자산',유동부채:'유동부채',재고자산:'재고자산',매입채무:['(매입채무 및 기타채무)','(매입채무)'],
     매출액:'매출액',매출원가:'매출원가',영업이익:'영업이익(손실)',순이익:['당기순이익(손실)','당기순이익'],   /* 2026 신형 상세보고서: 괄호 없는 '당기순이익' 폴백 */
-    이자비용:'(이자비용)',인건비:'(인건비)',영업현금:'영업활동조달현금',
+    이자비용:['(이자비용)','(금융비용)'],인건비:'(인건비)',영업현금:'영업활동조달현금',   /* ★ 2026 신형 상세보고서: 손익계산서가 '(금융비용)' 표기 — NICE 자체 이자보상 산식도 영업이익/금융비용 (2026-07-21) */
     퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금'
   }:fmt==='KODATA_WEB'?{
     /* 웹출력 '기업 종합 보고서' — KCR2와 계정명은 같지만 로마숫자 접두가 없고 총계가 '자산(*)' 표기 */
@@ -3362,8 +3363,9 @@ function finParse(pages,fmt){
     자산총계:ord(finCells(BS,P.자산총계||'자산총계')), 부채총계:ord(finCells(BS,P.부채총계||'부채총계')), 자본총계:ord(finCells(BS,P.자본총계||'자본총계')),
     자본금:ord(finCells(BS,P.자본금)), 이익잉여금:ord(finCells(BS,P.이익잉여금)),
     단기차입금:ord(finCells(BS,P.단기차입금)), 장기차입금:ord(finCells(BS,P.장기차입금)),
+    유동차입:ord(finCells(BS,['(유동차입부채)','유동차입부채'])), 비유동차입:ord(finCells(BS,['(비유동차입부채)','비유동차입부채'])),   /* ★ NICE-IFRS: 유동성장기부채 포함 차입 구분 — KODATA엔 없어 null→기존 폴백 (2026-07-21) */
     사채:ord(finCells(BS,P.사채))||[0,0,0],
-    매출채권:ord(finCells(BS,P.매출채권)), 현금:ord(finCells(BS,P.현금)),
+    매출채권:ord(finCells(BS,P.매출채권,3,fmt==='NICE'?finFind(BS,'유동자산'):null)), 현금:ord(finCells(BS,P.현금)),   /* ★ 신형 NICE: 비유동자산에도 '매출채권 및 기타채권'이 있어 유동자산 아래에서만 탐색 (2026-07-21) */
     유동자산:ord(finCells(BS,P.유동자산)), 유동부채:ord(finCells(BS,P.유동부채)),
     재고자산:ord(finCells(BS,P.재고자산)), 매입채무:ord(finCells(BS,P.매입채무)),
     퇴직충당:ord(finCells(BS,P.퇴직충당)), 가지급금:ord(finCells(BS,P.가지급금)),
@@ -3391,8 +3393,21 @@ function finParse(pages,fmt){
   if(SH){
     const rows=new Map();
     SH.forEach(i=>{const k=Math.round(i.y/2)*2; if(!rows.has(k))rows.set(k,[]); rows.get(k).push(i);});
+    /* ★ NICE 신형(2026): 한 페이지에 기업개요·주요주주·관계사현황이 함께 있다 —
+       '주요주주' 섹션 제목(동일 문구의 상단 이동경로는 y가 크므로 최소 y 채택)과 '관계사' 제목
+       사이 y 구간의 행만 주주로 인정. 관계사 표의 총자산·매출이 주주로 흡수되는 것 차단 (2026-07-21) */
+    let _top=null,_bot=null;
+    if(fmt==='NICE'){
+      const _h=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('주요주주'));
+      if(_h.length)_top=Math.min(..._h.map(i=>i.y));
+      const _b=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('관계사')&&(_top==null||i.y<_top));
+      if(_b.length)_bot=Math.max(..._b.map(i=>i.y));
+    }
     rows.forEach(r=>{
       r.sort((a,b)=>a.x-b.x);
+      const _ry=r[0]&&r[0].y;
+      if(_top!=null&&_ry>=_top)return;
+      if(_bot!=null&&_ry<=_bot)return;
       const nm=r[0]&&r[0].s;
       if(!nm||nm==='합계'||finIsLabelLike(nm)===false)return;
       /* KODATA_WEB: 숫자 재조립 탓에 머리글·푸터 행(조회일시·COPYRIGHT 등)이 숫자 2개 이상을 갖게 된다 — 제외 */
@@ -3438,7 +3453,10 @@ function finParse(pages,fmt){
     const par=(SH.text||'').match(/주당액면가\s*([\d,]+)\s*원/);
     const cnt=(SH.text||'').match(/주식수\s*([\d,]+)\s*주/);
     D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
-    if(!D.총주식 && D.주주.length) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);
+    if(!D.총주식 && D.주주.length){
+      const _rs=D.주주.reduce((a,b)=>a+b.율,0);
+      if(_rs>=95) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);   /* ★ 부분 명부(상장사 상위주주만 표시)로 총주식·액면 역산 오류 차단 — 95% 미만이면 총주식 미확정, 액면·주식가치 계산 안 함 (2026-07-21) */
+    }
     D.액면 = par?parseInt(par[1].replace(/,/g,''))
                 : ((D.총주식&&D.자본금)?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
     /* ★ KODATA_WEB: 재무상태표에 '발행주식수'·'(1주당금액)'이 최신 결산 기준으로 명기된다.
@@ -3504,7 +3522,7 @@ function finCalc(D){
         totalAssets:V(D.자산총계),totalLiabilities:V(D.부채총계),totalEquity:V(D.자본총계),
         currentAssets:V(D.유동자산),currentLiab:V(D.유동부채),inventory:V(D.재고자산),
         receivables:V(D.매출채권),payables:V(D.매입채무),cash:V(D.현금),
-        shortTermBorrow:V(D.단기차입금),longTermBorrow:V(D.장기차입금)+V(D.사채),
+        shortTermBorrow:V(D.유동차입)||V(D.단기차입금),longTermBorrow:V(D.비유동차입)||(V(D.장기차입금)+V(D.사채)),   /* ★ 유동성장기부채 누락으로 차입금의존도 축소되던 문제 — NICE는 유동·비유동차입부채 우선 (2026-07-21) */
         interestExpense:V(D.이자비용),laborCost:V(D.인건비),
         retainedEarnings:V(D.이익잉여금),capitalStock:V(D.자본금)},
       previous:{revenue:V(D.매출액,1),operatingProfit:V(D.영업이익,1),netIncome:V(D.순이익,1),
@@ -3519,7 +3537,7 @@ function finCalc(D){
       cash:V(D.현금),currentAssets:V(D.유동자산),currentLiab:V(D.유동부채),
       inventory:V(D.재고자산),receivables:V(D.매출채권),payables:V(D.매입채무),
       revenue:V(D.매출액),cogs:V(D.매출원가),operatingProfit:V(D.영업이익),
-      shortTermBorrow:V(D.단기차입금)
+      shortTermBorrow:V(D.유동차입)||V(D.단기차입금)
     });
   }catch(e){R.warns.push('현금흐름 계산 실패: '+e.message);}
 
@@ -3598,7 +3616,7 @@ function finRisks(D,R){
     L.push({lv:K.이자보상<1?'위험':'주의',p:0.3,amt:D.이자비용[0]*finUnitScale().won,
       t:`이자보상배율 ${K.이자보상.toFixed(2)}배`,
       d:K.이자보상<1?`영업이익 ${(finToEok(D.영업이익[0])).toFixed(1)}억으로 이자 ${(finToEok(D.이자비용[0])).toFixed(1)}억을 못 갚습니다.`
-        :`영업이익의 ${(D.이자비용[0]/D.영업이익[0]*100).toFixed(0)}%가 이자로 나갑니다.`});
+        :`영업이익의 ${(D.이자비용[0]/D.영업이익[0]*100).toFixed(0)}%가 이자 등 금융비용으로 나갑니다.`});
   if(K.부채비율!=null&&K.부채비율>200)
     L.push({lv:'위험',p:0.2,amt:D.차입금[0]*finUnitScale().won,
       t:`부채비율 ${K.부채비율.toFixed(0)}%`,
