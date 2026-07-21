@@ -9120,7 +9120,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function openCustDB(){return new Promise(function(res,rej){var r=indexedDB.open(CDBN,1);r.onupgradeneeded=function(e){var d=e.target.result;if(!d.objectStoreNames.contains(CSTORE))d.createObjectStore(CSTORE,{keyPath:"id"});};r.onsuccess=function(){cdb=r.result;res(cdb);};r.onerror=function(){rej(r.error);};});}
   function cst(m){return cdb.transaction(CSTORE,m).objectStore(CSTORE);}
   function custAll(){return new Promise(function(res){if(!cdb){res([]);return;}var out=[],c=cst("readonly").openCursor();c.onsuccess=function(e){var x=e.target.result;if(x){out.push(x.value);x.continue();}else res(out);};c.onerror=function(){res([]);};});}
-  function custPut(o){return new Promise(function(res,rej){var r=cst("readwrite").put(o);r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
+  function custPut(o,keepTs){try{if(!keepTs)o.updatedAt=Date.now();}catch(_e){}return new Promise(function(res,rej){var r=cst("readwrite").put(o);r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
   function custDel(id){return new Promise(function(res){var r=cst("readwrite").delete(id);r.onsuccess=r.onerror=function(){res();};});}
   /* ★ 고객 삭제 공용 (2026-07-18 개정) — 양방향 완전 동기: 지도(IndexedDB·Drive)와 fc_clients(마이페이지·알림·캘린더) 모두 삭제 */
   function mpcDeleteCust(c,done){
@@ -9958,16 +9958,17 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   function mpcMergeRemote(remote){
     var byId={};customers.forEach(function(c){byId[c.id]=c;});
     var localOnly=customers.length?true:false;   /* 로컬 전용 레코드 존재 여부 → 재푸시 판단 */
-    var remoteIds={};
+    var remoteIds={};var localNewer=false;
     remote.forEach(function(c){remoteIds[c.id]=1;var ex=byId[c.id];
       if(!ex){byId[c.id]=c;return;}
-      var w=((c.createdAt||0)>=(ex.createdAt||0))?c:ex;
+      var w=(((c.updatedAt||c.createdAt||0))>=((ex.updatedAt||ex.createdAt||0)))?c:ex;   /* ★ [2026-07-21] 수정시각 우선 — 최신 수정 기기가 승자 */
       var l=(w===c)?ex:c;
+      if(w===ex&&((ex.updatedAt||ex.createdAt||0)>((c.updatedAt||c.createdAt||0))))localNewer=true;   /* ★ 로컬이 더 최신 → 드라이브 재갱신 필요 */
       byId[c.id]=mpcFieldMerge(w,l);
     });
-    var needPush=customers.some(function(c){return !remoteIds[c.id];});   /* Drive에 없는 로컬 레코드 → 따라잡기 필요 */
+    var needPush=customers.some(function(c){return !remoteIds[c.id];})||localNewer;   /* Drive에 없는 로컬 레코드 or 로컬이 최신 → 따라잡기 */
     var merged=Object.keys(byId).map(function(k){return byId[k];});
-    return Promise.all(merged.map(function(c){return custPut(c);})).then(function(){customers=merged;return needPush;});
+    return Promise.all(merged.map(function(c){return custPut(c,true);})).then(function(){customers=merged;return needPush;});
   }
   function mpcGdPull(cb){if(!mpcGdOn()){cb&&cb(false);return;}
     (async function(){
@@ -10029,7 +10030,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   function placePin(lat,lng){edLat=lat;edLng=lng;if(!pickMk){pickMk=new kakao.maps.Marker({position:new kakao.maps.LatLng(lat,lng)});pickMk.setMap(pickMap);}else pickMk.setPosition(new kakao.maps.LatLng(lat,lng));pickMap.setCenter(new kakao.maps.LatLng(lat,lng));new kakao.maps.services.Geocoder().coord2Address(lng,lat,function(r,s){if(s===kakao.maps.services.Status.OK&&r[0]){var rd=r[0].road_address,ad=r[0].address;setAddr((rd&&rd.address_name)||(ad&&ad.address_name)||"");}});try{mpfRvUpdate(lat,lng);}catch(_e){}}
   function openEdit(p){editId=p?p.id:null;edPhotos=p?(p.photos||[]).slice():[];edCat=p?p.cat:"food";edRating=p?p.rating:4;edWish=p?!!p.wish:false;edLat=p?p.lat:null;edLng=p?p.lng:null;edAddr=p?(p.addr||""):"";$("mpEditTitle").textContent=p?"장소 수정":"장소 추가";$("mpfName").value=p?p.name:"";$("mpfMemo").value=p?(p.memo||""):"";var _vd=$("mpfVisit");if(_vd)_vd.value=p&&p.visitDate?p.visitDate:"";edPlaceUrl=p?(p.placeUrl||""):"";mpfPhotoBtn();if(edLat==null){var _rvEl=$("mpfRoadview");if(_rvEl)_rvEl.style.display="none";}$("mpfPlaceKw").value="";$("mpfPickRes").style.display="none";setAddr(edAddr);renderCatSeg();renderStars();renderEdPhotos();$("mpfGo").classList.toggle("on",!edWish);$("mpfWish").classList.toggle("on",edWish);$("mpEdit").classList.add("show");if(!p){setTimeout(function(){try{$("mpfPlaceKw").focus();}catch(_e){}},250);}ensureKakao(function(){var center=(edLat!=null)?new kakao.maps.LatLng(edLat,edLng):new kakao.maps.LatLng(myPos?myPos.lat:37.5665,myPos?myPos.lng:126.9780);if(!pickMap){pickMap=new kakao.maps.Map($("mpfPickMap"),{center:center,level:4});kakao.maps.event.addListener(pickMap,"click",function(e){var ll=e.latLng;edPlaceUrl="";mpfPhotoBtn();placePin(ll.getLat(),ll.getLng());});}else{pickMap.relayout&&pickMap.relayout();pickMap.setCenter(center);}if(pickMk){pickMk.setMap(null);pickMk=null;}if(edLat!=null)placePin(edLat,edLng);});}
   function doPlaceSearch(){var q=$("mpfPlaceKw").value.trim();if(!q){return;}ensureKakao(function(){new kakao.maps.services.Places().keywordSearch(q,function(data,status){var box=$("mpfPickRes");if(status!==kakao.maps.services.Status.OK||!data.length){box.style.display="none";return;}box.innerHTML=data.slice(0,8).map(function(d,i){return '<div data-i="'+i+'"><b>'+esc(d.place_name)+'</b><span>'+esc(d.road_address_name||d.address_name||"")+'</span></div>';}).join("");box.style.display="block";Array.prototype.forEach.call(box.children,function(el){el.onclick=function(){var d=data[parseInt(el.getAttribute("data-i"))];if(!$("mpfName").value.trim())$("mpfName").value=d.place_name;placePin(parseFloat(d.y),parseFloat(d.x));edPlaceUrl=(d.place_url||"");mpfPhotoBtn();box.style.display="none";};});});});}
-  function saveEdit(){var nm=$("mpfName").value.trim();if(!nm){alert("장소 이름을 입력해 주세요.");return;}var o={id:editId||("p_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:nm,cat:edCat,rating:edRating,visitDate:($("mpfVisit")&&$("mpfVisit").value)||"",lat:edLat,lng:edLng,addr:edAddr,placeUrl:edPlaceUrl||"",memo:$("mpfMemo").value.trim(),wish:edWish,photos:edPhotos,createdAt:editId?(findP(editId)||{}).createdAt||Date.now():Date.now()};dbPut(o).then(function(){return dbAll();}).then(function(a){places=a;$("mpEdit").classList.remove("show");renderChips();renderList();gdSyncQueue();toast(editId?"수정되었습니다":"장소가 저장되었습니다");}).catch(function(err){toast("저장 실패 — "+((err&&err.name)==="QuotaExceededError"?"기기 저장 공간이 부족합니다. 사진 수를 줄이거나 기기 공간을 확보해 주세요.":"잠시 후 다시 시도해 주세요."),"warn");});}   /* 2026-07-15: 용량 부족 등 무언 실패 방지 */
+  function saveEdit(){var nm=$("mpfName").value.trim();if(!nm){alert("장소 이름을 입력해 주세요.");return;}var o={id:editId||("p_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:nm,cat:edCat,rating:edRating,visitDate:($("mpfVisit")&&$("mpfVisit").value)||"",lat:edLat,lng:edLng,addr:edAddr,placeUrl:edPlaceUrl||"",memo:$("mpfMemo").value.trim(),wish:edWish,photos:edPhotos,createdAt:editId?(findP(editId)||{}).createdAt||Date.now():Date.now(),updatedAt:Date.now()};dbPut(o).then(function(){return dbAll();}).then(function(a){places=a;$("mpEdit").classList.remove("show");renderChips();renderList();gdSyncQueue();toast(editId?"수정되었습니다":"장소가 저장되었습니다");}).catch(function(err){toast("저장 실패 — "+((err&&err.name)==="QuotaExceededError"?"기기 저장 공간이 부족합니다. 사진 수를 줄이거나 기기 공간을 확보해 주세요.":"잠시 후 다시 시도해 주세요."),"warn");});}   /* 2026-07-15: 용량 부족 등 무언 실패 방지 */
   function findP(id){for(var i=0;i<places.length;i++)if(places[i].id===id)return places[i];return null;}
 
   /* ---------- 상세 ---------- */
@@ -10039,7 +10040,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     $("mpDetState").innerHTML='<span class="mp-vtag '+(p.wish?"mp-wish":"mp-go")+'">'+(p.wish?"❤ 위시리스트":"✓ 가봄")+'</span>';
     var hasLoc=p.lat!=null;$("mpDetAddr").textContent=p.addr||(hasLoc?"위치 저장됨":"위치 미설정");$("mpDetRoute").style.display=hasLoc?"":"none";$("mpDetMap").style.display=hasLoc?"":"none";
     $("mpDetEdit").onclick=$("mpDetEdit2").onclick=function(){$("mpDetail").classList.remove("show");openEdit(p);};
-    $("mpDetDel").onclick=function(){if(confirm("이 장소를 삭제할까요?")){dbDel(p.id).then(function(){return dbAll();}).then(function(a){places=a;$("mpDetail").classList.remove("show");renderChips();renderList();gdSyncQueue();toast("삭제되었습니다");});}};
+    $("mpDetDel").onclick=function(){if(confirm("이 장소를 삭제할까요?")){mpDelAdd(p.id);dbDel(p.id).then(function(){return dbAll();}).then(function(a){places=a;$("mpDetail").classList.remove("show");renderChips();renderList();gdSyncQueue();toast("삭제되었습니다");});}};
     $("mpDetRoute").onclick=function(){if(hasLoc)openRoute(p.name,p.lat,p.lng);};
     try{var _dr=$("mpdRoadview");if(_dr){if(!hasLoc){_dr.style.display="none";}else{ensureKakao(function(){try{var _pos=new kakao.maps.LatLng(p.lat,p.lng);new kakao.maps.RoadviewClient().getNearestPanoId(_pos,80,function(panoId){if(!panoId){_dr.style.display="none";return;}_dr.style.display="block";try{if(!mpdRv)mpdRv=new kakao.maps.Roadview(_dr);mpdRv.setPanoId(panoId,_pos);}catch(_e){_dr.style.display="none";}});}catch(_e){_dr.style.display="none";}});}}
     var _dp=$("mpdPhotoLink");if(_dp){if(p.placeUrl){_dp.href=p.placeUrl;_dp.style.display="block";}else _dp.style.display="none";}}catch(_e){}
@@ -10199,6 +10200,11 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
 
   function gdBlobToB64(blob){return new Promise(function(res){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.onerror=function(){res(null);};fr.readAsDataURL(blob);});}
   function gdB64ToBlob(d){return fetch(d).then(function(r){return r.blob();});}
+  /* ★ [2026-07-21] 장소 삭제 전파용 표식 — 드라이브=단일 원본: 삭제도 기기 간 전파, 재부활 금지 */
+  var MP_DEL_KEY="mp_deleted";
+  function mpDelList(){try{return JSON.parse(localStorage.getItem(MP_DEL_KEY)||"[]");}catch(_e){return [];}}
+  function mpDelAdd(id){try{var l=mpDelList().filter(function(x){return x&&x.id!==id;});l.push({id:id,ts:Date.now()});if(l.length>500)l=l.slice(-500);localStorage.setItem(MP_DEL_KEY,JSON.stringify(l));}catch(_e){}}
+  function mpDelSave(l){try{localStorage.setItem(MP_DEL_KEY,JSON.stringify(l));}catch(_e){}}
   function gdSerialize(){
     return Promise.all(places.map(function(p){
       return Promise.all((p.photos||[]).map(function(ph){
@@ -10211,18 +10217,31 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
         }
         return pre.then(function(){return gdBlobToB64(ph.blob);}).then(function(x){return {type:ph.type,data:x,driveId:ph.driveId||null};});
       }))
-        .then(function(phs){return {id:p.id,name:p.name,cat:p.cat,rating:p.rating,lat:p.lat,lng:p.lng,addr:p.addr,memo:p.memo,wish:p.wish,createdAt:p.createdAt,photos:phs.filter(function(x){return x.data;})};});
-    })).then(function(arr){return JSON.stringify({app:"myplaces",version:1,updatedAt:Date.now(),places:arr});});
+        .then(function(phs){return {id:p.id,name:p.name,cat:p.cat,rating:p.rating,visitDate:p.visitDate||"",placeUrl:p.placeUrl||"",lat:p.lat,lng:p.lng,addr:p.addr,memo:p.memo,wish:p.wish,createdAt:p.createdAt,updatedAt:p.updatedAt||p.createdAt||0,photos:phs.filter(function(x){return x.data;})};});
+    })).then(function(arr){return JSON.stringify({app:"myplaces",version:1,updatedAt:Date.now(),deleted:mpDelList(),places:arr});});
   }
   function gdMergeRemote(data){
     if(!data||!data.places)return Promise.resolve();
-    var have={};places.forEach(function(p){have[p.id]=1;});
-    var add=data.places.filter(function(p){return !have[p.id];});
-    if(!add.length)return Promise.resolve();
-    return Promise.all(add.map(function(p){
-      return Promise.all((p.photos||[]).map(function(ph){return gdB64ToBlob(ph.data).then(function(bl){return {blob:bl,type:ph.type,driveId:ph.driveId||null};}).catch(function(){return null;});}))
-        .then(function(phs){p.photos=phs.filter(function(x){return x;});return dbPut(p);});
-    })).then(function(){return dbAll();}).then(function(a){places=a;});
+    /* ★ [2026-07-21] 드라이브=단일 원본 병합: 같은 장소는 수정시각 최신 승리, 삭제는 표식으로 전파, 삭제된 항목 재부활 금지 */
+    var ts=function(x){return (x&&(x.updatedAt||x.createdAt))||0;};
+    /* 원격·로컬 삭제 표식 합집합 (최신 시각 유지) */
+    var seen={};mpDelList().forEach(function(t){if(t&&t.id)seen[t.id]=t.ts||0;});
+    (data.deleted||[]).forEach(function(t){if(t&&t.id&&(!(t.id in seen)||((t.ts||0)>seen[t.id])))seen[t.id]=t.ts||0;});
+    var uni=Object.keys(seen).map(function(id){return {id:id,ts:seen[id]};});
+    if(uni.length>500)uni=uni.sort(function(a,b){return a.ts-b.ts;}).slice(-500);
+    mpDelSave(uni);
+    var byId={};places.forEach(function(p){byId[p.id]=p;});
+    var ops=[];
+    /* 삭제 전파: 표식이 로컬 레코드 이후면 로컬에서도 삭제 */
+    places.forEach(function(p){var dt=seen[p.id];if(dt!=null&&dt>=ts(p)){ops.push(dbDel(p.id));delete byId[p.id];}});
+    /* 갱신·추가: 표식보다 오래된 원격 레코드는 무시(재부활 금지), 로컬이 최신이면 유지 */
+    data.places.forEach(function(rp){
+      var dt=seen[rp.id];if(dt!=null&&dt>=ts(rp))return;
+      var ex=byId[rp.id];if(ex&&ts(rp)<=ts(ex))return;
+      ops.push(Promise.all((rp.photos||[]).map(function(ph){return gdB64ToBlob(ph.data).then(function(bl){return {blob:bl,type:ph.type,driveId:ph.driveId||null};}).catch(function(){return null;});}))
+        .then(function(phs){rp.photos=phs.filter(function(x){return x;});return dbPut(rp);}));
+    });
+    return Promise.all(ops).then(function(){return dbAll();}).then(function(a){places=a;});
   }
   function gdPush(cb){gdSetUI("syncing");gdSerialize().then(function(js){gdUpload(js,function(id){if(id){gdDirty=false;gdSynced=Date.now();gdSetUI("synced");}else gdSetUI("reconnect");cb&&cb(!!id);});}).catch(function(){gdSetUI("reconnect");cb&&cb(false);});}
   function gdPull(cb){
@@ -10231,10 +10250,25 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
       gdDownload(f.id,function(data){gdMergeRemote(data).then(function(){gdPush(function(ok){cb&&cb(ok);});});});
     });
   }
-  function gdSyncQueue(){gdDirty=true;if(!gdOn())return;clearTimeout(gdSyncT);gdSyncT=setTimeout(function(){gdGetToken(true,function(ok){if(ok)gdPush(function(){});else gdSetUI("reconnect");});},1500);}
+  /* ★ [2026-07-21] 동기화 통합 — 장소(gd)와 고객(mpc)을 한 번에. 드라이브=단일 원본 모델 */
+  function gdPullAll(cb){
+    gdPull(function(ok){
+      try{
+        if(typeof mpcGdPull==="function"&&typeof mpcGdOn==="function"&&mpcGdOn()){
+          mpcGdPull(function(s){
+            if(s){try{mpcRenderFilter();mpcRenderList();if(typeof map!=="undefined"&&map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}}
+            cb&&cb(ok);
+          });
+          return;
+        }
+      }catch(_e){}
+      cb&&cb(ok);
+    });
+  }
+  function gdSyncQueue(){gdDirty=true;if(!gdOn())return;clearTimeout(gdSyncT);gdSyncT=setTimeout(function(){gdGetToken(true,function(ok){if(ok)gdPull(function(){gdAfterSync();});else gdSetUI("reconnect");});},1500);}   /* ★ [2026-07-21] 저장 시에도 받아 병합 후 밀기 — 드라이브=단일 원본 */
   function gdAgo(){if(!gdSynced)return"어느 기기서든 복원";var s=Math.floor((Date.now()-gdSynced)/1000);if(s<10)return"방금 동기화";if(s<60)return s+"초 전 동기화";var m=Math.floor(s/60);if(m<60)return m+"분 전 동기화";var h=Math.floor(m/60);return h+"시간 전 동기화";}
   function gdSetUI(s){var t=$("mpBackupTxt"),b=$("mpBackupBtn");if(!t||!b)return;
-    if(s==="on"||s==="synced"){t.innerHTML='<b>☁️ 드라이브 동기화됨</b> · '+gdAgo();b.textContent="동기화";}
+    if(s==="on"||s==="synced"){t.innerHTML='<b>☁️ 드라이브 동기화됨</b> · '+gdAgo()+((typeof mpcGdOn==="function"&&mpcGdOn())?'':' · <b style="color:#B45309">고객 미연결</b>');b.textContent="동기화";}
     else if(s==="syncing"){t.innerHTML="동기화 중…";b.textContent="…";}
     else if(s==="connecting"){t.innerHTML="연결 중…";b.textContent="…";}
     else if(s==="reconnect"){t.innerHTML='<b>다시 연결</b>이 필요해요'+(gdDirty?" · 저장 대기중":"");b.textContent="연결";}
@@ -10245,7 +10279,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     gdSetUI("connecting");
     gdGetToken(false,function(ok){
       if(!ok){gdSetUI(localStorage.getItem(GD_FLAG)==="1"?"reconnect":"off");toast("구글 연결이 취소되었어요");return;}
-      gdPull(function(){gdAfterSync();gdSetUI("synced");toast("드라이브 동기화 완료");});
+      gdPullAll(function(){gdAfterSync();gdSetUI("synced");toast("드라이브 동기화 완료");});
     });
   }
   function gdAutoConnect(){
@@ -10253,11 +10287,11 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     gdSetUI("syncing");
     gdGetToken(true,function(ok){
       if(!ok){gdSetUI("reconnect");return;}
-      gdPull(function(){gdAfterSync();gdSetUI("synced");});
+      gdPullAll(function(){gdAfterSync();gdSetUI("synced");});
     });
   }
   function gdBtn(){
-    if(gdToken&&Date.now()<gdExp){gdSetUI("syncing");gdPull(function(){gdAfterSync();gdSetUI("synced");toast("동기화 완료");});}
+    if(gdToken&&Date.now()<gdExp){gdSetUI("syncing");gdPullAll(function(){gdAfterSync();gdSetUI("synced");toast("동기화 완료");});}
     else gdConnect();
   }
   function gdMenu(){
