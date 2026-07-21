@@ -11921,6 +11921,7 @@ let crCurrentSlug = null;
 let crCurrentScheduleId = null;
 let crCurrentScheduleDate = null;
 let crSchedRunning = {};
+let crSchedReports = {};   // ★ [2026-07-21] 일정 표 ↔ 실제 생성 문서(upcoming_case_reports) 조인 맵
 try { crSchedRunning = JSON.parse(localStorage.getItem('crSchedRunning') || '{}'); } catch (e) { crSchedRunning = {}; }
 function crSaveSchedRunning() { try { localStorage.setItem('crSchedRunning', JSON.stringify(crSchedRunning)); } catch (e) {} }
 let crCurrentClientType = null;
@@ -12234,6 +12235,24 @@ async function loadCrSchedule() {
     ));
     crScheduleData = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
 
+    // ★ [2026-07-21] 실제 생성 현황 조인 — 생성일시=실제 createdAt, 전일 '점검대기' 상태 표시용
+    //   (scheduleId 우선 매칭, 없으면 게시일+토픽 매칭. 최신 생성분 우선)
+    crSchedReports = {};
+    try {
+      const upSnap = await getDocs(query(
+        collection(db, 'upcoming_case_reports'),
+        orderBy('createdAt', 'desc'),
+        limit(400)
+      ));
+      upSnap.docs.forEach(d => {
+        const u = { _id: d.id, ...d.data() };
+        const k1 = u.scheduleId ? ('sid:' + u.scheduleId) : null;
+        const k2 = (u.scheduledDate && u.topicSlug) ? ('dt:' + u.scheduledDate + '|' + u.topicSlug) : null;
+        if (k1 && !crSchedReports[k1]) crSchedReports[k1] = u;
+        if (k2 && !crSchedReports[k2]) crSchedReports[k2] = u;
+      });
+    } catch (je) { console.warn('[CR] 생성 현황 조인 실패(기존 표시로 대체):', je.message); }
+
     // 월별 필터 옵션 채우기
     const months = [...new Set(crScheduleData.map(d => (d.date || '').slice(0,7)))].sort();
     const sel = document.getElementById('cr-sched-month');
@@ -12281,14 +12300,24 @@ function crRenderSchedule() {
     // [v6.4] 진행중 추적 — 완료된 행은 추적 자동 해제
     if (r.completed && crSchedRunning[r._id]) { delete crSchedRunning[r._id]; crSaveSchedRunning(); }
     const _running = !r.completed && crSchedRunning[r._id];
-    const generated = r.completed
-      ? crFormatDateTime(r.completedAt)
-      : (_running ? '<span style="color:#0d47a1;font-weight:600">생성중</span>'
-        : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>'));
-    
-    // 상태: completed → published, 생성중 → running, revealed → ready, else pending
-    const st = r.completed ? 'published' : (_running ? 'running' : (r.revealed ? 'ready' : 'pending'));
-    const sb = crStatusBadge(st);
+    // ★ [2026-07-21] 실제 생성 문서 조인 — '생성일시'에 실제 생성 시각(createdAt) 표시 (게시 전·후 공통)
+    const rep = crSchedReports['sid:' + r._id] || ((r.date && r.topicSlug) ? crSchedReports['dt:' + r.date + '|' + r.topicSlug] : null);
+    const _manualTag = (rep && rep._manual === true) ? ' <span style="display:inline-block;padding:1px 4px;border-radius:3px;background:#fff3e0;color:#e65100;font-size:9px;font-weight:600">수동</span>' : '';
+    const generated = rep
+      ? crFormatDateTime(rep.createdAt) + _manualTag
+      : (r.completed ? crFormatDateTime(r.completedAt) + ' <span style="color:#bbb;font-size:9px">(게시시각)</span>'
+        : (_running ? '<span style="color:#0d47a1;font-weight:600">생성중</span>'
+          : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>')));
+
+    // 상태: 게시됨 → 점검대기(생성완료·게시 전) → 생성중(진행률) → 노출예약 → 대기
+    let st, stExtra = '';
+    if (r.completed) st = 'published';
+    else if (rep && rep.readyToPublish === true) st = 'review';
+    else if (rep) { st = 'running'; if (typeof rep.progress === 'number') stExtra = ' ' + rep.progress + '%'; }
+    else if (_running) st = 'running';
+    else if (r.revealed) st = 'revealed';
+    else st = 'pending';
+    const sb = crStatusBadge(st, stExtra);
     const actions = crBuildScheduleActions(r);
     return `<tr style="border-bottom:1px solid var(--border)" data-schedule-id="${r._id}">
       <td style="text-align:center;padding:8px">${idx+1}</td>
@@ -12308,16 +12337,18 @@ function crClientBadge(clientType) {
   return '<span style="display:inline-block;padding:2px 6px;border-radius:4px;background:#fff3e0;color:#854f0b;font-size:10px;font-weight:500">개인</span>';
 }
 
-function crStatusBadge(status) {
+function crStatusBadge(status, extra) {
   const map = {
     pending:   { label: '대기',   bg: '#f5f5f5',  fg: '#666' },
     running:   { label: '진행중', bg: '#e3f2fd',  fg: '#0d47a1' },
     ready:     { label: '완료',   bg: '#e8f5e9',  fg: '#1b5e20' },
+    review:    { label: '점검대기', bg: '#fff8e1', fg: '#8d6e00' },   // ★ [2026-07-21] 생성완료·게시 전 (담당자 점검 구간)
+    revealed:  { label: '노출예약', bg: '#e3f2fd', fg: '#1565c0' },   // ★ [2026-07-21] 메인 노출 예약됨·미생성
     published: { label: '게시됨', bg: '#f3e5f5',  fg: '#4a148c' },
     error:     { label: '에러',   bg: '#ffebee',  fg: '#b71c1c' },
   };
   const s = map[status] || map.pending;
-  return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:${s.bg};color:${s.fg};font-size:10px;font-weight:500">${s.label}</span>`;
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:${s.bg};color:${s.fg};font-size:10px;font-weight:500">${s.label}${extra || ''}</span>`;
 }
 
 function crFormatDateTime(ts) {
