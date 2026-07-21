@@ -4588,16 +4588,40 @@ async function jbGetIdToken(force){
   if(t){_jbIdTok=t;_jbIdTokExp=now+45*60*1000;}
   return t||null;
 }
+/* ★★ [2026-07-21] 개인정보 보호 — 고객 실명 가명처리
+   전송 직전: 요청 본문(고객명 필드·상담 원문 포함 전체)에서 실명 → [고객명] 치환
+   응답 직후: [고객명] → 실명 복원. 실명은 외부 AI로 전송되지 않으며 화면·문서에는 실명이 그대로 표시됨 */
+var JB_NAME_PH='[고객명]';
+function jbMaskBody(str){
+  var nm=(typeof clientName==='string'?clientName.trim():'');
+  if(nm.length<2||/["\\\u0000-\u001f]/.test(nm))return {body:str,masked:false};   // 2자 미만·특수문자 이름은 오치환 방지 위해 미적용
+  var esc=nm.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  var out=str.replace(new RegExp(esc,'g'),JB_NAME_PH);
+  return {body:out,masked:out!==str,name:nm};
+}
+function jbUnmaskText(txt){
+  var nm=(typeof clientName==='string'?clientName.trim():'');
+  if(nm.length<2)return txt;
+  return txt.split(JB_NAME_PH).join(nm);
+}
 async function jbApi(payload,timeoutMs){
   payload=payload||{};
   if(TRIAL.on&&TRIAL.token)payload.trialToken=TRIAL.token;
   var tk=await jbGetIdToken(false);
   var hd={'content-type':'application/json'};if(tk)hd.authorization='Bearer '+tk;
   var sg;if(timeoutMs){var _ac=new AbortController();sg=_ac.signal;setTimeout(function(){_ac.abort();},timeoutMs);}   /* 선택 타임아웃 — 미지정 시 기존 동작 (2026-07-20) */
-  var r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload),signal:sg});
+  var _mk=jbMaskBody(JSON.stringify(payload));               /* ★ 실명→[고객명] (전송 구간 한정) */
+  var r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:_mk.body,signal:sg});
   if(r.status===401&&!TRIAL.on){                             // 토큰 만료·경합 → 재발급 1회 재시도
     var tk2=await jbGetIdToken(true);
-    if(tk2&&tk2!==tk){hd.authorization='Bearer '+tk2;r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:JSON.stringify(payload),signal:sg});}
+    if(tk2&&tk2!==tk){hd.authorization='Bearer '+tk2;r=await fetch(FUNCTION_URL,{method:'POST',headers:hd,body:_mk.body,signal:sg});}
+  }
+  if(_mk.masked){                                            /* ★ 응답 내 [고객명]→실명 복원 후 동일 형태 Response 반환 */
+    var _ct='';try{_ct=r.headers.get('content-type')||'';}catch(_e){}
+    if(_ct.indexOf('json')>-1||_ct.indexOf('text')>-1){
+      var _tx=await r.text();
+      r=new Response(jbUnmaskText(_tx),{status:r.status,statusText:r.statusText,headers:r.headers});
+    }
   }
   return r;
 }
