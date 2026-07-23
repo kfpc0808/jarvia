@@ -856,16 +856,23 @@
         <input type="file" id="mr-html" accept=".html">
         <button class="btn btn-sm" onclick="mrUploadHtml()" style="margin-top:6px">📄 리포트 업로드</button>
         <span id="mr-html-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
-      <div class="fg"><label>①-b 슬라이드 HTML 업로드 <span style="font-weight:400;color:#888">(조회 발표·원클릭 PDF용)</span></label>
+      <div class="fg"><label>①-b 요약본 HTML 업로드 <span style="font-weight:400;color:#888">(조회 발표·인쇄·원클릭 PDF용 — 파일은 slides.html로 저장)</span></label>
         <input type="file" id="mr-slides" accept=".html">
-        <button class="btn btn-sm" onclick="mrUploadSlides()" style="margin-top:6px">📊 슬라이드 업로드</button>
+        <button class="btn btn-sm" onclick="mrUploadSlides()" style="margin-top:6px">📊 요약본 업로드</button>
         <span id="mr-slides-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
       <div class="fg"><label>② 음성 업로드 — TTS 해설 <b>track01.mp3 ~ track09.mp3</b> + NotebookLM 종합 대담 <b>track00.m4a</b> (여러 개 선택 가능)</label>
         <input type="file" id="mr-audio" accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a" multiple>
         <button class="btn btn-sm" onclick="mrUploadAudio()" style="margin-top:6px">🎧 오디오 업로드</button>
         <span id="mr-audio-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
       <div class="toolbar" style="margin-top:20px"><strong style="font-size:14px">발행 목록</strong><button class="btn btn-sm" onclick="mrLoad()">🔄 새로고침</button></div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>슬라이드</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>요약본</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+      <div id="mr-assets" style="display:none;margin-top:16px;border:1px solid #e2e6ea;border-radius:12px;padding:18px;background:#fafbfc">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><strong id="mr-assets-title" style="font-size:14px"></strong>
+          <span id="mr-assets-prog" style="font-size:12px;color:#888"></span>
+          <button class="btn btn-sm" style="margin-left:auto" onclick="document.getElementById('mr-assets').style.display='none'">닫기</button></div>
+        <p style="font-size:11.5px;color:#888;margin:0 0 12px">파일을 내려받아 수정한 뒤, 위의 업로드 칸(같은 발행월)으로 다시 올리면 덮어쓰기됩니다. 게시 상태는 유지됩니다.</p>
+        <div id="mr-assets-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px"></div>
+      </div>
     </div>
 
     <div id="p-master-guide" class="panel hidden">
@@ -11387,7 +11394,7 @@ window.mrUploadHtml=async function(){
 };
 window.mrUploadSlides=async function(){
   const m=mrMonth();if(!m)return;
-  const f=$('mr-slides').files[0];if(!f)return toast('슬라이드 HTML 파일을 선택하세요','error');
+  const f=$('mr-slides').files[0];if(!f)return toast('요약본 HTML 파일을 선택하세요','error');
   const st=$('mr-slides-stat');st.textContent='업로드 중...';
   try{
     const sR=stRef(storage,`monthly-reports/${m}/slides.html`);
@@ -11395,7 +11402,7 @@ window.mrUploadSlides=async function(){
     await new Promise((res,rej)=>task.on('state_changed',s=>{st.textContent=Math.round(s.bytesTransferred/s.totalBytes*100)+'%';},rej,res));
     const url=await getDownloadURL(sR);
     await setDoc(doc(db,'monthly_reports',m),{month:m,slidesUrl:url,slidesUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
-    st.textContent='✅ 완료';toast('슬라이드 업로드 완료');mrLoad();
+    st.textContent='✅ 완료';toast('요약본 업로드 완료');mrLoad();
   }catch(e){st.textContent='';toast('업로드 실패: '+e.message,'error');console.error(e);}
 };
 window.mrUploadAudio=async function(){
@@ -11430,6 +11437,36 @@ window.mrDelete=async function(m){
   if(!confirm(`${m}호 발행 문서를 삭제할까요?\n※ Storage의 리포트·오디오 파일은 보존됩니다(재등록 가능).`))return;
   await deleteDoc(doc(db,'monthly_reports',m));toast(`${m} 삭제됨`);mrLoad();
 };
+window.mrAssets=async function(m){
+  const box=$('mr-assets'),body=$('mr-assets-body'),prog=$('mr-assets-prog');
+  $('mr-assets-title').textContent=m+'호 산출물';
+  box.style.display='block';body.innerHTML='<span style="font-size:12px;color:#888">불러오는 중...</span>';prog.textContent='';prog.style.color='#888';
+  try{
+    const snap=await getDoc(doc(db,'monthly_reports',m));
+    if(!snap.exists()){body.innerHTML='<span style="font-size:12px;color:#C0392B">문서가 없습니다.</span>';return;}
+    const x=snap.data();
+    try{
+      const pg=await getDoc(doc(db,'monthly_report_progress',m));
+      if(pg.exists()){const p=pg.data();
+        const ic=p.status==='done'?'✅':p.status==='error'?'❌':'⏳';
+        prog.textContent=`${ic} 파이프라인 ${p.step}/${p.total} — ${p.label||''}`;
+        if(p.status==='error')prog.style.color='#C0392B';}
+      else prog.textContent=x.generated?'':'(수동 업로드 호)';
+    }catch(_){}
+    const item=(label,url,icon)=>url?`<a class="btn btn-sm" style="justify-content:flex-start;text-align:left" href="${url}" target="_blank" rel="noopener">${icon} ${label}</a>`:'';
+    const su=x.scriptUrls||{},au=x.audio||{};
+    let html='';
+    html+=item('문서 HTML (report.html)',x.reportUrl,'📄');
+    html+=item('요약본 HTML (slides.html)',x.slidesUrl,'📊');
+    html+=item('NotebookLM 대본 (track00용)',su.notebooklm,'🎙');
+    for(let i=1;i<=9;i++)html+=item(`TTS 대본 track0${i}.txt`,su['track0'+i],'📝');
+    html+=item('기획 JSON (plan.json)',x.planUrl,'🧩');
+    html+=item('팩트체크 리포트',x.factUrl,'🔍');
+    html+=item('수집 데이터 (collected.json)',x.collectedUrl,'🗂');
+    Object.keys(au).sort().forEach(k=>{html+=item(`오디오 ${k}${k==='track00'?'.m4a':'.mp3'}`,au[k],'🎧');});
+    body.innerHTML=html||'<span style="font-size:12px;color:#888">등록된 산출물 URL이 없습니다 (수동 업로드 호는 문서·요약본·오디오만 표시됩니다).</span>';
+  }catch(e){body.innerHTML='<span style="font-size:12px;color:#C0392B">로드 실패: '+e.message+'</span>';}
+};
 window.mrLoad=async function(){
   const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">로딩...</td></tr>';
   try{
@@ -11438,7 +11475,7 @@ window.mrLoad=async function(){
     tb.innerHTML=snap.docs.map(d=>{const x=d.data();const audioN=Object.keys(x.audio||{}).length;
       const sb=x.status==='published'?'<span class="badge" style="background:#E9F6F0;color:#177A4C">게시중</span>':'<span class="badge" style="background:#F9F3E2;color:#8A6A1F">검수 대기</span>';
       const tgl=x.status==='published'?`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','ai_draft')">내리기</button>`:`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','published')">게시</button>`;
-      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td>${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
   }catch(e){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
