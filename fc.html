@@ -5996,8 +5996,9 @@ function aiGuide(){
   const d=document.getElementById('aiGuideDot');if(d)d.style.display='none';
 }
 function aiOpen(){
+  aiBillLoad();   /* ★ [2026-07-23] 월 캐시 복원 — 서버 응답 전에도 사용횟수·잔액 즉시 표시 */
   let m=document.getElementById('aiSheet');
-  if(m){m.style.display='flex';if(aiSideOpen)aiSideLoad(true);if(!aiPinned)aiChkRender();   /* ★ 다시 열면 최신 현황으로 갱신 (2026-07-19) */
+  if(m){m.style.display='flex';aiUsageRender();if(aiSideOpen)aiSideLoad(true);if(!aiPinned)aiChkRender();   /* ★ 다시 열면 최신 현황으로 갱신 (2026-07-19) */
     const inp=document.getElementById('aiInput');if(inp)setTimeout(()=>inp.focus(),120);return;}
   m=document.createElement('div');m.id='aiSheet';
   m.style.cssText='position:fixed;inset:0;z-index:9600;background:rgba(15,27,51,.45);display:flex;align-items:flex-end';
@@ -6050,6 +6051,7 @@ function aiOpen(){
      자동 삽입하면 화면이 길어지고 오늘 할 일이 아래로 밀린다. (aiRestoreRecent는 유지 — 필요 시 재사용) */
   try{const _bx=document.getElementById('aiMsgs');if(_bx&&!aiPinned)_bx.scrollTop=0;}catch(_e){}
   if(!aiSideNarrow())aiSideToggle(true);   /* ★ PC = 대화 목록 사이드바 기본 펼침 (2026-07-18) */
+  aiUsageRender();   /* ★ [2026-07-23] 최초 생성 시에도 월 캐시 기반 사용횟수 즉시 표시 */
   setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
 }
 function aiMsgAdd(role,text){
@@ -6066,6 +6068,10 @@ function aiTyping(on){
   else if(t)t.remove();
 }
 let aiBill=null;   /* ★ 과금 상태 (2026-07-19): {freeUsed,freeQuota,point,balance,charged} */
+/* ★ [2026-07-23] aiBill 월 단위 로컬 캐시 — 패널을 새로 열어도 서버 응답 전에 사용횟수·잔액을 즉시 표시 */
+function aiBillKey(){const d=new Date(Date.now()+9*3600*1000);return 'ai_bill_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0');}
+function aiBillSave(){try{if(aiBill&&aiBill.freeQuota!=null)localStorage.setItem(aiBillKey(),JSON.stringify(aiBill));}catch(_e){}}
+function aiBillLoad(){try{if(!aiBill){const s=localStorage.getItem(aiBillKey());if(s)aiBill=JSON.parse(s);}}catch(_e){}}
 function aiUsageRender(){
   const el=document.getElementById('aiUsageTxt');if(!el)return;
   if(aiBill&&aiBill.freeQuota!=null){
@@ -6076,7 +6082,7 @@ function aiUsageRender(){
       el.style.fontWeight=(left<=5)?'800':'';
     }else{
       const tot=(aiBill.point||0)+(aiBill.balance||0);
-      el.textContent='잔액 '+tot.toLocaleString()+'원 · 질문당 100원';
+      el.textContent='무료 '+(aiBill.freeUsed||aiBill.freeQuota)+'/'+aiBill.freeQuota+'회 소진 · 잔액 '+tot.toLocaleString()+'원 · 질문당 100원';   /* ★ [2026-07-23] 사용횟수 함께 표기 */
       el.style.color='#E0C36B';el.style.fontWeight='800';
     }
     return;
@@ -6176,7 +6182,7 @@ async function aiSend(){
       const _w=aiMsgAdd('assistant',d.answer||'');
       if(_w&&d.recs&&d.recs.length)aiRecLinks(_w,d.recs);      /* ★ 추천 자료 → 클릭 가능 (2026-07-19) */
       if(_w&&d.charged>0)aiChargeLine(_w,d);                   /* ★ 차감 표시 (2026-07-19) */
-      if(d.freeQuota!=null){aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:d.charged};aiUsageRender();}
+      if(d.freeQuota!=null){aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:d.charged};aiUsageRender();aiBillSave();}
       if(_custNm&&_w)aiPinBtn(_w,_custNm,_q2,d.answer||'');   /* ★ 미팅기록 승격 버튼 (2026-07-17) */
       if(_custNm&&!aiPinned){aiPinned=_custNm;aiSavedAt=aiHist.length;aiPinBarRender();aiChipsRender();}   /* ★ 이름으로 물으면 자동 고정 — 이전 대화는 제외 (2026-07-19) */
       aiHist.push({role:'user',content:_q2},{role:'assistant',content:(d.answer||'').slice(0,2000)});
@@ -6427,7 +6433,7 @@ function aiPaidConfirm(){
     const tot=((aiBill.point||0)+(aiBill.balance||0));
     const cnt=Math.floor(tot/100);
     const ov=document.createElement('div');
-    ov.style.cssText='position:fixed;inset:0;z-index:2400;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:22px';
+    ov.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:22px';   /* ★ [2026-07-23 버그수정] 2400→9700: aiSheet(9600) 뒤에 숨어 전송이 막히던 문제 */
     ov.innerHTML='<div style="background:#fff;border-radius:16px;max-width:330px;width:100%;padding:20px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25)">'
       +'<div style="font-size:26px;text-align:center">💳</div>'
       +'<div style="font-size:15px;font-weight:800;color:#15294A;text-align:center;margin-top:9px">무료 '+(aiBill.freeQuota||AI_FREE_QUOTA)+'회를 모두 사용하셨어요</div>'
@@ -6486,7 +6492,7 @@ function aiChargeNotice(d,keepQ){   /* ★ 잔액 부족 안내 (2026-07-19): AI
     };   /* 마이페이지 충전 화면 직행 (2026-07-19) */
     const inp=document.getElementById('aiInput');
     if(inp&&keepQ&&!inp.value)inp.value=keepQ;   /* 질문을 되돌려 놓아 충전 후 바로 보낼 수 있게 */
-    aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:0};aiUsageRender();
+    aiBill={freeUsed:d.freeUsed,freeQuota:d.freeQuota,point:d.point,balance:d.balance,charged:0};aiUsageRender();aiBillSave();
   }catch(_e){}
 }
 function aiPinBtn(w,cust,q,a){
