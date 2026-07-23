@@ -856,12 +856,12 @@
         <input type="file" id="mr-html" accept=".html">
         <button class="btn btn-sm" onclick="mrUploadHtml()" style="margin-top:6px">📄 리포트 업로드</button>
         <span id="mr-html-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
-      <div class="fg"><label>② 음성 해설 업로드 (track01.mp3 ~ track09.mp3 · 여러 개 선택 가능)</label>
-        <input type="file" id="mr-audio" accept=".mp3,audio/mpeg" multiple>
+      <div class="fg"><label>② 음성 업로드 — TTS 해설 <b>track01.mp3 ~ track09.mp3</b> + NotebookLM 종합 대담 <b>track00.m4a</b> (여러 개 선택 가능)</label>
+        <input type="file" id="mr-audio" accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a" multiple>
         <button class="btn btn-sm" onclick="mrUploadAudio()" style="margin-top:6px">🎧 오디오 업로드</button>
         <span id="mr-audio-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
       <div class="toolbar" style="margin-top:20px"><strong style="font-size:14px">발행 목록</strong><button class="btn btn-sm" onclick="mrLoad()">🔄 새로고침</button></div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="6" class="tc">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="6" style="text-align:center;color:var(--text-lt);padding:20px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
     </div>
 
     <div id="p-master-guide" class="panel hidden">
@@ -11379,10 +11379,11 @@ window.mrUploadAudio=async function(){
   const st=$('mr-audio-stat');const ok={},skip=[];
   for(let i=0;i<files.length;i++){
     const f=files[i],name=f.name.toLowerCase();
-    if(!/^track0[1-9]\.mp3$/.test(name)){skip.push(f.name);continue;}
+    if(!/^track(0[1-9]\.mp3|00\.m4a)$/.test(name)){skip.push(f.name);continue;}
     st.textContent=`${name} 업로드 중 (${i+1}/${files.length})...`;
     const sR=stRef(storage,`monthly-reports/${m}/audio/${name}`);
-    const task=uploadBytesResumable(sR,f,{contentType:'audio/mpeg',cacheControl:'public, max-age=3600'});
+    const ct=name.endsWith('.m4a')?'audio/mp4':'audio/mpeg';
+    const task=uploadBytesResumable(sR,f,{contentType:ct,cacheControl:'public, max-age=3600'});
     await new Promise((res,rej)=>task.on('state_changed',null,rej,res));
     ok['track'+name.slice(5,7)]=await getDownloadURL(sR);
   }
@@ -11391,7 +11392,7 @@ window.mrUploadAudio=async function(){
     await setDoc(doc(db,'monthly_reports',m),{month:m,audio,audioUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
   }
   st.textContent=`✅ ${Object.keys(ok).length}개 완료`+(skip.length?` · 제외 ${skip.length}개(파일명 규칙 불일치)`:'');
-  if(skip.length)toast('파일명은 track01.mp3~track09.mp3만 허용: '+skip.join(', '),'warning');
+  if(skip.length)toast('허용 파일명: track01~09.mp3, track00.m4a — 제외됨: '+skip.join(', '),'warning');
   else toast('오디오 업로드 완료');
   mrLoad();
 };
@@ -11405,16 +11406,16 @@ window.mrDelete=async function(m){
   await deleteDoc(doc(db,'monthly_reports',m));toast(`${m} 삭제됨`);mrLoad();
 };
 window.mrLoad=async function(){
-  const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="6" class="tc">로딩...</td></tr>';
+  const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-lt);padding:20px">로딩...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'monthly_reports'),orderBy('month','desc'),limit(24)));
-    if(snap.empty){tb.innerHTML='<tr><td colspan="6" class="tc">등록된 호가 없습니다.</td></tr>';return;}
+    if(snap.empty){tb.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-lt);padding:20px">등록된 호가 없습니다.</td></tr>';return;}
     tb.innerHTML=snap.docs.map(d=>{const x=d.data();const audioN=Object.keys(x.audio||{}).length;
       const sb=x.status==='published'?'<span class="badge" style="background:#E9F6F0;color:#177A4C">게시중</span>':'<span class="badge" style="background:#F9F3E2;color:#8A6A1F">검수 대기</span>';
       const tgl=x.status==='published'?`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','ai_draft')">내리기</button>`:`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','published')">게시</button>`;
-      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 9':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td>${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td>${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
-  }catch(e){tb.innerHTML='<tr><td colspan="6" class="tc" style="color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
+  }catch(e){tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
 
 // 📖 마스터가이드 관리 (master_guides / upcoming_master_guides)
