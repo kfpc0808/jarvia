@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>월간 영업전략 리포트 · JARVIA</title>
+<meta name="robots" content="noindex"/>
+<style>
+:root{--navy:#131f38;--gold:#a2803f;--line:#e4e8ed;--muted:#6b7789}
+*{box-sizing:border-box;margin:0}
+body{font-family:Pretendard,"Noto Sans KR","Apple SD Gothic Neo",sans-serif;background:#f3f4f6;color:#1a2536;min-height:100vh;display:flex;flex-direction:column}
+.bar{background:var(--navy);color:#fff;display:flex;align-items:center;gap:14px;padding:0 18px;height:56px;flex:0 0 auto}
+.bar b{font-size:15px}
+.bar .lg{font-weight:800;letter-spacing:.02em}
+.bar .lg span{color:#c8ad74}
+.bar select{margin-left:auto;background:#1b2c4f;color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:7px 10px;font-size:13px}
+.bar .st{font-size:10.5px;font-weight:800;border-radius:999px;padding:4px 10px}
+.bar .st.pub{background:#e9f4ee;color:#177a4c}
+.bar .st.draft{background:#f9f3e2;color:#8a6a1f}
+.bar a.home{color:#b9c4d8;text-decoration:none;font-size:12.5px;font-weight:700}
+.bar a.home:hover{color:#fff}
+#frame{flex:1 1 auto;width:100%;border:0;background:#fff}
+.gate{flex:1;display:grid;place-items:center;padding:30px}
+.gate-box{background:#fff;border:1px solid var(--line);border-radius:18px;padding:44px 40px;max-width:420px;text-align:center;box-shadow:0 10px 34px rgba(19,31,56,.08)}
+.gate-box .ic{font-size:46px;margin-bottom:14px}
+.gate-box h2{font-size:19px;margin-bottom:10px}
+.gate-box p{font-size:13.5px;color:var(--muted);line-height:1.7;margin-bottom:24px}
+.gate-box button,.gate-box a{display:inline-block;background:var(--navy);color:#fff;border:0;border-radius:10px;padding:12px 26px;font-size:13.5px;font-weight:700;cursor:pointer;text-decoration:none}
+.hidden{display:none!important}
+@media(max-width:560px){.bar b{font-size:12.5px}.bar{gap:8px;padding:0 10px}}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <span class="lg">JARVIA<span> ·</span></span><b>월간 영업전략 리포트</b>
+  <select id="mSel" class="hidden" onchange="pick(this.value)"></select>
+  <span id="mStat" class="st hidden"></span>
+  <a class="home" href="./index.html">← 메인으로</a>
+</header>
+
+<div class="gate" id="gate">
+  <div class="gate-box" id="gateBox">
+    <div class="ic">⏳</div><h2>확인 중입니다</h2><p>로그인 정보를 확인하고 있습니다.</p>
+  </div>
+</div>
+<iframe id="frame" class="hidden" title="월간 영업전략 리포트"></iframe>
+
+<script type="module">
+import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getFirestore,collection,doc,getDoc,getDocs,query,where,orderBy,limit}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+/* ═══ 오픈 스위치 — 정식 오픈 시 MR_OPEN=true (index.html의 스위치와 함께 변경) ═══ */
+const MR_OPEN=false;
+const MR_ALLOW=['gildong'];
+
+const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
+const app=initializeApp(FC),auth=getAuth(app),db=getFirestore(app,'javia-db');
+const $=id=>document.getElementById(id);
+let reports=[],isAdmin=false;
+
+function gateMsg(ic,title,body,btnHtml){
+  $('gateBox').innerHTML=`<div class="ic">${ic}</div><h2>${title}</h2><p>${body}</p>${btnHtml||'<a href="./index.html">메인으로 돌아가기</a>'}`;
+}
+
+onAuthStateChanged(auth,async user=>{
+  if(!user){gateMsg('🔒','로그인이 필요합니다','월간 영업전략 리포트는 로그인 후 이용할 수 있습니다.');return;}
+  let lid='';
+  try{
+    const u=await getDoc(doc(db,'users',user.uid));
+    if(u.exists())lid=u.data().loginId||'';
+    if(!lid){const q1=await getDocs(query(collection(db,'users'),where('userId','==',user.uid),limit(1)));if(!q1.empty)lid=q1.docs[0].data().loginId||'';}
+  }catch(e){console.warn(e);}
+  try{const aq=await getDocs(query(collection(db,'admins'),where('loginId','==',lid),limit(1)));isAdmin=!aq.empty;}catch(e){}
+  if(!(MR_OPEN||isAdmin||MR_ALLOW.includes(lid))){
+    gateMsg('📊','준비 중입니다','월간 영업전략 리포트는 현재 준비 중입니다.<br>곧 오픈할 예정이니 조금만 기다려 주세요!');
+    return;
+  }
+  loadList();
+});
+
+async function loadList(){
+  try{
+    const snap=await getDocs(query(collection(db,'monthly_reports'),orderBy('month','desc'),limit(24)));
+    reports=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(r=>r.reportUrl)
+      .filter(r=>(MR_OPEN&&!isAdmin&&!MR_ALLOW_TEST())?r.status==='published':true);
+    if(!reports.length){gateMsg('📭','아직 발행된 호가 없습니다','관리자 페이지에서 리포트가 업로드되면 이곳에 표시됩니다.');return;}
+    const sel=$('mSel');
+    sel.innerHTML=reports.map(r=>`<option value="${r.id}">${r.id.slice(0,4)}년 ${String(+r.id.slice(4))}월호${r.status!=='published'?' (검수)':''}</option>`).join('');
+    sel.classList.remove('hidden');
+    pick(reports[0].id);
+  }catch(e){
+    gateMsg('⚠️','불러오지 못했습니다','리포트 목록을 읽을 수 없습니다.<br><span style="font-size:11.5px">'+ (e.message||e) +'<br>Firestore 규칙에 monthly_reports 읽기 권한이 필요할 수 있습니다.</span>');
+  }
+}
+function MR_ALLOW_TEST(){return false;} /* MR_OPEN 전환 후에는 published만 노출 (테스트 계정·관리자는 전 상태) */
+
+window.pick=function(id){
+  const r=reports.find(x=>x.id===id);if(!r)return;
+  const st=$('mStat');st.classList.remove('hidden');
+  st.className='st '+(r.status==='published'?'pub':'draft');
+  st.textContent=r.status==='published'?'게시중':'검수 대기';
+  $('gate').classList.add('hidden');
+  const f=$('frame');f.classList.remove('hidden');f.src=r.reportUrl;
+};
+</script>
+</body>
+</html>

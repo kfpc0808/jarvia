@@ -186,6 +186,7 @@
     <a class="sn" data-p="p-client-dr" onclick="goPanel(this)">📬 고객 데일리리포트</a>
     <a class="sn" data-p="p-premium-report" onclick="goPanel(this)">📄 특급보고서</a>
     <a class="sn" data-p="p-case-report" onclick="goPanel(this)">📑 클로징리포트</a>
+    <a class="sn" data-p="p-monthly-report" onclick="goPanel(this)">📊 월간 영업전략</a>
     <a class="sn" data-p="p-master-guide" onclick="goPanel(this)">📖 마스터가이드</a>
     <a class="sn" data-p="p-weekly-lecture" onclick="goPanel(this)">📚 토요특강관리</a>
     <a class="sn" data-p="p-tax-weekly" onclick="goPanel(this)">📋 택스컨설팅위클리</a>
@@ -846,6 +847,23 @@
     <!-- v6 클로징리포트 (Case Report) — 20 active 토픽 풀 수동 운영      -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- ═══ 📊 월간 영업전략 리포트 관리 (2026-07-23) ═══ -->
+    <div id="p-monthly-report" class="panel hidden">
+      <h2>📊 월간 영업전략 리포트</h2>
+      <p style="font-size:12.5px;color:#888;margin:-6px 0 14px">오픈 전 테스트 단계 — 메인 버튼은 <b>gildong</b> 계정만 진입, 일반 회원은 준비중 안내. 정식 오픈 시 index.html의 <code>MR_OPEN=true</code>로 전환.</p>
+      <div class="fg"><label>발행월 (YYYYMM)</label><input id="mr-month" placeholder="202608" maxlength="6" style="max-width:160px"></div>
+      <div class="fg"><label>① 리포트 HTML 업로드</label>
+        <input type="file" id="mr-html" accept=".html">
+        <button class="btn btn-sm" onclick="mrUploadHtml()" style="margin-top:6px">📄 리포트 업로드</button>
+        <span id="mr-html-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
+      <div class="fg"><label>② 음성 해설 업로드 (track01.mp3 ~ track09.mp3 · 여러 개 선택 가능)</label>
+        <input type="file" id="mr-audio" accept=".mp3,audio/mpeg" multiple>
+        <button class="btn btn-sm" onclick="mrUploadAudio()" style="margin-top:6px">🎧 오디오 업로드</button>
+        <span id="mr-audio-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
+      <div class="toolbar" style="margin-top:20px"><strong style="font-size:14px">발행 목록</strong><button class="btn btn-sm" onclick="mrLoad()">🔄 새로고침</button></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="6" class="tc">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+    </div>
+
     <div id="p-master-guide" class="panel hidden">
       <h2>📖 마스터가이드 관리</h2>
 
@@ -11340,6 +11358,65 @@ window.downloadNewHospitalCSV = downloadNewHospitalCSV;
 /* ═══════════════════════════════════════════════════════════════════ */
 
 // ═══════════════════════════════════════════════════════════════════
+// ═══ 📊 월간 영업전략 리포트 관리 (2026-07-23) — monthly_reports/{YYYYMM} + Storage monthly-reports/{YYYYMM}/ ═══
+function mrMonth(){const m=($('mr-month').value||'').trim();if(!/^20\d{4}$/.test(m)){toast('발행월을 YYYYMM 형식으로 입력하세요 (예: 202608)','error');return null;}return m;}
+window.mrUploadHtml=async function(){
+  const m=mrMonth();if(!m)return;
+  const f=$('mr-html').files[0];if(!f)return toast('리포트 HTML 파일을 선택하세요','error');
+  const st=$('mr-html-stat');st.textContent='업로드 중...';
+  try{
+    const sR=stRef(storage,`monthly-reports/${m}/report.html`);
+    const task=uploadBytesResumable(sR,f,{contentType:'text/html',cacheControl:'public, max-age=300'});
+    await new Promise((res,rej)=>task.on('state_changed',s=>{st.textContent=Math.round(s.bytesTransferred/s.totalBytes*100)+'%';},rej,res));
+    const url=await getDownloadURL(sR);
+    await setDoc(doc(db,'monthly_reports',m),{month:m,reportUrl:url,reportFile:f.name,htmlUpdatedAt:serverTimestamp(),status:'ai_draft',updatedAt:serverTimestamp()},{merge:true});
+    st.textContent='✅ 완료';toast('리포트 업로드 완료 — 상태: ai_draft (검수 후 게시 전환)');mrLoad();
+  }catch(e){st.textContent='';toast('업로드 실패: '+e.message,'error');console.error(e);}
+};
+window.mrUploadAudio=async function(){
+  const m=mrMonth();if(!m)return;
+  const files=Array.from($('mr-audio').files||[]);if(!files.length)return toast('mp3 파일을 선택하세요','error');
+  const st=$('mr-audio-stat');const ok={},skip=[];
+  for(let i=0;i<files.length;i++){
+    const f=files[i],name=f.name.toLowerCase();
+    if(!/^track0[1-9]\.mp3$/.test(name)){skip.push(f.name);continue;}
+    st.textContent=`${name} 업로드 중 (${i+1}/${files.length})...`;
+    const sR=stRef(storage,`monthly-reports/${m}/audio/${name}`);
+    const task=uploadBytesResumable(sR,f,{contentType:'audio/mpeg',cacheControl:'public, max-age=3600'});
+    await new Promise((res,rej)=>task.on('state_changed',null,rej,res));
+    ok['track'+name.slice(5,7)]=await getDownloadURL(sR);
+  }
+  if(Object.keys(ok).length){
+    const prev=await getDoc(doc(db,'monthly_reports',m));const audio=Object.assign({},(prev.exists()&&prev.data().audio)||{},ok);
+    await setDoc(doc(db,'monthly_reports',m),{month:m,audio,audioUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
+  }
+  st.textContent=`✅ ${Object.keys(ok).length}개 완료`+(skip.length?` · 제외 ${skip.length}개(파일명 규칙 불일치)`:'');
+  if(skip.length)toast('파일명은 track01.mp3~track09.mp3만 허용: '+skip.join(', '),'warning');
+  else toast('오디오 업로드 완료');
+  mrLoad();
+};
+window.mrSetStatus=async function(m,status){
+  if(status==='published'&&!confirm(`${m}호를 게시(published)로 전환할까요?\n오픈 전에는 gildong 계정에서만 보입니다.`))return;
+  await updateDoc(doc(db,'monthly_reports',m),{status,updatedAt:serverTimestamp(),...(status==='published'?{publishedAt:serverTimestamp()}:{})});
+  toast(`${m} → ${status}`);mrLoad();
+};
+window.mrDelete=async function(m){
+  if(!confirm(`${m}호 발행 문서를 삭제할까요?\n※ Storage의 리포트·오디오 파일은 보존됩니다(재등록 가능).`))return;
+  await deleteDoc(doc(db,'monthly_reports',m));toast(`${m} 삭제됨`);mrLoad();
+};
+window.mrLoad=async function(){
+  const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="6" class="tc">로딩...</td></tr>';
+  try{
+    const snap=await getDocs(query(collection(db,'monthly_reports'),orderBy('month','desc'),limit(24)));
+    if(snap.empty){tb.innerHTML='<tr><td colspan="6" class="tc">등록된 호가 없습니다.</td></tr>';return;}
+    tb.innerHTML=snap.docs.map(d=>{const x=d.data();const audioN=Object.keys(x.audio||{}).length;
+      const sb=x.status==='published'?'<span class="badge" style="background:#E9F6F0;color:#177A4C">게시중</span>':'<span class="badge" style="background:#F9F3E2;color:#8A6A1F">검수 대기</span>';
+      const tgl=x.status==='published'?`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','ai_draft')">내리기</button>`:`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','published')">게시</button>`;
+      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 9':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td>${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+    }).join('');
+  }catch(e){tb.innerHTML='<tr><td colspan="6" class="tc" style="color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
+};
+
 // 📖 마스터가이드 관리 (master_guides / upcoming_master_guides)
 //    인증: x-bridge-secret 헤더 = functions INTERNAL_API_KEY (MW/TCW 패턴)
 // ═══════════════════════════════════════════════════════════════════
