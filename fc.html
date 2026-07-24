@@ -6423,6 +6423,17 @@ function aiRecLinks(w,recs){
    ※ aiBill은 질문을 한 번 주고받아야 채워지므로, 앱을 새로 켠 직후 첫 질문은 이 확인을 건너뛸 수 있다.
       그 경우에도 답변 아래 "100원 차감" 표시는 그대로 나온다. */
 function aiPaidKey(){const d=new Date(Date.now()+9*3600*1000);return 'ai_paid_ok_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0');}
+/* ★ [2026-07-23] 엑셀 헤더 AI 매핑 브리지 — 고객지도 일괄등록에서 이름 열을 못 찾을 때 폴백.
+   개인정보 최소 전송 원칙: 열 제목 + 샘플 3행만 보낸다. */
+window.__aiMapHeaders=async function(headers,samples){
+  try{
+    const q='아래 JSON은 보험 컨설턴트가 가진 고객 엑셀의 열 제목(headers)과 샘플 행(samples)이다. 각 열 제목을 다음 표준 필드 코드 중 하나로 매핑하라: name(고객이름), birth(생년월일), phone(휴대전화), email(이메일), company(회사), title(직함), addr(주소), rel(관계/등급), status(상태), referrer(소개자), memo(메모/비고), needs(관심항목/니즈), next(다음연락일). 확신이 없거나 해당 없는 열은 결과에서 제외하라. 설명·마크다운 없이 JSON 객체 하나만 출력하라. 형식: {"열제목":"필드코드"}\n\n'+JSON.stringify({headers:headers,samples:samples}).slice(0,4000);
+    const r=await httpsCallable(fns,'aiChat')({question:q,context:{consultant:(fcData&&fcData.name)||loginId||'',today:vmYmd(new Date())},history:[]});
+    const d=r.data||{};if(!d.ok||!d.answer)return null;
+    const m=String(d.answer).match(/\{[\s\S]*\}/);if(!m)return null;
+    const obj=JSON.parse(m[0]);return (obj&&typeof obj==='object')?obj:null;
+  }catch(_e){return null;}
+};
 function aiPaidConfirm(){
   return new Promise(res=>{
     try{
@@ -8964,7 +8975,7 @@ init();
       <button type="button" class="mp-tab on" id="mpTabPlaces" onclick="var o=document.getElementById('mpOverlay');o.classList.remove('custMode');document.getElementById('mpTabCust').classList.remove('on');this.classList.add('on');if(window.__mpPlacesRedraw)window.__mpPlacesRedraw();">내 장소</button>
       <button type="button" class="mp-tab" id="mpTabCust" onclick="var o=document.getElementById('mpOverlay');o.classList.add('custMode');document.getElementById('mpTabPlaces').classList.remove('on');this.classList.add('on');if(window.__mpCustOpen)window.__mpCustOpen();">내 고객</button>
     </div>
-    <div class="mp-custbar" id="mpCustBar"><div class="mpcb-top"><div class="mpcb-count" id="mpcbCount">이 화면: 총 0명</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%"><button type="button" class="mpcb-xlsx" id="mpcTplBtn">양식 받기</button><button type="button" class="mpcb-xlsx" id="mpcExportBtn">내보내기</button><button type="button" class="mpcb-xlsx primary" id="mpcXlsxBtn">엑셀 업로드</button><button type="button" class="mpcb-guide" id="mpcGuideBtn" style="margin-left:auto">＋ 이용 가이드</button></div></div><div class="mpcb-filters" id="mpcbFilters"></div></div>
+    <div class="mp-custbar" id="mpCustBar"><div class="mpcb-top"><div class="mpcb-count" id="mpcbCount">이 화면: 총 0명</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%"><button type="button" class="mpcb-xlsx" id="mpcTplBtn">양식 받기</button><button type="button" class="mpcb-xlsx" id="mpcExportBtn">내보내기</button><button type="button" class="mpcb-xlsx primary" id="mpcXlsxBtn">엑셀 업로드</button><button type="button" class="mpcb-xlsx" id="mpcPasteBtn">붙여넣기</button><button type="button" class="mpcb-guide" id="mpcGuideBtn" style="margin-left:auto">＋ 이용 가이드</button></div></div><div class="mpcb-filters" id="mpcbFilters"></div></div>
     <input type="file" id="mpcXlsxFile" accept=".xlsx,.xls,.csv" style="display:none">
     <div id="mpcXlsxProg" class="mpc-prog"><div class="mpc-prog-box"><div class="mpc-prog-tit" id="mpcProgTit">엑셀 처리 중…</div><div class="mpc-prog-bar"><div class="mpc-prog-fill" id="mpcProgFill"></div></div><div class="mpc-prog-sub" id="mpcProgSub">0 / 0</div><button type="button" id="mpcProgStop" class="mpc-prog-stop">중지</button></div></div>
     <div class="mp-search"><div class="box">🔍<input id="mpKw" type="text" placeholder="장소·메모 검색 (예: 강남 파스타)"></div></div>
@@ -9640,6 +9651,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     body+=sec("니즈 · 가족","",'<div id="mpcDtNeeds" style="margin-top:8px"></div>'
         +(famH?'<div style="display:flex;font-size:12px;color:#3A4457;gap:10px;margin-top:8px"><b style="font-weight:700;color:#8A93A8;font-size:11px">가족</b><span>'+famH+'</span></div>':""));
     if(c.memo)body+=sec("메모","",'<div style="background:#FFFDF2;border:1px solid #F0E6C0;border-radius:11px;padding:10px 12px;font-size:12px;line-height:1.65;color:#3A4457;margin-top:8px;white-space:pre-wrap">'+esc(c.memo)+'</div>');
+    if(c.extra&&Object.keys(c.extra).length){var _exH=Object.keys(c.extra).map(function(k){return '<div style="display:flex;gap:9px;padding:6px 0;border-bottom:1px dashed #EEE7D6;font-size:12px"><span style="flex:0 0 96px;color:#8A93A8;font-weight:700;word-break:break-all">'+esc(k)+'</span><span style="flex:1;color:#3A4457;word-break:break-word;white-space:pre-wrap">'+esc(String(c.extra[k]))+'</span></div>';}).join("");body+=sec("추가 정보",Object.keys(c.extra).length+"항목",'<div style="background:#FBFAF6;border:1px solid #EFEAD9;border-radius:11px;padding:4px 12px;margin-top:8px">'+_exH+'</div>');}   /* ★ [2026-07-23] 엑셀 미매핑 칼럼 그대로 표시 — 컨설턴트별 자기 양식 */
     if(ms.length)body+=sec("미팅 · AI 기록",ms.length+"건",mtH+((!mpcDtMtAll&&ms.length>3)?'<button type="button" id="mpcDtMtMore" style="width:100%;margin-top:8px;border:1px dashed #D8DCE5;background:none;border-radius:10px;padding:8px;font-size:11px;font-weight:700;color:#8A93A8;cursor:pointer">전체 '+ms.length+'건 보기</button>':""));
     if(c.addr||fileH){
       body+=sec("위치 · 첨부",(c.files&&c.files.length)?("파일 "+c.files.length):"",(c.addr?'<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:#3A4457"><span style="flex:1;min-width:0">📍 '+esc(c.addr)+(c.addrDetail?" "+esc(c.addrDetail):"")+'</span>'+((c.lat&&c.lng)?'<button type="button" id="mpcDtMap" style="font-size:10.5px;font-weight:800;color:#185FA5;background:#E6F1FB;border:0;border-radius:9px;padding:5px 10px;cursor:pointer;flex-shrink:0">지도에서 보기</button>':"")+'</div>':"")
@@ -9996,10 +10008,38 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   // ── 내 고객: 엑셀 대량 업로드 (index.html 로직 이식 + 좌표캐시 + 자동 헤더매핑) ──
   var mpcXlsxStop=false;
   function mpcLoadXLSX(cb){if(window.XLSX){cb(true);return;}var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";s.onload=function(){cb(!!window.XLSX);};s.onerror=function(){cb(false);};document.head.appendChild(s);}
-  function mpcHeaderMap(row){var m={ct:[]};Object.keys(row).forEach(function(h){var k=String(h).replace(/\*/g,"").trim();if(!m.name&&/이름|성명|고객명/.test(k))m.name=h;else if(!m.birth&&/생년월일|생일/.test(k))m.birth=h;else if(!m.company&&/회사|소속|기업/.test(k))m.company=h;else if(!m.title&&/직함|직위|직책/.test(k))m.title=h;else if(!m.phone&&/연락처|전화|휴대|핸드폰|번호/.test(k))m.phone=h;else if(!m.email&&/이메일|메일/.test(k))m.email=h;else if(!m.addr&&/주소/.test(k))m.addr=h;else if(!m.rel&&/관계|분류|등급/.test(k))m.rel=h;else if(!m.status&&/상태/.test(k))m.status=h;else if(!m.referrer&&/소개/.test(k))m.referrer=h;else if(!m.memo&&/메모|비고|특이/.test(k))m.memo=h;else if(!m.lat&&/위도|lat/i.test(k))m.lat=h;else if(!m.lng&&/경도|lng|lon/i.test(k))m.lng=h;else{var cm=k.match(/^계약(\d)(상품|유형|종류|만기|보험사|보험료)$/);if(cm){var n=parseInt(cm[1],10)-1;m.ct[n]=m.ct[n]||{};var f={상품:"product",유형:"ptype",종류:"ptype",만기:"expiry",보험사:"insurer",보험료:"premium"}[cm[2]];if(f)m.ct[n][f]=h;}}});return m;}
+  function mpcHeaderMap(row){var m={ct:[],extra:[]};Object.keys(row).forEach(function(h){var k=String(h).replace(/\*/g,"").trim();if(!m.name&&/이름|성명|고객명|성함|계약자|피보험자/.test(k))m.name=h;else if(!m.birth&&/생년월일|생일/.test(k))m.birth=h;else if(!m.company&&/회사|소속|기업/.test(k))m.company=h;else if(!m.title&&/직함|직위|직책/.test(k))m.title=h;else if(!m.phone&&/연락처|전화|휴대|핸드폰|번호/.test(k))m.phone=h;else if(!m.email&&/이메일|메일/.test(k))m.email=h;else if(!m.addr&&/주소/.test(k))m.addr=h;else if(!m.rel&&/관계|분류|등급/.test(k))m.rel=h;else if(!m.status&&/상태/.test(k))m.status=h;else if(!m.referrer&&/소개/.test(k))m.referrer=h;else if(!m.needs&&/관심|니즈/.test(k))m.needs=h;else if(!m.nextContact&&/다음연락|연락예정|콜예정/.test(k))m.nextContact=h;else if(!m.memo&&/메모|비고|특이/.test(k))m.memo=h;else if(!m.lat&&/위도|lat/i.test(k))m.lat=h;else if(!m.lng&&/경도|lng|lon/i.test(k))m.lng=h;else{var cm=k.match(/^계약(\d)(상품|유형|종류|만기|보험사|보험료)$/);if(cm){var n=parseInt(cm[1],10)-1;m.ct[n]=m.ct[n]||{};var f={상품:"product",유형:"ptype",종류:"ptype",만기:"expiry",보험사:"insurer",보험료:"premium"}[cm[2]];if(f)m.ct[n][f]=h;}else if(k&&!/^__EMPTY/i.test(String(h))){m.extra.push(h);}}});return m;}   /* ★ [2026-07-23] 관심항목·다음연락 매핑 + 미매핑 칼럼은 extra(추가 정보)로 무손실 보관 */
   function mpcNormBirth(s){
     if(typeof s==="number"&&s>20000&&s<80000){var dt=new Date(Math.round((s-25569)*86400000));return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0")+"-"+String(dt.getUTCDate()).padStart(2,"0");}   /* ★ 엑셀 날짜 셀(시리얼) 지원 (2026-07-17) */
     s=String(s||"").trim().replace(/[./]/g,"-");if(/^\d{8}$/.test(s))s=s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8);if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){var p=s.split("-");return p[0]+"-"+String(parseInt(p[1],10)).padStart(2,"0")+"-"+String(parseInt(p[2],10)).padStart(2,"0");}return "";}
+  /* ★ [2026-07-23] 엑셀 붙여넣기(서브 입력) — 복사한 표(TSV)를 rows JSON으로 변환해 동일 파이프라인 재사용.
+     셀 안 줄바꿈이 있는 표는 행이 깨질 수 있으므로 파일 업로드를 권장(모달에 안내). */
+  function mpcPasteOpen(){
+    var ov=document.createElement("div");ov.id="mpcPasteOv";
+    ov.style.cssText="position:fixed;inset:0;z-index:9750;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:18px";
+    ov.innerHTML='<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;padding:18px 16px;box-shadow:0 12px 40px rgba(0,0,0,.25)">'
+      +'<div style="font-size:14px;font-weight:800;color:#15294A">📋 엑셀 붙여넣기로 등록</div>'
+      +'<div style="font-size:11px;color:#8A93A8;line-height:1.6;margin-top:6px">엑셀에서 <b>첫 행(열 제목) 포함</b> 범위를 복사(Ctrl+C)한 뒤 아래에 붙여넣기(Ctrl+V)하세요.<br>메모 셀에 줄바꿈이 많은 표는 <b>엑셀 업로드</b>가 더 정확합니다.</div>'
+      +'<textarea id="mpcPasteTa" style="width:100%;min-height:170px;margin-top:10px;border:1.5px solid #D8DCE5;border-radius:11px;padding:10px;font-size:11.5px;font-family:inherit;resize:vertical;box-sizing:border-box" placeholder="이름\t생년월일\t연락처\t관심항목 ...\n홍길동\t1970-01-01\t010-1234-5678\t상속,연금 ..."></textarea>'
+      +'<div style="display:flex;gap:8px;margin-top:12px">'
+      +'<button type="button" id="mpcPasteNo" style="flex:1;border:1px solid #E1E5EC;background:#fff;color:#5C6678;border-radius:11px;padding:11px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">취소</button>'
+      +'<button type="button" id="mpcPasteGo" style="flex:1.4;border:0;background:#15294A;color:#fff;border-radius:11px;padding:11px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">등록 시작</button>'
+      +'</div></div>';
+    document.body.appendChild(ov);
+    var close=function(){try{ov.remove();}catch(_e){}};
+    ov.querySelector("#mpcPasteNo").onclick=close;
+    ov.onclick=function(e){if(e.target===ov)close();};
+    ov.querySelector("#mpcPasteGo").onclick=function(){
+      var txt=(ov.querySelector("#mpcPasteTa").value||"").replace(/\r/g,"");
+      var lines=txt.split("\n").filter(function(l){return l.trim();});
+      if(lines.length<2){alert("첫 줄은 열 제목, 둘째 줄부터 고객 데이터가 필요해요.");return;}
+      var hd=lines[0].split("\t").map(function(h,i){return String(h).trim()||("열"+(i+1));});
+      if(hd.length<2){alert("탭으로 구분된 표가 아니에요 — 엑셀에서 범위를 복사해 붙여넣어 주세요.");return;}
+      var rows=lines.slice(1).map(function(l){var cs=l.split("\t");var o={};hd.forEach(function(h,i){o[h]=(cs[i]!=null)?String(cs[i]).trim():"";});return o;});
+      close();mpcXlsxImport(rows);
+    };
+    setTimeout(function(){var ta=ov.querySelector("#mpcPasteTa");if(ta)ta.focus();},80);
+  }
   function mpcXlsxPick(){
     /* ★ 정본 1개 원칙 경고 게이트 (2026-07-17) */
     var last=null;try{last=JSON.parse(localStorage.getItem("mpc_last_upload")||"null");}catch(_e){}
@@ -10015,11 +10055,28 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     try{localStorage.setItem("mpc_last_upload",JSON.stringify({name:file.name,ts:Date.now(),count:0}));}catch(_e){}
     try{window.ccAppendRecord&&window.ccAppendRecord("업로드이력","upload_log",{fileName:file.name,side:"customer_map"});}catch(_e){}
     mpcLoadXLSX(function(ok){if(!ok){alert("엑셀 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");return;}var reader=new FileReader();reader.onload=function(e){try{var wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});var json=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});if(!json.length){alert("데이터가 없어요.");return;}try{var lu=JSON.parse(localStorage.getItem("mpc_last_upload")||"null");if(lu){lu.count=json.length;localStorage.setItem("mpc_last_upload",JSON.stringify(lu));}}catch(_e){}mpcXlsxImport(json);}catch(err){alert("엑셀을 읽지 못했어요. 양식을 확인해 주세요.");}};reader.readAsArrayBuffer(file);});}
-  function mpcXlsxImport(rows){var mp=mpcHeaderMap(rows[0]);if(!mp.name){alert("‘이름’ 열을 찾지 못했어요. 제공된 양식을 사용해 주세요.");return;}
+  function mpcXlsxImport(rows){var mp=mpcHeaderMap(rows[0]);
+    /* ★ [2026-07-23] 이름 열을 못 찾으면 AI 매핑 폴백 — 헤더+샘플 3행만 전송(질문 1회 차감 가능) */
+    if(!mp.name){
+      if(window.__aiMapHeaders&&confirm("‘이름’ 열을 찾지 못했어요.\n\nAI로 열 배치를 자동 분석해 볼까요?\n(열 제목과 샘플 3행만 전송 · AI 비서 질문 1회가 사용될 수 있어요)")){
+        window.__aiMapHeaders(Object.keys(rows[0]),rows.slice(0,3)).then(function(am){
+          try{if(am){var F2K={name:"name",birth:"birth",phone:"phone",email:"email",company:"company",title:"title",addr:"addr",rel:"rel",status:"status",referrer:"referrer",memo:"memo",needs:"needs",next:"nextContact"};
+            Object.keys(am).forEach(function(h){var f=F2K[String(am[h]||"").trim()];if(f&&!mp[f]&&rows[0].hasOwnProperty(h)){mp[f]=h;var _xi=mp.extra.indexOf(h);if(_xi>=0)mp.extra.splice(_xi,1);}});}}catch(_e){}
+          if(!mp.name){alert("AI도 ‘이름’ 열을 확정하지 못했어요. 첫 행 열 제목에 ‘이름’을 넣어 다시 올려주세요.");return;}
+          mpcXlsxImport2(rows,mp);
+        });return;
+      }
+      alert("‘이름’ 열을 찾지 못했어요. 첫 행 열 제목에 ‘이름’을 넣어주세요.");return;
+    }
+    mpcXlsxImport2(rows,mp);}
+  function mpcXlsxImport2(rows,mp){
     var items=rows.map(function(r){var name=String(r[mp.name]||"").trim();if(!name)return null;
       var rels=mp.rel?String(r[mp.rel]||"").split(/[,/·]/).map(function(s){return s.trim();}).filter(Boolean):[];
       var cts=[];(mp.ct||[]).forEach(function(cm){if(!cm)return;var pd=cm.product?String(r[cm.product]||"").trim():"";if(!pd)return;cts.push({insurer:cm.insurer?String(r[cm.insurer]||"").trim():"",product:pd,ptype:cm.ptype?String(r[cm.ptype]||"").trim():"",expiry:mpcNormBirth(cm.expiry?r[cm.expiry]:"")||String(cm.expiry?r[cm.expiry]:"").trim(),premium:cm.premium?String(r[cm.premium]||"").trim():""});});
-      return {name:name,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",phone:mp.phone?String(r[mp.phone]||"").trim():"",email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:mp.addr?String(r[mp.addr]||"").trim():"",rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0};}).filter(Boolean);
+      var ph=mp.phone?String(r[mp.phone]||"").trim():"";if(/^1[016789]\d{7,8}$/.test(ph.replace(/\D/g,"")))ph="0"+ph.replace(/\D/g,"");   /* ★ [2026-07-23] 엑셀 숫자셀에서 사라진 앞 0 자동 복원 */
+      var nds=mp.needs?String(r[mp.needs]||"").split(/[,/·]/).map(function(s){return s.trim();}).filter(Boolean).slice(0,8):[];
+      var ext={};(mp.extra||[]).forEach(function(h){var v=r[h];if(v==null)return;v=String(v).trim();if(!v)return;var kk=String(h).replace(/\*/g,"").trim().slice(0,30);if(kk&&Object.keys(ext).length<20)ext[kk]=v.slice(0,300);});   /* ★ [2026-07-23] 미매핑 칼럼 무손실 보관 (키 20개·값 300자 제한) */
+      return {name:name,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",phone:ph,email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:mp.addr?String(r[mp.addr]||"").trim():"",rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",needs:nds,nextContact:mp.nextContact?(mpcNormBirth(r[mp.nextContact])||""):"",extra:ext,contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0};}).filter(Boolean);
     if(!items.length){alert("등록할 고객이 없어요.");return;}
     mpcXlsxStop=false;$("mpcXlsxProg").classList.add("show");$("mpcProgTit").textContent="고객 등록 중…";$("mpcProgFill").style.width="0%";$("mpcProgSub").textContent="0 / "+items.length;
     var i=0,geoOk=0,geoFail=0,nUp=0,nNew=0,nNoBirth=0,coreArr=[];
@@ -10035,6 +10092,9 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
       if(it.birthDate){c.birthDate=it.birthDate;c.birthUnknown=false;}
       if(it.rels&&it.rels.length)c.rels=it.rels;
       if(it.memo&&!c.memo)c.memo=it.memo;   /* 메모는 기존 값 불가침 — 비어있을 때만 채움 */
+      if(it.needs&&it.needs.length){var _ns=(c.needs||[]).slice();it.needs.forEach(function(n){if(_ns.indexOf(n)<0)_ns.push(n);});c.needs=_ns.slice(0,8);}   /* ★ [2026-07-23] 관심항목 합집합 병합 */
+      if(it.nextContact)c.nextContact=it.nextContact;
+      if(it.extra&&Object.keys(it.extra).length){c.extra=c.extra||{};Object.keys(it.extra).forEach(function(k){c.extra[k]=it.extra[k];});}   /* ★ [2026-07-23] 추가 정보 병합 — 들어온 키만 갱신, 기존 키 보존 */
       if(it.lat&&it.lng){c.lat=it.lat;c.lng=it.lng;}
       c.contracts=c.contracts||[];
       it.contracts.forEach(function(ct){var ex=c.contracts.findIndex(function(x){return x.product===ct.product;});if(ex>=0){var old=c.contracts[ex];c.contracts[ex]={insurer:ct.insurer||old.insurer,product:ct.product,ptype:ct.ptype||old.ptype,expiry:ct.expiry||old.expiry,premium:ct.premium||old.premium};}else c.contracts.push(ct);});
@@ -10049,7 +10109,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
       var save=function(){
         var ex=findExisting(it);
         if(ex){mergeInto(ex,it);custPut(ex);nUp++;}
-        else{var o={id:"c_"+Date.now()+"_"+i+"_"+Math.random().toString(36).slice(2,6),name:it.name,birthDate:it.birthDate||"",birthUnknown:!it.birthDate,company:it.company,title:it.title,phone:it.phone,email:it.email,status:it.status,referrer:it.referrer,addr:it.addr,lat:it.lat||0,lng:it.lng||0,rels:it.rels,memo:it.memo,contracts:it.contracts,createdAt:Date.now()+i};custPut(o);customers.push(o);nNew++;if(!it.birthDate)nNoBirth++;}
+        else{var o={id:"c_"+Date.now()+"_"+i+"_"+Math.random().toString(36).slice(2,6),name:it.name,birthDate:it.birthDate||"",birthUnknown:!it.birthDate,company:it.company,title:it.title,phone:it.phone,email:it.email,status:it.status,referrer:it.referrer,addr:it.addr,lat:it.lat||0,lng:it.lng||0,rels:it.rels,memo:it.memo,needs:it.needs||[],nextContact:it.nextContact||"",contracts:it.contracts,createdAt:Date.now()+i};if(it.extra&&Object.keys(it.extra).length)o.extra=it.extra;custPut(o);customers.push(o);nNew++;if(!it.birthDate)nNoBirth++;}
         if(it.birthDate)coreArr.push(it);   /* ★ 처리 완료분만 fc_clients 대상 */
         if(it.lat&&it.lng)geoOk++;else geoFail++;
         i++;$("mpcProgFill").style.width=Math.round(i/items.length*100)+"%";$("mpcProgSub").textContent=i+" / "+items.length+" (갱신 "+nUp+"·신규 "+nNew+")";
@@ -10223,6 +10283,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
     if($("mpcPlaceKw")){var _mpcKwT;$("mpcPlaceKw").oninput=function(){clearTimeout(_mpcKwT);_mpcKwT=setTimeout(mpcDoPlaceSearch,400);};$("mpcPlaceKw").onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();clearTimeout(_mpcKwT);mpcDoPlaceSearch();}};}
     if($("mpcdBack"))$("mpcdBack").onclick=function(){$("mpCustDetail").classList.remove("show");};
     if($("mpcXlsxBtn"))$("mpcXlsxBtn").onclick=mpcXlsxPick;
+    if($("mpcPasteBtn"))$("mpcPasteBtn").onclick=mpcPasteOpen;   /* ★ [2026-07-23] 붙여넣기 등록 */
     if($("mpcTplBtn"))$("mpcTplBtn").onclick=mpcDownloadTemplate;
     if($("mpcGuideBtn"))$("mpcGuideBtn").onclick=openCustGuide;
     if($("mpcGuideBack"))$("mpcGuideBack").onclick=closeCustGuide;
