@@ -4335,7 +4335,7 @@ async function scLoadList(){
     if(window._ccSlug){
       const fcName=(fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자';
       const fcOn=await lcFcOnline();
-      _scSections.push({title:'담당 컨설턴트',color:'#B49A64',items:[{type:'fc',peerId:loginId,name:fcName,sub:'탭하여 문의하기',online:fcOn}]});
+      _scSections.push({title:'담당 컨설턴트',color:'#B49A64',items:[{type:'fc',peerId:loginId,name:fcName,sub:'탭하여 문의하기',online:fcOn,hasKnock:_scClientKnocks.size>0}]});
       let subs=[];
       try{const ds=await scFetchAll('client_channels',[where('refSlug','==',window._ccSlug)]);ds.forEach(d=>{const c=d.data();subs.push({slug:d.id,name:(c.brand&&c.brand.title)||d.id});});}catch(_e){}
       if(subs.length){
@@ -4387,10 +4387,12 @@ async function scOpenChat(peerId,peerName,peerType){
   if(cb)cb.innerHTML='';
   scSysMsg('🔒 종단간 · 서버에 대화 저장 안 됨');
   if(window._ccSlug&&_scPeer.type==='fc'){
+    try{scKnkDismissAll();}catch(_e){}                      /* ★ 받은 대화요청 확인 처리 */
     const on=await lcFcOnline();
     if(on){scSetStatus('연결 중…');try{await scClientConnect(_scPeer.id);}catch(e){scSysMsg('연결을 시작하지 못했어요');}}
     else{scSysMsg('담당자가 오프라인이에요.');const ok=await scKnock(_scPeer);scSysMsg(ok?'🔔 노크를 남겼어요. 상대가 온라인이 되면 대화가 시작돼요.':'노크를 남기지 못했어요.');}
   }else if(isOwnerView&&_scPeer.type==='client'){
+    try{scNudgeClose(_scPeer.id);_scNudgeMute.delete(_scPeer.id);}catch(_e){}   /* ★ 대화 진입 시 알림 정리 */
     const pending=_scOwnerPending.get(_scPeer.id);
     if(pending){scSetStatus('연결 중…');try{await scOwnerAnswer(pending.room,pending.data);_scOwnerPending.delete(_scPeer.id);}catch(e){scSysMsg('연결 실패');}}
     else{const ok=await scKnock(_scPeer);scSysMsg(ok?'🔔 대화 요청(노크)을 보냈어요. 상대가 열면 연결돼요.':'노크를 보내지 못했어요.');}
@@ -4770,6 +4772,53 @@ async function scLoadContacts(){
   }catch(e){console.warn('[sc-contacts]',e.message);}
   return m;
 }
+/* ★ 고객측 수신 리스너 — 컨설턴트가 보낸 대화요청(노크)을 실시간 감지 (FC측 scStartOwnerChatWatch의 대칭 구현)
+   · 조회는 toSlug 단일 equality → 복합 인덱스 불필요. toType은 클라이언트에서 걸러냄
+   · 고객은 규칙상 자신에게 온 노크를 삭제할 수 없으므로 localStorage로 '확인함' 처리(문서는 expiresAt 7일 자동 만료) */
+let _scClientWatchStarted=false;
+const _scClientKnocks=new Map();          // knockId -> {name}
+function scKnkSeen(id){try{return localStorage.getItem('sc_knk_'+id)==='1';}catch(_e){return false;}}
+function scKnkDismiss(id){try{localStorage.setItem('sc_knk_'+id,'1');}catch(_e){}_scClientKnocks.delete(id);}
+function scKnkDismissAll(){
+  [..._scClientKnocks.keys()].forEach(scKnkDismiss);
+  const n=document.getElementById('scClientNudge');if(n)n.remove();
+}
+window.scKnkDismissAll=scKnkDismissAll;
+function scStartClientChatWatch(){
+  if(_scClientWatchStarted||!window._ccSlug)return;
+  try{if(!ccGetPin(window._ccSlug))return;}catch(_e){return;}   /* 채널 주인(로그인)만 — 구경 모드 제외 */
+  _scClientWatchStarted=true;
+  const qy=query(collection(db,'chat_knocks'),where('toSlug','==',window._ccSlug),limit(30));
+  onSnapshot(qy,snap=>{
+    let fresh=null;
+    snap.docChanges().forEach(ch=>{
+      const id=ch.doc.id,d=ch.doc.data()||{};
+      if(ch.type==='removed'){_scClientKnocks.delete(id);return;}
+      if(d.toType!=='client')return;
+      if(scKnkSeen(id))return;
+      _scClientKnocks.set(id,{name:d.fromName||'담당 컨설턴트'});
+      if(!fresh)fresh=d.fromName||'담당 컨설턴트';
+    });
+    if(fresh)scClientChatNudge(fresh);
+    try{                                                        /* 목록이 열려 있으면 🔔 배지 갱신 */
+      const ov=document.getElementById('scOverlay'),lb=document.getElementById('scListBody');
+      if(ov&&ov.style.display!=='none'&&lb&&lb.style.display!=='none')scLoadList();
+    }catch(_e){}
+  },e=>console.warn('[sc-client-watch]',e.message));
+}
+window.scStartClientChatWatch=scStartClientChatWatch;
+/* 고객측 알림 팝업 — 컨설턴트 이름만 노출 (B2B2C: 플랫폼 브랜드 비노출) */
+function scClientChatNudge(name){
+  if(document.getElementById('scClientNudge'))return;
+  const div=document.createElement('div');div.id='scClientNudge';
+  div.style.cssText='position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:13200;width:calc(100% - 32px);max-width:448px;background:#fff;border:1px solid #C9D8EE;border-left:4px solid #1B3A6B;border-radius:14px;padding:14px 16px;box-shadow:0 12px 36px rgba(15,27,51,.22)';
+  div.innerHTML='<div style="font-size:10px;font-weight:800;color:#A68B4B;letter-spacing:1px">보안채팅 요청</div>'
+    +'<div style="font-size:14px;font-weight:900;color:#141B2D;margin-top:3px">🔒 '+ccvEsc(name)+'님이 대화를 요청했어요</div>'
+    +'<div style="display:flex;gap:7px;margin-top:12px"><button type="button" class="scNudgeNo" style="flex:1;padding:10px;border:1px solid #DFE2EA;border-radius:9px;background:#fff;color:#5A6484;font-weight:700">나중에</button><button type="button" class="scNudgeYes" style="flex:1;padding:10px;border:none;border-radius:9px;background:#1B3A6B;color:#fff;font-weight:800">대화 시작</button></div>';
+  document.body.appendChild(div);
+  div.querySelector('.scNudgeNo').onclick=()=>div.remove();
+  div.querySelector('.scNudgeYes').onclick=()=>{scKnkDismissAll();openSecureChat();scOpenChat(loginId,name,'fc');};
+}
 /* 노크 남기기 (chat_knocks — 대화내용 없음, 규칙에서 message/body/text 차단) */
 async function scKnock(peer){
   try{
@@ -4779,6 +4828,12 @@ async function scKnock(peer){
       if(_dup&&!_dup.empty)return true;
       await addDoc(collection(db,'chat_knocks'),{fromUid:myUid,fromSlug:(window._ccSlug||''),fromName:(window._ccBrand&&window._ccBrand.title)||window._ccSlug||'고객',toType:'fc',toFcLoginId:peer.id,createdAt:serverTimestamp()});
     }else{
+      const _dup2=await getDocs(query(collection(db,'chat_knocks'),where('toSlug','==',peer.id),where('toType','==','client'),limit(5))).catch(()=>null);
+      if(_dup2&&!_dup2.empty){                              /* ★ 미확인 노크가 남아 있으면 재생성 안 함 */
+        let live=false;const _me=(window._ccSlug||loginId||'x');
+        _dup2.forEach(d=>{if((d.data()||{}).fromSlug===_me)live=true;});
+        if(live)return true;
+      }
       const exp=new Date(Date.now()+7*86400000);
       await addDoc(collection(db,'chat_knocks'),{fromUid:myUid,fromSlug:(window._ccSlug||loginId||'x'),fromName:(isOwnerView?((fcData&&fcData.name)||loginId):((window._ccBrand&&window._ccBrand.title)||'상대'))||'상대',toType:'client',toSlug:peer.id,expiresAt:exp,createdAt:serverTimestamp()});
     }
@@ -4799,6 +4854,26 @@ async function scDeleteKnock(slug){
   }catch(e){toast&&toast('처리 실패: '+e.message,'error');}
 }
 window.scDeleteKnock=scDeleteKnock;
+/* ★ 알림 팝업 수명 관리 — 유령 요청/중복 팝업 차단 (2026-07) */
+const SC_OFFER_FRESH_MS=3*60*1000;    // 3분 초과 오퍼: 팝업 억제(목록에서만 확인)
+const SC_OFFER_STALE_MS=30*60*1000;   // 30분 초과 오퍼: 유령으로 보고 서버에서 제거
+const SC_NUDGE_TTL_MS=45000;          // 팝업 자동 소멸
+const SC_NUDGE_MUTE_MS=5*60*1000;     // '나중에' 누른 뒤 재알림 억제
+const _scNudgeMute=new Map();         // slug -> 해제시각(ms)
+function scNudgeClose(slug){const n=document.getElementById('scOwnerNudge_'+(slug||''));if(n)n.remove();}
+window.scNudgeClose=scNudgeClose;
+function scNudgeMuted(slug){const t=_scNudgeMute.get(slug||'');return !!(t&&Date.now()<t);}
+function scSigTs(d){try{const t=d&&d.ts;return (t&&t.toMillis)?t.toMillis():((t&&t.toDate)?t.toDate().getTime():0);}catch(_e){return 0;}}
+/* 유령 신호 제거 — Rules상 fcAuthUid 일치 시 FC에게 삭제 권한 있음 */
+async function scDropStaleSignal(room){
+  try{
+    for(const sub of ['offerCandidates','answerCandidates']){
+      const s=await getDocs(collection(db,'chat_signals',room,sub));
+      for(const x of s.docs){try{await deleteDoc(x.ref);}catch(_e){}}
+    }
+    await deleteDoc(doc(db,'chat_signals',room));
+  }catch(e){console.warn('[sc-stale]',e.message);}
+}
 /* FC 수신 리스너 — 채팅창 안 열고 있어도 고객 요청 감지 */
 function scStartOwnerChatWatch(){
   if(_scOwnerWatchStarted||!isOwnerView||!currentUser||currentUser.uid!==fcUid)return;
@@ -4807,18 +4882,29 @@ function scStartOwnerChatWatch(){
   onSnapshot(q,snap=>{
     snap.docChanges().forEach(ch=>{
       const d=ch.doc.data();const room=ch.doc.id;
-      if((ch.type==='added'||ch.type==='modified')&&d&&d.from==='client'&&d.status==='pending'&&d.offer){
-        const slug=d.clientSlug||'';
-        if(document.getElementById('scOverlay')&&document.getElementById('scOverlay').style.display!=='none'&&_scPeer&&_scPeer.type==='client'&&_scPeer.id===slug&&(!_scConn||_scConn.room!==room||!scConnAlive()||(d.offer&&d.offer.sdp!==_scLastOfferSdp))&&!_scAnswering){
-          scSetStatus('다시 연결 중…');
-          scOwnerAnswer(room,d).catch(()=>{});
-        }else{
-          _scOwnerPending.set(slug,{room,data:d});
-          scOwnerChatNudge(slug,d.clientName||slug);
-        }
-      }else if(ch.type==='removed'){
-        const slug=(d&&d.clientSlug)||'';if(slug)_scOwnerPending.delete(slug);
+      const slug=(d&&d.clientSlug)||'';
+      /* ① 신호 삭제(대화 종료) → 대기목록·팝업 동시 정리 */
+      if(ch.type==='removed'){if(slug){_scOwnerPending.delete(slug);scNudgeClose(slug);}return;}
+      if(!d||d.from!=='client'||!d.offer)return;
+      /* ② 수락·거절 등 pending 이탈 → 팝업 정리 */
+      if(d.status!=='pending'){if(slug){_scOwnerPending.delete(slug);scNudgeClose(slug);}return;}
+      const ts=scSigTs(d),age=ts?(Date.now()-ts):0;
+      /* ③ 유령 문서(고객이 탭을 강제 종료해 teardown이 못 돈 잔여물) → 서버에서 제거 */
+      if(ts&&age>SC_OFFER_STALE_MS){if(slug){_scOwnerPending.delete(slug);scNudgeClose(slug);}scDropStaleSignal(room);return;}
+      const _ovOpen=!!(document.getElementById('scOverlay')&&document.getElementById('scOverlay').style.display!=='none');
+      const _isCur=_ovOpen&&_scPeer&&_scPeer.type==='client'&&_scPeer.id===slug;
+      if(_isCur&&(!_scConn||_scConn.room!==room||!scConnAlive()||(d.offer&&d.offer.sdp!==_scLastOfferSdp))&&!_scAnswering){
+        scSetStatus('다시 연결 중…');
+        scOwnerAnswer(room,d).catch(()=>{});
+        scNudgeClose(slug);
+        return;
       }
+      /* ④ 이미 그 상대와 연결되어 대화 중 → 팝업 금지 */
+      if(_isCur&&scConnAlive()){scNudgeClose(slug);return;}
+      _scOwnerPending.set(slug,{room,data:d});
+      /* ⑤ 오래된 요청·음소거 상태면 목록(🔔)에만 반영하고 팝업은 띄우지 않음 */
+      if((ts&&age>SC_OFFER_FRESH_MS)||scNudgeMuted(slug))return;
+      scOwnerChatNudge(slug,d.clientName||slug);
     });
   },e=>console.warn('[sc-owner-watch]',e.message));
 }
@@ -4829,8 +4915,9 @@ function scOwnerChatNudge(slug,name){
   div.style.cssText='position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:13200;width:calc(100% - 32px);max-width:448px;background:#fff;border:1px solid #C9D8EE;border-left:4px solid #1B3A6B;border-radius:14px;padding:14px 16px;box-shadow:0 12px 36px rgba(15,27,51,.22)';
   div.innerHTML='<div style="font-size:10px;font-weight:800;color:#A68B4B;letter-spacing:1px">보안채팅 요청</div><div style="font-size:14px;font-weight:900;color:#141B2D;margin-top:3px">🔒 '+ccvEsc(name)+'님이 대화를 요청했어요</div><div style="display:flex;gap:7px;margin-top:12px"><button type="button" class="scNudgeNo" style="flex:1;padding:10px;border:1px solid #DFE2EA;border-radius:9px;background:#fff;color:#5A6484;font-weight:700">나중에</button><button type="button" class="scNudgeYes" style="flex:1;padding:10px;border:none;border-radius:9px;background:#1B3A6B;color:#fff;font-weight:800">대화 시작</button></div>';
   document.body.appendChild(div);
-  div.querySelector('.scNudgeNo').onclick=()=>div.remove();
-  div.querySelector('.scNudgeYes').onclick=()=>{div.remove();openSecureChat();scOpenChat(slug,name,'client');};
+  const _ttl=setTimeout(()=>{try{div.remove();}catch(_e){}},SC_NUDGE_TTL_MS);   /* ★ 45초 자동 소멸 */
+  div.querySelector('.scNudgeNo').onclick=()=>{clearTimeout(_ttl);_scNudgeMute.set(slug,Date.now()+SC_NUDGE_MUTE_MS);div.remove();};
+  div.querySelector('.scNudgeYes').onclick=()=>{clearTimeout(_ttl);_scNudgeMute.delete(slug);div.remove();openSecureChat();scOpenChat(slug,name,'client');};
 }
 /* 별명(FC→고객) 저장 — 서버 보관, 기기 무관 유지 */
 async function scRenamePeer(){
@@ -4860,6 +4947,7 @@ async function scClientPresence(on){
 }
 function scStartClientPresence(){
   if(!window._ccSlug||_scPresTimer)return;
+  try{scStartClientChatWatch();}catch(_e){}   /* ★ 컨설턴트발 대화요청 수신 감지 */
   scClientPresence(true);
   _scPresTimer=setInterval(()=>scClientPresence(!document.hidden),25000);
   document.addEventListener('visibilitychange',()=>scClientPresence(!document.hidden));
