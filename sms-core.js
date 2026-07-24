@@ -43,12 +43,60 @@
 
   function normalizePhone(p) { return String(p || '').replace(/[^0-9+]/g, ''); }
 
+  /* ── ★ [2026-07-24] 고객입력(FC 채널) 번호 폴백 리더 ────────────────────────
+   * 정본 통합: 번호의 원본은 '고객입력'에 저장된 고객 객체(mycustomers_db)이며
+   * 본인 구글드라이브에 자동 백업된다. 이 로컬 저장소(jarvia-sms)는 발송용 캐시.
+   * 같은 origin이라 별도 인증 없이 읽을 수 있고, 연결 열쇠는 양쪽 모두 fc_clients 문서 ID
+   * (여기 cid == 고객 객체 fccId)이므로 매칭 로직이 필요 없다.
+   * ⚠️ 읽기 전용 — 이 파일은 mycustomers_db에 쓰지 않는다. DB가 없으면 만들지도 않는다.
+   * ------------------------------------------------------------------------ */
+  var MC_DB = 'mycustomers_db', MC_STORE = 'customers';
+  var _mcCache = null, _mcAt = 0, MC_TTL = 60000;   // 1분 캐시 — 대량 발송 시 반복 조회 방지
+
+  function _mcLoad() {
+    if (_mcCache && (Date.now() - _mcAt) < MC_TTL) return Promise.resolve(_mcCache);
+    return new Promise(function (res) {
+      try {
+        if (!window.indexedDB) { res(null); return; }
+        var fresh = false;
+        var r = indexedDB.open(MC_DB, 1);
+        r.onupgradeneeded = function (e) { fresh = true; try { e.target.transaction.abort(); } catch (_e) {} };   // 없으면 만들지 않고 중단
+        r.onerror = function () { res(null); };
+        r.onsuccess = function () {
+          var d = r.result;
+          try {
+            if (fresh || !d.objectStoreNames.contains(MC_STORE)) { d.close(); res(null); return; }
+            var idx = {}, cur = d.transaction(MC_STORE, 'readonly').objectStore(MC_STORE).openCursor();
+            cur.onsuccess = function (ev) {
+              var x = ev.target.result;
+              if (x) {
+                var c = x.value;
+                if (c && c.fccId && c.phone) idx[c.fccId] = normalizePhone(c.phone);
+                x.continue(); return;
+              }
+              d.close(); _mcCache = idx; _mcAt = Date.now(); res(idx);
+            };
+            cur.onerror = function () { d.close(); res(null); };
+          } catch (_e) { try { d.close(); } catch (_e2) {} res(null); }
+        };
+      } catch (_e) { res(null); }
+    });
+  }
+  function mcGetNumber(cid) {
+    if (!cid) return Promise.resolve(null);
+    return _mcLoad().then(function (idx) { return (idx && idx[cid]) || null; });
+  }
+  function mcRefresh() { _mcCache = null; _mcAt = 0; }
+
   // ── 번호 (로컬 전용) ──
   function getNumber(cid) {
     if (!cid) return Promise.resolve(null);
     return store(STORE_NUM, 'readonly').then(function (s) { return reqP(s.get(cid)); })
       .then(function (v) { return v && v.phone ? v.phone : null; })
-      .catch(function () { return null; });
+      .catch(function () { return null; })
+      /* ★ [2026-07-24] 로컬에 없으면 고객입력(FC 채널)에 저장된 번호를 사용 —
+         기기를 바꿔도 드라이브에서 복원된 번호로 문자를 보낼 수 있다. 기존 로컬 값이 항상 우선. */
+      .then(function (p) { return p ? p : mcGetNumber(cid); });
   }
   function setNumber(cid, phone) {
     var ph = normalizePhone(phone);
@@ -210,6 +258,7 @@
     LIMITS: LIMITS,
     normalizePhone: normalizePhone,
     getNumber: getNumber, setNumber: setNumber, bulkSetNumbers: bulkSetNumbers, exportNumbers: exportNumbers,
+    mcGetNumber: mcGetNumber, mcRefresh: mcRefresh,   /* ★ [2026-07-24] 고객입력 번호 폴백 (읽기 전용) */
     getToday: getToday, canSend: canSend, addSent: addSent, addSession: addSession, sessionGate: sessionGate,
     buildSmsUrl: buildSmsUrl, sendOne: sendOne, isIOS: isIOS, todayStr: todayStr,
     contactPickerSupported: contactPickerSupported, pickContact: pickContact,
