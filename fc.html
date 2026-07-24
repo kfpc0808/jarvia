@@ -9554,7 +9554,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function mpcAddCustomRel(name){name=(name||"").trim();if(!name)return;for(var i=0;i<REL_DEFS.length;i++)if(REL_DEFS[i].k===name)return;if(mpcCustomRels.indexOf(name)<0){mpcCustomRels.push(name);mpcSaveCustomRels();}}
   var mpcEditId=null,mpcRelsSel=[],mpcCoord=null,custFilter="all",mpcCountBound=false,mpcSearch="",mpcSort=(function(){try{var v=localStorage.getItem("mpc_sort")||"recent";return ["recent","name","rel"].indexOf(v)>=0?v:"recent";}catch(_e){return "recent";}})();   /* ★ 정렬 선택 유지 (2026-07-19) */
   var mpcPage=1,mpcPageSize=(function(){var v=parseInt(localStorage.getItem("mpc_pgsize")||"10",10);return [10,20,30,40,50,100].indexOf(v)>=0?v:10;})();   /* ★ 리스트 페이지네이션 (2026-07-18) */
-  function mpcMatch(c){return custFilter==="all"||((c.rels||[]).indexOf(custFilter)>=0);}
+  function mpcMatch(c){if(window.__mrF&&window.__mrF.match&&!window.__mrF.match(c))return false;return custFilter==="all"||((c.rels||[]).indexOf(custFilter)>=0);}
   function mpcRenderFilter(){var w=$("mpcbFilters");if(!w)return;var opts=[["all","전체"]].concat(REL_DEFS.map(function(r){return [r.k,r.k];})).concat(mpcCustomRels.map(function(k){return [k,k];}));w.innerHTML="";opts.forEach(function(o){var b=document.createElement("button");b.type="button";b.className="mpcb-f"+(custFilter===o[0]?" on":"");b.textContent=o[1];b.onclick=function(){custFilter=o[0];mpcPage=1;mpcRenderFilter();mpcRenderList();mpcDrawMarkers(false);mpcUpdateCount();};w.appendChild(b);});}
   function mpcUpdateCount(){var el=$("mpcbCount");if(!el)return;var b=(map&&map.getBounds)?map.getBounds():null;var tot=0,per={};customers.forEach(function(c){if(!c.lat||!c.lng||!mpcMatch(c))return;if(b&&!b.contain(new kakao.maps.LatLng(c.lat,c.lng)))return;tot++;(c.rels||[]).forEach(function(k){per[k]=(per[k]||0)+1;});});var pills=REL_DEFS.filter(function(r){return per[r.k];}).map(function(r){return '<span class="cpill" style="background:'+r.c+'">'+r.k+' '+per[r.k]+'</span>';}).join("");el.innerHTML="이 화면: 총 "+tot+"명"+pills;}
   function mpcGeocode(address){return new Promise(function(resolve){var addr=String(address||"").trim().replace(/\([^)]*\)/g,"").replace(/\s+/g," ").trim();if(!addr||addr.length<4){resolve({lat:0,lng:0,ok:false});return;}ensureKakao(function(){try{var gc=new kakao.maps.services.Geocoder();gc.addressSearch(addr,function(r,s){if(s===kakao.maps.services.Status.OK&&r&&r.length){resolve({lat:+r[0].y,lng:+r[0].x,ok:true});}else{try{new kakao.maps.services.Places().keywordSearch(addr,function(r2,s2){if(s2===kakao.maps.services.Status.OK&&r2&&r2.length){resolve({lat:+r2[0].y,lng:+r2[0].x,ok:true});}else{resolve({lat:0,lng:0,ok:false});}});}catch(e){resolve({lat:0,lng:0,ok:false});}}});}catch(e){resolve({lat:0,lng:0,ok:false});}});});}
@@ -9995,6 +9995,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   function mpcDrawMarkers(fit){if(!map)return;mpcClearMarkers();try{if(typeof markers!=="undefined"&&markers&&markers.length){markers.forEach(function(m){m.setMap&&m.setMap(null);});markers.length=0;}}catch(e){}var lvl=(map.getLevel?map.getLevel():6),cell=mpcCellSize(lvl),groups={},bounds=new kakao.maps.LatLngBounds(),any=false;customers.forEach(function(c){if(!c.lat||!c.lng||!mpcMatch(c))return;var key=Math.floor(c.lng/cell)+"_"+Math.floor(c.lat/cell);(groups[key]=groups[key]||[]).push(c);bounds.extend(new kakao.maps.LatLng(c.lat,c.lng));any=true;});Object.keys(groups).forEach(function(k){var g=groups[k];if(g.length<4){g.forEach(function(c){var ov=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(c.lat,c.lng),content:mpcPinEl(c),yAnchor:.5,clickable:true});ov.setMap(map);custMarkers.push(ov);});}else{var la=0,ln=0;g.forEach(function(x){la+=x.lat;ln+=x.lng;});la/=g.length;ln/=g.length;var cpos=new kakao.maps.LatLng(la,ln);var el=document.createElement("div");el.className="mpc-clus";el.textContent=g.length;(function(p){el.onclick=function(){var nl=Math.max(1,(map.getLevel?map.getLevel():6)-2);map.setLevel(nl);setTimeout(function(){map.setCenter(p);},60);};})(cpos);var ov=new kakao.maps.CustomOverlay({position:cpos,content:el,yAnchor:.5,clickable:true,zIndex:6});ov.setMap(map);custMarkers.push(ov);}});if(fit&&any)map.setBounds(bounds);}
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
+  window.__mrRefresh=function(){try{mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}};   /* ★ 월간 리포트 타깃 필터 재렌더 훅 (2026-07-24) */
   window.__mpCustOpen=function(){mpcLoadCustomRels();custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
     mpcDedup().then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
@@ -11410,5 +11411,92 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
+<!-- ═══ 📊 월간 영업전략 리포트 → 타깃 추출 딥링크 수신 (2026-07-24) ═══
+     fc.html?mrFilter=코드 로 진입 시: 고객 지도 오픈 → DB 입력현황 팝업(취소/확인) → 확인 시 필터 적용.
+     자동 조건은 고객 DB에 존재하는 필드만 사용, 나머지는 '수동 확인 조건'으로 안내. -->
+<script>
+(function(){
+  var code=null;try{code=new URLSearchParams(location.search).get('mrFilter');}catch(e){}
+  if(!code)return;
+  function yrs(bd){if(!bd)return null;var m=String(bd).match(/(\d{4})/);if(!m)return null;var a=new Date().getFullYear()-(+m[1]);return(a>0&&a<120)?a:null;}
+  function insurers(c){var s={};(c.contracts||[]).forEach(function(t){if(t&&t.insurer)s[String(t.insurer).trim()]=1;});return Object.keys(s).length;}
+  function hasSilson(c){return(c.contracts||[]).some(function(t){return t&&((t.insType==='silson')||/실손/.test(String(t.product||t.productName||'')));});}
+  function lastMeetY(c){var y=0;(c.meetings||[]).forEach(function(m){var d=String((m&&(m.date||m.d))||'');var mm=d.match(/(\d{4})/);if(mm)y=Math.max(y,+mm[1]);});return y;}
+  function needsHas(c,t){return(c.needs||[]).indexOf(t)>=0;}
+  function pastMaturity(c){var today=new Date().toISOString().slice(0,10);return(c.contracts||[]).some(function(t){var d=t&&(t.maturityDate||t.expireDate||t.expiry);return d&&String(d).slice(0,10)<today;});}
+  var F={
+    pb0A:{label:'캠페인 A — 숨은 보험금 (장기·다보험사·점검 공백)',
+      match:function(c){return insurers(c)>=3||(lastMeetY(c)>0&&lastMeetY(c)<=2023)||pastMaturity(c);},
+      need:[{l:'계약(보험사) 정보',t:function(c){return(c.contracts||[]).length>0;}},{l:'미팅(점검) 기록',t:function(c){return(c.meetings||[]).length>0;}}],
+      manual:['주소·연락처 변경 경험','부모님 계약을 관리하는 자녀 고객','가입기간 10년 이상(계약 가입일)']},
+    pb1A:{label:'이슈① A — 실손 진단 (실손 보유·세대 미확인)',
+      match:function(c){return hasSilson(c)||needsHas(c,'실손')||(c.contracts||[]).length===0;},
+      need:[{l:'계약 상품명(실손 표기)',t:function(c){return(c.contracts||[]).length>0;}},{l:'니즈 태그',t:function(c){return(c.needs||[]).length>0;}}],
+      manual:['실손 가입일·가입 세대 (초기실손: ≤2013.3.31)','최근 2년 청구 이력','갱신 보험료 인상률']},
+    pb3A:{label:'이슈③ A — 국민연금 (40~59세·연금 니즈)',
+      match:function(c){var a=yrs(c.birthDate);return(a!==null&&a>=40&&a<=59)||needsHas(c,'연금')||needsHas(c,'은퇴설계');},
+      need:[{l:'생년월일',t:function(c){return!!c.birthDate;}},{l:'니즈 태그',t:function(c){return(c.needs||[]).length>0;}}],
+      manual:['국민연금 예상 수령액 확인 여부','퇴직연금 적립액','직장/자영업 구분']},
+    pb4A:{label:'이슈④ A — 기준금리·현금흐름',
+      match:function(c){return true;},
+      need:[],
+      manual:['변동금리 대출 보유','보험계약대출 잔액','보험료 부담·미납 언급 이력'],
+      note:'대출 정보는 고객 DB 항목에 없어 자동 추출이 불가합니다. 전체 고객이 표시되며, 아래 수동 확인 조건으로 선별하십시오.'},
+    pb5A:{label:'이슈⑤ A — 폭염·연휴 (65세 이상)',
+      match:function(c){var a=yrs(c.birthDate);return a!==null&&a>=65;},
+      need:[{l:'생년월일',t:function(c){return!!c.birthDate;}}],
+      manual:['만성질환 여부','야외 직업(농업·건설 등)','장거리 운전 예정']},
+    next:{label:'실행관리 — 다음 행동일 미기록 고객',
+      match:function(c){return!c.nextContact;},
+      need:[{l:'다음 행동일 입력',t:function(c){return!!c.nextContact;}}],
+      manual:[]}
+  };
+  var f=F[code];if(!f)return;
+  function esc(s){return String(s).replace(/[&<>"]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x];});}
+  function showBadge(n,ex){
+    var b=document.getElementById('mrBadge');
+    if(!b){b=document.createElement('div');b.id='mrBadge';b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:3000;background:#15294A;color:#fff;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:700;box-shadow:0 8px 24px rgba(10,17,32,.35);display:flex;gap:10px;align-items:center';document.body.appendChild(b);}
+    b.innerHTML='<span>📊 '+esc(f.label)+' — <b style="color:#C9A96E">'+n+'명</b> 추출'+(ex?' · 미입력 등 제외 '+ex+'명':'')+'</span><button onclick="window.__mrClear()" style="border:0;background:rgba(255,255,255,.15);color:#fff;border-radius:999px;padding:5px 11px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit">해제</button>';
+  }
+  window.__mrClear=function(){window.__mrF=null;var b=document.getElementById('mrBadge');if(b)b.remove();if(window.__mrRefresh)window.__mrRefresh();};
+  function apply(list){
+    window.__mrF={code:code,match:f.match};
+    if(window.__mrRefresh)window.__mrRefresh();
+    var n=0;list.forEach(function(c){if(f.match(c))n++;});
+    showBadge(n,list.length-n);
+  }
+  function popup(list){
+    var tot=list.length;
+    var rows=f.need.map(function(nd){
+      var k=0;list.forEach(function(c){if(nd.t(c))k++;});
+      var ic=k===0?'❌':(k<tot?'⚠️':'✅');
+      return'<div style="display:flex;justify-content:space-between;gap:10px;background:#F6F8FB;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#33415C"><span>'+ic+' '+esc(nd.l)+'</span><b>'+k+' / '+tot+'명 입력됨</b></div>';
+    }).join('');
+    var man=f.manual.length?'<div style="margin-top:10px;font-size:11.5px;color:#8a6a1f;background:#FBF6EA;border:1px solid #EAD9B4;border-radius:10px;padding:9px 12px;line-height:1.65;text-align:left"><b>수동 확인 조건</b> (DB 자동 추출 불가)<br>· '+f.manual.map(esc).join('<br>· ')+'</div>':'';
+    var note=f.note?'<div style="margin-top:10px;font-size:11.5px;color:#A23B3B;background:#FBEAEA;border:1px solid #F2D7D7;border-radius:10px;padding:9px 12px;line-height:1.6;text-align:left">'+esc(f.note)+'</div>':'';
+    var ov=document.createElement('div');ov.id='mrPopup';
+    ov.style.cssText='position:fixed;inset:0;z-index:3200;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:20px';
+    ov.innerHTML='<div style="width:100%;max-width:380px;background:#fff;border-radius:18px;padding:22px 20px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.3)">'
+      +'<div style="font-size:34px;margin-bottom:6px">📋</div>'
+      +'<div style="font-size:16px;font-weight:800;color:#15294A;margin-bottom:4px">'+esc(f.label)+'</div>'
+      +'<div style="font-size:12px;color:#5C6678;margin-bottom:14px;line-height:1.6">이 추출에는 고객 DB에 아래 정보가 입력되어 있어야 합니다.<br>입력되지 않은 고객은 결과에서 빠질 수 있습니다.</div>'
+      +'<div style="display:grid;gap:6px">'+(rows||'<div style="font-size:12px;color:#5C6678">필요한 사전 입력 항목이 없습니다.</div>')+'</div>'
+      +man+note
+      +'<div style="font-size:11px;color:#9AA3B2;margin-top:10px">고객 정보 수정에서 미리 입력해 두면 추출이 정확해집니다.</div>'
+      +'<div style="display:flex;gap:8px;margin-top:14px"><button id="mrCancel" style="flex:1;border:1px solid #D8DEE9;background:#fff;color:#5C6678;border-radius:12px;padding:12px;font-size:13.5px;font-weight:800;cursor:pointer;font-family:inherit">취소</button><button id="mrOk" style="flex:1;border:0;background:#15294A;color:#fff;border-radius:12px;padding:12px;font-size:13.5px;font-weight:800;cursor:pointer;font-family:inherit">확인</button></div></div>';
+    document.body.appendChild(ov);
+    document.getElementById('mrCancel').onclick=function(){ov.remove();};
+    document.getElementById('mrOk').onclick=function(){ov.remove();apply(list);};
+  }
+  function start(tries){
+    if(window.myPlacesOpen&&window.__mpcEnsureCustomers){
+      try{window.myPlacesOpen();}catch(e){}
+      setTimeout(function(){window.__mpcEnsureCustomers(function(list){popup(list||[]);});},600);
+    }else if(tries<40){setTimeout(function(){start(tries+1);},500);}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){start(0);});
+  else start(0);
+})();
+</script>
 </body>
 </html>
