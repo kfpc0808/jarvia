@@ -574,7 +574,7 @@
         <button class="btn btn-sec" onclick="rcQuick('this')">이번 달</button>
         <button class="btn btn-sec" onclick="rcQuick('next')">다음 달</button>
         <button class="btn btn-sec" onclick="rcQuick('year')">올해 전체</button>
-        <button class="btn btn-sec" onclick="exportRecurringCSV()">CSV 다운로드</button>
+        <button class="btn btn-sec" onclick="exportRecurringCSV()">📊 엑셀 다운로드</button>
         <input id="rc-search" placeholder="이름/아이디/연락처 검색..." oninput="renderRecurring()">
       </div>
       <div class="dash-row mt">
@@ -877,7 +877,7 @@
       <!-- ═══ 📮 사용자 피드백 관리 (2026-07-24) — 리포트 내 [의견 보내기] 수집분 ═══ -->
       <div class="toolbar" style="margin-top:26px"><strong style="font-size:14px">📮 사용자 피드백 <span id="mrfb-badge" style="display:none;background:#C0392B;color:#fff;border-radius:10px;font-size:11px;padding:2px 9px;margin-left:6px"></span></strong><button class="btn btn-sm" onclick="mrFbLoad()">🔄 새로고침</button></div>
       <p style="font-size:11.5px;color:#888;margin:4px 0 10px">상태를 접수 → 진행 → 완료로 관리하고, 답변을 입력해 [저장]하면 작성자의 리포트 화면(MY FEEDBACK)에 그대로 표시됩니다.</p>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:120px">일시</th><th style="width:110px">작성자</th><th style="width:70px">발행월</th><th style="width:80px">유형</th><th>내용</th><th style="width:90px">상태</th><th style="width:260px">답변</th><th style="width:70px">저장</th></tr></thead><tbody id="mrfb-tbody"><tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:16px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:120px">일시</th><th style="width:110px">작성자</th><th style="width:70px">발행월</th><th style="width:80px">유형</th><th>내용</th><th style="width:90px">상태</th><th style="width:300px">답변</th><th style="width:76px">저장</th></tr></thead><tbody id="mrfb-tbody"><tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:16px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
     </div>
 
     <div id="p-master-guide" class="panel hidden">
@@ -4750,15 +4750,26 @@ function rcQuick(k){
   else if(k==='year'){if($('rc-from'))$('rc-from').value=cy+'-01';if($('rc-to'))$('rc-to').value=cy+'-12';}
   renderRecurring();renderRecurringRange();
 }
-function exportRecurringCSV(){
+async function exportRecurringCSV(){
   const mv=$('rc-month')?$('rc-month').value:'';if(!mv)return toast('조회 월을 선택하세요.','error');
   const a=mv.split('-').map(Number);const viewYM=a[0]*12+(a[1]-1);
   const rows=_rcMonthRows(viewYM,$('rc-search')?$('rc-search').value:'');
-  const head=['No','이름','아이디','연락처','소속','등록일','과금시작월','월결제금액','등록비'];
-  const lines=[head];
-  rows.forEach((m,i)=>lines.push([i+1,m.name||'',m.loginId||'',m.phone||'',m.company||'',m._regD.toLocaleDateString('ko-KR'),_rcYmStr(m._billYM),_rcFee(m),m.regFeePaid?'확인':'미확인']));
-  const csv='\uFEFF'+lines.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\r\n');
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a2=document.createElement('a');a2.href=url;a2.download='정기결제대상_'+mv+'.csv';a2.click();URL.revokeObjectURL(url);
+  if(!rows.length)return toast('내보낼 대상이 없습니다.','error');
+  try{
+    const XLSX=await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
+    const data=rows.map((m,i)=>({
+      'No':i+1,'이름':m.name||'','아이디':m.loginId||'','연락처':m.phone||'','소속':m.company||'',
+      '등록일':m._regD.toLocaleDateString('ko-KR'),'과금시작월':_rcYmStr(m._billYM),
+      '월결제금액':Number(_rcFee(m))||0,'등록비':m.regFeePaid?'확인':'미확인'
+    }));
+    const total=data.reduce((s,r)=>s+(r['월결제금액']||0),0);
+    data.push({'No':'','이름':'합계','아이디':'','연락처':'','소속':'','등록일':'','과금시작월':data.length+'명','월결제금액':total,'등록비':''});
+    const ws=XLSX.utils.json_to_sheet(data);
+    ws['!cols']=[{wch:5},{wch:12},{wch:14},{wch:15},{wch:24},{wch:13},{wch:11},{wch:12},{wch:8}];
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'정기결제대상');
+    XLSX.writeFile(wb,'정기결제대상_'+mv+'.xlsx');
+    toast('엑셀 다운로드 완료 ('+rows.length+'명)','success');
+  }catch(e){toast('엑셀 생성 실패: '+e.message,'error');console.error(e);}
 }
 window.loadRecurring=loadRecurring;window.renderRecurring=renderRecurring;window.renderRecurringRange=renderRecurringRange;window.rcQuick=rcQuick;window.exportRecurringCSV=exportRecurringCSV;
 
@@ -11401,8 +11412,8 @@ window.mrFbLoad=async function(){
         <td>${esc(x.type||'')}</td>
         <td style="font-size:12px;line-height:1.55">${body}</td>
         <td><select id="mrfb-st-${x.id}" style="width:80px">${sel}</select></td>
-        <td><input id="mrfb-rp-${x.id}" value="${esc(x.reply||'')}" placeholder="작성자에게 표시될 답변" style="width:100%"></td>
-        <td><button class="btn btn-sm" onclick="mrFbSave('${x.id}')">저장</button></td>
+        <td><textarea id="mrfb-rp-${x.id}" rows="3" placeholder="작성자에게 표시될 답변" style="width:100%;min-height:64px;resize:vertical;font-family:inherit;font-size:12px;line-height:1.55;padding:6px 8px">${esc(x.reply||'')}</textarea></td>
+        <td style="vertical-align:top"><button class="btn btn-sm" onclick="mrFbSave('${x.id}')" style="white-space:nowrap">저장</button></td>
       </tr>`;
     }).join('');
   }catch(e){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:#C0392B;padding:16px">로드 실패: '+esc(e.message)+'</td></tr>';}
