@@ -9561,6 +9561,72 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   /* ★ 내고객관리 → 지도 이름+생년월일 동기화 (2026-07-17)
      계약은 복사하지 않음 — D-day 배지가 fc_clients를 직접 읽어 표시 (이중 관리 방지).
      삭제는 양방향 완전 동기(fc_clients 동시 삭제) — 제외 목록 없음 (2026-07-18 개정). */
+  /* ═══ ★ [2026-07-24] 대량 편입 안전화 (v4) ═══
+     기존 v3 결함 2건 해결:
+      (1) 색인이 '이름|생일' 키라 동명·무생일 중복 문서가 조용히 누락 → 문서(list) 단위 순회로 전건 편입
+      (2) 고객 1명당 전체 명단 3회 스캔(O(n²)) → 3천명 계정에서 화면 정지 → Map 사전 구축 O(n)
+     추가: 200건 배치 + 진행 표시 + 최초 대량 편입 전 자동 스냅샷. 사용자에게 아무것도 묻지 않는다.
+     멱등성: fccId가 이미 링크된 문서는 건너뛰므로 중단·재실행이 항상 안전하다. */
+  function mpcAdoptChip(txt){
+    var el=document.getElementById("mpcAdoptChip");
+    if(txt==null){if(el)el.remove();return;}
+    if(!el){el=document.createElement("div");el.id="mpcAdoptChip";
+      el.style.cssText="position:fixed;right:14px;bottom:16px;z-index:9800;background:#15294A;color:#fff;border-radius:999px;padding:9px 15px;font-size:12px;font-weight:700;font-family:inherit;box-shadow:0 6px 20px rgba(0,0,0,.28);pointer-events:none";
+      document.body.appendChild(el);}
+    el.textContent=txt;
+  }
+  function mpcAdoptSnapshot(cb){   /* 최초 대량 편입 직전 1회: 현재 상태를 드라이브에 별도 파일로 보존 */
+    try{
+      if(!mpcGdOn()||!window.ccStorage||!window.ccStorage.saveJson){cb();return;}
+      var mk="mpc_adopt_bk";if(localStorage.getItem(mk)){cb();return;}
+      window.ccStorage.saveJson("고객관리","내고객_편입전백업",{app:"mycustomers",version:2,note:"대량 편입 직전 자동 스냅샷",savedAt:Date.now(),customers:customers})
+        .then(function(){try{localStorage.setItem(mk,String(Date.now()));}catch(_e){}cb();},function(){cb();});
+    }catch(_e){cb();}
+  }
+  function mpcFccAdoptAsync(list,cb){
+    var docs=(list||[]).filter(function(d){return d&&d.name;});
+    if(!docs.length){cb(0);return;}
+    /* ── 사전 조회표 (O(n)) ── */
+    var byFcc={},byName={};
+    customers.forEach(function(c){
+      if(c.fccId)byFcc[c.fccId]=1;
+      var n=c.name||"";if(!n)return;(byName[n]=byName[n]||[]).push(c);
+    });
+    var todo=docs.filter(function(d){return !byFcc[d.id];});
+    if(!todo.length){cb(0);return;}
+    var added=0,i=0,BATCH=200,big=(todo.length>=300);
+    var link=function(c,d){c.fccId=d.id;byFcc[d.id]=1;if(!c.mgTitle&&d.mgTitle)c.mgTitle=d.mgTitle;custPut(c);};
+    var create=function(d){
+      var o={id:"c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),fccId:d.id,name:d.name,
+        birthDate:d.birthDate||"",birthUnknown:!d.birthDate,mgTitle:d.mgTitle||"",
+        company:"",title:"",phone:"",email:"",status:"",referrer:"",addr:"",lat:0,lng:0,
+        rels:[],memo:"",meetings:[],files:[],family:[],needs:[],
+        contracts:(d.contracts||[]).map(function(x){return {product:x.product||"",expiry:x.expiry||"",ptype:x.ptype||"",yearly:!!x.yearly,insurer:x.insurer||"",premium:x.premium||""};}),
+        createdAt:Date.now()};
+      byFcc[d.id]=1;(byName[o.name]=byName[o.name]||[]).push(o);
+      customers.push(o);custPut(o);added++;
+    };
+    var step=function(){
+      var end=Math.min(i+BATCH,todo.length);
+      for(;i<end;i++){
+        var d=todo[i],same=byName[d.name]||[],j,c;
+        /* ① 생일 일치 + 미링크 카드 → 링크만 (신규 아님) */
+        var hit=null;
+        if(d.birthDate){for(j=0;j<same.length;j++){c=same[j];if(!c.fccId&&c.birthDate===d.birthDate){hit=c;break;}}}
+        if(hit){link(hit,d);continue;}
+        /* ② 생일 없는 미링크 카드가 정확히 1명 → 승격 링크 (명함고객 승격) */
+        var free=[];for(j=0;j<same.length;j++){c=same[j];if(!c.fccId&&!c.birthDate)free.push(c);}
+        if(free.length===1){if(d.birthDate){free[0].birthDate=d.birthDate;free[0].birthUnknown=false;}link(free[0],d);added++;continue;}
+        /* ③ 그 외 → 문서 1건당 카드 1장 신규 (fc_clients와 1:1 — 누락 없음) */
+        create(d);
+      }
+      if(big)mpcAdoptChip("고객 불러오는 중 "+i+" / "+todo.length);
+      if(i<todo.length){setTimeout(step,0);return;}   /* 브라우저에 제어 양보 — 화면 정지 방지 */
+      mpcAdoptChip(null);cb(added);
+    };
+    if(big){mpcAdoptChip("고객 불러오는 중 0 / "+todo.length);mpcAdoptSnapshot(function(){setTimeout(step,0);});}
+    else step();
+  }
   function mpcFccAdopt(ix){   /* ★ v3 (2026-07-18): skip 목록 제거(100% 동기 — 과거 "지도에서만 삭제" 고객도 재편입), fccId·호칭·계약 전체필드 이식 */
     var added=0;
     Object.keys(ix).forEach(function(k){var p=k.indexOf("|");if(p<0)return;var nm=k.slice(0,p),bd=k.slice(p+1);
@@ -9979,14 +10045,14 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
       var upP=(upList.length&&window.fccBridge.upsert)?window.fccBridge.upsert(upList):Promise.resolve(null);
       var _after=function(ids){
         if(ids){for(var ui=0;ui<upRef.length;ui++){if(ids[ui]&&upRef[ui].fccId!==ids[ui]){upRef[ui].fccId=ids[ui];custPut(upRef[ui]);dirty=true;}}}
-        /* ④ fc_clients에만 있는 고객 편입 */
-        var _added=mpcFccAdopt(pd.idx);
-        var _re=function(){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}};
-        if(_added){mpcDedup().then(_re);}else _re();
-        if(dirty||_added)mpcGdPush();
+        /* ④ fc_clients에만 있는 고객 편입 — ★ [2026-07-24] 문서 단위·배치 비동기 (누락/정지 방지) */
         if(removed)toast("마이페이지에서 삭제된 고객 "+removed+"명을 지도에서도 정리했어요");
         if(upList.length)toast("지도 고객 "+upList.length+"명의 정보를 내고객관리와 맞췄어요");
-        if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
+        mpcFccAdoptAsync(pd.list,function(_added){
+          var _re=function(){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}};
+          if(_added){mpcDedup().then(_re);}else{_re();if(dirty)mpcGdPush();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
+          if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
+        });
       };
       upP.then(_after,function(){_after(null);});
     }).catch(function(){});}
