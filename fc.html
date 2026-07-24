@@ -4279,6 +4279,20 @@ async function scFetchAll(colName,conds){
     catch(_e){return out;}
   }
 }
+/* ★ 온라인 슬러그 일괄 조회 — 목록 1회당 쿼리 1건 (기존: 인원수만큼 N건) */
+async function scOnlineSet(){
+  const set=new Set();
+  try{
+    const ds=await scFetchAll('p2p_presence',[where('online','==',true)]);
+    const now=Date.now();
+    ds.forEach(d=>{
+      const v=d.data()||{};if(v.role==='fc'||!v.slug)return;
+      const t=v.ts;const ms=(t&&t.toMillis)?t.toMillis():((t&&t.toDate)?t.toDate().getTime():0);
+      if(now-ms<90000)set.add(v.slug);
+    });
+  }catch(e){console.warn('[sc-online]',e.message);}
+  return set;
+}
 /* ★ 섹션 캐시 + 검색 렌더링 — 목록은 잘리지 않고 전부 유지, 키워드로 필터만 함 */
 let _scSections=[],_scKw='';
 function scSecHead(t,c){return '<div style="font-size:9px;font-weight:800;color:'+(c||'#8a877f')+';letter-spacing:1px;margin:14px 4px 6px">'+t+'</div>';}
@@ -4317,6 +4331,7 @@ async function scLoadList(){
   const lb=document.getElementById('scListBody');if(!lb)return;
   _scSections=[];
   try{
+    const _onSet=await scOnlineSet();          /* ★ 온라인 판정 1회 일괄 조회 */
     if(window._ccSlug){
       const fcName=(fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자';
       const fcOn=await lcFcOnline();
@@ -4324,16 +4339,14 @@ async function scLoadList(){
       let subs=[];
       try{const ds=await scFetchAll('client_channels',[where('refSlug','==',window._ccSlug)]);ds.forEach(d=>{const c=d.data();subs.push({slug:d.id,name:(c.brand&&c.brand.title)||d.id});});}catch(_e){}
       if(subs.length){
-        const ons=await Promise.all(subs.map(s=>scClientOnline(s.slug)));
-        _scSections.push({title:'내가 소개한 사람',items:subs.map((s,i)=>({type:'client',peerId:s.slug,name:s.name,online:ons[i]}))});
+        _scSections.push({title:'내가 소개한 사람',items:subs.map(s=>({type:'client',peerId:s.slug,name:s.name,online:_onSet.has(s.slug)}))});
       }
       /* ★ 대화한 사람 — 위 섹션에 없는 귀속 상대 영구 표시 */
       const _cts=await scLoadContacts();
       const _shown=new Set(subs.map(s=>s.slug));_shown.add(loginId);
       const _rest=[..._cts.values()].filter(c=>!_shown.has(c.id)).sort((a,b)=>b.lastChatAt-a.lastChatAt);
       if(_rest.length){
-        const cons=await Promise.all(_rest.map(c=>c.type==='fc'?lcFcOnline():scClientOnline(c.id)));
-        _scSections.push({title:'대화한 사람',items:_rest.map((c,i)=>({type:c.type,peerId:c.id,name:c.name,sub:'이전에 대화한 상대',online:cons[i]}))});
+        _scSections.push({title:'대화한 사람',items:_rest.map(c=>({type:c.type,peerId:c.id,name:c.name,sub:'이전에 대화한 상대',online:c.type==='fc'?fcOn:_onSet.has(c.id)}))});
       }
     } else if(isOwnerView && loginId){
       let direct=[],knocks=[];
@@ -4347,16 +4360,13 @@ async function scLoadList(){
       const _ctSlugs=new Set(_ctList.map(c=>c.id));
       const knocksF=knocks.filter(k=>!_dirSlugs.has(k.slug)&&!_ctSlugs.has(k.slug));  /* ★ 귀속 표시분 제외 */
       if(direct.length){
-        const dons=await Promise.all(direct.map(s=>scClientOnline(s.slug)));
-        _scSections.push({title:'내 직접 고객',color:'#B49A64',items:direct.map((s,i)=>({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:dons[i],hasKnock:_knSlugs.has(s.slug)}))});
+        _scSections.push({title:'내 직접 고객',color:'#B49A64',items:direct.map(s=>({type:'client',peerId:s.slug,name:s.name,badge:'직접',sub:'먼저 대화를 걸 수 있어요',online:_onSet.has(s.slug),hasKnock:_knSlugs.has(s.slug)}))});
       }
       if(_ctList.length){                                                  /* ★ 대화한 고객 — 영구 유지 */
-        const cons=await Promise.all(_ctList.map(c=>scClientOnline(c.id)));
-        _scSections.push({title:'대화한 고객',color:'#B49A64',items:_ctList.map((c,i)=>({type:'client',peerId:c.id,name:c.name,badge:'소개',sub:'이전에 대화한 고객',online:cons[i],hasKnock:_knSlugs.has(c.id)}))});
+        _scSections.push({title:'대화한 고객',color:'#B49A64',items:_ctList.map(c=>({type:'client',peerId:c.id,name:c.name,badge:'소개',sub:'이전에 대화한 고객',online:_onSet.has(c.id),hasKnock:_knSlugs.has(c.id)}))});
       }
-      const kons=knocksF.length?await Promise.all(knocksF.map(k=>scClientOnline(k.slug))):[];
       _scSections.push({title:'소개로 연결 — 말을 걸어온 사람만',
-        items:knocksF.map((k,i)=>({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:kons[i]})),
+        items:knocksF.map(k=>({type:'client',peerId:k.slug,name:k.name,badge:'소개',knock:true,online:_onSet.has(k.slug)})),
         empty:'<div style="text-align:center;color:#B9B5AA;font-size:10.5px;padding:14px 12px;line-height:1.6">소개로 연결된 분들은 먼저 말을 걸기 전까지<br>여기에 표시되지 않아요</div>'});
     }
   }catch(_e){lb.innerHTML='<div style="text-align:center;color:#9CA3AF;font-size:11px;padding:24px">목록을 불러오지 못했습니다</div>';return;}
@@ -4728,7 +4738,6 @@ function scSelfName(){
   if(window._ccSlug)return ((window._ccBrand&&window._ccBrand.title)||window._ccSlug);
   return ((fcData&&fcData.name)||(consultantData&&consultantData.name)||loginId||'담당자');
 }
-function scPairId(a,b){const p=[a,b].sort();return p[0]+'__'+p[1];}
 async function scSaveContact(){
   try{
     if(!_scPeer||!_scPeer.id)return;
@@ -8890,7 +8899,7 @@ init();
   <div id="scSearchBar" style="display:none;flex:none;padding:10px 12px 2px;background:#F4F6FA">
     <div style="position:relative;display:flex;align-items:center">
       <span style="position:absolute;left:12px;font-size:13px;color:#9CA3AF;pointer-events:none">🔍</span>
-      <input id="scSearchInput" type="search" placeholder="이름으로 검색" oninput="scOnSearch(this.value)" autocomplete="off" style="width:100%;border:1px solid #E1E6EF;border-radius:999px;padding:9px 62px 9px 32px;font-size:13px;outline:none;font-family:inherit;background:#fff;box-sizing:border-box">
+      <input id="scSearchInput" type="search" placeholder="이름으로 검색" oninput="scOnSearch(this.value)" autocomplete="off" style="width:100%;border:1px solid #E1E6EF;border-radius:999px;padding:9px 62px 9px 32px;font-size:13px;outline:none;font-family:inherit;background:#fff;box-sizing:border-box;-webkit-appearance:none;appearance:none">
       <button id="scSearchClear" onclick="scClearSearch()" aria-label="검색어 지우기" style="display:none;position:absolute;right:44px;border:none;background:none;color:#9CA3AF;font-size:13px;cursor:pointer;padding:2px 4px">✕</button>
       <span id="scSearchCount" style="position:absolute;right:13px;font-size:10px;font-weight:700;color:#B49A64;pointer-events:none"></span>
     </div>
