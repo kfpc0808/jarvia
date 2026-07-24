@@ -11402,7 +11402,7 @@ window.mrUploadSlides=async function(){
     const task=uploadBytesResumable(sR,f,{contentType:'text/html',cacheControl:'public, max-age=300'});
     await new Promise((res,rej)=>task.on('state_changed',s=>{st.textContent=Math.round(s.bytesTransferred/s.totalBytes*100)+'%';},rej,res));
     const url=await getDownloadURL(sR);
-    await setDoc(doc(db,'monthly_reports',m),{month:m,slidesUrl:url,slidesUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
+    await setDoc(doc(db,'monthly_reports',m),{month:m,slidesUrl:url,slidesFile:f.name,slidesUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
     st.textContent='✅ 완료';toast('요약본 업로드 완료');mrLoad();
   }catch(e){st.textContent='';toast('업로드 실패: '+e.message,'error');console.error(e);}
 };
@@ -11454,17 +11454,17 @@ window.mrAssets=async function(m){
         if(p.status==='error')prog.style.color='#C0392B';}
       else prog.textContent=x.generated?'':'(수동 업로드 호)';
     }catch(_){}
-    const item=(label,url,icon)=>url?`<a class="btn btn-sm" style="justify-content:flex-start;text-align:left" href="${url}" target="_blank" rel="noopener">${icon} ${label}</a>`:'';
+    const item=(label,url,icon,fn)=>url?`<button class="btn btn-sm" style="justify-content:flex-start;text-align:left" onclick="prDownload('${esc(url)}','${esc(fn)}')">${icon} ${label} ⬇</button>`:'';
     const su=x.scriptUrls||{},au=x.audio||{};
     let html='';
-    html+=item('문서 HTML (report.html)',x.reportUrl,'📄');
-    html+=item('요약본 HTML (slides.html)',x.slidesUrl,'📊');
-    html+=item('NotebookLM 대본 (track00용)',su.notebooklm,'🎙');
-    for(let i=1;i<=9;i++)html+=item(`TTS 대본 track0${i}.txt`,su['track0'+i],'📝');
-    html+=item('기획 JSON (plan.json)',x.planUrl,'🧩');
-    html+=item('팩트체크 리포트',x.factUrl,'🔍');
-    html+=item('수집 데이터 (collected.json)',x.collectedUrl,'🗂');
-    Object.keys(au).sort().forEach(k=>{html+=item(`오디오 ${k}${k==='track00'?'.m4a':'.mp3'}`,au[k],'🎧');});
+    html+=item(`문서 HTML (report.html)${x.reportFile?' · 원본: '+esc(x.reportFile):''}`,x.reportUrl,'📄',`${m}_report.html`);
+    html+=item(`요약본 HTML (slides.html)${x.slidesFile?' · 원본: '+esc(x.slidesFile):''}`,x.slidesUrl,'📊',`${m}_slides.html`);
+    html+=item('NotebookLM 대본 (track00용)',su.notebooklm,'🎙',`${m}_track00_대본.txt`);
+    for(let i=1;i<=9;i++)html+=item(`TTS 대본 track0${i}.txt`,su['track0'+i],'📝',`${m}_track0${i}.txt`);
+    html+=item('기획 JSON (plan.json)',x.planUrl,'🧩',`${m}_plan.json`);
+    html+=item('팩트체크 리포트',x.factUrl,'🔍',`${m}_factcheck.html`);
+    html+=item('수집 데이터 (collected.json)',x.collectedUrl,'🗂',`${m}_collected.json`);
+    Object.keys(au).sort().forEach(k=>{html+=item(`오디오 ${k}${k==='track00'?'.m4a':'.mp3'}`,au[k],'🎧',`${m}_${k}${k==='track00'?'.m4a':'.mp3'}`);});
     body.innerHTML=html||'<span style="font-size:12px;color:#888">등록된 산출물 URL이 없습니다 (수동 업로드 호는 문서·요약본·오디오만 표시됩니다).</span>';
   }catch(e){body.innerHTML='<span style="font-size:12px;color:#C0392B">로드 실패: '+e.message+'</span>';}
 };
@@ -11476,7 +11476,7 @@ window.mrLoad=async function(){
     tb.innerHTML=snap.docs.map(d=>{const x=d.data();const audioN=Object.keys(x.audio||{}).length;
       const sb=x.status==='published'?'<span class="badge" style="background:#E9F6F0;color:#177A4C">게시중</span>':'<span class="badge" style="background:#F9F3E2;color:#8A6A1F">검수 대기</span>';
       const tgl=x.status==='published'?`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','ai_draft')">내리기</button>`:`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','published')">게시</button>`;
-      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      return `<tr><td><b>${d.id}</b></td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}</small>`:''}`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
   }catch(e){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
