@@ -93,7 +93,7 @@ body{font-family:Pretendard,"Noto Sans KR","Apple SD Gothic Neo",sans-serif;back
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,collection,doc,getDoc,getDocs,query,where,orderBy,limit}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,collection,doc,getDoc,getDocs,query,where,orderBy,limit,addDoc,serverTimestamp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 /* ═══ 오픈 스위치 — 정규회원(컨홈·자비아멤버십·지사장·이너) 오픈 (2026-07-24) ═══ */
 const MR_OPEN=true;
@@ -110,12 +110,13 @@ function gateMsg(ic,title,body,btnHtml){
 
 onAuthStateChanged(auth,async user=>{
   if(!user){gateMsg('📊','정규회원 전용 서비스입니다','월간 영업전략 리포트는 정규회원 전용 서비스입니다.<br>로그인 후 이용해 주세요.');return;}
-  let lid='',role='';
+  let lid='',role='',uname='';
   try{
     const u=await getDoc(doc(db,'users',user.uid));
-    if(u.exists()){lid=u.data().loginId||'';role=u.data().role||'';}
-    if(!lid){const q1=await getDocs(query(collection(db,'users'),where('userId','==',user.uid),limit(1)));if(!q1.empty){const d=q1.docs[0].data();lid=d.loginId||'';role=role||d.role||'';}}
+    if(u.exists()){lid=u.data().loginId||'';role=u.data().role||'';uname=u.data().name||'';}
+    if(!lid){const q1=await getDocs(query(collection(db,'users'),where('userId','==',user.uid),limit(1)));if(!q1.empty){const d=q1.docs[0].data();lid=d.loginId||'';role=role||d.role||'';uname=uname||d.name||'';}}
   }catch(e){console.warn(e);}
+  _fbUser={uid:user.uid,loginId:lid,name:uname};
   try{const aq=await getDocs(query(collection(db,'admins'),where('loginId','==',lid),limit(1)));isAdmin=!aq.empty;}catch(e){}
   if(!(isAdmin||MR_ROLES.includes(role))){
     gateMsg('📊','정규회원 전용 서비스입니다','월간 영업전략 리포트는 정규회원<br>(컨설턴트 홈페이지 · 자비아 멤버십 · 지사장 · 이너 회원)<br>전용 서비스입니다.');
@@ -156,6 +157,33 @@ window.addEventListener('message',e=>{
   }
 });
 let curR=null,curMode='doc';
+let _fbUser=null;   /* 피드백 저장용 사용자 컨텍스트 (게이트 통과 시 설정) */
+
+/* ═══ 리포트 → 피드백 저장 대행 + 내 피드백 회신 (2026-07-24) ═══ */
+async function fbSave(p){
+  const f=$('frame');
+  if(!_fbUser){if(f&&f.contentWindow)f.contentWindow.postMessage({mrFbSent:'fail'},'*');return;}
+  try{
+    await addDoc(collection(db,'mr_feedback'),{
+      uid:_fbUser.uid,loginId:_fbUser.loginId,name:_fbUser.name,
+      month:(curR&&curR.id)||p.month||'',type:p.issue?'이슈반응':'주제제안',
+      issue:String(p.issue||'').slice(0,60),topic:String(p.topic||'').slice(0,300),
+      status:'접수',reply:'',createdAt:serverTimestamp()
+    });
+    if(f&&f.contentWindow)f.contentWindow.postMessage({mrFbSent:'ok'},'*');
+    fbPushMine();
+  }catch(e){console.warn('fbSave',e);if(f&&f.contentWindow)f.contentWindow.postMessage({mrFbSent:'fail'},'*');}
+}
+async function fbPushMine(){
+  if(!_fbUser||!curR)return;
+  try{
+    const snap=await getDocs(query(collection(db,'mr_feedback'),where('uid','==',_fbUser.uid),where('month','==',curR.id),limit(20)));
+    const list=snap.docs.map(d=>{const x=d.data();return{issue:x.issue||'',topic:x.topic||'',status:x.status||'접수',reply:x.reply||'',t:x.createdAt&&x.createdAt.toMillis?x.createdAt.toMillis():0};})
+      .sort((a,b)=>b.t-a.t);
+    const f=$('frame');if(f&&f.contentWindow)f.contentWindow.postMessage({mrFbList:list},'*');
+  }catch(e){console.warn('fbPushMine',e);}
+}
+window.addEventListener('message',e=>{const d=e.data||{};if(d.mrFeedback)fbSave(d.mrFeedback);});
 window.setMode=function(mode){
   if(!curR)return;
   if(mode==='slide'&&!curR.slidesUrl){return;}
@@ -163,6 +191,7 @@ window.setMode=function(mode){
   const f=$('frame');
   f.classList.remove('hidden');   /* ★ 버그 수정: 토글 도입 시 누락됐던 iframe 표시 */
   f.src=(mode==='slide'?curR.slidesUrl:curR.reportUrl)+'#embed';
+  f.onload=function(){if(mode==='doc')setTimeout(fbPushMine,800);};
   $('btnDoc').style.opacity=mode==='doc'?'1':'0.5';
   $('btnSlide').style.opacity=mode==='slide'?'1':'0.5';
   $('btnPresent').classList.toggle('hidden',mode!=='slide'); /* 발표는 요약본 전용 */

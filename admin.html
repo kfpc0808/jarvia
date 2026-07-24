@@ -873,6 +873,11 @@
         <p style="font-size:11.5px;color:#888;margin:0 0 12px">파일을 내려받아 수정한 뒤, 위의 업로드 칸(같은 발행월)으로 다시 올리면 덮어쓰기됩니다. 게시 상태는 유지됩니다.</p>
         <div id="mr-assets-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px"></div>
       </div>
+
+      <!-- ═══ 📮 사용자 피드백 관리 (2026-07-24) — 리포트 내 [의견 보내기] 수집분 ═══ -->
+      <div class="toolbar" style="margin-top:26px"><strong style="font-size:14px">📮 사용자 피드백 <span id="mrfb-badge" style="display:none;background:#C0392B;color:#fff;border-radius:10px;font-size:11px;padding:2px 9px;margin-left:6px"></span></strong><button class="btn btn-sm" onclick="mrFbLoad()">🔄 새로고침</button></div>
+      <p style="font-size:11.5px;color:#888;margin:4px 0 10px">상태를 접수 → 진행 → 완료로 관리하고, 답변을 입력해 [저장]하면 작성자의 리포트 화면(MY FEEDBACK)에 그대로 표시됩니다.</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:120px">일시</th><th style="width:110px">작성자</th><th style="width:70px">발행월</th><th style="width:80px">유형</th><th>내용</th><th style="width:90px">상태</th><th style="width:260px">답변</th><th style="width:70px">저장</th></tr></thead><tbody id="mrfb-tbody"><tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:16px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
     </div>
 
     <div id="p-master-guide" class="panel hidden">
@@ -11374,7 +11379,40 @@ window.mrInit=function(){
   const el=$('mr-month');
   /* 기본값 = 익월 (당월 말일에 다음 달 호를 올리는 운영 흐름) — 1일 고정 후 +1개월로 말일·연말 롤오버 안전 */
   if(el&&!el.value){const d=new Date(Date.now()+9*3600*1000);d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()+1);el.value=''+d.getUTCFullYear()+String(d.getUTCMonth()+1).padStart(2,'0');}
-  mrLoad();
+  mrLoad();mrFbLoad();
+};
+/* ═══ 📮 사용자 피드백 관리 (2026-07-24) ═══ */
+let _mrFb=[];
+window.mrFbLoad=async function(){
+  const tb=$('mrfb-tbody');tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:16px">불러오는 중...</td></tr>';
+  try{
+    const snap=await getDocs(query(collection(db,'mr_feedback'),orderBy('createdAt','desc'),limit(200)));
+    _mrFb=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const open=_mrFb.filter(x=>x.status!=='완료').length;
+    const bd=$('mrfb-badge');if(bd){bd.style.display=open?'inline-block':'none';bd.textContent='미완료 '+open;}
+    if(!_mrFb.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:16px">접수된 피드백이 없습니다.</td></tr>';return;}
+    tb.innerHTML=_mrFb.map(x=>{
+      const body=esc(((x.issue?'['+x.issue+'] ':'')+(x.topic||'')).trim()||'—');
+      const sel=['접수','진행','완료'].map(s=>`<option ${x.status===s?'selected':''}>${s}</option>`).join('');
+      return `<tr>
+        <td style="font-size:11px;white-space:nowrap">${fdatetime(x.createdAt)}</td>
+        <td>${esc(x.name||'')}<br><small style="color:#888">${esc(x.loginId||'')}</small></td>
+        <td>${esc(x.month||'')}</td>
+        <td>${esc(x.type||'')}</td>
+        <td style="font-size:12px;line-height:1.55">${body}</td>
+        <td><select id="mrfb-st-${x.id}" style="width:80px">${sel}</select></td>
+        <td><input id="mrfb-rp-${x.id}" value="${esc(x.reply||'')}" placeholder="작성자에게 표시될 답변" style="width:100%"></td>
+        <td><button class="btn btn-sm" onclick="mrFbSave('${x.id}')">저장</button></td>
+      </tr>`;
+    }).join('');
+  }catch(e){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:#C0392B;padding:16px">로드 실패: '+esc(e.message)+'</td></tr>';}
+};
+window.mrFbSave=async function(id){
+  const st=$('mrfb-st-'+id),rp=$('mrfb-rp-'+id);
+  try{
+    await updateDoc(doc(db,'mr_feedback',id),{status:st.value,reply:rp.value.trim(),repliedAt:serverTimestamp()});
+    toast('피드백 처리 저장 완료','success');mrFbLoad();
+  }catch(e){toast('저장 실패: '+e.message,'error');}
 };
 function mrMonth(){const m=($('mr-month').value||'').trim();if(!/^20\d{4}$/.test(m)){toast('발행월을 YYYYMM 형식으로 입력하세요 (예: 202608)','error');return null;}return m;}
 window.mrUploadHtml=async function(){
