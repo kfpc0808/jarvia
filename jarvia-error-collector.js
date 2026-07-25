@@ -68,15 +68,24 @@
     function ctx() {
       var loginId = "";
       try {
-        var q = new URLSearchParams(location.search);
-        loginId = q.get("fc") || q.get("id") || "";
+        // (1) /@아이디 채널 경로 (fc.html) — 채널 주인 우선
+        var pm = location.pathname.match(/^\/@([^\/\?#]+)/);
+        if (pm && pm[1]) loginId = pm[1];
+        // (2) 로그인한 회원 정보 (index.html 등) — 페이지가 전역에 올려둔 meData.loginId
         if (!loginId) {
-          var seg = location.pathname.split("/").filter(Boolean);
-          if (seg.length) loginId = seg[seg.length - 1].replace(/\.html?$/i, "");
+          try { if (window.meData && window.meData.loginId) loginId = String(window.meData.loginId); } catch (e) {}
         }
+        // (3) ?id / ?fc 파라미터
+        if (!loginId) {
+          var q = new URLSearchParams(location.search);
+          loginId = q.get("id") || q.get("fc") || "";
+        }
+        try { loginId = decodeURIComponent(loginId); } catch (e) {}
+        // .html 제거 · 선행 @ 제거 · 공백 제거
+        loginId = (loginId || "").split("/")[0].replace(/\.html?$/i, "").replace(/^@+/, "").trim();
       } catch (e) {}
       return {
-        consultantLoginId: (loginId || "").slice(0, 60),
+        consultantLoginId: loginId.slice(0, 60),
         viewer: (window.__jvViewer || "unknown"),   // 페이지가 'owner'/'customer'로 지정 가능
         screen: (window.__jvScreen || CFG.page),
         url: (location.pathname + location.search).slice(0, 300)
