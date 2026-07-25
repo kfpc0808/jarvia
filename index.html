@@ -125,6 +125,28 @@
   <script src="sms-core.js"></script>
 </head>
 <body>
+<!-- ★ [2026-07-25] action 딥링크 이동 게이트 — fc.html 등에서 ?action=…으로 들어올 때
+     메인 화면 → 마이페이지 기본탭 → 목표탭 순으로 3단계가 노출되던 깜빡임을 가린다.
+     인증 로직은 건드리지 않고 화면만 덮는다. 9초 안전 해제 포함. -->
+<div id="actGate" style="display:none;position:fixed;inset:0;z-index:99999;background:#0F1B33;color:#C9A96E;flex-direction:column;align-items:center;justify-content:center;gap:14px">
+  <div style="width:34px;height:34px;border:3px solid rgba(201,169,110,.25);border-top-color:#C9A96E;border-radius:50%;animation:actGateSpin .8s linear infinite"></div>
+  <div id="actGateTxt" style="font-size:14px;font-weight:800">이동 중…</div>
+</div>
+<style>@keyframes actGateSpin{to{transform:rotate(360deg)}}</style>
+<script>
+(function(){
+  window.__actGateOff=function(){try{var e=document.getElementById('actGate');if(e)e.style.display='none';}catch(_e){}};
+  try{
+    var LBL={'clients':'내 고객 관리로 이동 중…','views':'열람 현황으로 이동 중…','charge':'충전 화면으로 이동 중…','channel-manage':'채널 관리로 이동 중…','client-report':'고객용 데일리 Report로 이동 중…'};
+    var a=new URLSearchParams(location.search).get('action');
+    if(!a||!LBL[a])return;
+    var g=document.getElementById('actGate');if(!g)return;
+    var t=document.getElementById('actGateTxt');if(t)t.textContent=LBL[a];
+    g.style.display='flex';
+    setTimeout(window.__actGateOff,9000);   /* 안전장치 — 어떤 경로로도 화면이 잠기지 않게 */
+  }catch(_e){}
+})();
+</script>
 
 <header id="app-header" class="header hidden">
   <div class="header-inner">
@@ -4921,6 +4943,7 @@ async function setupPlatformPWA(){
 }
 
 onAuthStateChanged(auth,async u=>{
+  window.__authResolved=true;   /* ★ [2026-07-25] 인증 상태 확정 — action 딥링크 스케줄러가 비로그인 판정을 즉시 내리도록 (동작 영향 없음) */
   if(u){
     me=u;window.me=u;window.meData=null;
     // 관리자가 사용자페이지를 직접 열었을 때: 리다이렉트하지 않고 열람 모드로 진입
@@ -7646,6 +7669,28 @@ window.fccSaveAll=async function(){
   if(fccBoardY)fccRenderBoard();
 };
 /* ★ 내 고객 관리 진입 분기 — fc.html ⋮ 패널에서 ?action=clients로 이동 시 호출 (channel-manage와 동일 패턴) */
+/* ★ [2026-07-25] action 딥링크 공용 헬퍼
+   기존 setTimeout(fn,1500) 고정 대기가 "메인 화면이 먼저 다 그려진 뒤 이동"의 원인이었다.
+   _actWhenReady: 인증(me·meData)이 준비되는 즉시 실행 — 비로그인 확정 시에도 즉시 실행 (최대 6초)
+   _actGoTab   : 목표 탭이 실제로 노출될 때까지 기다렸다가 전환 + 게이트 해제 (기존 300ms 추정 제거) */
+function _actWhenReady(fn){
+  var n=0;
+  (function tick(){
+    var _m=window.me||(typeof me!=='undefined'?me:null);
+    var _d=window.meData||(typeof meData!=='undefined'?meData:null);
+    if((_m&&_d)||(window.__authResolved&&!_m)||++n>120){fn();return;}   /* 50ms×120 = 6초 */
+    setTimeout(tick,50);
+  })();
+}
+function _actGoTab(tabId){
+  var n=0;
+  (function tick(){
+    var t=document.getElementById(tabId);
+    if(t&&t.style.display!=='none'){try{mpTab(t);}catch(_e){}if(window.__actGateOff)window.__actGateOff();return;}
+    if(++n>60){if(t){try{mpTab(t);}catch(_e){}}if(window.__actGateOff)window.__actGateOff();return;}   /* 50ms×60 = 3초 */
+    setTimeout(tick,50);
+  })();
+}
 async function handleClientsAction(){
   const _params = new URLSearchParams(window.location.search);
   if(_params.get('action') !== 'clients') return;
@@ -7655,21 +7700,20 @@ async function handleClientsAction(){
   const _me = window.me || (typeof me!=='undefined'?me:null);
   const _md = window.meData || (typeof meData!=='undefined'?meData:null);
   if(!_me){
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-login-prompt'), 600);
     return;
   }
   const _ok = _md && (_md.role==='admin'||_md.role==='jarvia_member'||_md.role==='jarvia_inner'||_md.role==='jarvia_report'||_md.role==='inner_circle'||_md.role==='con_homepage'||_md.role==='branch_manager'||_md.role==='free_user');
   if(_ok){
     nav('mypage');
-    setTimeout(()=>{
-      const _t = $('tab-fc-clients');
-      if(_t) mpTab(_t);
-    }, 300);
+    _actGoTab('tab-fc-clients');
   }else{
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-upgrade-prompt'), 600);
   }
 }
-window.addEventListener('load', ()=>{ setTimeout(handleClientsAction, 1500); });
+window.addEventListener('load', ()=>{ _actWhenReady(handleClientsAction); });
 
 /* ★ 충전 진입 분기 — fc.html AI 비서 '충전하러 가기'에서 ?action=charge로 이동 시 호출 (clients와 동일 패턴) 2026-07-19 */
 async function handleChargeAction(){
@@ -7685,13 +7729,14 @@ async function handleChargeAction(){
     _me = window.me || (typeof me!=='undefined'?me:null);
   }
   if(!_me){
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-login-prompt'), 300);
     return;
   }
   nav('mypage');
-  setTimeout(()=>{ try{ openCharge(); }catch(_e){} }, 500);
+  setTimeout(()=>{ try{ openCharge(); }catch(_e){} if(window.__actGateOff)window.__actGateOff(); }, 500);
 }
-window.addEventListener('load', ()=>{ setTimeout(handleChargeAction, 1500); });
+window.addEventListener('load', ()=>{ _actWhenReady(handleChargeAction); });
 
 /* ★ 열람 현황 진입 분기 — fc.html ⋮ 패널에서 ?action=views로 이동 시 호출 (clients와 동일 패턴) */
 async function handleViewsAction(){
@@ -7703,21 +7748,20 @@ async function handleViewsAction(){
   const _me = window.me || (typeof me!=='undefined'?me:null);
   const _md = window.meData || (typeof meData!=='undefined'?meData:null);
   if(!_me){
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-login-prompt'), 600);
     return;
   }
   const _ok = _md && (_md.role==='admin'||_md.role==='jarvia_member'||_md.role==='jarvia_inner'||_md.role==='jarvia_report'||_md.role==='inner_circle'||_md.role==='con_homepage'||_md.role==='branch_manager'||_md.role==='free_user');
   if(_ok){
     nav('mypage');
-    setTimeout(()=>{
-      const _t = $('tab-fc-views');
-      if(_t) mpTab(_t);
-    }, 300);
+    _actGoTab('tab-fc-views');
   }else{
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-upgrade-prompt'), 600);
   }
 }
-window.addEventListener('load', ()=>{ setTimeout(handleViewsAction, 1500); });
+window.addEventListener('load', ()=>{ _actWhenReady(handleViewsAction); });
 
 /* ═══ 📊 열람 현황 탭 (Phase 2) — 2026-06-11 ═══ */
 const FCV_CARD_LABELS={cardDailyLink:'고객용 데일리',cardCalendar:'일정 캘린더',cardSim:'시뮬레이션',cardCurated:'콘텐츠리스트',cardDashboard:'재무대시보드',cardMorning:'아침독서',cardCert:'자격증',cardResource:'자료실',cardReview:'후기',sim_fv:'미래가치 계산기',sim_pv:'현재가치 계산기',sim_rt:'은퇴자금 시뮬레이션',sim_sv:'적립 시뮬레이션',sim_ih:'상속세 시뮬레이션',calc_pension:'국민연금 계산기',calc_retire:'노후 필요자금',calc_goalback:'목표 금액 역산',calc_house:'주택연금',calc_fv:'미래가치',calc_pv:'현재가치',calc_accum:'적립 시뮬',calc_compound:'복리 계산기',calc_rule72:'72의 법칙',calc_irp:'연금저축·IRP',calc_pensiontax:'연금소득세',calc_needins:'필요 보장액',calc_medself:'실손 자기부담금',calc_lifecmp:'종신 vs 정기',calc_loan:'대출 이자',calc_saving:'예·적금 이자',calc_salary:'연봉 실수령액',calc_dutch:'더치페이',calc_percent:'할인가 계산',calc_retiretax:'퇴직소득세',calc_inherit:'상속세',calc_gift:'증여세',calc_giftcmp:'증여 vs 상속',calc_transfer:'양도소득세',calc_jeonse:'전월세 전환',calc_dsr:'대출한도(DSR)',calc_ltv:'LTV·DTI',calc_pyeong:'평↔㎡',calc_bmi:'BMI',calc_bmr:'기초대사량',calc_stdwt:'표준체중',calc_burn:'칼로리 소모',calc_unit:'단위 변환',calc_age:'만 나이',myplaces:'나의 장소',lc_open:'생활변화 점검 열기',quiz_open:'자가진단 열기',kmi_open:'KMI 종합검진 안내',diagnosis_daily:'재무진단 신청 폼'};
@@ -13832,21 +13876,20 @@ async function handleChannelManageAction(){
   const _me = window.me || (typeof me!=='undefined'?me:null);
   const _md = window.meData || (typeof meData!=='undefined'?meData:null);
   if(!_me){
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-login-prompt'), 600);
     return;
   }
   const _is6Role = _md && ['admin','jarvia_member','jarvia_inner','inner_circle','branch_manager','con_homepage','free_user'].includes(_md.role);
   if(_is6Role){
     nav('mypage');
-    setTimeout(()=>{
-      const _tab = document.getElementById('tab-channel');
-      if(_tab) mpTab(_tab);
-    }, 300);
+    _actGoTab('tab-channel');
   }else{
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-upgrade-prompt'), 600);
   }
 }
-window.addEventListener('load', ()=>{ setTimeout(handleChannelManageAction, 1500); });
+window.addEventListener('load', ()=>{ _actWhenReady(handleChannelManageAction); });
 /* ★ 고객용데일리Report 편집 진입 분기 — client-daily.html 편집 버튼에서 ?action=client-report로 이동 시 호출
    - 비로그인: 로그인 모달
    - 고객리포트 자격 6 role(jarvia_report 포함): 마이페이지 → 고객용데일리Report 탭으로 이동
@@ -13862,6 +13905,7 @@ async function handleClientReportAction(){
   const _me = window.me || (typeof me!=='undefined'?me:null);
   const _md = window.meData || (typeof meData!=='undefined'?meData:null);
   if(!_me){
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-login-prompt'), 600);
     return;
   }
@@ -13869,15 +13913,13 @@ async function handleClientReportAction(){
   const _isReportRole = _md && ['jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager','admin','free_user'].includes(_md.role);
   if(_isReportRole){
     nav('mypage');
-    setTimeout(()=>{
-      const _tab = document.getElementById('tab-client-profile');
-      if(_tab) mpTab(_tab);
-    }, 300);
+    _actGoTab('tab-client-profile');
   }else{
+    if(window.__actGateOff)window.__actGateOff();
     setTimeout(()=>openM('mdl-upgrade-prompt'), 600);
   }
 }
-window.addEventListener('load', ()=>{ setTimeout(handleClientReportAction, 1500); });
+window.addEventListener('load', ()=>{ _actWhenReady(handleClientReportAction); });
 </script>
 <script>
 /* ═══════════ [2026-07-20 메인 개편 v1] 신규 화면 스크립트 (jm-) ═══════════
