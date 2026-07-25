@@ -6240,7 +6240,9 @@ function aiOpen(){
     +'<div style="display:flex;gap:7px;align-items:flex-end">'
     +'<textarea id="aiInput" rows="1" placeholder="내가 등록한 고객 기록에서만 찾아 드려요" style="flex:1;border:1px solid #D8DCE5;border-radius:18px;padding:10px 14px;font-size:14px;line-height:1.55;outline:0;min-width:0;resize:none;font-family:inherit;max-height:120px;overflow-y:auto;box-sizing:border-box"></textarea>'
     +'<button type="button" id="aiSendBtn" style="width:38px;height:38px;border-radius:50%;background:#15294A;border:0;color:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-arrow-up" style="font-size:17px"></i></button></div>'
-    +'<div style="font-size:10px;color:#B7BDC9;text-align:center;margin-top:6px"><i class="ti ti-microphone" style="font-size:10px"></i> 키보드 아래 마이크를 누르면 음성으로도 입력돼요</div>'
+    +'<div id="aiRosterMeter" style="padding:0 2px"></div>'
+    +'<div style="font-size:10px;color:#B7BDC9;text-align:center;margin-top:4px"><i class="ti ti-cloud" style="font-size:10px"></i> 고객 정보는 내 구글 드라이브에 무제한 저장돼요</div>'
+    +'<div style="font-size:10px;color:#B7BDC9;text-align:center;margin-top:3px"><i class="ti ti-microphone" style="font-size:10px"></i> 키보드 아래 마이크를 누르면 음성으로도 입력돼요</div>' '
     +'<div style="font-size:10px;color:#B7BDC9;text-align:center;margin-top:3px"><i class="ti ti-lock" style="font-size:10px"></i> 대화는 내 드라이브에 암호화 저장 · 회사 서버에는 남지 않아요</div></div></div></div></div>';
   document.body.appendChild(m);
   document.getElementById('aiCloseBtn').onclick=()=>{aiSaveAsk(()=>{m.style.display='none';});};   /* ★ 닫기 전 저장 확인 (2026-07-19) */
@@ -6314,6 +6316,31 @@ function aiLastMeetDate(c){
   const a=aiHumanMeetings(c).map(mm=>String(mm.date||'')).filter(Boolean).sort();
   return a.length?a[a.length-1]:'';
 }
+/* ★ [2026-07-25] AI 조회 글자수 게이지 — 전체/조회 숫자 + 막대. 한도 초과 시 색·경고.
+   aiBuildContext가 계산한 rosterMeter를 받아 #aiRosterMeter, #mpcRosterMeter 두 곳(있으면)에 그린다. */
+function aiRosterMeterHtml(m){
+  if(!m)return '';
+  const limit=m.limit||60000, used=m.used||0, total=m.total||0, over=total>limit;
+  const pct=Math.min(100,Math.round(used/limit*100));
+  const near=pct>=80&&!over;
+  const barColor=over?'#D14343':(near?'#E08A1E':'#3B7A57');
+  const txtColor=over?'#B23636':'#8A93A8';
+  const fmt=(x)=>x.toLocaleString('ko-KR');
+  let head;
+  if(over) head='전체 <b>'+fmt(total)+'자</b> · AI 조회 <b>'+fmt(limit)+' / '+fmt(limit)+'자</b>';
+  else     head='AI 조회 <b>'+fmt(used)+' / '+fmt(limit)+'자</b> ('+pct+'%)';
+  return '<div style="margin-top:6px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:'+txtColor+';line-height:1.5">'
+    +'<span><i class="ti ti-database" style="font-size:10px"></i> '+head+'</span>'
+    +(over?'<span style="color:#B23636;font-weight:700">⚠ 한도 초과</span>':'')+'</div>'
+    +'<div style="height:5px;background:#EDEBE3;border-radius:99px;margin-top:3px;overflow:hidden">'
+    +'<div style="height:100%;width:'+pct+'%;background:'+barColor+';border-radius:99px;transition:width .3s"></div></div>'
+    +(over?'<div style="font-size:10px;color:#B23636;margin-top:3px;line-height:1.5">전체 대상 질문(예: 직업·소개 훑기)에서 뒷부분 '+((m.cutCount||0))+'명이 빠질 수 있어요. 개별 이름으로 물으면 정상 조회됩니다.</div>':'')
+    +'</div>';
+}
+window.aiRosterMeterRender=function(m){
+  try{['aiRosterMeter','mpcRosterMeter'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=aiRosterMeterHtml(m);});}catch(_e){}
+};
 async function aiBuildContext(q){
   const ctx={consultant:(fcData&&fcData.name)||loginId||'',today:vmYmd(new Date())};
   const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
@@ -6325,7 +6352,8 @@ async function aiBuildContext(q){
   /* ★ [2026-07-25] 전 고객 요약 명부 — 항상 첨부.
      소개자·회사·가족처럼 '다른 고객 카드에 답이 있는' 질문(예: 이규선이 소개한 고객)은
      주인공 1명만 봐서는 구조적으로 답할 수 없다. 키를 줄여 토큰을 아낀다(해석 규칙은 서버 프롬프트). */
-  ctx.roster=(customers||[]).slice(0,400).map(c=>{
+  /* ★ [2026-07-25] 명부 1인분 변환 — 표시 글자수 계산과 실제 전달을 같은 함수로 뽑아 항상 일치시킨다 */
+  const aiRosterOne=(c)=>{
     const key=(c.name||'')+'|'+(c.birthDate||'');
     let cts=(c.contracts||[]);if(fcc&&fcc[key])cts=cts.concat(fcc[key].contracts);
     const o={n:c.name||''};
@@ -6334,6 +6362,7 @@ async function aiBuildContext(q){
     if(c.referrer)o.r=c.referrer;
     if(c.company)o.co=c.company;
     if(c.title)o.t=c.title;
+    if(c.job)o.jb=c.job;   /* ★ [2026-07-25] 직업 */
     if((c.rels||[]).length)o.g=c.rels;
     if((c.needs||[]).length)o.nd=c.needs;
     if(c.nextContact)o.nx=c.nextContact;
@@ -6346,15 +6375,29 @@ async function aiBuildContext(q){
     o.mt=aiHumanMeetings(c).length;
     if(c.memo)o.mo=1;
     return o;
+  };
+  /* ★ [2026-07-25] roster 상한을 '명수(400)'에서 '글자수(6만)'로 전환.
+     이름만 등록한 명부는 2,000명 넘게, 필드가 꽉 찬 명부는 300~400명 선에서 자동으로 멈춰 원가가 일정해진다.
+     자르기 전 '전체 글자수'와 실제 담긴 '조회 글자수'를 함께 계산해 화면 게이지(전체 N자 · 조회 M/6만)에 쓴다. */
+  const AI_ROSTER_LIMIT=60000;
+  let _rTotal=0,_rUsed=0,_rIn=0,_rCut=0;const _roster=[];
+  (customers||[]).forEach(c=>{
+    const o=aiRosterOne(c);const len=JSON.stringify(o).length;
+    _rTotal+=len;
+    if(_rUsed+len<=AI_ROSTER_LIMIT){_roster.push(o);_rUsed+=len;_rIn++;}
+    else{_rCut++;}
   });
-  if((customers||[]).length>400)ctx.rosterNote='고객 '+(customers||[]).length+'명 중 400명만 전달됨';
+  ctx.roster=_roster;
+  ctx.rosterMeter={total:_rTotal,used:_rUsed,limit:AI_ROSTER_LIMIT,inCount:_rIn,cutCount:_rCut,custCount:(customers||[]).length};
+  if(_rCut>0)ctx.rosterNote='고객 '+(customers||[]).length+'명 중 '+_rIn+'명만 명부로 전달됨(6만 자 한도 초과 '+_rCut+'명 제외) — 전체 대상 질문에서 일부 누락 가능';
+  try{if(window.aiRosterMeterRender)window.aiRosterMeterRender(ctx.rosterMeter);}catch(_e){}   /* 게이지 갱신 */
   if(hit){
     const key=(hit.name||'')+'|'+(hit.birthDate||'');
     const f=(fcc&&fcc[key])||null;
     const cts=[].concat((hit.contracts||[]).map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,insurer:x.insurer,premium:x.premium})),f?f.contracts.map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,src:'내고객관리'})):[]);
     const seen={};const dedup=cts.filter(x=>{if(!x.product)return false;if(seen[x.product])return false;seen[x.product]=1;return true;}).slice(0,12).map(x=>{const dd=aiDday(x.expiry);return Object.assign({},x,dd!=null?{maturityDday:dd}:{});});
     ctx.customer={name:hit.name,age:aiAge(hit.birthDate),birthDate:hit.birthDate||'',status:hit.status||'',needs:hit.needs||[],referrer:hit.referrer||'',nextContact:hit.nextContact||'',prefChannel:hit.prefChannel||'',prefTime:hit.prefTime||'',
-      company:hit.company||'',title:hit.title||'',phone:hit.phone||'',email:hit.email||'',addr:hit.addr||'',   /* ★ [2026-07-25] 등록 항목 전부 열람 가능하도록 보강 */
+      company:hit.company||'',title:hit.title||'',job:hit.job||'',phone:hit.phone||'',email:hit.email||'',addr:hit.addr||'',   /* ★ [2026-07-25] 등록 항목 전부 열람 가능하도록 보강 */
       family:(hit.family||[]).slice(0,6),memo:(hit.memo||'').slice(0,600),contracts:dedup,
       sangryeongDday:hit.birthDate?aiDdayMmdd(aiSangMmdd(hit.birthDate)):null,
       birthdayDday:hit.birthDate?aiDdayMmdd(hit.birthDate.slice(5,7)+hit.birthDate.slice(8,10)):null,
@@ -7425,7 +7468,7 @@ function vmMergeFields(aiF,codeF){   /* 코드가 찾으면 코드 우선 — �
 }
 /* ★ 추출 필드 정규화 (2026-07-19): AI가 무엇을 보내든 정해진 모양으로만 통과시킨다 */
 const VM_FIELDS=[
-  {k:'phone',label:'연락처'},{k:'company',label:'회사'},{k:'title',label:'직함'},
+  {k:'phone',label:'연락처'},{k:'company',label:'회사'},{k:'title',label:'직함'},{k:'job',label:'직업'},   /* ★ [2026-07-25] 직업 필드 추가 */
   {k:'email',label:'이메일'},{k:'addr',label:'주소'},
   {k:'birthDate',label:'생년월일',ph:'YYYY-MM-DD'},{k:'referrer',label:'소개자'},
   {k:'nextContact',label:'다음 연락일',ph:'YYYY-MM-DD'}
@@ -7568,7 +7611,7 @@ window.__vmOpen=vmOpen;   /* ★ 다른 화면(고객 추가 팝업)에서 음�
 /* ═══ ➕ 신규 고객 등록 확인 화면 (2026-07-19) ═══
    원칙: 이름은 반드시 사용자가 확정한다. 나머지는 뽑아낸 값을 보여주고 그 자리에서 고칠 수 있게 한다.
    등록 버튼을 누르기 전까지 아무것도 저장되지 않는다. */
-const VM_NEW_ADD=[{k:'company',label:'회사'},{k:'title',label:'직함'},{k:'addr',label:'주소'},
+const VM_NEW_ADD=[{k:'company',label:'회사'},{k:'title',label:'직함'},{k:'job',label:'직업'},{k:'addr',label:'주소'},
   {k:'email',label:'이메일'},{k:'phone',label:'연락처'},{k:'referrer',label:'소개자'},{k:'nextContact',label:'다음 연락일'}];
 let vmNewExtra=[];
 function vmRenderNew(preName){
@@ -9346,6 +9389,7 @@ init();
         <div class="mp-fld" style="flex:1"><span class="mp-lbl">회사</span><input class="mp-in" id="mpcCompany" type="text" placeholder="***주식회사"></div>
         <div class="mp-fld" style="flex:1"><span class="mp-lbl">직함</span><input class="mp-in" id="mpcTitleF" type="text" placeholder="팀장"></div>
       </div>
+      <div class="mp-fld"><span class="mp-lbl">직업</span><input class="mp-in" id="mpcJobF" type="text" placeholder="예: 사업가 · 의사 · 공무원"></div>   <!-- ★ [2026-07-25] 직업 필드 추가 -->
       <div class="mp-fld"><span class="mp-lbl">연락처</span><input class="mp-in" id="mpcPhone" type="tel" inputmode="numeric" placeholder="010-1234-5678"></div>
       <div class="mp-fld"><span class="mp-lbl">생년월일 <span class="req">*</span></span><input class="mp-in" id="mpcBirth" type="date"><label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#5C6678;margin-top:6px"><input type="checkbox" id="mpcBirthUnknown" style="width:15px;height:15px">아직 모름 (명함만 받은 가망고객 등 — 생일 알림·연동에서 제외돼요)</label></div>
       <div class="mp-fld"><span class="mp-lbl">주소 <span class="req">*</span> <small style="color:#9099AD;font-weight:400">(지도 표시에 필요)</small></span>
@@ -9424,7 +9468,8 @@ init();
       </div>
       <button class="mp-save" id="mpcSave">저장</button>
       <button type="button" id="mpcFormDel" style="display:none;width:100%;border:1px solid #E8B4B4;background:#FDF3F3;color:#A94442;border-radius:12px;padding:11px;font-size:12.5px;font-weight:700;margin-top:8px">🗑 이 고객 삭제</button>
-      <div class="mp-note">고객 정보는 <b>내 기기에 저장</b>됩니다 · 회사 서버에 저장되지 않아요</div>
+      <div class="mp-note">고객 정보는 <b>내 구글 드라이브에 무제한 저장</b>돼요 · 회사 서버에 저장되지 않아요<br>주소·메모·관심항목·직업까지 함께 저장되며, <b>AI 비서가 한 번에 읽는 범위는 최대 6만 글자(A4 약 35장)</b>입니다</div>
+      <div id="mpcRosterMeter" style="margin-top:8px"></div>
     </div>
   </div>
 
@@ -9571,7 +9616,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function dbPut(o){return new Promise(function(res,rej){var r=st("readwrite").put(o);r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
   function dbDel(id){return new Promise(function(res){var r=st("readwrite").delete(id);r.onsuccess=r.onerror=function(){res();};});}
   // ── 내 고객(Customer) 저장소 — 나의 장소와 완전 분리된 별도 DB ──
-  // 데이터 구조: {id, name, company, title, phone, addr, lat, lng, rels:[관계배열], memo, createdAt}
+  // 데이터 구조: {id, name, company, title, job, phone, addr, lat, lng, rels:[관계배열], memo, createdAt}   /* job 2026-07-25 */
   var CDBN="mycustomers_db",CSTORE="customers",cdb=null,customers=[];
   function openCustDB(){return new Promise(function(res,rej){var r=indexedDB.open(CDBN,1);r.onupgradeneeded=function(e){var d=e.target.result;if(!d.objectStoreNames.contains(CSTORE))d.createObjectStore(CSTORE,{keyPath:"id"});};r.onsuccess=function(){cdb=r.result;res(cdb);};r.onerror=function(){rej(r.error);};});}
   function cst(m){return cdb.transaction(CSTORE,m).objectStore(CSTORE);}
@@ -9674,7 +9719,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===custId){c=customers[i];break;}
     if(!c){if(cb)cb(false);return;}
     f=f||{};
-    ["phone","company","title","email","referrer","addr"].forEach(function(k){var v=f[k]?String(f[k]).trim().slice(0,120):"";if(v)c[k]=v;});
+    ["phone","company","title","job","email","referrer","addr"].forEach(function(k){var v=f[k]?String(f[k]).trim().slice(0,120):"";if(v)c[k]=v;});   /* ★ [2026-07-25] job 추가 */
     var _prevB=(c.birthDate||"");
     var _ctBefore=JSON.stringify(c.contracts||[]);
     if(f.birthDate&&/^\d{4}-\d{2}-\d{2}$/.test(f.birthDate)){c.birthDate=f.birthDate;c.birthUnknown=false;}
@@ -9959,7 +10004,32 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     });
   });}
   function mpcRenderRels(){var w=$("mpcRels");if(!w)return;w.innerHTML="";var all=REL_DEFS.map(function(r){return r.k;}).concat(mpcCustomRels);all.forEach(function(k){var on=mpcRelsSel.indexOf(k)>=0;var b=document.createElement("button");b.type="button";b.className="mpc-rel"+(on?" on":"");b.textContent=k;if(on){var c=mpcRelColor(k);b.style.background=c;b.style.borderColor=c;}b.onclick=function(){var i=mpcRelsSel.indexOf(k);if(i>=0)mpcRelsSel.splice(i,1);else mpcRelsSel.push(k);mpcRenderRels();};w.appendChild(b);});var add=document.createElement("button");add.type="button";add.className="mpc-rel mpc-rel-add";add.textContent="＋ 직접 입력";add.onclick=function(){var nm=prompt("관계를 직접 입력하세요 (예: 거래처, 동창, VIP)");if(nm&&nm.trim()){nm=nm.trim();mpcAddCustomRel(nm);if(mpcRelsSel.indexOf(nm)<0)mpcRelsSel.push(nm);mpcRenderRels();}};w.appendChild(add);}
-  function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb){_fdb.style.display=c?"block":"none";_fdb.onclick=c?function(){mpcDeleteCust(c,function(){closeCustForm();});}:null;}mpcRelsSel=c?(c.rels||[]).slice():[];mpcCoord=(c&&c.lat)?{lat:c.lat,lng:c.lng}:null;mpcCoordAddr=c?(c.addr||""):"";$("mpcTitle2").textContent=c?"고객 수정":"고객 추가";$("mpcName").value=c?(c.name||""):"";$("mpcCompany").value=c?(c.company||""):"";$("mpcTitleF").value=c?(c.title||""):"";$("mpcPhone").value=c?(c.phone||""):"";$("mpcAddr").value=c?(c.addr||""):"";if($("mpcAddrDetail"))$("mpcAddrDetail").value=c?(c.addrDetail||""):"";$("mpcMemo").value=c?(c.memo||""):"";if($("mpcMgTitle"))$("mpcMgTitle").value=c?(c.mgTitle||""):"";mpcMeetings=c&&c.meetings?c.meetings.slice():[];mpcFiles=c&&c.files?c.files.slice():[];mpcMtEditId=null;mpcMtPage=1;mpcMtOpen={};var _mab=$("mpcMtAdd");if(_mab)_mab.textContent="＋ 미팅 기록 추가";var _mcb=$("mpcMtCancel");if(_mcb)_mcb.style.display="none";mpcMtRender();mpcFileRender();var _mtd=$("mpcMtDate");if(_mtd)_mtd.value=mpcTodayStr();var _bi=$("mpcBirth"),_bu=$("mpcBirthUnknown");if(_bi)_bi.value=c&&c.birthDate?c.birthDate:"";if(_bu){_bu.checked=!!(c&&c.birthUnknown);if(_bi)_bi.disabled=_bu.checked;}var _st=$("mpcStatus");if(_st)_st.value=c&&c.status?c.status:"";var _nc=$("mpcNextContact");if(_nc)_nc.value=c&&c.nextContact?c.nextContact:"";var _rf=$("mpcReferrer");if(_rf)_rf.value=c&&c.referrer?c.referrer:"";var _em=$("mpcEmail");if(_em)_em.value=c&&c.email?c.email:"";var _pc=$("mpcPrefCh");if(_pc)_pc.value=c&&c.prefChannel?c.prefChannel:"";var _pt=$("mpcPrefTime");if(_pt)_pt.value=c&&c.prefTime?c.prefTime:"";mpcNeedsSel=c&&c.needs?c.needs.slice():[];mpcFamily=c&&c.family?c.family.slice():[];mpcContracts=c&&c.contracts?c.contracts.slice():[];mpcCtRO=[];try{if(c&&c.birthDate&&mpcFccIdx){var _fk=(c.name||"")+"|"+c.birthDate;var _fx=mpcFccIdx[_fk];if(_fx&&_fx.contracts){var _lp={};mpcContracts.forEach(function(x){if(x.product)_lp[x.product]=1;});mpcCtRO=_fx.contracts.filter(function(x){return x.product&&!_lp[x.product];});}}}catch(_e){mpcCtRO=[];}mpcNeedsRender();mpcFamRender();mpcCtRender();var _sw=$("mpcSalesWrap"),_stg=$("mpcSalesToggle");if(_sw&&_stg){var _has=!!(c&&(c.status||c.nextContact||(c.needs&&c.needs.length)||c.referrer||c.email||(c.family&&c.family.length)||(c.contracts&&c.contracts.length)));_sw.style.display=_has?"block":"none";_stg.textContent=_has?"💼 영업정보 접기 ▴":"💼 영업정보 더보기 ▾";}mpcExtraWire();setTimeout(function(){mpcTaGrow($("mpcMemo"));},80);$("mpcAddrStat").textContent=mpcCoord?"✓ 좌표 확인됨":"주소를 확인하면 좌표가 생성됩니다";$("mpcAddrStat").style.color=mpcCoord?"#2E8B6E":"#9099AD";mpcRenderRels();if($("mpcPlaceKw"))$("mpcPlaceKw").value="";if($("mpcPickRes"))$("mpcPickRes").style.display="none";$("mpCustForm").classList.add("show");setTimeout(mpcInitPickMap,150);}
+  /* ★ [2026-07-25] 고객 등록 화면용 명부 글자수 계산 — aiBuildContext의 로직과 동일 규격.
+   (aiBuildContext의 aiRosterOne은 그 함수의 지역이라, 여기선 같은 필드 구성으로 독립 계산한다) */
+function mpcRosterMeterCalc(){
+  var LIMIT=60000, total=0, used=0, inC=0, cutC=0;
+  var arr=(typeof customers!=='undefined'&&customers)?customers:[];
+  arr.forEach(function(c){
+    var o={n:c.name||''};
+    if(c.birthDate){o.b=c.birthDate;o.ag=1;}else if(c.birthUnknown)o.b='미확인';
+    if(c.status)o.s=c.status; if(c.referrer)o.r=c.referrer;
+    if(c.company)o.co=c.company; if(c.title)o.t=c.title; if(c.job)o.jb=c.job;
+    if((c.rels||[]).length)o.g=c.rels; if((c.needs||[]).length)o.nd=c.needs;
+    if(c.nextContact)o.nx=c.nextContact; if(c.addr)o.ad=c.addr; if(c.phone)o.ph=c.phone;
+    o.em=c.email?1:0;
+    if((c.family||[]).length)o.fm=(c.family||[]).slice(0,6).map(function(f){return (f.rel||'')+(f.name?':'+f.name:'');});
+    var cts=(c.contracts||[]); if(cts.length)o.cp=cts.map(function(x){return String(x.product||'');}).filter(Boolean).slice(0,8);
+    o.mt=(c.meetings||[]).filter(function(m){var sc=String(m&&m.src||'');return !(sc==='ai'||sc==='ai_chat'||String(m&&m.note||'').indexOf('[AI 브리핑]')===0);}).length;
+    if(c.memo)o.mo=1;
+    var len=JSON.stringify(o).length; total+=len;
+    if(used+len<=LIMIT){used+=len;inC++;}else{cutC++;}
+  });
+  return {total:total,used:used,limit:LIMIT,inCount:inC,cutCount:cutC,custCount:arr.length};
+}
+function mpcRosterMeterRefresh(){
+  try{if(window.aiRosterMeterRender)window.aiRosterMeterRender(mpcRosterMeterCalc());}catch(_e){}
+}
+function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb){_fdb.style.display=c?"block":"none";_fdb.onclick=c?function(){mpcDeleteCust(c,function(){closeCustForm();});}:null;}mpcRelsSel=c?(c.rels||[]).slice():[];mpcCoord=(c&&c.lat)?{lat:c.lat,lng:c.lng}:null;mpcCoordAddr=c?(c.addr||""):"";$("mpcTitle2").textContent=c?"고객 수정":"고객 추가";$("mpcName").value=c?(c.name||""):"";$("mpcCompany").value=c?(c.company||""):"";$("mpcTitleF").value=c?(c.title||""):"";$("mpcJobF").value=c?(c.job||""):"";   /* ★ [2026-07-25] 직업 로드 */$("mpcPhone").value=c?(c.phone||""):"";$("mpcAddr").value=c?(c.addr||""):"";if($("mpcAddrDetail"))$("mpcAddrDetail").value=c?(c.addrDetail||""):"";$("mpcMemo").value=c?(c.memo||""):"";if($("mpcMgTitle"))$("mpcMgTitle").value=c?(c.mgTitle||""):"";mpcMeetings=c&&c.meetings?c.meetings.slice():[];mpcFiles=c&&c.files?c.files.slice():[];mpcMtEditId=null;mpcMtPage=1;mpcMtOpen={};var _mab=$("mpcMtAdd");if(_mab)_mab.textContent="＋ 미팅 기록 추가";var _mcb=$("mpcMtCancel");if(_mcb)_mcb.style.display="none";mpcMtRender();mpcFileRender();var _mtd=$("mpcMtDate");if(_mtd)_mtd.value=mpcTodayStr();var _bi=$("mpcBirth"),_bu=$("mpcBirthUnknown");if(_bi)_bi.value=c&&c.birthDate?c.birthDate:"";if(_bu){_bu.checked=!!(c&&c.birthUnknown);if(_bi)_bi.disabled=_bu.checked;}var _st=$("mpcStatus");if(_st)_st.value=c&&c.status?c.status:"";var _nc=$("mpcNextContact");if(_nc)_nc.value=c&&c.nextContact?c.nextContact:"";var _rf=$("mpcReferrer");if(_rf)_rf.value=c&&c.referrer?c.referrer:"";var _em=$("mpcEmail");if(_em)_em.value=c&&c.email?c.email:"";var _pc=$("mpcPrefCh");if(_pc)_pc.value=c&&c.prefChannel?c.prefChannel:"";var _pt=$("mpcPrefTime");if(_pt)_pt.value=c&&c.prefTime?c.prefTime:"";mpcNeedsSel=c&&c.needs?c.needs.slice():[];mpcFamily=c&&c.family?c.family.slice():[];mpcContracts=c&&c.contracts?c.contracts.slice():[];mpcCtRO=[];try{if(c&&c.birthDate&&mpcFccIdx){var _fk=(c.name||"")+"|"+c.birthDate;var _fx=mpcFccIdx[_fk];if(_fx&&_fx.contracts){var _lp={};mpcContracts.forEach(function(x){if(x.product)_lp[x.product]=1;});mpcCtRO=_fx.contracts.filter(function(x){return x.product&&!_lp[x.product];});}}}catch(_e){mpcCtRO=[];}mpcNeedsRender();mpcFamRender();mpcCtRender();var _sw=$("mpcSalesWrap"),_stg=$("mpcSalesToggle");if(_sw&&_stg){var _has=!!(c&&(c.status||c.nextContact||(c.needs&&c.needs.length)||c.referrer||c.email||(c.family&&c.family.length)||(c.contracts&&c.contracts.length)));_sw.style.display=_has?"block":"none";_stg.textContent=_has?"💼 영업정보 접기 ▴":"💼 영업정보 더보기 ▾";}mpcExtraWire();setTimeout(function(){mpcTaGrow($("mpcMemo"));},80);$("mpcAddrStat").textContent=mpcCoord?"✓ 좌표 확인됨":"주소를 확인하면 좌표가 생성됩니다";$("mpcAddrStat").style.color=mpcCoord?"#2E8B6E":"#9099AD";mpcRenderRels();if($("mpcPlaceKw"))$("mpcPlaceKw").value="";if($("mpcPickRes"))$("mpcPickRes").style.display="none";$("mpCustForm").classList.add("show");setTimeout(mpcInitPickMap,150);try{mpcRosterMeterRefresh();}catch(_e){}   /* ★ [2026-07-25] 글자수 게이지 */}
   function closeCustForm(){$("mpCustForm").classList.remove("show");}
   // ── 첫 사용 안내 팝업 + 이용 가이드 ──
   function mpcMaybeIntro(){try{if(!localStorage.getItem("mpc_intro_seen"))$("mpcIntro").classList.add("show");}catch(e){}}
@@ -10403,9 +10473,10 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     return d;
   }
   function mpcDoSave(){try{var _pn2=$("mpcMtNote"),_pp2=$("mpcMtPlace");if((_pn2&&_pn2.value.trim())||(_pp2&&_pp2.value.trim())){mpcMtAddFn();}}catch(_e){}   /* ★ 입력칸에 남은 미팅 자동 등록 — 유실 방지 (2026-07-17 버그수정) */
-    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),createdAt:Date.now()};if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}var _prevB="";if(i>=0&&customers[i].birthDate&&o.birthDate&&customers[i].birthDate!==o.birthDate)_prevB=customers[i].birthDate;   /* ★ 생일 수정 감지 (2026-07-17) */
+    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),createdAt:Date.now()};if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}var _prevB="";if(i>=0&&customers[i].birthDate&&o.birthDate&&customers[i].birthDate!==o.birthDate)_prevB=customers[i].birthDate;   /* ★ 생일 수정 감지 (2026-07-17) */
 if(i>=0){if(customers[i].fccId&&!o.fccId)o.fccId=customers[i].fccId;customers[i]=o;}else customers.push(o);   /* ★ fccId 승계 (2026-07-18) */
-var _fin=function(){closeCustForm();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();};
+var _fin=function(){closeCustForm();mpcRenderList();try{mpcRosterMeterRefresh();}catch(_e){}   /* ★ [2026-07-25] 저장 후 게이지 갱신 */
+if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();};
 if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:_prevB,replaceContracts:true,mgTitle:o.mgTitle||"",contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(x){return x.productName;})}]).then(function(ids){if(ids&&ids[0]&&o.fccId!==ids[0]){o.fccId=ids[0];custPut(o).then(_fin,_fin);}else _fin();},function(){_fin();});}catch(_e){_fin();}}else _fin();});}
   function mpcSaveCust(){if(!$("mpcName").value.trim()){alert("이름을 입력하세요.");return;}var addr=$("mpcAddr").value.trim();if(addr.length>=4&&(!mpcCoord||addr!==mpcCoordAddr)){$("mpcAddrStat").textContent="좌표 확인 중…";mpcGeocode(addr).then(function(g){if(g.ok){var _fx=mpcFixSido(addr,g.matched);if(_fx!==addr){addr=_fx;$("mpcAddr").value=_fx;try{toast("주소 앞에 시/도를 붙여 ‘"+_fx+"’로 저장했어요","info");}catch(_e){}}mpcCoord={lat:g.lat,lng:g.lng};mpcCoordAddr=addr;if(g.approx){try{toast("‘"+addr+"’의 정확한 위치를 못 찾아 비슷한 장소로 저장했어요 — 지도에서 위치를 확인해 주세요","warn");}catch(_e){}}}else{try{toast("‘"+addr+"’ 위치를 찾지 못했어요 — 주소 맨 앞에 시/도(서울·경기 등)를 붙여 다시 시도해 주세요. 지금은 지도에 표시되지 않습니다","warn");}catch(_e){}}mpcDoSave();});}else{mpcDoSave();}}
   function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)return;if(!customers.length){if(lctl)lctl.style.display="none";rows.innerHTML='<div class="mp-cust-empty"><i class="ti ti-map-pin" style="font-size:32px;color:#C9A96E"></i><b>내 고객 지도</b><span>아직 등록된 고객이 없어요.<br>＋ 고객 추가로 한 명씩, 또는 위 <b>양식 받기 → 엑셀 업로드</b>로 한 번에 등록하세요.</span></div>';return;}if(lctl)lctl.style.display="flex";var q=(mpcSearch||"").toLowerCase().trim();var _vo=(function(){var e=$("mpcViewOnly");return !!(e&&e.checked&&map&&map.getBounds);})();var _vb=_vo?map.getBounds():null;var _voHid=0;   /* ★ [2026-07-24] 지도 화면 안만 보기 */
@@ -10558,7 +10629,7 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
   });ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();var _v=document.getElementById("mpcViewOnly");if(_v&&_v.checked){mpcPage=1;mpcRenderList();}}});   /* ★ [2026-07-24] 지도 이동 시 목록도 함께 갱신 (토글 ON일 때만) */mpcCountBound=true;}mpcUpdateCount();}},180);});});};
   window.__mpPlacesRedraw=function(){mpcCloseInfo();mpcClearMarkers();if(map){map.relayout&&map.relayout();drawMarkers();}};
   var mpcdNeedsOpen=false;   /* ★ 지도 상세 니즈 펼침 상태 (2026-07-19) */
-  function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title].filter(Boolean).join(" · ")||"-";$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
+  function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title,c.job].filter(Boolean).join(" · ")||"-";   /* ★ [2026-07-25] 직업 표시 */$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
     var nb=$("mpcdNeeds");if(!nb)return;
     var sel=(c.needs||[]).slice();
     nb.innerHTML=mpcdNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
