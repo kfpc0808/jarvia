@@ -143,7 +143,7 @@
     var g=document.getElementById('actGate');if(!g)return;
     var t=document.getElementById('actGateTxt');if(t)t.textContent=LBL[a];
     g.style.display='flex';
-    setTimeout(window.__actGateOff,9000);   /* 안전장치 — 어떤 경로로도 화면이 잠기지 않게 */
+    setTimeout(window.__actGateOff,10000);   /* 안전장치 — 스케줄러 6초 + 탭대기 3초를 넘겨도 화면이 잠기지 않게 */
   }catch(_e){}
 })();
 </script>
@@ -7674,11 +7674,26 @@ window.fccSaveAll=async function(){
    _actWhenReady: 인증(me·meData)이 준비되는 즉시 실행 — 비로그인 확정 시에도 즉시 실행 (최대 6초)
    _actGoTab   : 목표 탭이 실제로 노출될 때까지 기다렸다가 전환 + 게이트 해제 (기존 300ms 추정 제거) */
 function _actWhenReady(fn){
-  var n=0;
+  var n=0,st=0;
   (function tick(){
     var _m=window.me||(typeof me!=='undefined'?me:null);
     var _d=window.meData||(typeof meData!=='undefined'?meData:null);
-    if((_m&&_d)||(window.__authResolved&&!_m)||++n>120){fn();return;}   /* 50ms×120 = 6초 */
+    var authOk=(_m&&_d)||(window.__authResolved&&!_m);
+    /* ★ [2026-07-25 수정] 인증만 보고 실행하면 안 된다.
+       window.meData가 채워지는 시점(4983행)은 앱 자신의 nav('main')(5096행)보다 훨씬 이르다.
+       먼저 mypage로 보내면 곧바로 main이 덮어써서 "메인화면으로 튕기는" 증상이 난다.
+       pg-main·pg-landing·pg-login·pg-mypage 네 섹션은 모두 초기값이 hidden이므로,
+       하나라도 보이면 최초 라우팅이 끝난 것으로 판정할 수 있다. */
+    var routed=false;
+    try{
+      var ids=['pg-main','pg-landing','pg-login','pg-mypage'];
+      for(var i=0;i<ids.length;i++){
+        var e=document.getElementById(ids[i]);
+        if(e&&!e.classList.contains('hidden')){routed=true;break;}
+      }
+    }catch(_e){}
+    if(authOk&&routed){ if(++st>=3){fn();return;} }else{ st=0; }   /* 150ms 안정화 — 직후 추가 nav 방어 */
+    if(++n>120){fn();return;}   /* 50ms×120 = 6초 상한 */
     setTimeout(tick,50);
   })();
 }
