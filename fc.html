@@ -1245,8 +1245,8 @@ if(_pathMatch&&_pathMatch[1])_loginRaw=_pathMatch[1];
 else _loginRaw=params.get('id')||params.get('fc')||'';
 let _dec=_loginRaw;
 try{_dec=decodeURIComponent(_loginRaw);}catch(e){}
-const _loginRawCased=_dec.split('/')[0].trim();   // URL 원본 대소문자 보존 (폴백 조회용)
-const _loginLower=_loginRawCased.toLowerCase();    // 대소문자 무시 조회용
+let _loginRawCased=_dec.split('/')[0].trim();   // URL 원본 대소문자 보존 (폴백 조회용)
+let _loginLower=_loginRawCased.toLowerCase();    // 대소문자 무시 조회용
 let loginId=_loginLower;                            // init() 조회 성공 후 정본 케이스로 재설정
 
 // 전역 상태
@@ -2104,7 +2104,32 @@ function initSimulators(){
 
 // ═══ 초기 로드 ═══
 async function init(){
-  if(!loginId){showError('잘못된 URL','컨설턴트 ID가 없습니다');return;}
+  if(!loginId){
+    /* 📊 월간 리포트 타깃추출 딥링크(fc.html?mrFilter=…)는 로그인한 컨설턴트 본인 전용 —
+       URL에 컨설턴트 ID가 없어도 로그인 세션에서 본인을 복구해 진행 (2026-07-25) */
+    var _mrc=null;try{_mrc=new URLSearchParams(location.search).get('mrFilter');}catch(_e){}
+    if(_mrc){
+      await new Promise(function(res){
+        var done=false,un=null;
+        function fin(){if(done)return;done=true;try{un&&un();}catch(_e){}res();}
+        try{
+          un=onAuthStateChanged(auth,async function(u){
+            if(done)return;
+            if(u){
+              try{
+                var ud=await getDoc(doc(db,'users',u.uid));
+                if(ud&&ud.exists()){var d=ud.data(),_lid=d.loginId||'';
+                  if(_lid){loginId=_lid;_loginRawCased=_lid;_loginLower=(d.loginIdLower||_lid).toLowerCase();}}
+              }catch(_e){}
+            }
+            fin();
+          });
+        }catch(_e){fin();}
+        setTimeout(fin,8000);
+      });
+    }
+    if(!loginId){showError('잘못된 URL','컨설턴트 ID가 없습니다');return;}
+  }
   try{
     // 1. users 조회 — 대소문자 무시: loginIdLower 우선, 없으면 원본 케이스로 폴백
     let userSnap=await getDocs(query(collection(db,'users'),where('loginIdLower','==',_loginLower),limit(1)));
