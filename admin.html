@@ -14479,6 +14479,40 @@ function emTab(which){
   if(which==='log'){f.style.display='none';l.style.display='';tf.className='btn btn-sm btn-sec';tl.className='btn btn-sm';}
   else{f.style.display='';l.style.display='none';tf.className='btn btn-sm';tl.className='btn btn-sm btn-sec';}
 }
+function emNarrate(gr){
+  const s=gr.sample||{}, arr=gr.arr||[];
+  const scr=s.screen||s.page||'해당 화면';
+  const who=s.consultantLoginId?(String(s.consultantLoginId)+' 채널'):'채널';
+  const typeKo={js_error:'자바스크립트 오류',promise_rejection:'비동기 처리 오류',dead_click:'버튼 무반응(먹통)'}[s.type]||'오류';
+  const dev={};arr.forEach(r=>{const o=((r.device&&r.device.os)||'?').split(' ')[0];dev[o]=(dev[o]||0)+1;});
+  const keys=Object.keys(dev);
+  let devSent='';
+  if(keys.length===1){
+    const k=keys[0];
+    devSent='모두 '+k+' 사용자에게서 발생했습니다.';
+    if(/iOS/i.test(k))devSent+=' 다른 기기에서는 나타나지 않아 사파리(iOS) 전용 문제일 가능성이 있습니다.';
+    else if(/Android/i.test(k))devSent+=' 안드로이드 전용 동작 차이일 수 있습니다.';
+  }else if(keys.length>1){
+    devSent=keys.map(k=>k+' '+dev[k]+'건').join(', ')+' 등 여러 기기에서 발생해, 특정 기기만의 문제는 아닌 것으로 보입니다.';
+  }
+  const msg=(s.message||'').toLowerCase();
+  let cause;
+  if(s.type==='dead_click')cause='버튼을 눌렀지만 완료 신호가 오지 않았습니다. 클릭 처리가 중간에 멈췄을 가능성이 있어, 해당 버튼의 동작을 점검하세요.';
+  else if(/undefined is not|cannot read propert|is not a function|is not defined|null is not/.test(msg))cause='아직 준비되지 않았거나 존재하지 않는 값을 사용하려다 발생한 것으로 보입니다. 해당 함수·변수가 있는지, 데이터가 로드된 뒤 실행되는지 점검이 필요합니다.';
+  else if(/failed to fetch|networkerror|network error|load failed|err_/.test(msg))cause='네트워크 또는 서버 응답 문제로 보입니다. 연결 상태와 서버·API 응답을 확인하세요.';
+  else if(/clipboard/.test(msg))cause='클립보드 접근이 브라우저에서 거부된 것으로 보입니다. 사파리 등 일부 브라우저의 권한 제한일 수 있습니다.';
+  else if(/timeout|시간 초과|exceeded/.test(msg))cause='처리 시간이 초과됐습니다. 서버 작업이 너무 오래 걸렸을 수 있습니다.';
+  else if(s.type==='promise_rejection')cause='비동기 처리 중 오류가 처리되지 않았습니다. 관련 구간의 예외 처리를 확인하세요.';
+  else cause='일반적인 자바스크립트 실행 오류입니다. 아래 스택의 위치를 기준으로 점검하세요.';
+  const loc=(s.source||'')+(s.lineno?(' '+s.lineno+'번째 줄'):'');
+  let text=who+'의 '+scr+' 화면에서 '+typeKo+'가 '+gr.cnt+'회 발생했습니다';
+  if(gr.members>1)text+=' (영향 채널 '+gr.members+'개)';
+  text+='.';
+  if(devSent)text+=' '+devSent;
+  if(s.message)text+=' 오류 메시지는 "'+((s.message.length>80)?s.message.slice(0,80)+'…':s.message)+'"입니다.';
+  if(loc)text+=' 위치는 '+loc+' 부근입니다.';
+  return {text:text,suggest:cause};
+}
 function emOpenDetail(i){
   const gr=(window._emGroups||[])[i]; if(!gr)return;
   const s=gr.sample, arr=gr.arr;
@@ -14487,12 +14521,19 @@ function emOpenDetail(i){
   const mx=Math.max.apply(null,devKeys.map(k=>dev[k]));
   const devBars=devKeys.map(k=>{const w=Math.max(4,Math.round(dev[k]/mx*100));const red=(/iOS|Safari/i.test(k));return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:130px">'+esc(k)+'</span><div style="flex:1;height:18px;background:#F0F3F6;border-radius:5px;overflow:hidden"><div style="height:100%;width:'+w+'%;background:'+(red?'#E74C3C':'#2E86AB')+';color:#fff;font-size:11px;font-weight:700;text-align:right;padding-right:6px;border-radius:5px">'+dev[k]+'</div></div></div>';}).join('');
   const members=Array.from(new Set(arr.map(r=>r.consultantLoginId).filter(Boolean)));
+  const nar=emNarrate(gr);
+  const narHtml='<div style="background:#EFF6FF;border:1px solid #DBEAFE;border-radius:10px;padding:14px 16px;margin-bottom:16px">'
+    +'<div style="font-size:12px;font-weight:700;color:#1D4ED8;margin-bottom:6px">📝 요약 (자동 생성)</div>'
+    +'<div style="font-size:13px;color:#334155;line-height:1.7">'+esc(nar.text)+'</div>'
+    +'<div style="font-size:12.5px;color:#B45309;line-height:1.7;margin-top:8px;background:#FFF8E1;border-radius:6px;padding:8px 10px">🔎 추정 원인 — '+esc(nar.suggest)+' <span style="color:#94A3B8;font-weight:400">(규칙 기반 추정 · 참고용)</span></div>'
+    +'</div>';
   const inner=
     '<div style="background:linear-gradient(135deg,#0F2440,#1B5E20);color:#fff;padding:18px 20px;border-radius:12px;margin-bottom:16px">'
     +'<div style="font-size:11px;opacity:.85;font-weight:700;margin-bottom:4px">👤 영향 컨설턴트 채널</div>'
     +'<div style="font-size:20px;font-weight:800">'+esc(members.join(', ')||'-')+'</div>'
     +'<div style="display:flex;gap:16px;margin-top:8px;font-size:12px;flex-wrap:wrap"><span>발생 '+gr.cnt+'회</span><span>채널 '+members.length+'개</span><span>viewer: '+esc(s.viewer||'unknown')+'</span></div>'
     +'</div>'
+    +narHtml
     +'<div style="display:grid;grid-template-columns:110px 1fr;gap:6px 12px;font-size:13px;margin-bottom:16px">'
     +'<span style="color:#7F8C8D">화면</span><span>'+esc(s.screen||s.page||'-')+'</span>'
     +'<span style="color:#7F8C8D">버튼·함수</span><span>'+esc(s.func||'-')+'</span>'
