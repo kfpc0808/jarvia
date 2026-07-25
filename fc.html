@@ -5992,6 +5992,20 @@ const AI_EX_CHIPS=[
   {q:'등록은 돼 있지만 계약 기록이 없는 고객을 알려 주세요'},
   {q:'연락처나 생년월일 같은 기본 정보가 비어 있는 고객을 알려 주세요'}
 ];
+/* ★ [2026-07-25] 고객 고정 모드 전용 예시 9종 — 대상이 그 고객 한 명이므로 전체 고객 질문(소개자별·회사별 등)과 섞이지 않게 분리.
+   1~4번은 기존 문맥칩 4종(미팅 전 브리핑·등록 정보·지난 기록·소개 관계)을 그대로 흡수 — 기능 손실 없음.
+   원칙 동일: 팩트 조회·정리 전용, 생성(문안)·판단(플랜)은 제외. */
+const AI_EX_CHIPS_ONE=[
+  {q:'미팅 전 브리핑해줘'},
+  {q:'이 고객의 등록된 정보를 정리해 주세요'},
+  {q:'이 고객의 지난 미팅 기록을 시간순으로 정리해 주세요'},
+  {q:'이 고객이 소개한 고객이 있는지 알려 주세요'},
+  {q:'이 고객을 소개한 사람이 누구인지 알려 주세요'},
+  {q:'이 고객의 계약 내역과 만기일을 정리해 주세요'},
+  {q:'이 고객의 가족 정보와 관계를 정리해 주세요'},
+  {q:'이 고객의 등록된 관심항목을 정리해 주세요'},
+  {q:'이 고객 기록에서 비어 있는 정보를 알려 주세요'}
+];
 function aiChkMd(mmdd){return (mmdd&&mmdd.length===4)?(parseInt(mmdd.slice(0,2),10)+'/'+parseInt(mmdd.slice(2,4),10)):'';}
 function aiChkYmd(ymd){return (ymd&&ymd.length>=10)?(parseInt(ymd.slice(5,7),10)+'/'+parseInt(ymd.slice(8,10),10)):'';}
 let aiFccCache=null,aiFccAt=0;
@@ -6053,28 +6067,59 @@ function aiChkRender(){
     if(!total){
       h+='<div style="background:#fff;border:1px solid #ECE7DA;border-radius:13px;padding:16px 14px;font-size:13px;color:#5C6678;line-height:1.7;margin-top:6px">지금 급히 챙길 고객은 없어요 👍 <span style="color:#8A93A8">(등록 고객 '+g._total+'명 확인)</span><br>고객 이름을 입력하면 그 고객의 기록으로 브리핑·제안을 도와드릴게요.</div>';
     }else{
-      h+='<div style="font-size:11.5px;color:#8A93A8;margin:0 2px 10px">탭하면 그 고객으로 바로 대화를 시작해요</div>';
-      AI_CHK_GROUPS.forEach(grp=>{
-        const arr=g[grp.k]||[];if(!arr.length)return;
-        h+='<div style="font-size:11.5px;font-weight:800;color:#8B6914;margin:13px 2px 7px">'+grp.ic+' '+grp.label+' <span style="background:#EFE7D3;border-radius:99px;padding:1px 7px;font-size:10.5px">'+arr.length+'</span></div>';
-        h+='<div class="aichk-grid">';
-        arr.slice(0,6).forEach(it=>{
-          const urg=!!(grp.urg&&it.dd<=14);
-          const dlab=(grp.k==='cold')?(it.days+'일'):(it.dd<0?((-it.dd)+'일 지남'):(it.dd===0?'오늘':'D-'+it.dd));
-          h+='<button type="button" data-aichk="'+_aiEsc(it.nm)+'" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid '+(urg?'#F0D4D1':'#ECE7DA')+';border-left:3px solid '+(urg?'#C0392B':'#C9A96E')+';border-radius:13px;padding:11px 12px;cursor:pointer;font-family:inherit;text-align:left">'
-            +'<span style="width:32px;height:32px;border-radius:50%;background:'+(urg?'#FBEAEA':'#EEF1F6')+';color:'+(urg?'#C0392B':'#15294A')+';font-size:14px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+_aiEsc(it.nm.slice(0,1))+'</span>'
-            +'<span style="flex:1;min-width:0"><span style="display:block;font-size:14px;font-weight:800;color:#15294A">'+_aiEsc(it.nm)+(it.sub?' <em style="font-style:normal;font-size:10.5px;color:#8A93A8;font-weight:600">'+_aiEsc(it.sub)+'</em>':'')+'</span>'
-            +'<span style="display:block;font-size:12px;color:#3A4457;margin-top:2px;line-height:1.45">'+it.why+'</span></span>'
-            +'<span style="font-size:11px;font-weight:800;border-radius:8px;padding:2px 7px;white-space:nowrap;flex-shrink:0;background:'+(urg?'#C0392B':'#F0E6CE')+';color:'+(urg?'#fff':'#15294A')+'">'+dlab+'</span></button>';
-        });
-        h+='</div>';
-        if(arr.length>6)h+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(arr.length-6)+'명</div>';
-      });
+      /* ★ [2026-07-25] 그룹별 아코디언 — 기본 접힘. 34명이 한꺼번에 펼쳐져 대화창을 다 먹는 문제 해결.
+         탭을 누르면 하단 #aiChkPanel에만 그 그룹이 펼쳐진다. 마지막 펼침 상태는 localStorage에 기억. */
+      h+='<div id="aiChkTabs" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 2px 0"></div>'
+        +'<div id="aiChkPanel"></div>';
     }
     /* ★ [2026-07-25] 질문 예시는 상단 칩바 드롭다운(#aiExToggle)으로 이동 — 스크롤에 밀려 올라가지 않도록 */
     w.innerHTML=h;
-    Array.prototype.forEach.call(w.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
+    if(total){
+      try{const _sv=localStorage.getItem('ai_chk_tab')||'';aiChkTab=(_sv&&(g[_sv]||[]).length)?_sv:'';}catch(_e){aiChkTab='';}
+      aiChkTabsRender(g);aiChkGrpRender(g);
+    }
   }).catch(()=>{const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="font-size:12.5px;color:#8A93A8;padding:12px 2px">고객 현황을 불러오지 못했어요. 고객 이름을 입력해 물어보셔도 돼요.</div>';});
+}
+/* ── 📋 그룹별 아코디언 (2026-07-25): 탭 = 요약 한 줄, 펼침은 한 그룹만 ── */
+let aiChkTab='';
+function aiChkTabsRender(g){
+  const tb=document.getElementById('aiChkTabs');if(!tb)return;
+  let s='';
+  AI_CHK_GROUPS.forEach(grp=>{
+    const n=(g[grp.k]||[]).length;if(!n)return;
+    const on=(aiChkTab===grp.k);
+    s+='<button type="button" data-aitab="'+grp.k+'" style="display:flex;align-items:center;gap:5px;border:1.5px solid '+(on?'#C9A96E':'#E4DFD1')+';background:'+(on?'#15294A':'#fff')+';color:'+(on?'#F0E6CE':'#5C6678')+';border-radius:12px;padding:7px 10px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">'
+      +grp.ic+' '+grp.label
+      +'<span style="background:'+(on?'#C9A96E':'#EFE7D3')+';color:'+(on?'#15294A':'#8B6914')+';border-radius:99px;padding:1px 6px;font-size:10.5px;font-weight:800">'+n+'</span>'
+      +'<span style="font-size:9px;color:'+(on?'#C9A96E':'#B0A88F')+'">'+(on?'▴':'▾')+'</span></button>';
+  });
+  tb.innerHTML=s;
+  Array.prototype.forEach.call(tb.querySelectorAll('[data-aitab]'),b=>{b.onclick=()=>{
+    const k=b.getAttribute('data-aitab');
+    aiChkTab=(aiChkTab===k)?'':k;   /* 같은 탭 재클릭 = 접기 */
+    try{localStorage.setItem('ai_chk_tab',aiChkTab);}catch(_e){}
+    aiChkTabsRender(g);aiChkGrpRender(g);
+  };});
+}
+function aiChkGrpRender(g){
+  const pn=document.getElementById('aiChkPanel');if(!pn)return;
+  const grp=AI_CHK_GROUPS.filter(x=>x.k===aiChkTab)[0];
+  if(!grp){pn.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:9px 2px 2px;line-height:1.6">위 항목을 탭하면 해당 고객 명단이 펼쳐집니다.</div>';return;}
+  const arr=g[grp.k]||[],cap=aiSideNarrow()?4:6;   /* ★ 모바일은 4개까지 — 화면 점유 최소화 */
+  let s='<div style="font-size:11.5px;color:#8A93A8;margin:9px 2px 7px">탭하면 그 고객으로 바로 대화를 시작해요</div><div class="aichk-grid">';
+  arr.slice(0,cap).forEach(it=>{
+    const urg=!!(grp.urg&&it.dd<=14);
+    const dlab=(grp.k==='cold')?(it.days+'일'):(it.dd<0?((-it.dd)+'일 지남'):(it.dd===0?'오늘':'D-'+it.dd));
+    s+='<button type="button" data-aichk="'+_aiEsc(it.nm)+'" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid '+(urg?'#F0D4D1':'#ECE7DA')+';border-left:3px solid '+(urg?'#C0392B':'#C9A96E')+';border-radius:13px;padding:11px 12px;cursor:pointer;font-family:inherit;text-align:left">'
+      +'<span style="width:32px;height:32px;border-radius:50%;background:'+(urg?'#FBEAEA':'#EEF1F6')+';color:'+(urg?'#C0392B':'#15294A')+';font-size:14px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+_aiEsc(it.nm.slice(0,1))+'</span>'
+      +'<span style="flex:1;min-width:0"><span style="display:block;font-size:14px;font-weight:800;color:#15294A">'+_aiEsc(it.nm)+(it.sub?' <em style="font-style:normal;font-size:10.5px;color:#8A93A8;font-weight:600">'+_aiEsc(it.sub)+'</em>':'')+'</span>'
+      +'<span style="display:block;font-size:12px;color:#3A4457;margin-top:2px;line-height:1.45">'+it.why+'</span></span>'
+      +'<span style="font-size:11px;font-weight:800;border-radius:8px;padding:2px 7px;white-space:nowrap;flex-shrink:0;background:'+(urg?'#C0392B':'#F0E6CE')+';color:'+(urg?'#fff':'#15294A')+'">'+dlab+'</span></button>';
+  });
+  s+='</div>';
+  if(arr.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(arr.length-cap)+'명</div>';
+  pn.innerHTML=s;
+  Array.prototype.forEach.call(pn.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
 }
 /* ── 기기 저장소가 비었을 때: 드라이브에서 자동 복원 → 미연결이면 연결 유도 (2026-07-19) ── */
 function aiChkBox(html){const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="display:flex;align-items:baseline;gap:7px;margin:6px 2px 8px"><b style="font-size:16px;color:#15294A;font-weight:800">📋 점검하면 좋을 고객</b></div>'+html;}
@@ -6158,14 +6203,10 @@ function aiPinBarRender(){
 }
 function aiChipsRender(){
   const box=document.getElementById('aiChips');if(!box)return;
-  const mk=(q,label,gold)=>'<button type="button" data-aiq="'+_aiEsc(q)+'" style="border:1px solid '+(gold?'#E0C36B':'#D8DCE5')+';background:'+(gold?'#FFF8E7':'#fff')+';border-radius:13px;padding:6px 11px;font-size:12px;color:'+(gold?'#8B6914':'#5C6678')+';font-weight:'+(gold?'700':'400')+';white-space:nowrap;font-family:inherit;cursor:pointer">'+_aiEsc(label)+'</button>';
-  /* ★ [2026-07-25] 💬 질문 예시 = 상단 칩바 고정 드롭다운. 대화가 길어져도 위로 밀리지 않는다.
-     비고정(전체 고객) 상태의 고정칩 4종은 폐기 — 예시 목록이 대체한다. 고객 고정 시 문맥칩은 유지. */
-  const ex='<button type="button" id="aiExToggle" style="border:1px solid #E0C36B;background:#FFF8E7;border-radius:13px;padding:6px 11px;font-size:12px;color:#8B6914;font-weight:700;white-space:nowrap;font-family:inherit;cursor:pointer;flex-shrink:0">💬 질문 예시 <span id="aiExArrow" style="font-size:10px">▾</span></button>';
-  box.innerHTML=ex+(aiPinned
-    ?(mk('미팅 전 브리핑해줘','미팅 전 브리핑',1)+mk('이 고객의 등록된 정보를 정리해 주세요','등록 정보')+mk('이 고객의 지난 미팅 기록을 시간순으로 정리해 주세요','지난 기록')+mk('이 고객이 소개한 고객이 있는지 알려 주세요','소개 관계'))
-    :'');
-  Array.prototype.forEach.call(box.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{const i2=document.getElementById('aiInput');if(i2){i2.value=b.getAttribute('data-aiq');aiSend();}};});
+  /* ★ [2026-07-25] 진입점은 항상 버튼 1개. 문맥칩 4종은 AI_EX_CHIPS_ONE 1~4번으로 흡수.
+     라벨에 고정 고객명을 넣어 "이 질문이 누구를 향하는지"를 누르기 전에 보이게 한다 — 혼돈 제거의 핵심. */
+  const lab=aiPinned?('💬 '+_aiEsc(aiPinned)+' 님 질문 예시'):'💬 질문 예시';
+  box.innerHTML='<button type="button" id="aiExToggle" style="border:1px solid #E0C36B;background:#FFF8E7;border-radius:13px;padding:6px 11px;font-size:12px;color:#8B6914;font-weight:700;white-space:nowrap;font-family:inherit;cursor:pointer;flex-shrink:0">'+lab+' <span id="aiExArrow" style="font-size:10px">▾</span></button>';
   aiExDropWire();
 }
 /* ── 💬 질문 예시 드롭다운 (2026-07-25): 상단 칩바에 고정 — 답변이 길어져도 항상 같은 자리 ── */
@@ -6176,15 +6217,16 @@ function aiExDropClose(){
 function aiExDropWire(){
   const p=document.getElementById('aiExDrop'),tg=document.getElementById('aiExToggle');
   if(!p||!tg)return;
-  if(!p.getAttribute('data-built')){
-    p.innerHTML=AI_EX_CHIPS.map(x=>'<button type="button" data-aiq2="'+_aiEsc(x.q)+'" style="display:block;width:100%;text-align:left;background:#fff;border:1.5px solid #E9E4D8;border-radius:11px;padding:9px 12px;font-size:12.5px;font-weight:600;line-height:1.5;color:#15294A;margin:0 0 6px;cursor:pointer;font-family:inherit;white-space:normal">'+_aiEsc(x.q)+'</button>').join('');
-    Array.prototype.forEach.call(p.querySelectorAll('[data-aiq2]'),b=>{b.onclick=()=>{
-      const i2=document.getElementById('aiInput');
-      if(i2){i2.value=b.getAttribute('data-aiq2');i2.focus();try{i2.setSelectionRange(i2.value.length,i2.value.length);}catch(_e){}try{i2.dispatchEvent(new Event('input',{bubbles:true}));}catch(_e2){}}
-      aiExDropClose();   /* 선택하면 목록을 접는다 — 전송은 사용자가 */
-    };});
-    p.setAttribute('data-built','1');
-  }
+  /* ★ [2026-07-25] 모드가 바뀌면 목록도 바뀌어야 한다 → 1회 빌드 캐시 제거, 매번 재구성 (9개라 부담 없음) */
+  const one=!!aiPinned,arr=one?AI_EX_CHIPS_ONE:AI_EX_CHIPS;
+  p.innerHTML='<div style="font-size:11px;font-weight:800;color:#8A93A8;padding:1px 4px 8px;line-height:1.5">'
+      +(one?('👤 <b style="color:#8B6914">'+_aiEsc(aiPinned)+'</b> 님 기록에서만 찾아요'):'📋 전체 고객 기록에서 찾아요')+'</div>'
+    +arr.map(x=>'<button type="button" data-aiq2="'+_aiEsc(x.q)+'" style="display:block;width:100%;text-align:left;background:#fff;border:1.5px solid #E9E4D8;border-radius:11px;padding:9px 12px;font-size:12.5px;font-weight:600;line-height:1.5;color:#15294A;margin:0 0 6px;cursor:pointer;font-family:inherit;white-space:normal">'+_aiEsc(x.q)+'</button>').join('');
+  Array.prototype.forEach.call(p.querySelectorAll('[data-aiq2]'),b=>{b.onclick=()=>{
+    const i2=document.getElementById('aiInput');
+    if(i2){i2.value=b.getAttribute('data-aiq2');i2.focus();try{i2.setSelectionRange(i2.value.length,i2.value.length);}catch(_e){}try{i2.dispatchEvent(new Event('input',{bubbles:true}));}catch(_e2){}}
+    aiExDropClose();   /* 선택하면 목록을 접는다 — 전송은 사용자가 */
+  };});
   tg.onclick=function(ev){try{ev.stopPropagation();}catch(_e){}
     if(p.style.display!=='none'){aiExDropClose();return;}
     p.style.display='';p.scrollTop=0;const a=document.getElementById('aiExArrow');if(a)a.textContent='▴';};
@@ -6255,10 +6297,10 @@ function aiOpen(){
     +'<div id="aiMsgs" style="flex:1;overflow-y:auto;padding:4px 12px 10px"></div>'
     +'<div style="border-top:1px solid #E4E0D6;background:#fff;padding:9px 11px;flex-shrink:0">'
     +'<div style="display:flex;gap:7px;align-items:flex-end">'
-    +'<textarea id="aiInput" rows="1" placeholder="내가 등록한 고객 기록에서만 찾아 드려요 · 일반 질문은 외부 AI를 사용해 주세요" style="flex:1;border:1px solid #D8DCE5;border-radius:18px;padding:10px 14px;font-size:14px;line-height:1.55;outline:0;min-width:0;resize:none;font-family:inherit;max-height:120px;overflow-y:auto;box-sizing:border-box"></textarea>'
+    +'<textarea id="aiInput" rows="2" placeholder="내가 등록한 고객 기록에서만 찾아 드려요 · 일반 질문은 외부 AI를 사용해 주세요" style="flex:1;border:1px solid #D8DCE5;border-radius:18px;padding:10px 14px;font-size:14px;line-height:1.55;outline:0;min-width:0;resize:none;font-family:inherit;min-height:62px;max-height:160px;overflow-y:auto;box-sizing:border-box"></textarea>'   /* ★ [2026-07-25] 기본 2줄 — min-height로 잡아야 vmTaGrow/height:auto 후에도 줄어들지 않는다 */
     +'<button type="button" id="aiSendBtn" style="width:38px;height:38px;border-radius:50%;background:#15294A;border:0;color:#C9A96E;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-arrow-up" style="font-size:17px"></i></button></div>'
     +'<div id="aiRosterMeter" style="padding:0 2px"></div>'
-    +'<div style="font-size:10px;color:#B7BDC9;text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-lock" style="font-size:10px"></i> 내 구글 드라이브에 암호화 저장 · 회사 서버엔 안 남아요 · <i class="ti ti-microphone" style="font-size:10px"></i> 음성 입력 가능</div></div></div></div></div>';
+    +'<div style="font-size:11.5px;color:#6B7280;text-align:center;margin-top:5px;line-height:1.5"><i class="ti ti-lock" style="font-size:11px"></i> 내 구글 드라이브에 암호화 저장 · 회사 서버엔 안 남아요 · <i class="ti ti-microphone" style="font-size:11px"></i> 음성 입력 가능</div></div></div></div></div>';   /* ★ [2026-07-25] 10px/#B7BDC9 → 11.5px/#6B7280, nowrap·ellipsis 해제 (모바일 문구 잘림) */
   document.body.appendChild(m);
   document.getElementById('aiCloseBtn').onclick=()=>{aiSaveAsk(()=>{m.style.display='none';});};   /* ★ 닫기 전 저장 확인 (2026-07-19) */
   document.getElementById('aiHistBtn').onclick=function(){aiSideToggle();};
@@ -6266,8 +6308,8 @@ function aiOpen(){
   m.addEventListener('click',ev=>{if(ev.target===m)aiSaveAsk(()=>{m.style.display='none';});});   /* ★ 배경 탭으로 닫을 때도 확인 (2026-07-19) */
   document.getElementById('aiSendBtn').onclick=aiSend;
   document.getElementById('aiInput').addEventListener('keydown',ev=>{if(ev.key==='Enter'&&!ev.shiftKey&&!ev.isComposing&&ev.keyCode!==229){ev.preventDefault();aiSend();}});   /* Shift+Enter는 줄바꿈 */
-  document.getElementById('aiInput').addEventListener('input',function(){vmTaGrow(this,120);});   /* ★ 자동 확장 (2026-07-20) */
-  Array.prototype.forEach.call(m.querySelectorAll('[data-aiq]'),b=>{b.onclick=()=>{document.getElementById('aiInput').value=b.getAttribute('data-aiq');aiSend();};});
+  document.getElementById('aiInput').addEventListener('input',function(){vmTaGrow(this,160);});   /* ★ 자동 확장 (2026-07-20) · [2026-07-25] max-height 160px와 일치 */
+  /* ★ [2026-07-25] 고정칩(data-aiq) 전면 폐기로 바인딩 불필요 — 질문 예시 드롭다운(data-aiq2)이 대체 */
   try{ccSync.mount(document.getElementById('ccSyncBadge'));ccSync.flush();}catch(_e){}   /* ★ 백업 상태 표시 + 대기분 자동 전송 (2026-07-19) */
   aiChkRender();   /* ★ 첫 화면 = 점검하면 좋을 고객 (2026-07-19): 묻지 않고 먼저 보여준다 */
   aiChipsRender();
