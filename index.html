@@ -427,6 +427,10 @@
       #jm-stat-track.jm-run{animation:jmMq var(--jm-mq-dur,26s) linear infinite}
       #jm-stat-track .jm-st{font-size:13px;font-weight:680;color:#3D4657;white-space:nowrap;margin-right:26px}
       #jm-stat-track .jm-st b{font-weight:850}
+      #jm-stat-track .jm-st small{font-size:11px;font-weight:650;color:var(--jm-lt);margin-left:5px}
+      #jm-stat-track .jm-st small:before{content:'(';}
+      #jm-stat-track .jm-st small:after{content:')';}
+      #jm-stat-track .jm-st .jm-sdv{font-style:normal;color:#C3CAD6;margin:0 6px}
       /* ── [단체가입] 슬라이드4 · 하단 배너 · 팝업 ── */
       .jm-s4{background:linear-gradient(118deg,#0E2E22 0%,#175C40 55%,#1E7A55 100%)}
       .jm-gbar{display:flex;align-items:center;gap:11px;background:linear-gradient(115deg,#0E2E22,#1E7A55);color:#fff;padding:13px 16px;border-radius:14px;cursor:pointer;margin:8px 0 0;box-shadow:0 6px 18px rgba(14,46,34,.22)}
@@ -5126,7 +5130,9 @@ async function loadMain(){
     try{
       const crSnap=await getDocs(collection(db,'case_reports'));
       const crItems=crSnap.docs.map(d=>{const x=d.data();return{contentId:'cr_'+(x.reportId||d.id),type:'case_report',title:x.title||x.topicLabel||'클로징 Report',summary:x.summary||x.topicLabel||'',url:(x.step5&&x.step5.htmlUrl)||x.url||'',audioUrl:(x.step6&&x.step6.audioMp3Url)||x.audioUrl||'',pdfUrl:(x.step5&&x.step5.pdfUrl)||x.pdfUrl||'',topicSlug:x.topicSlug||'',subType:x.subType||x.corpType||'',price:2000,isActive:true,createdAt:x.publishedAt||x.createdAt||null};});
-      allContents=allContents.filter(c=>c.type!=='case_report').concat(crItems);
+      /* ★ [v3.3] 자료(HTML/PDF/오디오) 전무한 미완성 건 제외 — master_guides 의 .filter(c=>!!c.url) 와 동일 취지, 조건은 더 보수적 */
+      const crReady=crItems.filter(c=>!!(c.url||c.pdfUrl||c.audioUrl));
+      allContents=allContents.filter(c=>c.type!=='case_report').concat(crReady);
     }catch(e){console.warn('case_reports 로드 실패:',e.message);}
     // ★ [마스터가이드] 게시본(master_guides)을 메인 그리드에 노출
     //    가격·권한: 클로징/TCW 와 완전 동일 (일반회원 2,000원 차감, 멤버십 등급 무료) — mgPayAndOpen 참조
@@ -14045,10 +14051,11 @@ window.addEventListener('load', ()=>{ setTimeout(handleClientReportAction, 1500)
     else{items=jmPick(function(c){return true;});title=jmKw?'검색 결과':'전체 콘텐츠';}
     if(jmSub!=='all')items=items.filter(function(c){return (c.subType||'')===jmSub;});
     if(jmKw){var q=jmKw.toLowerCase();items=items.filter(function(c){return String(c.title||'').toLowerCase().indexOf(q)>=0||String(c.summary||'').toLowerCase().indexOf(q)>=0;});}
+    var _tot=items.length;   /* ★ [v3.3] 슬라이스 전 실제 건수 — 티커와 정합 */
     items=items.slice(0,60);
     var hd='<div class="jm-arch-hd"><h3>'+jmEsc(title)+(jmSub!=='all'?' · '+jmEsc(jmSub):'')+'</h3>'
       +(when?'<span class="jm-when" style="'+(JM_SERIES[jmCat]?JM_SERIES[jmCat].wc:'')+'">'+when+'</span>':'')
-      +'<span class="jm-cnt">'+items.length+'건</span>'
+      +'<span class="jm-cnt">'+_tot+'편</span>'
       +'<button class="jm-all jm-back" onclick="jmArchBack()">‹ 콘텐츠 전체보기</button></div>';
     if(!items.length){host.innerHTML=hd+'<div class="jm-aempty">조건에 맞는 콘텐츠가 없습니다.</div>';return;}
     host.innerHTML=hd+'<div class="jm-agrid">'+items.map(jmContentCard).join('')+'</div>';
@@ -14073,20 +14080,53 @@ window.addEventListener('load', ()=>{ setTimeout(handleClientReportAction, 1500)
     if(typeof window.filterCat==='function')window.filterCat('all',null);
     window.jmScroll('jm-rails');
   }catch(e){}};
-  /* ── [v3.2] 콘텐츠 현황 티커: 오늘 날짜 + 총 건수 + 시리즈별 건수 우→좌 흐름 ── */
+  /* ── [v3.3] 콘텐츠 현황 티커: 오늘 날짜 + 자료 건수 합산(HTML·PDF·오디오·PPT·영상·카드) ── */
+  /* 자료 판정 기준 = 상세모달 포맷 배지(_detFmts, 5768행)와 완전 동일 + 카드뉴스(cardUrls) 포함 */
+  var JM_FMT_LB={html:'HTML',pdf:'PDF',audio:'오디오',ppt:'PPT',video:'영상',card:'카드뉴스'};
+  var JM_FMT_CL={html:'#1565C0',pdf:'#C62828',audio:'#4A148C',ppt:'#E65100',video:'#6A1B9A',card:'#00796B'};
   var JM_ST_COLOR={daily_report:'#2563EB',case_report:'#8F2D62',tax_weekly:'#B9821F',master_guide:'#177A56',medical_weekly:'#9E2A38'};
+  function jmFmtSet(c){var s={};try{
+    if(c.formats&&c.formats.length)c.formats.forEach(function(f){if(JM_FMT_LB[f])s[f]=1;});
+    var u=String(c.url||'').toLowerCase().split('?')[0];
+    if(u){
+      if(u.slice(-5)==='.html'||c.type==='report'||c.type==='brief')s.html=1;
+      if(u.slice(-4)==='.pdf')s.pdf=1;
+      if(u.slice(-5)==='.pptx')s.ppt=1;
+      if(u.slice(-4)==='.mp3'||u.slice(-4)==='.m4a')s.audio=1;
+      if(u.slice(-4)==='.mp4'||u.indexOf('vimeo')>=0)s.video=1;
+    }
+    if(c.pptUrl||c.pptxUrl)s.ppt=1;
+    if(c.pdfUrl)s.pdf=1;
+    if(c.audioUrl)s.audio=1;
+    if(c.videoUrl)s.video=1;
+    if(c.cardUrls&&c.cardUrls.length)s.card=1;
+    if(c.categoryId==='daily_report')s.html=1;              /* _contentHasFmt 동일 예외 */
+    if(!Object.keys(s).length&&(c.url||c.pdfUrl||c.audioUrl))s.html=1;   /* 자료 0건 방지 */
+  }catch(e){}return s;}
+  function jmTally(list){var r={ea:list.length,tot:0,by:{}};
+    list.forEach(function(c){var s=jmFmtSet(c);for(var k in s){r.by[k]=(r.by[k]||0)+1;r.tot++;}});
+    return r;}
   var jmStSig='';
   window.jmStatTicker=function(force){try{
     var tr=$id('jm-stat-track'),mq=$id('jm-stat-mq');if(!tr||!mq)return;
     var n=new Date(),wd=['일','월','화','수','목','금','토'][n.getDay()];
     var it=['<span class="jm-st" style="color:#15294A;font-weight:850">📅 '+n.getFullYear()+'. '+(n.getMonth()+1)+'. '+n.getDate()+' ('+wd+')</span>'];
-    it.push('<span class="jm-st">전체 콘텐츠 <b style="color:#15294A">'+jmList.length+'건</b></span>');
-    ['case_report','tax_weekly','master_guide','medical_weekly','daily_report'].forEach(function(k){
+    var all=jmTally(jmList);
+    it.push('<span class="jm-st">전체 자료 <b style="color:#15294A">'+all.tot+'건</b><small>주제 '+all.ea+'편</small></span>');
+    /* 시리즈별 — 요청 순서: 클로징 · 택스 · 마스터 · 메디컬 · 데일리 */
+    var keys=['case_report','tax_weekly','master_guide','medical_weekly','daily_report'],sum=0,sumEa=0;
+    keys.forEach(function(k){
       var r=JM_SERIES[k];if(!r)return;
-      it.push('<span class="jm-st">'+r.t+' <b style="color:'+(JM_ST_COLOR[k]||'#15294A')+'">'+jmList.filter(r.match).length+'건</b></span>');
+      var t=jmTally(jmList.filter(r.match));sum+=t.tot;sumEa+=t.ea;
+      it.push('<span class="jm-st">'+r.t+' <b style="color:'+(JM_ST_COLOR[k]||'#15294A')+'">'+t.tot+'건</b><small>'+t.ea+'편</small></span>');
     });
-    var nw=jmList.filter(jmIsToday).length;
-    if(nw)it.push('<span class="jm-st">오늘 신규 <b style="color:var(--jm-red)">'+nw+'건</b></span>');
+    /* 기타(토요특강·일반 콘텐츠 등) — 전체 = 시리즈 합계 + 기타 로 항상 정합 */
+    var etT=all.tot-sum,etE=all.ea-sumEa;
+    if(etT>0)it.push('<span class="jm-st">기타 콘텐츠 <b style="color:#546E7A">'+etT+'건</b><small>'+etE+'편</small></span>');
+    /* 자료 종류별 내역 */
+    var bd=[];['html','pdf','audio','ppt','video','card'].forEach(function(k){
+      if(all.by[k])bd.push('<i style="color:'+JM_FMT_CL[k]+';font-style:normal;font-weight:800">'+JM_FMT_LB[k]+' '+all.by[k]+'</i>');});
+    if(bd.length)it.push('<span class="jm-st">'+bd.join('<em class="jm-sdv">·</em>')+'</span>');
     var one=it.join('');
     if(!force&&one===jmStSig)return;   /* 내용 동일하면 애니메이션 유지(재시작 방지) */
     jmStSig=one;
@@ -14097,7 +14137,7 @@ window.addEventListener('load', ()=>{ setTimeout(handleClientReportAction, 1500)
       var reps=Math.max(1,Math.min(8,Math.ceil((vw+80)/ow)));   /* 뷰포트보다 짧으면 반복 채워 항상 흐르게 */
       var blk='';for(var i=0;i<reps;i++)blk+=one;
       tr.innerHTML=blk+blk;
-      tr.style.setProperty('--jm-mq-dur',Math.max(18,Math.round(ow*reps/42))+'s');
+      tr.style.setProperty('--jm-mq-dur',Math.max(20,Math.round(ow*reps/42))+'s');
       tr.classList.add('jm-run');
     });
   }catch(e){}};
