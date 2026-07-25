@@ -2510,12 +2510,19 @@
         </div>   <!-- /#fcc-tools -->
       </div>   <!-- /전화번호·캘린더 도구 카드 -->
       <div class="filter-bar" style="margin-bottom:10px">
-        <input id="fcc-search" placeholder="이름으로 검색..." oninput="fccRenderTable()" style="flex:1;min-width:0">
+        <input id="fcc-search" placeholder="이름·회사·직업·주소·관심항목 검색..." oninput="fccRenderTable()" style="flex:1;min-width:0">
         <select id="fcc-filter" onchange="fccRenderTable()" style="flex:0 0 auto">
           <option value="all">전체 고객</option>
           <option value="birth">이번 달 생일</option>
           <option value="sang">이번 달 상령일</option>
           <option value="mat">이번 달 만기·갱신</option>
+        </select>
+        <select id="fcc-sort" onchange="fccRenderTable()" style="flex:0 0 auto">
+          <option value="name">이름 가나다순</option>
+          <option value="name_desc">이름 역순</option>
+          <option value="sang">상령일 임박순</option>
+          <option value="birth">생일 빠른순</option>
+          <option value="recent">최근 등록순</option>
         </select>
         <select id="fcc-pp" onchange="fccSetPP(this.value)" style="flex:0 0 auto">
           <option value="10">10개씩</option>
@@ -2526,8 +2533,11 @@
           <option value="100">100개씩</option>
         </select>
       </div>
-      <div id="fcc-summary" style="font-size:12px;color:#8B93AE;margin-bottom:8px"></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:44px">No.</th><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th>연락처</th><th>주소</th><th>관심항목</th><th>다음연락</th><th>메모</th><th>추가정보</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="12" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+        <div id="fcc-summary" style="font-size:12px;color:#8B93AE"></div>
+        <button id="fcc-delbar" onclick="fccDelSelected()" style="display:none;flex:0 0 auto;background:#D14343;color:#fff;border:0;border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer">🗑 선택 <span id="fcc-delcnt">0</span>명 삭제</button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:34px" class="tc"><input type="checkbox" id="fcc-chkall" onclick="fccChkAll(this)" title="전체 선택"></th><th style="width:44px">No.</th><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th>연락처</th><th>주소</th><th>관심항목</th><th>다음연락</th><th>메모</th><th>추가정보</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="13" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
       <div id="fcc-detail-note" style="margin-top:8px;font-size:12px;color:#8B93AE;line-height:1.6"></div>
       <div id="fcc-pager" style="display:flex;align-items:center;justify-content:center;gap:5px;flex-wrap:wrap;margin-top:12px"></div>
     </div>
@@ -6903,18 +6913,18 @@ async function loadFcClients(){
     // 페이지 진입 직후엔 인증 복원(me 설정) 전일 수 있음 — 최대 8회(약 5.6초) 대기 후 재시도
     if(_fccAuthWait<8){
       _fccAuthWait++;
-      $('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">불러오는 중...</td></tr>';
+      $('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">불러오는 중...</td></tr>';
       setTimeout(loadFcClients,700);
       return;
     }
     _fccAuthWait=0;
-    $('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">로그인 후 이용 가능합니다.</td></tr>';
+    $('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">로그인 후 이용 가능합니다.</td></tr>';
     return;
   }
   _fccAuthWait=0;
-  $('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">불러오는 중...</td></tr>';
+  $('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">불러오는 중...</td></tr>';
   try{await fccFetch(true);}
-  catch(e){console.error('loadFcClients error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">고객 정보를 불러오지 못했습니다.</td></tr>';return;}
+  catch(e){console.error('loadFcClients error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">고객 정보를 불러오지 못했습니다.</td></tr>';return;}
   try{await jvMcRead();}catch(_e){}   /* ★ [2026-07-24] FC 채널 상세 병합 (읽기 전용 · 실패해도 기본 표는 표시) */
   window.fccRenderTable();
 }
@@ -6928,7 +6938,17 @@ window.fccRenderTable=function(){
   const fil=$('fcc-filter')?$('fcc-filter').value:'all';
   const t=fccToday();const mm=fccD2(t.m);
   let list=fccCache.slice();
-  if(kw)list=list.filter(c=>(c.name||'').includes(kw));
+  if(kw){
+    /* ★ [2026-07-25] 통합 검색 — 이름·회사·직업·직함·주소·관심항목·연락처·메모 전 컬럼에서 찾는다.
+       상세 정보(주소·직업 등)는 jvMcGet(c.id)에 있으므로 함께 대조한다. */
+    const _kw=kw.toLowerCase();
+    list=list.filter(c=>{
+      const D=(typeof jvMcGet==='function'?(jvMcGet(c.id)||{}):{});
+      const hay=[c.name,c.company,c.job,c.title,D.company,D.job,D.title,D.addr,D.addrDetail,D.phone,c.phone,
+                 (D.needs||[]).join(' '),D.memo].filter(Boolean).join(' ').toLowerCase();
+      return hay.indexOf(_kw)>=0;
+    });
+  }
   if(fil!=='all'){
     list=list.filter(c=>{
       if(!c.birthDate)return false;
@@ -6938,12 +6958,20 @@ window.fccRenderTable=function(){
       return true;
     });
   }
-  list.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
+  /* ★ [2026-07-25] 정렬 — 드롭다운(fcc-sort) 선택에 따라. 기본은 이름 가나다순 */
+  const _sort=$('fcc-sort')?$('fcc-sort').value:'name';
+  const _sangKey=(c)=>{if(!c.birthDate)return '9999';const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:fccSang(c.birthDate);const cur=mm+fccD2(t.d);return (sg>=cur?'0':'1')+sg;};   /* 오늘 이후를 앞으로 */
+  const _birthKey=(c)=>{if(!c.birthDate)return '9999';return (c.birthMmdd||c.birthDate.slice(5,7)+c.birthDate.slice(8,10));};
+  if(_sort==='name_desc')list.sort((a,b)=>String(b.name||'').localeCompare(String(a.name||''),'ko'));
+  else if(_sort==='sang')list.sort((a,b)=>_sangKey(a).localeCompare(_sangKey(b)));
+  else if(_sort==='birth')list.sort((a,b)=>_birthKey(a).localeCompare(_birthKey(b)));
+  else if(_sort==='recent')list.sort((a,b)=>String(b.id||'').localeCompare(String(a.id||'')));   /* Firestore 자동 ID는 대략 시간순 — 최근이 뒤 */
+  else list.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
   const totalContracts=fccCache.reduce((s,c)=>s+((c.contracts&&c.contracts.length)||0),0);
   /* ★ 검색어·필터가 바뀌면 1페이지로 리셋 */
-  const _key=kw+'|'+fil;if(_key!==_fccLastKey){_fccLastKey=_key;fccPage=1;}
+  const _key=kw+'|'+fil+'|'+_sort;if(_key!==_fccLastKey){_fccLastKey=_key;fccPage=1;}   /* ★ [2026-07-25] 정렬 변경 시에도 1페이지로 */
   const _pager=$('fcc-pager');
-  if(!list.length){$('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">'+(fccCache.length?'조건에 맞는 고객이 없습니다.':'등록된 고객이 없습니다. 위에서 등록해보세요.')+'</td></tr>';if(_pager)_pager.innerHTML='';$('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(fccCache.length?' · 조건 일치 0명':'');return;}
+  if(!list.length){$('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">'+(fccCache.length?'조건에 맞는 고객이 없습니다.':'등록된 고객이 없습니다. 위에서 등록해보세요.')+'</td></tr>';if(_pager)_pager.innerHTML='';$('fcc-summary').textContent='고객 '+fccCache.length+'명 · 계약 '+totalContracts+'건'+(fccCache.length?' · 조건 일치 0명':'');return;}
   const totalPages=Math.max(1,Math.ceil(list.length/fccPP));
   if(fccPage>totalPages)fccPage=totalPages;if(fccPage<1)fccPage=1;
   const _st=(fccPage-1)*fccPP;
@@ -6966,6 +6994,7 @@ window.fccRenderTable=function(){
     const exKeys=D.extra?Object.keys(D.extra):[];
     const memoTxt=cut(D.memo,28);
     return '<tr'+(D.id?' data-fccrow="'+fccEsc(c.id)+'" style="cursor:pointer"':'')+'>'
+      +'<td class="tc"'+(D.id?'':' ')+'>'+(D.id?'<input type="checkbox" class="fcc-chk" data-fccchk="'+fccEsc(c.id)+'" onclick="fccChkOne(event)">':'')+'</td>'
       +'<td class="tc" style="color:#8B93AE;font-size:12px">'+(_st+_i+1)+'</td>'
       +'<td style="font-weight:700">'+fccEsc(c.name)+(D.id?'':' <span title="내 채널에 상세 정보가 없습니다" style="color:#C5CAD6;font-size:11px">·</span>')+'</td>'
       +'<td>'+fccEsc(c.birthDate||'')+'</td>'
@@ -6980,6 +7009,8 @@ window.fccRenderTable=function(){
       +'<td class="tc" style="white-space:nowrap"><button type="button" data-fcccopy="'+fccEsc(c.id)+'" style="font-size:12px;color:#0F6E56;background:none;border:1px solid #9FE1CB;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">🔗 데일리</button><button type="button" data-fccedit="'+fccEsc(c.id)+'" style="font-size:12px;color:#1B3A5C;background:none;border:1px solid #C7D2DE;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">✏️</button><button type="button" data-fcccal="'+fccEsc(c.id)+'" style="font-size:12px;color:#7C5C1A;background:none;border:1px solid #E0C36B;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">📅</button><button type="button" data-fccdel="'+fccEsc(c.id)+'" style="font-size:12px;color:#DC2626;background:none;border:1px solid #FCA5A5;border-radius:6px;padding:3px 8px;cursor:pointer">삭제</button></td>'
       +'</tr>';
   }).join('');
+  /* ★ [2026-07-25] 표 다시 그릴 때마다 선택·삭제바 초기화 (페이지 이동·검색·정렬 시 선택 유지되면 위험) */
+  try{const _h=$('fcc-chkall');if(_h)_h.checked=false;fccUpdateDelBar();}catch(_e){}
   /* ★ [2026-07-24] 상세 출처 안내 */
   (function(){const n=$('fcc-detail-note');if(!n)return;
     const hit=pageList.filter(c=>jvMcGet(c.id)).length;
@@ -7137,7 +7168,7 @@ function jvFccToggleDetail(row){
       +ms.map(m=>'<div style="background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:7px 10px;margin-top:5px"><div style="font-size:11px;color:#8B93AE">'+E(m.date||'')+(m.place?' · '+E(m.place):'')+'</div><div style="font-size:12.5px;color:#1F2937;white-space:pre-wrap;margin-top:2px">'+E(m.note||'')+'</div></div>').join('')+'</div>';
     if(!h)h='<div style="color:#8B93AE">표시할 상세 정보가 없습니다.</div>';
     const tr=document.createElement('tr');tr.setAttribute('data-fccdetail','1');
-    tr.innerHTML='<td colspan="12" style="background:#F8FAFC;padding:14px 16px;white-space:normal"><div style="max-width:900px;font-size:12.5px;line-height:1.6">'+h
+    tr.innerHTML='<td colspan="13" style="background:#F8FAFC;padding:14px 16px;white-space:normal"><div style="max-width:900px;font-size:12.5px;line-height:1.6">'+h
       +'<div style="margin-top:10px;font-size:11.5px;color:#8B93AE">이 내용은 <b>내 채널</b>에 저장된 정보입니다 · 수정은 고객입력에서</div></div></td>';
     row.parentNode.insertBefore(tr,row.nextSibling);
   }catch(_e){}
@@ -7162,6 +7193,56 @@ window._fccDelLegacy=async function(ev){
     if(fccBoardY)fccRenderBoard();
     toast('삭제되었습니다.','success');
   }catch(e){console.error('fccDelete error:',e);toast('삭제에 실패했습니다.');}
+};
+/* ═══ ★ [2026-07-25] 마이페이지 일괄 삭제 — 조회 화면에서 중복·불필요 고객을 골라 한 번에 삭제 ═══
+   삭제 실체는 기존 _fccDelLegacy와 동일 경로(fc_clients + 열람기록 fc_client_views 파기)를 재사용한다.
+   되돌릴 수 없으므로 ①선택 대상 이름 확인창 ②확정 시에만 실행. */
+window.fccChkAll=function(box){
+  const on=box.checked;
+  document.querySelectorAll('#fcc-tbody .fcc-chk').forEach(cb=>{cb.checked=on;});
+  fccUpdateDelBar();
+};
+window.fccChkOne=function(ev){
+  if(ev)ev.stopPropagation();   /* 행 클릭(상세) 이벤트와 분리 */
+  fccUpdateDelBar();
+  const all=document.querySelectorAll('#fcc-tbody .fcc-chk');
+  const chk=document.querySelectorAll('#fcc-tbody .fcc-chk:checked');
+  const head=document.getElementById('fcc-chkall');
+  if(head)head.checked=(all.length>0&&chk.length===all.length);
+};
+function fccSelectedIds(){
+  return Array.prototype.map.call(document.querySelectorAll('#fcc-tbody .fcc-chk:checked'),cb=>cb.getAttribute('data-fccchk'));
+}
+function fccUpdateDelBar(){
+  const ids=fccSelectedIds();
+  const bar=document.getElementById('fcc-delbar'),cnt=document.getElementById('fcc-delcnt');
+  if(cnt)cnt.textContent=ids.length;
+  if(bar)bar.style.display=ids.length?'':'none';
+}
+window.fccDelSelected=async function(){
+  const ids=fccSelectedIds();
+  if(!ids.length)return;
+  const names=ids.map(id=>{const c=(fccCache||[]).find(x=>x.id===id);return c?(c.name||'(이름없음)'):id;});
+  const preview=names.slice(0,10).join(', ')+(names.length>10?(' 외 '+(names.length-10)+'명'):'');
+  if(!confirm('아래 '+ids.length+'명을 삭제합니다.\n\n'+preview+'\n\n등록된 계약·열람 기록도 함께 삭제되며, 되돌릴 수 없습니다. 진행할까요?'))return;
+  const bar=document.getElementById('fcc-delbar');if(bar){bar.disabled=true;bar.textContent='삭제 중…';}
+  let ok=0,fail=0;
+  for(const id of ids){
+    try{
+      await deleteDoc(doc(db,'fc_clients',id));
+      try{
+        const _vs=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid),where('clientId','==',id)));
+        await Promise.all(_vs.docs.map(dv=>deleteDoc(dv.ref)));
+      }catch(_ve){console.warn('열람 기록 삭제 일부 실패:',_ve);}
+      fccCache=fccCache.filter(x=>x.id!==id);ok++;
+    }catch(e){console.error('일괄삭제 실패 id=',id,e);fail++;}
+  }
+  if(bar){bar.disabled=false;}
+  const head=document.getElementById('fcc-chkall');if(head)head.checked=false;
+  window.fccRenderTable();
+  if(fccBoardY)fccRenderBoard();
+  fccUpdateDelBar();
+  toast(ok+'명 삭제 완료'+(fail?(' · '+fail+'명 실패'):''),fail?'':'success');
 };
 let fccEdit=null;   // 수정 모드: {id, keep:[유지할 기존 계약]}
 function fccCtAddRow(p,m,y,t,ins,pr){   /* ★ 보험사(ins)·월보험료(pr) 추가 + '기타' 종류 — 채널(지도) 양식과 통일 (2026-07-18) */
