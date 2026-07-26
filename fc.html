@@ -707,6 +707,8 @@ a{color:inherit;text-decoration:none}
 
 <!-- 📅 일정·이벤트 캘린더 데이터 (정기 15 + 수시 6) -->
 <script src="calendarData.js"></script>
+<!-- 📱 문자발송 공용 코어 (window.SmsCore) — AI 비서 카드 문자 발송용 · index.html과 동일 IndexedDB 공유 -->
+<script src="sms-core.js"></script>
 <!-- ─── PWA: 동적 manifest + iOS 호환 (setupPWA() 함수에서 채워짐) ─── -->
 <link rel="prefetch" href="/client-daily.html"><!-- ★ 데일리 뷰어 사전 로딩 (클릭 체감 개선) -->
 <link rel="manifest" id="pwaManifest">
@@ -6069,14 +6071,14 @@ async function aiChkBuild(){
       const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
       if(!p||ex.length<10)return;const kk=p+'|'+ex;if(seen[kk])return;seen[kk]=1;
       const dd=aiDday(ex);if(dd==null||dd<0||dd>45)return;
-      if(!bx||dd<bx.dd)bx={dd:dd,p:p,ex:ex};});
-    if(bx)g.exp.push({nm:nm,sub:sub,dd:bx.dd,why:_aiEsc(bx.p)+' <b>'+aiChkYmd(bx.ex)+' 만기</b>'});
+      if(!bx||dd<bx.dd)bx={dd:dd,p:p,ex:ex,pt:String((x&&x.ptype)||'')};});
+    if(bx){const _c={'실손':'silson','자동차':'auto','보장성':'protect','저축성':'saving','연금':'pension'}[bx.pt]||'';g.exp.push({nm:nm,sub:sub,dd:bx.dd,why:_aiEsc(bx.p)+' <b>'+aiChkYmd(bx.ex)+' 만기</b>',mk:(_c?('만기_'+_c):'만기'),mm:parseInt(bx.ex.slice(5,7),10),md:parseInt(bx.ex.slice(8,10),10),mp:bx.p,cid:(c.fccId||c.id||''),ph:(c.phone||'')});}
     /* ② 상령일 ③ 생일 */
     if(c.birthDate&&c.birthDate.length===10&&!c.birthUnknown){
       const sm=aiSangMmdd(c.birthDate),sd=aiDdayMmdd(sm);
-      if(sd!=null&&sd<=30)g.sang.push({nm:nm,sub:sub,dd:sd,why:'상령일 <b>'+aiChkMd(sm)+'</b> · 지나면 보험료가 오릅니다'});
+      if(sd!=null&&sd<=30)g.sang.push({nm:nm,sub:sub,dd:sd,why:'상령일 <b>'+aiChkMd(sm)+'</b> · 지나면 보험료가 오릅니다',mk:'상령일',mm:parseInt(sm.slice(0,2),10),md:parseInt(sm.slice(2,4),10),mp:'',cid:(c.fccId||c.id||''),ph:(c.phone||'')});
       const bm=c.birthDate.slice(5,7)+c.birthDate.slice(8,10),bd=aiDdayMmdd(bm),ag=aiAge(c.birthDate);
-      if(bd!=null&&bd<=30)g.bday.push({nm:nm,sub:sub,dd:bd,why:'생일 <b>'+aiChkMd(bm)+'</b>'+(ag!=null?' · 만 '+(ag+1)+'세':'')});
+      if(bd!=null&&bd<=30)g.bday.push({nm:nm,sub:sub,dd:bd,why:'생일 <b>'+aiChkMd(bm)+'</b>'+(ag!=null?' · 만 '+(ag+1)+'세':''),mk:'생일',mm:parseInt(bm.slice(0,2),10),md:parseInt(bm.slice(2,4),10),mp:'',cid:(c.fccId||c.id||''),ph:(c.phone||'')});
     }
     /* ④ 다음 연락 예정 — 지났거나 7일 내 */
     if(c.nextContact&&c.nextContact.length>=10){
@@ -6122,6 +6124,7 @@ function aiChkRender(){
 }
 /* ── 📋 그룹별 아코디언 (2026-07-25): 탭 = 요약 한 줄, 펼침은 한 그룹만 ── */
 let aiChkTab='';
+let _aiChkMsgArr=[];   /* ★ 현재 펼쳐진 그룹의 카드 항목 — 💬문자 버튼이 인덱스로 참조 */
 function aiChkTabsRender(g){
   const tb=document.getElementById('aiChkTabs');if(!tb)return;
   let s='';
@@ -6147,19 +6150,80 @@ function aiChkGrpRender(g){
   if(!grp){pn.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:9px 2px 2px;line-height:1.6">위 항목을 탭하면 해당 고객 명단이 펼쳐집니다.</div>';return;}
   const arr=g[grp.k]||[],cap=aiSideNarrow()?4:6;   /* ★ 모바일은 4개까지 — 화면 점유 최소화 */
   let s='<div style="font-size:11.5px;color:#8A93A8;margin:9px 2px 7px">탭하면 그 고객으로 바로 대화를 시작해요</div><div class="aichk-grid">';
-  arr.slice(0,cap).forEach(it=>{
+  const _slice=arr.slice(0,cap);_aiChkMsgArr=_slice;   /* ★ 💬문자 버튼이 인덱스로 참조 */
+  _slice.forEach((it,i)=>{
     const urg=!!(grp.urg&&it.dd<=14);
     const dlab=(grp.k==='cold')?(it.days+'일'):(it.dd<0?((-it.dd)+'일 지남'):(it.dd===0?'오늘':'D-'+it.dd));
-    s+='<button type="button" data-aichk="'+_aiEsc(it.nm)+'" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid '+(urg?'#F0D4D1':'#ECE7DA')+';border-left:3px solid '+(urg?'#C0392B':'#C9A96E')+';border-radius:13px;padding:11px 12px;cursor:pointer;font-family:inherit;text-align:left">'
+    const _card='<button type="button" data-aichk="'+_aiEsc(it.nm)+'" style="display:flex;align-items:center;gap:10px;flex:1 1 0;min-width:0;background:#fff;border:1.5px solid '+(urg?'#F0D4D1':'#ECE7DA')+';border-left:3px solid '+(urg?'#C0392B':'#C9A96E')+';border-radius:13px;padding:11px 12px;cursor:pointer;font-family:inherit;text-align:left">'
       +'<span style="width:32px;height:32px;border-radius:50%;background:'+(urg?'#FBEAEA':'#EEF1F6')+';color:'+(urg?'#C0392B':'#15294A')+';font-size:14px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+_aiEsc(it.nm.slice(0,1))+'</span>'
       +'<span style="flex:1;min-width:0"><span style="display:block;font-size:14px;font-weight:800;color:#15294A">'+_aiEsc(it.nm)+(it.sub?' <em style="font-style:normal;font-size:10.5px;color:#8A93A8;font-weight:600">'+_aiEsc(it.sub)+'</em>':'')+'</span>'
       +'<span style="display:block;font-size:12px;color:#3A4457;margin-top:2px;line-height:1.45">'+it.why+'</span></span>'
       +'<span style="font-size:11px;font-weight:800;border-radius:8px;padding:2px 7px;white-space:nowrap;flex-shrink:0;background:'+(urg?'#C0392B':'#F0E6CE')+';color:'+(urg?'#fff':'#15294A')+'">'+dlab+'</span></button>';
+    const _msgBtn=it.mk?('<button type="button" data-aimsg="'+i+'" title="문자 보내기" style="flex-shrink:0;width:50px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:1.5px solid #E0C36B;background:#FFF8E7;color:#8B6914;border-radius:13px;font-size:15px;font-weight:800;font-family:inherit;cursor:pointer;line-height:1">💬<span style="font-size:10px;font-weight:800">문자</span></button>'):'';
+    s+='<div class="aichk-cell" style="display:flex;align-items:stretch;gap:6px">'+_card+_msgBtn+'</div>';
   });
   s+='</div>';
   if(arr.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(arr.length-cap)+'명</div>';
   pn.innerHTML=s;
   Array.prototype.forEach.call(pn.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
+  Array.prototype.forEach.call(pn.querySelectorAll('[data-aimsg]'),b=>{b.onclick=()=>aiChkMsg(parseInt(b.getAttribute('data-aimsg'),10),b);});
+}
+/* ── 💬 AI 카드 문자 컴포저 (2026-07-26): 톤 5종 + 고객용 데일리 리포트 링크 + 폰 발송(SmsCore) ──
+   기존 opMsgTpl·opBuildLink·opCopyText 재사용. 소유자 패널의 opMsgRowClick 은 미변경. */
+function aiChkMsgSync(ed){
+  const ta=ed.querySelector('.aichk-msg-ta');if(!ta)return;
+  const cid=ed.getAttribute('data-cid')||'';
+  let v=(ta.value||'').replace(/\n*▶ 오늘의 인사이트 보기:[^\n]*/g,'').replace(/\s+$/,'');
+  const tog=ed.querySelector('.aichk-link-tog');
+  if(tog&&tog.checked){const lk=opBuildLink(cid);if(lk)v+='\n\n▶ 오늘의 인사이트 보기: '+lk;}
+  ta.value=v;
+}
+function aiChkMsg(i,btn){
+  const it=_aiChkMsgArr[i];if(!it||!it.mk)return;
+  const cell=btn&&btn.closest?btn.closest('.aichk-cell'):null;if(!cell)return;
+  const pn=document.getElementById('aiChkPanel');
+  const nx=cell.nextElementSibling;
+  const wasOpen=nx&&nx.classList&&nx.classList.contains('aichk-msg-ed');
+  if(pn)Array.prototype.forEach.call(pn.querySelectorAll('.aichk-msg-ed'),x=>x.remove());   /* 하나만 열림 */
+  if(wasOpen)return;   /* 재탭 = 닫기 */
+  const cid=it.cid||'',mk=it.mk,mn=it.nm||'',mm=it.mm,md=it.md,mp=it.mp||'';
+  const _tones=['정중','강조','친근','전문','간결'];
+  const _chips=_tones.map((nm,ti)=>'<span class="aichk-tone-chip" data-tone="'+ti+'" style="font-size:12px;font-weight:'+(ti===0?'700':'600')+';color:'+(ti===0?'#fff':'#475569')+';background:'+(ti===0?'#1B3A5C':'#fff')+';border:1px solid '+(ti===0?'#1B3A5C':'#CBD5E1')+';border-radius:18px;padding:5px 12px;cursor:pointer;user-select:none">'+nm+'</span>').join('');
+  const _linkTog='<div style="display:flex;align-items:center;gap:8px;background:#F0FAF6;border:1px solid #BFE6D6;border-radius:8px;padding:6px 8px 6px 10px"><label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#0F6E56;font-weight:700;cursor:pointer;flex:1"><input type="checkbox" class="aichk-link-tog" style="width:15px;height:15px;margin:0"> 📊 고객용 데일리 리포트 링크</label><button type="button" data-act="copy-link" style="font-size:11px;font-weight:700;color:#0F6E56;background:#fff;border:1px solid #9FE1CB;border-radius:7px;padding:5px 12px;cursor:pointer;white-space:nowrap">🔗 복사</button></div>';
+  const ed=document.createElement('div');
+  ed.className='aichk-msg-ed';
+  ed.setAttribute('data-cid',cid);
+  ed.style.cssText='grid-column:1/-1;border:1px solid #D4A03C;background:#FFFDF5;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;margin-top:1px';
+  ed.innerHTML='<div style="font-size:11px;font-weight:700;color:#A16207">메시지 톤 선택 <span style="font-weight:400;color:#B0A48A">— 골라서 복사 후 보내세요</span></div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+_chips+'</div>'
+    +'<textarea class="aichk-msg-ta" rows="5" style="width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;border:1px solid #E5E7EB;border-radius:6px;padding:8px;resize:vertical;font-family:inherit"></textarea>'
+    +_linkTog
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
+    +'<button type="button" data-act="copy-msg" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:8px;padding:7px 16px;cursor:pointer">📋 메시지 복사</button>'
+    +'<button type="button" data-act="sms-send" style="font-size:12px;font-weight:800;color:#fff;background:#D4A03C;border:1px solid #D4A03C;border-radius:8px;padding:7px 16px;cursor:pointer">📱 문자 보내기</button>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#138A5E;font-weight:700;text-align:right">💰 내 폰으로 발송 · 문자비 0원 <span style="color:#9CA3AF;font-weight:500">(내 요금제 문자 사용)</span></div>';
+  cell.insertAdjacentElement('afterend',ed);
+  ed.querySelector('.aichk-msg-ta').value=opMsgTpl(mk,mn,mm,md,mp,0);
+  Array.prototype.forEach.call(ed.querySelectorAll('.aichk-tone-chip'),chip=>{chip.onclick=()=>{
+    const tone=parseInt(chip.getAttribute('data-tone'),10)||0;
+    Array.prototype.forEach.call(ed.querySelectorAll('.aichk-tone-chip'),c=>{const on=c===chip;c.style.background=on?'#1B3A5C':'#fff';c.style.color=on?'#fff':'#475569';c.style.borderColor=on?'#1B3A5C':'#CBD5E1';c.style.fontWeight=on?'700':'600';});
+    ed.querySelector('.aichk-msg-ta').value=opMsgTpl(mk,mn,mm,md,mp,tone);
+    aiChkMsgSync(ed);
+  };});
+  const _tog=ed.querySelector('.aichk-link-tog');if(_tog)_tog.onchange=()=>aiChkMsgSync(ed);
+  Array.prototype.forEach.call(ed.querySelectorAll('[data-act]'),a=>{a.onclick=()=>{
+    const act=a.getAttribute('data-act'),ta=ed.querySelector('.aichk-msg-ta');
+    if(act==='copy-msg')opCopyText(ta.value);
+    else if(act==='copy-link')opCopyText(opBuildLink(cid));
+    else if(act==='sms-send')aiChkSmsSend(it,ta.value);
+  };});
+}
+async function aiChkSmsSend(it,body){
+  body=(body||'').trim();if(!body)return;
+  if(!window.SmsCore){toast('문자 기능을 불러오지 못했습니다');return;}
+  const r=await SmsCore.sendOne((it&&it.ph)||'',body);
+  if(!r||!r.sent)toast((r&&r.msg)||'문자앱을 열 수 없습니다','warning');
 }
 /* ── 기기 저장소가 비었을 때: 드라이브에서 자동 복원 → 미연결이면 연결 유도 (2026-07-19) ── */
 function aiChkBox(html){const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="display:flex;align-items:baseline;gap:7px;margin:6px 2px 8px"><b style="font-size:16px;color:#15294A;font-weight:800">📋 점검하면 좋을 고객</b></div>'+html;}
