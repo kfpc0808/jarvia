@@ -2646,6 +2646,7 @@
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap">
         <div id="fcc-summary" style="font-size:12px;color:#8B93AE"></div>
+        <button id="fcc-xlsdown" onclick="fccXlsxDownloadAll()" style="flex:0 0 auto;background:#0F6E56;color:#fff;border:0;border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer">📥 엑셀 다운로드</button>
         <button id="fcc-delbar" onclick="fccDelSelected()" style="display:none;flex:0 0 auto;background:#D14343;color:#fff;border:0;border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer">🗑 선택 <span id="fcc-delcnt">0</span>명 삭제</button>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:34px" class="tc"><input type="checkbox" id="fcc-chkall" onclick="fccChkAll(this)" title="전체 선택"></th><th style="width:44px">No.</th><th>이름</th><th>생일</th><th>상령일</th><th>계약 (상품 · 만기일)</th><th>연락처</th><th>주소</th><th>관심항목</th><th>다음연락</th><th>메모</th><th>추가정보</th><th style="width:96px">관리</th></tr></thead><tbody id="fcc-tbody" onclick="fccRowAction(event)"><tr><td colspan="13" class="tc">로그인 후 이용 가능합니다.</td></tr></tbody></table></div>
@@ -7067,6 +7068,47 @@ async function loadFcClients(){
 let fccPage=1,fccPP=10,_fccLastKey='';
 window.fccSetPP=function(v){fccPP=parseInt(v,10)||10;fccPage=1;window.fccRenderTable();};
 window.fccGoPage=function(p){fccPage=p;window.fccRenderTable();try{const w=document.getElementById('fcc-tbody').closest('.tbl-wrap');if(w)w.scrollIntoView({behavior:'smooth',block:'start'});}catch(_e){}};
+/* ═══ 📥 [2026-07-27] 고객리스트 전체 엑셀 다운로드 — 서버 코어(이름·생일·계약) + 내 채널 상세(이 기기) 병합, 추가정보·미팅기록까지 모든 항목 포함 ═══ */
+window.fccXlsxDownloadAll=async function(){
+  if(!me){toast('로그인이 필요합니다.');return;}
+  if(!fccCache.length){toast('다운로드할 고객이 없습니다.');return;}
+  const _btn=$('fcc-xlsdown');if(_btn){_btn.disabled=true;_btn.textContent='생성 중…';}
+  const _fin=()=>{if(_btn){_btn.disabled=false;_btn.textContent='📥 엑셀 다운로드';}};
+  try{await fccLoadExcelJS();}catch(e){_fin();toast('엑셀 모듈을 불러오지 못했습니다 — 잠시 후 다시 시도해주세요');return;}
+  try{await jvMcRead();}catch(_e){}   /* 상세 최신본 재읽기 (읽기 전용) */
+  const IT={silson:'실손',auto:'자동차',protect:'보장성',saving:'저축성',pension:'연금',etc:'기타'};
+  const S=v=>String(v==null?'':v).slice(0,30000);   /* 엑셀 셀 32,767자 한도 보호 */
+  let maxCt=1;fccCache.forEach(c=>{maxCt=Math.max(maxCt,(c.contracts||[]).length);});maxCt=Math.min(maxCt,5);
+  const exKeys=[],exSeen={};
+  fccCache.forEach(c=>{const D=(typeof jvMcGet==='function'?(jvMcGet(c.id)||{}):{});if(D.extra)Object.keys(D.extra).forEach(k=>{if(!exSeen[k]){exSeen[k]=1;exKeys.push(k);}});});
+  const head=['이름','생년월일','상령일','호칭','연락처','이메일','회사','직함','직업','주소','관계','상태','소개자','관심항목','다음연락일','선호채널','선호시간','가족','메모'];
+  for(let i=1;i<=maxCt;i++)head.push('계약'+i+'상품','계약'+i+'종류','계약'+i+'만기','계약'+i+'보험사','계약'+i+'월보험료','계약'+i+'매년');
+  exKeys.forEach(k=>head.push(S(k)));
+  head.push('미팅기록');
+  const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet('고객목록');
+  ws.addRow(head);
+  fccCache.forEach(c=>{
+    const D=(typeof jvMcGet==='function'?(jvMcGet(c.id)||{}):{});
+    const sg=c.birthDate?((c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:fccSang(c.birthDate)):'';
+    const row=[S(c.name),S(c.birthDate),sg?(sg.slice(0,2)+'/'+sg.slice(2)):'',S(c.mgTitle||D.mgTitle),S(D.phone),S(D.email),S(D.company),S(D.title),S(D.job),S([D.addr,D.addrDetail].filter(Boolean).join(' ')),S((D.rels||[]).join(',')),S(D.status),S(D.referrer),S((D.needs||[]).join(',')),S(D.nextContact),S(D.prefChannel),S(D.prefTime),S((D.family||[]).map(f=>[f.rel,f.name,f.birth].filter(Boolean).join(' ')).join(' / ')),S(D.memo)];
+    for(let i=0;i<maxCt;i++){const ct=(c.contracts||[])[i]||{};row.push(S(ct.productName),IT[ct.insType]||S(ct.insType),S(ct.maturityDate),S(ct.insurer),S(ct.premium),ct.yearly?'Y':'');}
+    exKeys.forEach(k=>row.push(S(D.extra?D.extra[k]:'')));
+    row.push(S((D.meetings||[]).slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(m=>'['+(m.date||'')+(m.place?' '+m.place:'')+'] '+(m.note||'')+(m.next?' → 다음: '+m.next:'')).join('\n')));
+    ws.addRow(row);
+  });
+  ws.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};
+  ws.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1B3A5C'}};
+  ws.columns.forEach(col=>{col.width=14;});
+  let buf;try{buf=await wb.xlsx.writeBuffer();}catch(e){_fin();toast('엑셀 생성에 실패했습니다');return;}
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download='내고객리스트_전체_'+new Date(Date.now()+9*3600*1000).toISOString().slice(0,10)+'.xlsx';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  _fin();
+  const _miss=fccCache.filter(c=>!(typeof jvMcGet==='function'&&jvMcGet(c.id))).length;
+  toast('고객 '+fccCache.length+'명 전체를 내려받았습니다'+(_miss?' — 상세 없는 '+_miss+'명은 기본 정보만 포함 (내 채널을 한 번 열면 복원됩니다)':''),'success');
+};
 /* ═══ 📊 월간 리포트 타깃추출 → 마이페이지 표 브리지 (fc.html 지도에서 넘어온 명단만 표시) 2026-07-25 ═══ */
 window.__fccMrKey=function(c){return String((c&&c.name)||'').trim()+'|'+((c&&c.birthDate)||'');};
 window.__fccMrPick=(function(){try{if(new URLSearchParams(location.search).get('mrPick')!=='1')return null;var p=JSON.parse(localStorage.getItem('jv_mrPick')||'null');if(p&&p.keys&&p.keys.length)return{label:String(p.label||'추출'),keySet:new Set(p.keys)};}catch(_e){}return null;})();
