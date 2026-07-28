@@ -429,13 +429,22 @@ const stripHtml=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').
    오탐이 반복됐다(콘솔 에러 없음 + 새로고침하면 정상 = 오탐의 전형).
    → 이 브라우저에 로그인 이력(jarvia_hasLogin, index.html이 기록)이 있으면
      최대 3초까지 복원을 기다린 뒤 판단하고, 그래도 실패하면 1회 한정 자동 새로고침으로 복구한다.
-   정상 진입 이후(_authSettled) 발생한 null 은 진짜 로그아웃이므로 즉시 잠금화면. */
+   ★ [2026-07-28 v2] 사용 중(_authSettled) 오탐 대응 추가 — 이 페이지는 signOut 을 import 조차
+   하지 않으므로 여기서 진짜 로그아웃은 발생 불가. 사용 중 null 은 전부 오발화(탭 절전/유휴 후
+   SDK-IndexedDB 단절 등)이며, 이때는 같은 SDK 인스턴스의 currentUser 폴링이 무의미하므로
+   (새 인스턴스가 IndexedDB 를 다시 읽는) 새로고침이 확실한 복구 수단이다.
+   → 진입/사용중 각각 1회 한정 자동 새로고침(가드 분리). 잠금화면은 최후 수단.
+   → 세션이 자연 복원되어 user 가 재발화하면 _unlock() 으로 잠금 해제(기존엔 해제 코드 부재). */
 let _authSettled = false;
 function _showLock(t1, t2){
   $('loading').style.display='none';
   if(t1) $('lock-t1').textContent=t1;
   if(t2) $('lock-t2').textContent=t2;
   $('lock').style.display='flex';
+}
+function _unlock(){                                      /* ★ [2026-07-28 v2] 잠금 해제 — 세션 자연 복원 대응 */
+  $('lock').style.display='none';
+  if(_inited){ $('app').style.display='block'; }
 }
 function _hadLogin(){ try{ return localStorage.getItem('jarvia_hasLogin')==='1'; }catch(_){ return false; } }
 
@@ -448,20 +457,22 @@ onAuthStateChanged(auth, async u=>{
     if(auth.currentUser) return;                         // 복원됨 → 곧 유저와 함께 재발화
     await new Promise(r=>setTimeout(r,2000));
     if(auth.currentUser) return;
-    if(!_authSettled){                                   // 진입 단계에서만 새로고침 (잃을 입력값 없음)
-      try{
-        if(!sessionStorage.getItem('_bizAuthReload')){   // 무한루프 방지 가드
-          sessionStorage.setItem('_bizAuthReload','1');
-          console.warn('[biz-support] 인증 오탐 감지(진입 단계) — 자동 새로고침으로 복구 시도');
-          location.reload(); return;
-        }
-      }catch(_){}
-    }
+    /* ★ [2026-07-28 v2] 진입/사용중 공통 1회 한정 자동 새로고침 — 가드 키 분리로 독립 관리.
+       사용 중 오발화는 SDK 인스턴스 자체가 저장소와 어긋난 상태일 수 있어 폴링으로는 복구가
+       안 되며, 새로고침(새 인스턴스가 IndexedDB 재판독)이 확실한 복구 수단이다. */
+    const _guard=_authSettled?'_bizAuthReload2':'_bizAuthReload';
+    try{
+      if(!sessionStorage.getItem(_guard)){               // 무한루프 방지 가드
+        sessionStorage.setItem(_guard,'1');
+        console.warn('[biz-support] 인증 오탐 감지('+(_authSettled?'사용 중':'진입 단계')+') — 자동 새로고침으로 복구 시도');
+        location.reload(); return;
+      }
+    }catch(_){}
     console.warn('[biz-support] 세션 복원 실패(3초 대기 후) — settled:',_authSettled,'referrer:',document.referrer||'(없음)');
     _showLock(); return;
   }
   _authSettled = true;
-  try{ sessionStorage.removeItem('_bizAuthReload'); }catch(_){}   // 정상 진입 → 복구 가드 해제
+  try{ sessionStorage.removeItem('_bizAuthReload'); sessionStorage.removeItem('_bizAuthReload2'); }catch(_){}   // 정상 (재)인증 → 복구 가드 해제 (재발 시 다시 1회 복구 가능)
   try{
     const uDoc=await getDoc(doc(db,'users',u.uid));
     if(uDoc.exists() && uDoc.data().role==='free_user' && !BIZ_ALLOW_FREE){
@@ -470,11 +481,15 @@ onAuthStateChanged(auth, async u=>{
     }
   }catch(e){}
   ME=u;
+  _unlock();                                             /* ★ [2026-07-28 v2] 오탐 잠금 후 세션 자연 복원 시 화면 복귀 */
   init();
 });
 
 /* ════════ 초기화 ════════ */
+let _inited=false;                                       /* ★ [2026-07-28 v2] 재진입 가드 — 인증 재발화 시 이벤트 중복 바인딩/중복 fetch 방지 */
 async function init(){
+  if(_inited) return;
+  _inited=true;
   // 셀렉트 채우기
   $('f-region').innerHTML='<option value="">전체</option>'+REGIONS.map(r=>`<option>${r}</option>`).join('');
   $('f-ind').innerHTML='<option value="">무관</option>'+IND_GROUPS.map(g=>`<option value="${g.v}">${g.label}</option>`).join('');
