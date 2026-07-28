@@ -423,15 +423,47 @@ const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const stripHtml=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim();
 
 /* ════════ 인증 게이트 ════════ */
+/* ★ [2026-07-28] 인증 오탐 방어 — index.html(L5202~5216)과 동일 정책 적용
+   Firebase 세션 복원(IndexedDB)이 늦으면 onAuthStateChanged 가 먼저 null 로 발화한다.
+   기존 코드는 그 즉시 잠금화면을 띄워, 실제로는 로그인 상태인데 "로그인이 필요합니다"가 뜨는
+   오탐이 반복됐다(콘솔 에러 없음 + 새로고침하면 정상 = 오탐의 전형).
+   → 이 브라우저에 로그인 이력(jarvia_hasLogin, index.html이 기록)이 있으면
+     최대 3초까지 복원을 기다린 뒤 판단하고, 그래도 실패하면 1회 한정 자동 새로고침으로 복구한다.
+   정상 진입 이후(_authSettled) 발생한 null 은 진짜 로그아웃이므로 즉시 잠금화면. */
+let _authSettled = false;
+function _showLock(t1, t2){
+  $('loading').style.display='none';
+  if(t1) $('lock-t1').textContent=t1;
+  if(t2) $('lock-t2').textContent=t2;
+  $('lock').style.display='flex';
+}
+function _hadLogin(){ try{ return localStorage.getItem('jarvia_hasLogin')==='1'; }catch(_){ return false; } }
+
 onAuthStateChanged(auth, async u=>{
-  if(!u){ $('loading').style.display='none'; $('lock').style.display='flex'; return; }
+  if(!u){
+    if(_authSettled){ _showLock(); return; }            // 이용 중 진짜 로그아웃
+    if(_hadLogin()){
+      await new Promise(r=>setTimeout(r,1000));
+      if(auth.currentUser) return;                      // 복원됨 → 곧 유저와 함께 재발화
+      await new Promise(r=>setTimeout(r,2000));
+      if(auth.currentUser) return;
+      try{
+        if(!sessionStorage.getItem('_bizAuthReload')){  // 무한루프 방지 가드
+          sessionStorage.setItem('_bizAuthReload','1');
+          console.warn('[biz-support] 인증 오탐 감지(로그인 이력 존재) — 자동 새로고침으로 복구 시도');
+          location.reload(); return;
+        }
+      }catch(_){}
+      console.warn('[biz-support] 세션 복원 실패(3초 대기 후) — referrer:', document.referrer||'(없음)');
+    }
+    _showLock(); return;
+  }
+  _authSettled = true;
+  try{ sessionStorage.removeItem('_bizAuthReload'); }catch(_){}   // 정상 진입 → 복구 가드 해제
   try{
     const uDoc=await getDoc(doc(db,'users',u.uid));
     if(uDoc.exists() && uDoc.data().role==='free_user' && !BIZ_ALLOW_FREE){
-      $('loading').style.display='none';
-      $('lock-t1').textContent='이용 권한이 없습니다';
-      $('lock-t2').textContent='유료회원 전용 기능입니다.';
-      $('lock').style.display='flex';
+      _showLock('이용 권한이 없습니다','유료회원 전용 기능입니다.');
       return;
     }
   }catch(e){}
