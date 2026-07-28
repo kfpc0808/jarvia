@@ -12144,6 +12144,7 @@ let crCurrentScheduleId = null;
 let crCurrentScheduleDate = null;
 let crSchedRunning = {};
 let crSchedReports = {};   // ★ [2026-07-21] 일정 표 ↔ 실제 생성 문서(upcoming_case_reports) 조인 맵
+let crSchedPublished = {}; // ★ [2026-07-28] 일정 표 ↔ 게시 완료 문서(case_reports) 조인 맵 — 산출물 버튼용
 try { crSchedRunning = JSON.parse(localStorage.getItem('crSchedRunning') || '{}'); } catch (e) { crSchedRunning = {}; }
 function crSaveSchedRunning() { try { localStorage.setItem('crSchedRunning', JSON.stringify(crSchedRunning)); } catch (e) {} }
 let crCurrentClientType = null;
@@ -12475,6 +12476,17 @@ async function loadCrSchedule() {
       });
     } catch (je) { console.warn('[CR] 생성 현황 조인 실패(기존 표시로 대체):', je.message); }
 
+    // ★ [2026-07-28] 게시 완료분 조인 — case_reports (문서ID = reportId) → 게시된 행에도 산출물 버튼 제공
+    crSchedPublished = {};
+    try {
+      const pubSnap = await getDocs(query(
+        collection(db, 'case_reports'),
+        orderBy('publishedAt', 'desc'),
+        limit(300)
+      ));
+      pubSnap.docs.forEach(d => { crSchedPublished[d.id] = { _id: d.id, ...d.data() }; });
+    } catch (pe) { console.warn('[CR] 게시분 조인 실패(관리 버튼으로 대체):', pe.message); }
+
     // 월별 필터 옵션 채우기
     const months = [...new Set(crScheduleData.map(d => (d.date || '').slice(0,7)))].sort();
     const sel = document.getElementById('cr-sched-month');
@@ -12524,6 +12536,8 @@ function crRenderSchedule() {
     const _running = !r.completed && crSchedRunning[r._id];
     // ★ [2026-07-21] 실제 생성 문서 조인 — '생성일시'에 실제 생성 시각(createdAt) 표시 (게시 전·후 공통)
     const rep = crSchedReports['sid:' + r._id] || ((r.date && r.topicSlug) ? crSchedReports['dt:' + r.date + '|' + r.topicSlug] : null);
+    // ★ [2026-07-28] 산출물 버튼 전용 조인본 — 게시분은 case_reports 로 폴백 (생성일시 표시 로직에는 미사용)
+    const repOut = rep || ((r.completed && r.reportId) ? crSchedPublished[r.reportId] : null);
     const _manualTag = (rep && rep._manual === true) ? ' <span style="display:inline-block;padding:1px 4px;border-radius:3px;background:#fff3e0;color:#e65100;font-size:9px;font-weight:600">수동</span>' : '';
     const generated = rep
       ? crFormatDateTime(rep.createdAt) + _manualTag
@@ -12540,7 +12554,7 @@ function crRenderSchedule() {
     else if (r.revealed) st = 'revealed';
     else st = 'pending';
     const sb = crStatusBadge(st, stExtra);
-    const actions = crBuildScheduleActions(r);
+    const actions = crBuildScheduleActions(r, repOut);
     return `<tr style="border-bottom:1px solid var(--border)" data-schedule-id="${r._id}">
       <td style="text-align:center;padding:8px">${idx+1}</td>
       <td style="text-align:center;padding:8px;font-family:monospace;font-size:11px">${esc(dateStr)}</td>
@@ -12731,7 +12745,41 @@ function crBuildActions(slug, state) {
   return '';
 }
 
-function crBuildScheduleActions(r) {
+function crBuildScheduleActions(r, rep) {
+  // ★ [2026-07-28] 생성완료(점검대기)·게시됨 공통 — 보기/다운로드/교체 업로드 버튼 (토픽 풀과 동일 세트)
+  const S = 'font-size:10px;padding:3px 8px';
+  const d = rep || null;
+  const rid = (d && d._id) || r.reportId || '';
+  const h  = (d && d.step5 && d.step5.htmlUrl) || '';
+  const p  = (d && d.step5 && d.step5.pdfUrl) || '';
+  const sc = (d && d.step6 && d.step6.audioScriptUrl) || '';
+  const m4 = (d && d.step6 && d.step6.audioMp3Url) || '';
+  if (rid && (h || p || sc || m4)) {
+    const safe = String((d && d.title) || r.title || r.topicSlug || rid).replace(/[^\w가-힣]/g, '_').slice(0, 40);
+    const B = [];
+    if (h)  B.push(`<button class="btn" onclick="window.open('${h}','_blank')" style="${S};background:#1e293b;color:#fff">📄 보기</button>`);
+    if (h)  B.push(`<button class="btn btn-sec" onclick="prDownload('${h}','${safe}.html')" style="${S}">⬇ HTML</button>`);
+    if (h)  B.push(`<button class="btn" onclick="crRowUploadHtml('${rid}')" style="${S};background:#0369a1;color:#fff">📄 HTML 교체</button>`);
+    if (sc) B.push(`<button class="btn btn-sec" onclick="prDownload('${sc}','${safe}_스크립트.txt')" style="${S}">📝 스크립트</button>`);
+    if (p)  B.push(`<button class="btn btn-sec" onclick="prDownload('${p}','${safe}.pdf')" style="${S}">⬇ PDF</button>`);
+    if (p)  B.push(`<button class="btn" onclick="crRowUploadPdf('${rid}')" style="${S};background:#b91c1c;color:#fff">📑 PDF 교체</button>`);
+    B.push(`<button class="btn" onclick="crRowUploadAudio('${rid}')" style="${S};background:#6d28d9;color:#fff">🎵 오디오 업로드</button>`);
+    if (m4) {
+      B.push(`<button class="btn btn-sec" onclick="prDownload('${m4}','${safe}.m4a')" style="${S}">🎧 오디오</button>`);
+      B.push(`<button class="btn" onclick="playDrAudio('${m4}')" style="${S};background:#0891b2;color:#fff">▶ 듣기</button>`);
+    }
+    B.push(`<button class="btn btn-sec" onclick="openCrManageModal('${rid}','${r.topicSlug || ''}')" style="${S}">✏ 관리</button>`);
+    B.push(r.completed
+      ? `<button class="btn" disabled title="이미 게시됨" style="${S};background:#7B1FA2;color:#fff;opacity:.75">✅ 게시됨</button>`
+      : `<button class="btn" onclick="publishCrNow('${rid}')" style="${S};background:#2e7d32;color:#fff">🚀 게시</button>`);
+    B.push(`<button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${rid}',label:'${r.topicSlug || ''}'})" style="${S};background:#dc3545;color:#fff">🗑 완전삭제</button>`);
+    return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center">${B.join('')}</div>`;
+  }
+  // ★ [2026-07-28] 서버 기준 생성 진행중 — 다른 PC/브라우저에서도 '지금 생성' 중복 클릭 차단
+  if (rid && d && !r.completed) {
+    return `<button class="btn" onclick="openProgressModal('${rid}')" style="${S};background:#0d47a1;color:#fff">⏳ 진행 보기</button>
+            <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${rid}',label:'${r.topicSlug || ''}'})" style="${S};background:#dc3545;color:#fff">🗑 삭제</button>`;
+  }
   if (r.completed && r.reportId) {
     return `<button class="btn btn-sec" onclick="openCrManageModal('${r.reportId}','${r.topicSlug}')" style="font-size:10px;padding:3px 8px">관리</button>
             <button class="btn btn-sec" onclick="crDeleteCompletely({reportId:'${r.reportId}',label:'${r.topicSlug}'})" style="font-size:10px;padding:3px 8px;background:#dc3545;color:#fff">\uD83D\uDDD1 \uC644\uC804\uC0AD\uC81C</button>`;
