@@ -412,6 +412,9 @@ async function handleFile(f){
       const c=await page.getTextContent();
       text+=c.items.map(it=>it.str).join(' ')+'\n';
     }
+    // pdf.js 는 글자 조각마다 공백을 넣어 분량이 크게 부풀어 오른다.
+    // 중복된 공백만 정리한다 (글자 자체는 건드리지 않음).
+    text=text.replace(/[ \t\u00A0\u3000]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
     policyText=text;
     const perPage=text.length/pdf.numPages;
     $('fileStat').textContent=pdf.numPages+'페이지 · '+text.length.toLocaleString()+'자';
@@ -505,36 +508,59 @@ function badgeText(){
    배열에 값이 여러 개인 것은 "다른 모델"이 아니라 같은 모델의 ID 표기 후보다.
    (Google이 -it / -preview 접미사를 붙였다 뗐다 하므로 첫 번째가 404면 다음 표기를 시도)
    모델을 바꾸시려면 아래 두 줄의 ID와 LABEL만 고치면 됩니다. */
-const MODEL_EXTRACT=['gemma-4-31b-it','gemma-4-31b'];
+/* 2026-07-28 콘솔 실측: gemma-4-31b-it 200, gemini-3.5-flash 200 (둘 다 정상)
+   gemma-4-31b / gemma-4-26b-it / gemini-2.5-flash 계열은 404 확인 → 후보에서 제외 */
+const MODEL_EXTRACT=['gemma-4-31b-it'];
 const LABEL_EXTRACT='Gemma 4 31B';
-const MODEL_SYNTH  =['gemini-3.5-flash','gemini-3.5-flash-preview'];
+const MODEL_SYNTH  =['gemini-3.5-flash'];
 const LABEL_SYNTH  ='Gemini 3.5 Flash';
 const MODEL_NAMES={
-  'gemma-4-31b-it':LABEL_EXTRACT,'gemma-4-31b':LABEL_EXTRACT,
-  'gemini-3.5-flash':LABEL_SYNTH,'gemini-3.5-flash-preview':LABEL_SYNTH
+  'gemma-4-31b-it':LABEL_EXTRACT,
+  'gemini-3.5-flash':LABEL_SYNTH
 };
 let EXTRACT_USED='', SYNTH_USED='', SYNTH_FELLBACK=false;
 function shortName(id){return MODEL_NAMES[id]||id;}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
-/* 429 원인 구분 — 분당 한도인지 일일 한도인지 */
-function classify429(t){
-  const x=(t||'')+'';
-  if(/PerDay|per_day|per day|RequestsPerDay|daily/i.test(x))return 'day';
-  if(/PerMinute|per_minute|per minute|retryDelay|RetryInfo|TokensPerMinute/i.test(x))return 'minute';
-  return 'unknown';
-}
-function retryDelaySec(t){
-  const m=/"retryDelay"\s*:\s*"(\d+)(?:\.\d+)?s"/.exec((t||'')+'');
-  return m?Math.min(parseInt(m[1],10)+2,90):0;
-}
+/* 응답 본문에 키가 섞여 나올 경우를 대비한 마스킹 */
+function maskKey(x){return String(x||'').replace(/key=[^&\s"']+/g,'key=***');}
 
-/* 분당 요청수(RPM) 초과를 미리 피하기 위한 최소 간격 */
-let _lastCallAt=0;
-async function pace(minGapMs){
-  const wait=minGapMs-(Date.now()-_lastCallAt);
-  if(wait>0)await sleep(wait);
-  _lastCallAt=Date.now();
+/* 429 상세 파싱 — google.rpc.QuotaFailure / RetryInfo 구조를 직접 읽는다.
+   본문 전체 정규식 방식은 retryDelay 존재만으로 '분당'이라 오판하므로 폐기. */
+function quotaInfo(t){
+  let j=null; try{j=JSON.parse(t);}catch(e){}
+  const det=(j&&j.error&&j.error.details)||[];
+  let qid='',qmetric='',qval='',delay=0;
+  det.forEach(function(d){
+    (d.violations||[]).forEach(function(v){
+      qid=qid||v.quotaId||'';
+      qmetric=qmetric||v.quotaMetric||'';
+      qval=qval||(v.quotaValue!=null?String(v.quotaValue):'');
+    });
+    if(d.retryDelay){var m=/(\d+)/.exec(d.retryDelay); if(m)delay=parseInt(m[1],10);}
+  });
+  var kind='unknown', hay=qid+' '+qmetric;
+  if(/PerDay|per_day/i.test(hay))kind='day';
+  else if(/PerMinute|per_minute/i.test(hay))kind='minute';
+  return {kind:kind,qid:qid,qmetric:qmetric,qval:qval,delay:delay,msg:(j&&j.error&&j.error.message)||''};
+}
+function classify429(t){return quotaInfo(t).kind;}
+
+/* 요청 게이트 — 최소 간격 + 60초 롤링 윈도우 RPM 제한.
+   무료 등급 Gemma RPM 15 기준, 여유를 두고 12로 제한한다.
+   기준 시각은 '응답 완료' 시점(_lastCallAt)이라 실제 간격이 줄어들지 않는다. */
+const MIN_GAP_MS=5000, RPM_LIMIT=12;
+let _lastCallAt=0, _callTimes=[];
+async function gate(onProgress){
+  for(;;){
+    const now=Date.now();
+    if(now-_lastCallAt<MIN_GAP_MS){await sleep(Math.min(MIN_GAP_MS-(now-_lastCallAt),800));continue;}
+    _callTimes=_callTimes.filter(function(x){return now-x<60000;});
+    if(_callTimes.length<RPM_LIMIT){_callTimes.push(now);return;}
+    const wait=Math.ceil((60000-(now-_callTimes[0]))/1000)+1;
+    if(onProgress)onProgress('분당 요청 한도를 지키는 중… '+wait+'초 대기');
+    await sleep(1000);
+  }
 }
 
 /* 후보 모델을 순서대로 시도 (404면 다음 후보) */
@@ -567,11 +593,12 @@ async function askGemini(question,fullText,onProgress){
   }
 
   const partials=[];
+  let skipped=0, consecFail=0, dayLimit=false, lastErr=null;
   for(let i=0;i<chunks.length;i++){
-    if(onProgress)onProgress('약관에서 관련 조항을 찾는 중… ('+(i+1)+'/'+chunks.length+' 부분)');
+    if(onProgress)onProgress('약관에서 관련 조항을 찾는 중… ('+(i+1)+'/'+chunks.length+' 부분)'+(skipped?' · 건너뜀 '+skipped:''));
     const note=chunks.length>1?'\n(참고: 이 약관은 분량이 커서 '+chunks.length+'개로 나눠 읽는 중이며, 지금은 '+(i+1)+'번째 부분입니다. 이 부분에 있는 내용만 발췌하세요. "다음 부분에 이어진다"거나 "이후 페이지 참고" 같은 안내 문구는 넣지 마세요 — 나중에 자동으로 합쳐집니다.)':'';
     try{
-      await pace(4200); // RPM 여유 확보
+      await gate(onProgress);
       const a=await askOnce(question,chunks[i],note,onProgress);
       // "이 부분에 관련 내용 없음"류만 제외: 답이 짧고(30자 미만) '없다'는 표현이 있거나,
       // 답이 '없음' 표현으로 시작하는 경우 (정상 답변 중간에 "~는 없습니다"가 섞인 건 살림)
@@ -583,14 +610,25 @@ async function askGemini(question,fullText,onProgress){
         partials.push('[부분 '+(i+1)+']\n'+a);
       }
     }catch(e){
-      // 한 덩이 실패해도 나머지는 계속
-      if(e.status===429)throw e; // 무료 소진은 즉시 중단
+      // 한 덩이가 실패해도 지금까지 읽은 내용은 버리지 않는다.
+      lastErr=e;
+      if(e.status===429&&(e.kind||classify429(e.detail))==='day'){
+        dayLimit=true;break; // 일일 한도는 기다려도 안 풀리므로 중단
+      }
+      skipped++;
+      if(++consecFail>=3)break; // 연속 3개 실패면 더 진행해도 의미 없음
+      continue;
     }
+    consecFail=0;
   }
 
   if(!partials.length){
+    if(lastErr)throw lastErr; // 한 건도 못 읽음 → 원인을 그대로 안내
     return '약관 전체를 나눠 읽었지만, 질문과 관련된 내용을 찾지 못했습니다. 질문을 다른 표현으로 바꿔보시거나, 약관에 해당 내용이 있는지 확인해 주세요.';
   }
+  const partNote=(skipped||dayLimit)
+    ? '※ 사용량 한도로 '+skipped+'개 부분을 읽지 못했습니다. 아래 답변은 읽은 부분만 근거로 하므로 누락이 있을 수 있습니다. 잠시 후 다시 질문해 주세요.\n\n'
+    : '';
 
   // 발췌가 하나뿐이어도 반드시 종합 단계를 거친다 (답변 품질을 일정하게 유지)
   if(onProgress)onProgress('찾은 조항을 하나로 정리하는 중…');
@@ -611,22 +649,22 @@ async function askGemini(question,fullText,onProgress){
     '7) 존댓말로 명확하고 간결하게.';
 
   try{
-    await pace(4200);
+    await gate(onProgress);
     const r=await callList(MODEL_SYNTH,mergePrompt,8192,onProgress);
     SYNTH_USED=r.model;
-    return r.text||plain;
+    return partNote+(r.text||plain);
   }catch(e){
     if(e.status!==429)throw e;
     // 종합 모델의 한도가 소진된 경우: 발췌 모델로 대체 종합 (막히지 않게)
     if(onProgress)onProgress('종합 모델 한도에 도달해 대체 모델로 정리하는 중…');
     try{
-      await pace(4200);
+      await gate(onProgress);
       const r2=await callList(MODEL_EXTRACT,mergePrompt,8192,onProgress);
       SYNTH_USED=r2.model;SYNTH_FELLBACK=true;
-      return r2.text||plain;
+      return partNote+(r2.text||plain);
     }catch(e2){
       SYNTH_FELLBACK=true;
-      return plain; // 최후 수단: 발췌 원문 그대로 전달 (답을 못 주는 것보다 낫다)
+      return partNote+plain; // 최후 수단: 발췌 원문 그대로 전달 (답을 못 주는 것보다 낫다)
     }
   }
 }
@@ -651,7 +689,8 @@ async function askOnce(question,text,extraNote,onProgress){
   return r.text;
 }
 
-async function callModel(model,prompt,maxTokens,onProgress,_retried){
+const MAX_RETRY=3;
+async function callModel(model,prompt,maxTokens,onProgress,_try){
   const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(GEMINI_KEY);
   try{
     const res=await fetch(url,{
@@ -659,22 +698,26 @@ async function callModel(model,prompt,maxTokens,onProgress,_retried){
       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:maxTokens||4096}})
     });
     if(!res.ok){
+      _lastCallAt=Date.now();
       const t=await res.text();
       const notFound=res.status===404||/is not found|not supported/i.test(t);
-      const kind=res.status===429?classify429(t):'';
-      // 분당 한도라면 결제 안내 대신 잠시 기다렸다가 한 번 자동 재시도
-      if(res.status===429&&kind==='minute'&&!_retried){
-        let left=retryDelaySec(t)||60;
+      const qi=res.status===429?quotaInfo(t):null;
+      const kind=qi?qi.kind:'';
+      const tryNo=(_try||0)+1;
+      // 일일 한도로 '확정'된 경우가 아니면 지수 백오프로 재시도
+      if(res.status===429&&kind!=='day'&&tryNo<=MAX_RETRY){
+        let left=Math.max(qi.delay||0,[20,40,60][tryNo-1]||60);
         while(left>0){
-          if(onProgress)onProgress('분당 사용량에 도달했어요. '+left+'초 후 자동으로 다시 시도합니다…');
+          if(onProgress)onProgress('사용량 한도에 걸려 대기 중… '+left+'초 후 재시도 ('+tryNo+'/'+MAX_RETRY+')');
           await sleep(1000);left--;
         }
-        _lastCallAt=Date.now();
-        return await callModel(model,prompt,maxTokens,onProgress,true);
+        return await callModel(model,prompt,maxTokens,onProgress,tryNo);
       }
-      const err=new Error('HTTP '+res.status);err.status=res.status;err.detail=t;err.kind=kind;
+      const err=new Error('HTTP '+res.status);
+      err.status=res.status;err.detail=t;err.kind=kind;err.quota=qi;err.model=model;err.tries=tryNo;
       return {notFound,err};
     }
+    _lastCallAt=Date.now();
     const data=await res.json();
     const txt=(data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts||[]).map(p=>p.text).join('');
     return {text:txt};
@@ -692,7 +735,7 @@ function renderError(err){
     if(kind==='minute'){
       title='잠깐만요 — 분당 사용량에 도달했어요';
       body='<b>결제하실 필요 없습니다.</b> 짧은 시간에 많은 양을 읽어서 생긴 일시적인 제한이에요.<br>'+
-        '약 1분 뒤에 다시 질문해 주세요. 오늘 쓸 수 있는 양은 그대로 남아 있습니다.';
+        '자동으로 여러 번 다시 시도했지만 계속 막혔습니다. 2~3분 뒤에 다시 질문해 주세요.';
     }else if(kind==='day'){
       title='오늘 사용량을 다 쓰셨어요';
       body='무료 일일 한도는 태평양 표준시 자정, 한국시간 기준 <b>오후 4~5시경</b>에 초기화됩니다. 기다리시면 다시 사용하실 수 있어요.<br>'+
@@ -713,8 +756,27 @@ function renderError(err){
     title='답변 생성 실패';
     body='잠시 후 다시 시도해주세요.<br><span style="font-size:12px;color:var(--ink3)">'+esc(d.slice(0,160))+'</span>';
   }
+  // 기술 정보 — 원인을 추측하지 않도록 실제 응답을 그대로 보여준다 (키는 마스킹)
+  let tech='';
+  if(d){
+    const qi2=err.quota||(err.status===429?quotaInfo(d):null);
+    const rows=[];
+    if(err.model)rows.push('모델: '+err.model);
+    rows.push('HTTP: '+(err.status||'-'));
+    if(err.tries)rows.push('시도 횟수: '+err.tries);
+    if(qi2){
+      if(qi2.qid)rows.push('quotaId: '+qi2.qid);
+      if(qi2.qmetric)rows.push('quotaMetric: '+qi2.qmetric);
+      if(qi2.qval!=='')rows.push('quotaValue: '+qi2.qval);
+      if(qi2.delay)rows.push('retryDelay: '+qi2.delay+'s');
+    }
+    tech='<details style="margin-top:12px">'+
+      '<summary style="cursor:pointer;font-size:12px;color:var(--ink3)">기술 정보 보기 (문의 시 이 내용을 전달해 주세요)</summary>'+
+      '<pre style="white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.55;color:var(--ink3);background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:10px;margin-top:8px;max-height:260px;overflow:auto">'+
+      esc(rows.join('\n'))+'\n\n'+esc(maskKey(d).slice(0,1500))+'</pre></details>';
+  }
   $('answerModel').textContent='';
-  $('answerBody').innerHTML='<p style="color:var(--red);font-weight:700">'+esc(title)+'</p><p style="color:var(--ink2);font-size:13.5px">'+body+'</p>';
+  $('answerBody').innerHTML='<p style="color:var(--red);font-weight:700">'+esc(title)+'</p><p style="color:var(--ink2);font-size:13.5px">'+body+'</p>'+tech;
 }
 
 /* ══ 회사 딥링크 ══ */
