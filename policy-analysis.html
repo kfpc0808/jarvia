@@ -96,6 +96,7 @@ header{padding:40px 0 28px;text-align:center;border-bottom:1px solid var(--line)
 .banner.warn b{color:var(--amber)}
 .banner.info{background:var(--navy-lt);border:1px solid var(--line2)}
 .banner .big{font-size:14.5px;font-weight:700;color:var(--navy);display:block;margin-bottom:4px}
+.wait-warn{display:block;margin:10px 0;padding:10px 14px;background:#FDECEA;border:1.5px solid #C0392B;border-radius:9px;color:#C0392B;font-size:15px;font-weight:800;letter-spacing:.2px}
 
 /* ── 질문 ── */
 .q-hint{font-size:12.5px;color:var(--ink3);margin-bottom:9px}
@@ -431,7 +432,13 @@ async function handleFile(f){
     const CHUNK_CHARS=150000; // askGemini() 의 발췌 청크 크기와 반드시 동일해야 함
     if(text.length>CHUNK_CHARS){
       const parts=Math.ceil(text.length/(CHUNK_CHARS-30000));
-      showBanner('info','분량이 큰 약관이에요 — 자동으로 나눠 읽습니다','이 약관은 커서 '+parts+'개 부분으로 나눠 읽은 뒤 하나로 정리해 드려요. <b>질문 하나에 '+Math.max(1,Math.round(parts*8/60))+'~'+Math.max(2,Math.round(parts*15/60))+'분쯤 걸립니다.</b> 그대로 질문하시고 기다려 주세요.');
+      // 분당 처리량(TPM 200K 예산) 기준: 조각당 최대 15만 자 ≈ 1분에 1조각 남짓
+      const lo=Math.max(2,Math.ceil(parts*0.9));
+      const hi=Math.max(3,Math.ceil(parts*1.4)+1);
+      showBanner('info','분량이 큰 약관이에요 — 자동으로 나눠 읽습니다',
+        '이 약관은 커서 '+parts+'개 부분으로 나눠 읽은 뒤 하나로 정리해 드려요.'+
+        '<div class="wait-warn">⏱ 질문 하나에 약 '+lo+'~'+hi+'분 걸립니다</div>'+
+        '분석 중에는 화면을 닫지 마시고 그대로 기다려 주세요. 진행 상황이 아래에 표시됩니다.');
     }
 
     $('s1').classList.add('ready');
@@ -504,19 +511,17 @@ function badgeText(){
    종합 : 발췌 정리        — 질문당 딱 1회      → 품질 좋은 모델
    각 배열은 후보 순서. 404(모델 없음)면 다음 후보로 자동 이동하고,
    실제로 응답한 모델명을 답변 배지에 표시한다. */
-/* 발췌 = Gemma 4 31B 한 개, 종합 = Gemini 3.5 Flash 한 개.
-   배열에 값이 여러 개인 것은 "다른 모델"이 아니라 같은 모델의 ID 표기 후보다.
-   (Google이 -it / -preview 접미사를 붙였다 뗐다 하므로 첫 번째가 404면 다음 표기를 시도)
-   모델을 바꾸시려면 아래 두 줄의 ID와 LABEL만 고치면 됩니다. */
-/* 2026-07-28 콘솔 실측: gemma-4-31b-it 200, gemini-3.5-flash 200 (둘 다 정상)
-   gemma-4-31b / gemma-4-26b-it / gemini-2.5-flash 계열은 404 확인 → 후보에서 제외 */
-const MODEL_EXTRACT=['gemma-4-31b-it'];
-const LABEL_EXTRACT='Gemma 4 31B';
-const MODEL_SYNTH  =['gemini-3.5-flash'];
-const LABEL_SYNTH  ='Gemini 3.5 Flash';
+/* 2026-07-28 실측 확정:
+   - gemma-4-31b-it: 입력 TPM 16,000 (quotaId: GenerateContentInputTokensPerModelPerMinute-FreeTier)
+     → 약관 조각(10만+ 토큰)이 한도의 6배라 발췌 불가. 재시도해도 영원히 429.
+   - gemini-3.1-flash-lite: TPM 250K / RPD 500 → 발췌·종합 모두 이 모델로.
+   - gemini-3.5-flash: 정상이지만 RPD 20이라 발췌에 못 씀. 종합 승격은 결제 후 검토. */
+const MODEL_EXTRACT=['gemini-3.1-flash-lite'];
+const LABEL_EXTRACT='Gemini 3.1 Flash-Lite';
+const MODEL_SYNTH  =['gemini-3.1-flash-lite'];
+const LABEL_SYNTH  ='Gemini 3.1 Flash-Lite';
 const MODEL_NAMES={
-  'gemma-4-31b-it':LABEL_EXTRACT,
-  'gemini-3.5-flash':LABEL_SYNTH
+  'gemini-3.1-flash-lite':'Gemini 3.1 Flash-Lite'
 };
 let EXTRACT_USED='', SYNTH_USED='', SYNTH_FELLBACK=false;
 function shortName(id){return MODEL_NAMES[id]||id;}
@@ -546,19 +551,25 @@ function quotaInfo(t){
 }
 function classify429(t){return quotaInfo(t).kind;}
 
-/* 요청 게이트 — 최소 간격 + 60초 롤링 윈도우 RPM 제한.
-   무료 등급 Gemma RPM 15 기준, 여유를 두고 12로 제한한다.
-   기준 시각은 '응답 완료' 시점(_lastCallAt)이라 실제 간격이 줄어들지 않는다. */
-const MIN_GAP_MS=5000, RPM_LIMIT=12;
-let _lastCallAt=0, _callTimes=[];
-async function gate(onProgress){
+/* 요청 게이트 — 60초 롤링 윈도우로 '요청 수'와 '입력 토큰'을 함께 제한.
+   무료 등급 3.1 Flash-Lite: RPM 15 / 입력 TPM 250K (2026-07-28 실측 기반).
+   여유를 두고 RPM 12 / TPM 200K 로 잡는다.
+   한글 1자 ≈ 1토큰 이상이므로 글자 수를 그대로 토큰 추정치로 쓴다(보수적). */
+const MIN_GAP_MS=5000, RPM_LIMIT=12, TPM_BUDGET=200000;
+let _lastCallAt=0, _calls=[]; // {t:시각, tok:입력토큰추정}
+async function gate(onProgress,inputChars){
+  const tok=Math.ceil((inputChars||0)*1.0)||1000;
   for(;;){
     const now=Date.now();
     if(now-_lastCallAt<MIN_GAP_MS){await sleep(Math.min(MIN_GAP_MS-(now-_lastCallAt),800));continue;}
-    _callTimes=_callTimes.filter(function(x){return now-x<60000;});
-    if(_callTimes.length<RPM_LIMIT){_callTimes.push(now);return;}
-    const wait=Math.ceil((60000-(now-_callTimes[0]))/1000)+1;
-    if(onProgress)onProgress('분당 요청 한도를 지키는 중… '+wait+'초 대기');
+    _calls=_calls.filter(function(c){return now-c.t<60000;});
+    const used=_calls.reduce(function(a,c){return a+c.tok;},0);
+    if(_calls.length<RPM_LIMIT && used+tok<=TPM_BUDGET){
+      _calls.push({t:now,tok:tok});return;
+    }
+    const oldest=_calls.length?_calls[0].t:now;
+    const wait=Math.ceil((60000-(now-oldest))/1000)+1;
+    if(onProgress)onProgress('분당 처리량 한도를 지키는 중… '+wait+'초 대기 (자동)');
     await sleep(1000);
   }
 }
@@ -598,7 +609,7 @@ async function askGemini(question,fullText,onProgress){
     if(onProgress)onProgress('약관에서 관련 조항을 찾는 중… ('+(i+1)+'/'+chunks.length+' 부분)'+(skipped?' · 건너뜀 '+skipped:''));
     const note=chunks.length>1?'\n(참고: 이 약관은 분량이 커서 '+chunks.length+'개로 나눠 읽는 중이며, 지금은 '+(i+1)+'번째 부분입니다. 이 부분에 있는 내용만 발췌하세요. "다음 부분에 이어진다"거나 "이후 페이지 참고" 같은 안내 문구는 넣지 마세요 — 나중에 자동으로 합쳐집니다.)':'';
     try{
-      await gate(onProgress);
+      await gate(onProgress,chunks[i].length+1500);
       const a=await askOnce(question,chunks[i],note,onProgress);
       // "이 부분에 관련 내용 없음"류만 제외: 답이 짧고(30자 미만) '없다'는 표현이 있거나,
       // 답이 '없음' 표현으로 시작하는 경우 (정상 답변 중간에 "~는 없습니다"가 섞인 건 살림)
@@ -649,7 +660,7 @@ async function askGemini(question,fullText,onProgress){
     '7) 존댓말로 명확하고 간결하게.';
 
   try{
-    await gate(onProgress);
+    await gate(onProgress,mergePrompt.length);
     const r=await callList(MODEL_SYNTH,mergePrompt,8192,onProgress);
     SYNTH_USED=r.model;
     return partNote+(r.text||plain);
@@ -658,7 +669,7 @@ async function askGemini(question,fullText,onProgress){
     // 종합 모델의 한도가 소진된 경우: 발췌 모델로 대체 종합 (막히지 않게)
     if(onProgress)onProgress('종합 모델 한도에 도달해 대체 모델로 정리하는 중…');
     try{
-      await gate(onProgress);
+      await gate(onProgress,mergePrompt.length);
       const r2=await callList(MODEL_EXTRACT,mergePrompt,8192,onProgress);
       SYNTH_USED=r2.model;SYNTH_FELLBACK=true;
       return partNote+(r2.text||plain);
@@ -704,6 +715,14 @@ async function callModel(model,prompt,maxTokens,onProgress,_try){
       const qi=res.status===429?quotaInfo(t):null;
       const kind=qi?qi.kind:'';
       const tryNo=(_try||0)+1;
+      // 요청 하나가 분당 토큰 한도보다 큰 경우: 기다려도 절대 안 풀림 → 재시도 금지
+      const oversize=qi&&/InputTokens|input_token/i.test(qi.qid+qi.qmetric)
+        &&qi.qval&&prompt.length>parseInt(qi.qval,10);
+      if(oversize){
+        const err=new Error('HTTP 429');
+        err.status=429;err.detail=t;err.kind='oversize';err.quota=qi;err.model=model;err.tries=tryNo;
+        return {notFound:false,err:err};
+      }
       // 일일 한도로 '확정'된 경우가 아니면 지수 백오프로 재시도
       if(res.status===429&&kind!=='day'&&tryNo<=MAX_RETRY){
         let left=Math.max(qi.delay||0,[20,40,60][tryNo-1]||60);
@@ -731,8 +750,14 @@ function renderError(err){
   const d=(err.detail||'')+'';
   if(err.status===429||/quota|RESOURCE_EXHAUSTED/i.test(d)){
     const payLink='<a class="g-link" href="https://aistudio.google.com/app/billing" target="_blank" rel="noopener">결제 페이지 열기 →</a>';
-    const kind=err.kind||classify429(d);
-    if(kind==='minute'){
+    const qi0=err.quota||quotaInfo(d);
+    const kind=err.kind||qi0.kind;
+    if(kind==='oversize'){
+      title='이 약관 조각이 현재 계정의 처리 한도보다 큽니다';
+      body='기다리거나 다시 시도해도 해결되지 않는 유형입니다.<br>'+
+        '아래 <b>기술 정보</b>의 quotaValue가 현재 분당 처리 한도입니다. '+
+        '프로그램 업데이트 또는 Google 계정 결제 등록이 필요합니다 — 관리자에게 문의해 주세요.';
+    }else if(kind==='minute'){
       title='잠깐만요 — 분당 사용량에 도달했어요';
       body='<b>결제하실 필요 없습니다.</b> 짧은 시간에 많은 양을 읽어서 생긴 일시적인 제한이에요.<br>'+
         '자동으로 여러 번 다시 시도했지만 계속 막혔습니다. 2~3분 뒤에 다시 질문해 주세요.';
