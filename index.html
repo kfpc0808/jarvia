@@ -842,7 +842,7 @@
         <button onclick="filterCat('all',document.querySelector('.cat-tab'))" style="font-size:12px;font-weight:600;padding:4px 12px;border-radius:16px;border:1px solid var(--border);background:#fff;color:var(--text-lt);cursor:pointer;font-family:var(--font)">← 메인</button>
       </h2>
       <p style="color:var(--text-lt);font-size:14px;margin-bottom:16px">다음 업데이트 예정인 콘텐츠 목록입니다.</p>
-      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="tbl" style="min-width:820px;table-layout:fixed;border-collapse:collapse"><thead><tr><th style="text-align:center;width:100px">게시예정일</th><th style="text-align:center;width:120px">카테고리</th><th style="text-align:center;width:50px">구분</th><th style="text-align:left">제목</th><th style="text-align:center;width:40px">영상</th><th style="text-align:center;width:40px">오디오</th><th style="text-align:center;width:40px">HTML</th><th style="text-align:center;width:40px">PDF</th><th style="text-align:center;width:40px">PPT</th><th style="text-align:center;width:60px;color:#ffffff;font-weight:700">게시완료</th></tr></thead><tbody id="upcoming-tbody"></tbody></table></div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="tbl" style="min-width:820px;table-layout:fixed;border-collapse:collapse"><thead><tr><th style="text-align:center;width:100px">게시예정일</th><th style="text-align:center;width:120px">카테고리</th><th style="text-align:center;width:76px">구분</th><th style="text-align:left">제목</th><th style="text-align:center;width:40px">영상</th><th style="text-align:center;width:40px">오디오</th><th style="text-align:center;width:40px">HTML</th><th style="text-align:center;width:40px">PDF</th><th style="text-align:center;width:40px">PPT</th><th style="text-align:center;width:60px;color:#ffffff;font-weight:700">게시완료</th></tr></thead><tbody id="upcoming-tbody"></tbody></table></div>
     </div>
     <!-- ★ [2026-07-17 영업시그널] biz_signals 실시간 리스트 섹션 (upcoming-sec 패턴) -->
     <div id="signal-sec" class="sec hidden">
@@ -5374,21 +5374,30 @@ async function loadUpcoming(){
     const _norm=s=>(s||'').replace(/\s+/g,'').toLowerCase();
     const _pipeCats=['클로징리포트','마스터가이드','메디컬'];
     const rows=[];const _seen=new Map();
+    /* ★[2026-07-29] 구분 정규화 — 소스별 표기 편차('corporate'/'법인컨설팅' 등)를 '법인'/'개인'으로 통일해 병합 키 어긋남 방지 */
+    const _normField=v=>{v=String(v||'').trim();if(!v)return'';if(/corporate|법인/i.test(v))return'법인';if(/personal|individual|개인/i.test(v))return'개인';return v;};
     const pushRow=r=>{
       if(!r.date||r.date<_minDate||r.date>_maxDate)return;
+      r.field=_normField(r.field);
       /* 파이프라인 콘텐츠: 하루 1편 전제 → 날짜+구분 키로 병합 (토픽·보고서·게시분 문서 간 제목 차이 흡수)
          그 외(수동 등록 등): 제목 포함 키 (같은 날 같은 카테고리 다건 허용) */
       const k=_pipeCats.includes(r.category)
         ? r.category+'|'+r.date+'|'+(r.field||'')
         : r.category+'|'+r.date+'|'+_norm(r.title);
-      if(_seen.has(k)){
-        const ex=_seen.get(k);
-        if(r.completed)ex.completed=true;
-        if(!ex.title&&r.title)ex.title=r.title;
-        ['video','audio','html','pdf','ppt'].forEach(f=>{if(r[f]&&!ex[f])ex[f]=r[f];});
+      /* ★[2026-07-29] 보조키(제목) — 한쪽 소스에 구분이 비어 키가 어긋나도 같은 날·같은 제목이면 같은 콘텐츠로 병합
+         (클로징리포트가 일정 소스=법인, 게시분 소스=구분 없음으로 들어와 중복 2행이 생기던 문제 해결) */
+      const tk=_pipeCats.includes(r.category)&&r.title?r.category+'|'+r.date+'|T|'+_norm(r.title):null;
+      const hit=_seen.get(k)||(tk&&_seen.get(tk))||null;
+      if(hit){
+        if(r.completed)hit.completed=true;
+        if(!hit.title&&r.title)hit.title=r.title;
+        if(!hit.field&&r.field)hit.field=r.field;   /* 구분 빈 행이 먼저 왔어도 나중 값으로 채움 */
+        ['video','audio','html','pdf','ppt'].forEach(f=>{if(r[f]&&!hit[f])hit[f]=r[f];});
+        if(!_seen.has(k))_seen.set(k,hit);
+        if(tk&&!_seen.has(tk))_seen.set(tk,hit);
         return;
       }
-      _seen.set(k,r);rows.push(r);
+      _seen.set(k,r);if(tk)_seen.set(tk,r);rows.push(r);
     };
 
     /* ① upcoming_contents (기존 소스 — AI 초안은 사용자에게 숨김) */
@@ -5419,7 +5428,9 @@ async function loadUpcoming(){
         if(!dt&&c.createdAt){const d2=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);dt=`${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-${String(d2.getDate()).padStart(2,'0')}`;}
         const cat=c.type==='case_report'?'클로징리포트':c.type==='master_guide'?'마스터가이드':'메디컬';
         const fmts=c.formats||[];
-        pushRow({date:dt,category:cat,field:c.subType||'',title:c.title||'',
+        /* ★[2026-07-29] 클로징리포트 구분: 일정 소스(②)와 동일하게 clientType/salesType 우선 — subType 공백으로 인한 병합 실패 방지 */
+        const fld=c.type==='case_report'?(((c.clientType||c.salesType)==='corporate')?'법인':((c.clientType||c.salesType)?'개인':(c.subType||''))):(c.subType||c.track||'');
+        pushRow({date:dt,category:cat,field:fld,title:c.title||'',
           video:fmts.includes('video')?'O':'',audio:(c.audioUrl||fmts.includes('audio'))?'O':'',
           html:(c.url||fmts.includes('html'))?'O':'',pdf:fmts.includes('pdf')?'O':'',ppt:(c.pptUrl||c.pptxUrl||fmts.includes('ppt'))?'O':'',completed:true});
       });
@@ -5430,7 +5441,7 @@ async function loadUpcoming(){
     const ck=v=>v?'<span style="color:#2e86ab;font-weight:700">✓</span>':'';
     const fmtDate=d=>(d||'').replace(/-/g,'.');
     const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910'],'택스컨설팅위클리':['#e3eaf6','#1a3a6b'],'클로징리포트':['#fdf3d7','#8a6d1a'],'마스터가이드':['#e8ecfb','#3b4f9e'],'메디컬':['#fde4e4','#b91c1c']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${esc(c)}</span>`;};
-    $('upcoming-tbody').innerHTML=rows.map((c,i)=>{const bg=i%2===1?'background:#f8f9fa':'';const done=c.completed===true;const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">&mdash;</td>';return`<tr style="${bg};border-bottom:1px solid #e9ecef"><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center">${esc(c.field||'')}</td><td style="text-align:left">${esc(c.title||'')}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}</tr>`;}).join('');
+    $('upcoming-tbody').innerHTML=rows.map((c,i)=>{const bg=i%2===1?'background:#f8f9fa':'';const done=c.completed===true;const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">&mdash;</td>';return`<tr style="${bg};border-bottom:1px solid #e9ecef"><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.field||'')}">${esc(c.field||'')}</td><td style="text-align:left">${esc(c.title||'')}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}</tr>`;}).join('');
   }catch(e){console.error('게시예정 로드 오류:',e);$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">로드 중 오류가 발생했습니다.</td></tr>';}
 }
 function toggleRecent(){const g=$('recent-grid'),t=$('recent-toggle');if(!g)return;const open=g.style.display!=='none';g.style.display=open?'none':'';t.textContent=open?'▶':'▼';}
