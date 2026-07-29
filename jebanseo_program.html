@@ -1491,7 +1491,7 @@ function renderChart(c){const _cnum=function(v){var n=+String(v).replace(/,/g,''
       const t=document.createElementNS(ns,'text');t.setAttribute('x',cx);t.setAttribute('y',y(v)-10);t.setAttribute('text-anchor','middle');t.setAttribute('font-size','11');t.setAttribute('font-weight','700');t.setAttribute('fill','#17263A');t.textContent=_cnum(v);svg.appendChild(t);
       const lt=document.createElementNS(ns,'text');lt.setAttribute('x',cx);lt.setAttribute('y',H-pb+15);lt.setAttribute('text-anchor','middle');lt.setAttribute('font-size','11');lt.setAttribute('fill','#52606D');lt.textContent=c.labels[i];svg.appendChild(lt);});}
   wrap.appendChild(svg);if(c.unit){const cap=elt('div','cap');cap.textContent='단위: '+c.unit;wrap.appendChild(cap);}return wrap;}
-function renderTable(t){const tb=elt('table','t');t.rows.forEach((row,ri)=>{const tr=elt('tr');row.forEach(cell=>{const c=elt(ri===0?'th':'td');c.textContent=cell;tr.appendChild(c);});tb.appendChild(tr);});return tb;}
+function renderTable(t){const tb=elt('table','t');const _hw=(t.rows&&t.rows[0]?t.rows[0].length:0);t.rows.forEach((row,ri)=>{const _r=row.slice();while(_hw>0&&_r.length>_hw&&String(_r[_r.length-1]==null?'':_r[_r.length-1]).trim()==='')_r.pop();/* ★ 헤더 폭 초과 빈 꼬리셀 제거 — 서버 생성 표의 <td></td> 잉여 셀 방어 (2026-07-30) */const tr=elt('tr');_r.forEach(cell=>{const c=elt(ri===0?'th':'td');c.textContent=cell;tr.appendChild(c);});tb.appendChild(tr);});return tb;}
 // AI가 스키마를 무시하고 마크다운 표(| a | b |)를 문자열로 뱉을 때 → 구조화 표로 자동 복원
 function mdTableToStruct(s){
   if(typeof s!=='string'||s.indexOf('|')<0)return null;
@@ -2657,7 +2657,13 @@ function financialToClientParams(financial){
   const by=_finNum(financial&&financial.baseYear),cy=_finNum(financial&&financial.comparisonYear);
   if(by!=null)out.baseYear=by;if(cy!=null)out.comparisonYear=cy;
   if(financial&&financial.statementType)out.statementType=String(financial.statementType).trim();
-  if(financial&&financial.unit)out.statementUnit=String(financial.unit).trim();
+  /* ★ 단위 계약 명문화 (2026-07-30): extracted는 이 앱 전역에서 항상 '만원' 환산값이다.
+     기존엔 원문 단위(예: 천원)를 statementUnit으로 실어 보내 서버가 만원 값을 천원으로 오독
+     → 이중환산(÷10·÷100)이 발생했다. 값의 단위는 '만원'으로 고정하고 원문 단위는 별도 보존. */
+  out.statementUnit='만원';
+  if(financial&&financial.unit)out.sourceStatementUnit=String(financial.sourceUnit||financial.unit).trim();
+  const _bY=_finNum(financial&&financial.ceoBirthYear);if(_bY!=null)out.ceoBirthYear=_bY;      /* ★ 크레탑 인적사항 기준 생년 — 진술값 대신 사용 (2026-07-30) */
+  const _aY=_finNum(financial&&financial.ceoAppointedYear);if(_aY!=null)out.ceoAppointedYear=_aY; /* ★ 크레탑 주요경력 기준 대표이사 취임년 (2026-07-30) */
   return out;
 }
 
@@ -2718,8 +2724,9 @@ function _financialUncertainResolved(message,resolvedKeys,meta){
 function mergeFinancialData(base,next,options){
   const b=base&&typeof base==='object'?JSON.parse(JSON.stringify(base)):{},n=next&&typeof next==='object'?next:{},opt=options||{};
   const out={...b},meta=opt.correctionMode?_financialCorrectionMeta(opt.sourceText):{};
-  ['baseYear','comparisonYear','statementType','unit'].forEach(k=>{if(n[k]!=null&&String(n[k]).trim()!=='')out[k]=n[k];});
+  ['baseYear','comparisonYear','statementType','unit','ceoBirthYear','ceoAppointedYear','sourceUnit'].forEach(k=>{if(n[k]!=null&&String(n[k]).trim()!=='')out[k]=n[k];});   /* ★ 인적사항·원문단위 병합 유실 방지 (2026-07-30) */
   ['baseYear','comparisonYear','statementType','unit'].forEach(k=>{if(meta[k]!=null&&String(meta[k]).trim()!=='')out[k]=meta[k];});
+  if(meta.unit!=null&&String(meta.unit).trim()!=='')out.sourceUnit=meta.unit;   /* ★ 사용자 단위 정정 = 원문 단위 진술 → sourceUnit 동기화(스테일 표시 방지) (2026-07-30) */
   if(meta.comparisonYearAbsent)delete out.comparisonYear;
   const be=b.extracted&&typeof b.extracted==='object'?b.extracted:{},ne=n.extracted&&typeof n.extracted==='object'?n.extracted:n;
   out.extracted={...be};
@@ -2760,9 +2767,34 @@ function mergeIssues(){
   Array.from(arguments).flat().forEach(x=>{if(!x)return;const code=String(x.code||x.message||x);if(seen.has(code))return;seen.add(code);out.push(x);});
   return out;
 }
+/* ★ 배율 가드 (2026-07-30): 생성 응답의 재무 수치를 클라이언트 확정값(만원)과 대조한다.
+   기존 검산(회계 항등식)은 전 항목이 같은 배율로 틀리면 통과하므로, 서버 이중환산 같은
+   10ⁿ 배율 오차는 잡지 못했다 — 이 가드가 그 마지막 관문이다. 기준연도 필드만 대조한다. */
+function finScaleAudit(sp){
+  const fd=confirmedFinancialData||pendingFinancialData;
+  if(!sp||typeof sp!=='object'||!fd||!fd.extracted)return[];
+  const E=fd.extracted,by=String(fd.baseYear||'');
+  const CANON={revenue:E.revenue,operatingIncome:E.operatingProfit,operatingProfit:E.operatingProfit,netIncome:E.netProfit,netProfit:E.netProfit,totalAssets:E.totalAssets,financialTotalAssets:E.totalAssets,totalLiabilities:E.totalLiabilities,totalEquity:E.totalEquity,retainedEarnings:E.retainedEarnings,loanAmount:E.loanAmount,ceoShortTermLoan:E.loanAmount,cashAndCashEquivalents:E.cashAndCashEquivalents,cash:E.cashAndCashEquivalents,borrowings:E.borrowings};
+  const out=[];
+  Object.keys(sp).forEach(k=>{
+    const m=String(k).match(/^([A-Za-z]+?)(\d{4})?$/);if(!m||!CANON.hasOwnProperty(m[1]))return;
+    if(m[2]&&m[2]!==by)return;                                        /* 기준연도 외 연도 필드는 원본이 달라 대조 제외 */
+    const base=Number(CANON[m[1]]);if(!Number.isFinite(base)||base===0)return;
+    const v=Number(sp[k]);if(!Number.isFinite(v)||v===0)return;
+    const lr=Math.log10(Math.abs(v/base)),n=Math.round(lr);
+    if(n!==0&&Math.abs(lr-n)<0.13)out.push({key:k,server:v,canonical:base,pow:n});
+  });
+  return out;
+}
+function finScaleWarnHtml(flags){
+  return '<div class="fconfirm"><div class="ft">🚨 금액 배율 검증 실패 — 이 자료를 그대로 사용하지 마세요</div>'+
+    '<div class="fissues"><b>서버 생성 수치가 확인·확정된 재무값과 10ⁿ 배율로 어긋납니다.</b><br>'+
+    flags.map(f=>'· '+escHtml(f.key)+': 생성값 '+Number(f.server).toLocaleString()+' ↔ 확정값 '+Number(f.canonical).toLocaleString()+'만원 ('+(f.pow>0?'×':'÷')+Math.round(Math.pow(10,Math.abs(f.pow))).toLocaleString()+')').join('<br>')+
+    '<br><br>슬라이드 본문의 금액·서사도 같은 배율로 틀렸을 가능성이 큽니다. <b>저장·발표 전 반드시 재생성</b>하시고, 반복되면 관리자에게 알려 주세요.</div></div>';
+}
 function financialConfirmHtml(financial,issues){
   const f=financial&&financial.extracted?financial.extracted:(financial||{});
-  const rows=[['기준연도',financial&&financial.baseYear?financial.baseYear+'년':'확인 필요'],['비교연도',financial&&financial.comparisonYear?financial.comparisonYear+'년':'없음·미확인'],['재무제표',financial&&financial.statementType||'확인 필요'],['금액 단위',(financial&&financial.unit?('원문 '+financial.unit+' · 아래 금액은 만원 환산'):'확인 필요')],['매출액',_finFmt(f.revenue)],['영업이익',_finFmt(f.operatingProfit)],['당기순이익',_finFmt(f.netProfit)],['자산총계',_finFmt(f.totalAssets)],['부채총계',_finFmt(f.totalLiabilities)],['자본총계',_finFmt(f.totalEquity)],['이익잉여금',_finFmt(f.retainedEarnings)],['현금 및 현금성자산',_finFmt(f.cashAndCashEquivalents)],['차입금',_finFmt(f.borrowings)],['가지급금 관련',_finFmt(f.loanAmount)]];
+  const rows=[['기준연도',financial&&financial.baseYear?financial.baseYear+'년':'확인 필요'],['비교연도',financial&&financial.comparisonYear?financial.comparisonYear+'년':'없음·미확인'],['재무제표',financial&&financial.statementType||'확인 필요'],['금액 단위',(financial&&(financial.sourceUnit||financial.unit)?('원문 '+(financial.sourceUnit||financial.unit)+' · 아래 금액은 만원 환산'):'확인 필요')],['매출액',_finFmt(f.revenue)],['영업이익',_finFmt(f.operatingProfit)],['당기순이익',_finFmt(f.netProfit)],['자산총계',_finFmt(f.totalAssets)],['부채총계',_finFmt(f.totalLiabilities)],['자본총계',_finFmt(f.totalEquity)],['이익잉여금',_finFmt(f.retainedEarnings)],['현금 및 현금성자산',_finFmt(f.cashAndCashEquivalents)],['차입금',_finFmt(f.borrowings)],['가지급금 관련',_finFmt(f.loanAmount)]];
   const uncertain=_financialUncertain(financial).map(escHtml);
   const issueList=(issues||[]).filter(x=>!String(x&&x.code||'').startsWith('UNCERTAIN_')).map(x=>escHtml(String(x&&x.message||x))).filter(Boolean);
   return '<div class="fconfirm"><div class="ft">📊 재무자료 추출 결과를 확인해 주세요</div>'+
@@ -2851,11 +2883,39 @@ async function generate(){
   deck={slides:[]};auditFlags=[];qualityAudit=[];calcOmissions=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
+    /* ★ 대표명·회사명 교차검증 (2026-07-30): 파서가 이미 아는 D.회사명·D.대표자와 타이핑값을 대조.
+       완전 스왑(첫 칸=회사명, 둘째 칸=대표명)은 자동 교정, 부분 불일치는 경고만. */
+    if(topic==='기업컨설팅'&&FIN.data&&FIN.data.회사명&&FIN.data.대표자){
+      const _nz=s=>String(s||'').replace(/\(주\)|\(유\)|\(합\)|주식회사|유한회사|\s+/g,'');
+      const _cn=_nz(clientName),_co=_nz(companyName),_pc=_nz(FIN.data.회사명),_pd=_nz(FIN.data.대표자);
+      if(_cn&&_co&&_cn===_pc&&_co===_pd){
+        const _t=clientName;clientName=companyName;companyName=_t;
+        const _tn=document.getElementById('topic');if(_tn)_tn.textContent=topic+' · '+clientName;
+        aiReply('ℹ️ 재무보고서 확인 결과 <b>대표명과 회사명이 서로 바뀌어 입력</b>되어 자동 교정했습니다 → 대표 <b>'+escHtml(clientName)+'</b> · 회사 <b>'+escHtml(companyName)+'</b>. 다르면 표지에서 직접 수정해 주세요.');
+      }else if((_cn&&_pc&&_cn===_pc)||(_co&&_pd&&_co===_pd)){
+        aiReply('⚠️ 입력하신 대표명/회사명이 재무보고서(대표 <b>'+escHtml(FIN.data.대표자)+'</b> · 회사 <b>'+escHtml(FIN.data.회사명)+'</b>)와 어긋나 보입니다. 생성 후 표지·팩트시트를 확인해 주세요.');
+      }
+    }
+    /* ★ 대표 나이 교차검증 (2026-07-30): 크레탑 인적사항 생년은 불변 사실 — 진술 나이와 2세 이상 어긋나면 생년 기준으로 교정. */
+    if(topic==='기업컨설팅'&&FIN.data&&FIN.data.대표생년){
+      const _age=new Date().getFullYear()-FIN.data.대표생년;
+      ['ceoAge','age'].forEach(function(k){const v=Number(collectedParams[k]);
+        if(Number.isFinite(v)&&v>0&&Math.abs(v-_age)>1){collectedParams[k]=_age;
+          aiReply('⚠️ 질문지의 대표 나이 <b>'+v+'세</b>가 재무보고서 생년('+FIN.data.대표생년+'년)과 달라 <b>'+_age+'세</b>로 교정해 전달합니다. (예: "1955년생"의 55를 나이로 오인한 사례 방지)');}});
+    }
     const genPayload={action:'generate',topic,text:rawInput,params:collectedParams,clientName,companyName,needBasis:chosenBasis||undefined,member:MEMBER,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[],qsheetConfirmed:QS.confirmedForGen||[],qsheetPromises:QS.promisesForGen||[],qsheetUnknown:QS.unknownForGen||[]};
     if(topic==='기업컨설팅'&&(financialTableDetected||pendingFinancialData||confirmedFinancialData)){
       if(_forceGen){ genPayload.skipFinancialConfirm=true; }   // ★ 즉시생성: 재무확인 건너뜀(미확인값은 '정밀산출 필요'로 표기)
       else { genPayload.requireFinancialConfirmation=true; }
-      if(confirmedFinancialData)genPayload.confirmedFinancialData=confirmedFinancialData;
+      if(confirmedFinancialData){
+        /* ★ 전송본 단위 정규화 (2026-07-30): extracted는 만원인데 unit이 원문 단위(천원 등)면
+           서버·AI가 값 단위로 오독해 이중환산한다. 전송 사본만 unit='만원'으로 고정하고
+           원문 단위는 sourceUnit에 보존 — 클라이언트 보관본·정정 흐름은 그대로 둔다. */
+        const _cf=JSON.parse(JSON.stringify(confirmedFinancialData));
+        _cf.sourceUnit=_cf.sourceUnit||_cf.unit;_cf.unit='만원';
+        _cf.unitContract='extracted 금액은 전부 만원 환산값입니다. 재환산 금지. (원문 단위: '+(_cf.sourceUnit||'미상')+')';
+        genPayload.confirmedFinancialData=_cf;
+      }
     }
     _forceGen=false;   // ★ 1회성 신호 — 사용 후 즉시 초기화(이후 일반 생성에 영향 없음)
     const r=await jbApi(genPayload);
@@ -2881,6 +2941,7 @@ async function generate(){
     _deckSaved=false;                              // 미저장 상태 (저장 전 편집 잠금)
     aiOpCount=0;                                   // 새 문서 → 슬라이드 10회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
+    const _scaleFlags=(topic==='기업컨설팅')?finScaleAudit(data.params):[];   /* ★ 배율 가드 (2026-07-30) */
     if(data.calc) calc=data.calc;
     auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];   // ★ 검증 안 된 금액 목록
     qualityAudit=Array.isArray(data.qualityAudit)?data.qualityAudit:[];
@@ -2891,6 +2952,7 @@ async function generate(){
     applyCoverIdentity();ensureDeckExtras();renderDeck();
     pendingGen=null;interviewQueue=[];_lastRoundAsked=false;   // 생성 완료 → 편집 모드(이후 입력은 슬라이드 명령으로)
     aiReply(GUIDE_HTML);
+    if(_scaleFlags.length) aiReply(finScaleWarnHtml(_scaleFlags));   // ★ 배율 오차는 최우선 경고 (2026-07-30)
     if(auditFlags.length) aiReply(auditWarnHtml(auditFlags));   // ★ 검증 안 된 금액이 있으면 검수 경고
     if(qualityAudit.length) aiReply(qualityAuditWarnHtml(qualityAudit));
     if(calcOmissions.length) aiReply(calcOmissionWarnHtml(calcOmissions));
@@ -3526,6 +3588,25 @@ function finParse(pages,fmt){
   const ind = IN?finText(IN,['표준산업분류','업 종 분 류','업종분류'],S):'';
   D.업종 = ind.replace(/^\d+\s*차\)\s*/,'').replace(/\(\s*[A-Z]\s*\d+\s*\)/g,'').replace(/\s+/g,' ').trim();
 
+  /* ── 대표 생년·대표이사 취임년 (2026-07-30) — 질문지 진술값 교차검증용.
+     KODATA_WEB 인적사항 페이지: 생년월일 YYYY-MM-DD, 주요경력사항의 재직중(종료일 없는) 대표이사 행.
+     "김기성(1955년생)"을 55세로 오인하는 사고를 원천 차단하는 근거값. NICE 등 타 포맷은 미적용. */
+  D.대표생년=0; D.대표취임년=0;
+  if(fmt==='KODATA_WEB'){
+    const PI=pages.find(p=>/인적사항/.test(p.text)&&/생년월일/.test(p.text));
+    if(PI){
+      const _bm=PI.text.match(/생년월일[^0-9]{0,20}((?:19|20)\d{2})-\d{2}-\d{2}/);
+      if(_bm)D.대표생년=parseInt(_bm[1]);
+      const _T=PI.text,_hits=[];let _am;const _are=/((?:19|20)\d{2})-\d{2}\s*~/g;
+      while((_am=_are.exec(_T))!==null)_hits.push({y:parseInt(_am[1]),i:_am.index});
+      for(let _h=0;_h<_hits.length;_h++){
+        const _seg=_T.slice(_hits[_h].i,_hits[_h+1]?_hits[_h+1].i:_hits[_h].i+140);
+        /* 재직중 경력(~ 뒤에 종료 연도가 없음) + 대표이사 직위 → 취임년 */
+        if(/대표이사/.test(_seg)&&!/~\s*(?:19|20)\d{2}/.test(_seg.slice(0,20))){D.대표취임년=_hits[_h].y;break;}
+      }
+    }
+  }
+
   /* ── 주주 (행 단위 좌표 스캔) ── */
   D.주주=[]; D.총주식=0; D.액면=0;
   if(SH){
@@ -3812,7 +3893,7 @@ function finRender(){
   const bad=FIN.checks.filter(x=>!x.ok);
 
   let h=`<div class="fc-h"><div class="fc-nm">${esc(D.회사명||'(회사명 미확인)')}</div><div class="fc-src">${esc(FIN.fileName)}</div></div>`;
-  h+=`<div class="fc-sub">${esc(D.업종||'업종 미확인')}${D.설립년?' · 설립 '+(new Date().getFullYear()-D.설립년)+'년차':''}${D.종업원?' · 직원 '+D.종업원+'명':''} · 대표 ${esc(D.대표자||'—')}${D.대표지분?` (지분 ${D.대표지분}%)`:''}</div>`;
+  h+=`<div class="fc-sub">${esc(D.업종||'업종 미확인')}${D.설립년?' · 설립 '+(new Date().getFullYear()-D.설립년)+'년차':''}${D.종업원?' · 직원 '+D.종업원+'명':''} · 대표 ${esc(D.대표자||'—')}${D.대표지분?` (지분 ${D.대표지분}%)`:''}${D.대표생년?` · ${D.대표생년}년생(만 ${new Date().getFullYear()-D.대표생년}세 안팎)`:''}${D.대표취임년?` · 취임 ${D.대표취임년}년`:''}</div>`;
 
   h+=`<div class="fc-sec">재무 요약 · ${D.years[0]}년 결산</div><table>`;
   h+=row('매출액',억(D.매출액[0]))+row('영업이익',억(D.영업이익[0]))+row('당기순이익',억(D.순이익[0]));
@@ -3906,12 +3987,14 @@ function finToPending(){
   if(!D.가지급금||D.가지급금[0]===0)unc.push('가지급금(주임종 단기대여금) — 재무보고서에서 확인되지 않음');
   if(!D.퇴직충당||D.퇴직충당[0]===0)unc.push('퇴직급여충당부채 — 재무보고서에서 확인되지 않음');
   unc.push('대표 급여·임원 퇴직금 규정(정관 배수) — CEO 확인 필요');
-  unc.push('대표 나이·가족관계(배우자·자녀 수)·후계자 유무 — CEO 확인 필요');
+  if(D.대표생년)unc.push('가족관계(배우자·자녀 수)·후계자 유무 — CEO 확인 필요');   /* ★ 생년은 인적사항에서 확보 (2026-07-30) */
+  else unc.push('대표 나이·가족관계(배우자·자녀 수)·후계자 유무 — CEO 확인 필요');
   unc.push('대표 개인 부동산·금융자산·사전증여 이력 — 상속세 산출에 필수');
   if((FIN.stmtType||'별도')==='별도')unc.push('재무제표를 별도로 가정함 — 연결재무제표이면 정정 필요');
   return {
     baseYear:D.years[0], comparisonYear:D.years[1],
     statementType:FIN.stmtType||'별도', unit:finUnit(),
+    ceoBirthYear:D.대표생년||undefined, ceoAppointedYear:D.대표취임년||undefined,   /* ★ 크레탑 인적사항 기준 (2026-07-30) */
     source:'첨부 재무보고서 PDF 자동추출(표 좌표 기반) · 회계 항등식 검산 완료',
     uncertain:unc,
     extracted:{
@@ -3971,6 +4054,9 @@ function finTextToPending(text){
     uncertain:unc,extracted:extracted,
     userConfirmed:false,confirmed:false,confirmationStatus:'pending'};
   if(compYear)out.comparisonYear=compYear;
+  /* ★ 인적사항 라인 복원 (2026-07-30) — finToText가 넣은 생년·취임년을 역파싱 경로에서도 유지 */
+  const _pb=s.match(/대표 인적사항[^\n]*?생년\s*((?:19|20)\d{2})년/);if(_pb)out.ceoBirthYear=+_pb[1];
+  const _pa=s.match(/대표 인적사항[^\n]*?취임\s*((?:19|20)\d{2})년/);if(_pa)out.ceoAppointedYear=+_pa[1];
   return out;
 }
 
@@ -3989,6 +4075,8 @@ function finToText(){
   L.push(`법인 기업컨설팅. ${D.회사명||''}${D.업종?' ('+D.업종+')':''}.`);
   L.push(`대표 ${D.대표자||''}, 지분 ${D.대표지분}%${D.대표주식?` (${D.대표주식.toLocaleString()}주 / 총 발행 ${D.총주식.toLocaleString()}주, 1주당 액면가 ${D.액면.toLocaleString()}원)`:''}.`
         +`${D.설립년?` 설립 ${D.설립년}년(${new Date().getFullYear()-D.설립년}년차).`:''}${D.종업원?` 상시종업원 ${D.종업원}명.`:''}`);
+  /* ★ 인적사항 근거값 (2026-07-30): 재무보고서에서 직접 추출 — 질문지 진술과 다르면 이 값이 우선 */
+  if(D.대표생년||D.대표취임년)L.push(`대표 인적사항(재무보고서 기준): ${D.대표생년?`생년 ${D.대표생년}년 → 현재 만 ${new Date().getFullYear()-D.대표생년}세 안팎`:''}${D.대표생년&&D.대표취임년?' · ':''}${D.대표취임년?`대표이사 취임 ${D.대표취임년}년(근속 ${new Date().getFullYear()-D.대표취임년}년차)`:''}. 진술값과 상충 시 이 값을 우선 확인할 것.`);
   L.push('');
   /* ★★ 이 한 줄이 기준연도·비교연도·별도/연결·단위를 모두 확정한다. 절대 형식 변경 금지 ★★ */
   L.push(`[재무 현황 — ${ST} 재무제표, 단위 ${finUnit()}, 기준연도 ${Y[0]} / 비교연도 ${Y[1]}]`);   // ★ C2: 포맷별 단위표
