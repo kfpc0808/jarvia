@@ -2599,6 +2599,36 @@ function auFiltered(){
   else a.sort((x,y)=>(y.chat+y.voice)-(x.chat+x.voice));
   return a;
 }
+/* ★ [2026-07-29] 회원별 AI 과금 건별 드릴다운 — 원장(transactions·refType ai_chat)을 시각·용도·결제수단까지 표시 */
+async function auDetail(loginId){
+  if(!loginId)return;
+  let ov=$('auDetOv');
+  if(!ov){ov=document.createElement('div');ov.id='auDetOv';ov.style.cssText='position:fixed;inset:0;z-index:9800;background:rgba(15,27,51,.5);display:flex;align-items:center;justify-content:center;padding:18px';
+    ov.innerHTML='<div style="background:#fff;border-radius:14px;max-width:720px;width:100%;max-height:86vh;display:flex;flex-direction:column;overflow:hidden"><div style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid #ECEEF2"><b id="auDetTitle" style="font-size:15px;color:#15294A;flex:1"></b><button type="button" id="auDetX" style="border:0;background:#F2F4F8;border-radius:8px;width:30px;height:30px;font-size:15px;cursor:pointer">✕</button></div><div id="auDetBody" style="overflow-y:auto;padding:14px 16px;font-size:13px"></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',e=>{if(e.target===ov)ov.style.display='none';});
+    ov.querySelector('#auDetX').onclick=()=>{ov.style.display='none';};}
+  ov.style.display='flex';
+  $('auDetTitle').textContent=loginId+' — AI 과금 건별 내역';
+  $('auDetBody').innerHTML='<p style="color:#888">조회 중…</p>';
+  try{
+    const us=await getDocs(query(collection(db,'users'),where('loginId','==',loginId)));
+    if(us.empty){$('auDetBody').innerHTML='<p style="color:#A32D2D">users 문서에서 이 아이디를 찾지 못했습니다.</p>';return;}
+    const uid=us.docs[0].id;
+    const ts=await getDocs(query(collection(db,'transactions'),where('userId','==',uid)));
+    const list=ts.docs.map(d=>d.data()).filter(t=>t.refType==='ai_chat').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,300);
+    if(!list.length){$('auDetBody').innerHTML='<p style="color:#888">AI 과금·무료사용 거래가 없습니다. (무과금 음성 트랙은 원장을 남기지 않습니다)</p>';return;}
+    const _p2=n=>String(n).padStart(2,'0');
+    const _dt=t=>{const d=t?.toDate?t.toDate():null;return d?(d.getFullYear()+'-'+_p2(d.getMonth()+1)+'-'+_p2(d.getDate())+' '+_p2(d.getHours())+':'+_p2(d.getMinutes())+':'+_p2(d.getSeconds())):'-';};
+    let paid=0,free=0,sum=0;
+    const rows=list.map(t=>{const amt=Math.abs(t.amount||0);if(amt>0){paid++;sum+=amt;}else free++;
+      const kind=(t.task==='voice_fields_refine')?'음성 고객수정':'AI 비서 질문';
+      const pay=amt>0?((t.fromPoint?('포인트 '+t.fromPoint.toLocaleString()+'P '):'')+(t.fromBalance?('잔액 '+t.fromBalance.toLocaleString()+'원'):'')):'<span style="color:#9099AD">무료</span>';
+      return '<tr><td style="white-space:nowrap">'+_dt(t.createdAt)+'</td><td>'+esc(t.memo||kind)+'</td><td style="text-align:right">'+(amt>0?('<b>'+amt.toLocaleString()+'원</b>'):'0원')+'</td><td>'+pay+'</td><td style="text-align:right;color:#9099AD">'+((t.pointAfter!=null)?(t.pointAfter.toLocaleString()+'P / '+(t.balanceAfter||0).toLocaleString()+'원'):'-')+'</td></tr>';}).join('');
+    $('auDetBody').innerHTML='<div style="display:flex;gap:14px;margin-bottom:10px;font-size:12.5px;color:#5A6484"><span>유료 <b style="color:#15294A">'+paid+'건 · '+sum.toLocaleString()+'원</b></span><span>무료 <b>'+free+'건</b></span><span style="color:#9099AD">최근 '+list.length+'건 표시</span></div>'
+      +'<table class="tbl" style="width:100%"><thead><tr><th>일시</th><th>용도</th><th style="text-align:right">금액</th><th>결제수단</th><th style="text-align:right">잔여(P/원)</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }catch(e){$('auDetBody').innerHTML='<p style="color:#A32D2D">조회 실패: '+esc(e&&e.message||'')+'</p>';}
+}
 function auRender(page){
   _auPage=page||1;
   const a=auFiltered();
@@ -2658,7 +2688,7 @@ function auRender(page){
       else if(chatNear)chatCell+=' <span style="font-size:11px;background:#FFF8E7;color:#8B6914;border-radius:6px;padding:1px 6px">임박</span>';
       let voiceCell=String(r.voice);
       if(isOne)voiceCell+=bar(r.voice,AU_VOICE_DAILY,vNear?'#EF9F27':'#1D9E75');
-      return '<tr><td style="text-align:center;color:#9099AD">'+(_st+_i+1)+'</td><td>'+nm+'</td>'
+      return '<tr data-audet="'+esc(r.loginId||'')+'" title="클릭: 이 회원의 AI 과금 건별 내역" style="cursor:pointer"><td style="text-align:center;color:#9099AD">'+(_st+_i+1)+'</td><td>'+nm+'</td>'
         +'<td style="text-align:right">'+chatCell+'</td>'
         +'<td style="text-align:right">'+voiceCell+'</td>'
         +(isOne?'':'<td style="text-align:right">'+(vNear?'<span style="font-size:11px;background:#FFF8E7;color:#8B6914;border-radius:6px;padding:1px 6px">음성 '+r.maxVoice+'</span>':'채팅 '+r.maxChat+' · 음성 '+r.maxVoice)+'</td>'
@@ -2669,6 +2699,7 @@ function auRender(page){
     +'<div id="au-pager" style="display:flex;gap:4px;justify-content:center;margin-top:12px;flex-wrap:wrap"></div>'
     +'<p style="color:#888;font-size:13px;margin-top:10px">'+_auFrom+' ~ '+_auTo+' · 사용 '+_auRows.length+'명'+(a.length!==_auRows.length?(' · 검색 '+a.length+'명'):'')+' · '+(_st+1)+'~'+Math.min(_st+_per,a.length)+'명 표시</p>';
   mkPager($('au-pager'),a.length,_auPage,_per,'auRender');
+  try{$('au-body').querySelectorAll('[data-audet]').forEach(function(tr){tr.onclick=function(){auDetail(tr.getAttribute('data-audet'));};});}catch(_e){}   /* ★ [2026-07-29] 건별 드릴다운 */
 }
 function auCsv(){
   const a=auFiltered();

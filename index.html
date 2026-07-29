@@ -8235,10 +8235,10 @@ async function doUpdateProfile(e){
 async function loadUsage(){
   let snap;try{snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid),orderBy('createdAt','desc'),limit(50)));}catch(e){const all=await getDocs(query(collection(db,'view_logs'),where('userId','==',me.uid)));snap={docs:all.docs.sort((a,b)=>(b.data().createdAt?.toMillis?.()??0)-(a.data().createdAt?.toMillis?.()??0)).slice(0,50)};}
   const logs=snap.docs.map(d=>d.data());
-  let apLogs=[];try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));apLogs=all.docs.map(d=>d.data()).filter(t=>t.refType==='ai_proposal'||t.refType==='ai_proposal_slide').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,80);}catch(e){}
+  let apLogs=[],aiLogs=[];try{const all=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));const _tx=all.docs.map(d=>d.data());apLogs=_tx.filter(t=>t.refType==='ai_proposal'||t.refType==='ai_proposal_slide').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,80);aiLogs=_tx.filter(t=>t.refType==='ai_chat').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,120);}catch(e){}   /* ★ [2026-07-29] AI 비서 차감·무료사용 건별 표시 — 같은 조회를 재사용해 추가 읽기 0회 */
   // ★ AI 제안서 사용 기록 — 권한 불문 service_logs(진입 기록)로 표시. 무제한·지사장 등 transactions에 차감이 남지 않는 계정도 누락 없이 노출.
   let svcLogs=[];try{const sall=await getDocs(query(collection(db,'service_logs'),where('userId','==',me.uid)));svcLogs=sall.docs.map(d=>d.data()).filter(s=>s.service==='ai_proposal').sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)).slice(0,80);}catch(e){}
-  if(!logs.length&&!apLogs.length&&!svcLogs.length){$('tb-usage').innerHTML='<tr><td colspan="7" class="tc">이용 내역이 없습니다.</td></tr>';return;}
+  if(!logs.length&&!apLogs.length&&!svcLogs.length&&!aiLogs.length){$('tb-usage').innerHTML='<tr><td colspan="7" class="tc">이용 내역이 없습니다.</td></tr>';return;}
   const cMap={};
   const typeNames2={video:'영상',brief:'이슈브리핑',audio:'오디오',report:'특급보고서',closing:'클로징PPT'};
   for(const l of logs){if(!cMap[l.contentId]){const cached=allContents.find(x=>x.contentId===l.contentId);if(cached){cMap[l.contentId]={title:cached.title,type:typeNames2[cached.type]||cached.type};}else{const d=await getDoc(doc(db,'contents',l.contentId));if(d.exists()){cMap[l.contentId]={title:d.data().title,type:typeNames2[d.data().type]||d.data().type};}else{cMap[l.contentId]={title:'(이전이용내역)',type:'-'};}}}}
@@ -8269,6 +8269,12 @@ async function loadUsage(){
   }
   for(const s of svcLogs){
     rows.push({t:s.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(s.createdAt)}</td><td>자료생성</td><td>AI 제안서</td><td><span class="t-free">무료</span></td><td>-</td><td>-</td><td>-</td></tr>`});
+  }
+  for(const t of aiLogs){   /* ★ [2026-07-29] AI 비서 — 언제·무료/유료·결제수단까지 건별 투명화 */
+    const amt=Math.abs(t.amount||0);
+    const label=(t.task==='voice_fields_refine')?'음성 고객수정':'AI 비서';
+    const memo=t.memo?esc(t.memo):(label+(amt>0?' (100원)':' (무료)'));
+    rows.push({t:t.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(t.createdAt)}</td><td>${memo}</td><td>${label}</td><td>${amt>0?fmt(amt)+'원':'<span class="t-free">무료</span>'}</td><td>${payHtml({amount:amt,pointUsed:t.fromPoint||0,balanceUsed:t.fromBalance||0})}</td><td>-</td><td>-</td></tr>`});
   }
   rows.sort((a,b)=>b.t-a.t);
   $('tb-usage').innerHTML=rows.map(r=>r.html).join('');
