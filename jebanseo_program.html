@@ -1713,6 +1713,21 @@ function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak
   if(s.notes){const n=elt('div','notes');const l=elt('div','lab');l.textContent='🎤 발표노트';n.appendChild(l);const p=document.createElement('div');p.textContent=s.notes;n.appendChild(p);sl.appendChild(n);}
   return sl;}
 function reseq(){deck.slides.forEach((s,i)=>{s.slideNum=String(i+1).padStart(2,'0');});}
+/* ★[2026-07-29] 생성 방어 — 제목·아이브로·결론·본문이 전부 빈 슬라이드는 제외(발표노트는 직전 장에 병합해 유실 방지).
+   생성 직후에만 적용 — 저장본 로드에는 미적용(사용자가 수동 추가한 빈 슬라이드 보호). */
+function jbDropEmptySlides(list){
+  var out=[],dropped=0;
+  (list||[]).forEach(function(s){
+    var hasBody=Array.isArray(s&&s.content)&&s.content.length>0;
+    var hasHead=!!(((s&&s.title)||'').trim()||((s&&s.eyebrow)||'').trim()||((s&&s.conclusion)||'').trim());
+    var isFrame=!!(s&&(s.region==='cover'||s.region==='toc'));
+    if(isFrame||hasBody||hasHead){out.push(s);return;}
+    dropped++;
+    if(s&&s.notes){var prev=out[out.length-1];if(prev)prev.notes=(prev.notes?prev.notes+'\n\n':'')+s.notes;}
+  });
+  if(dropped)console.warn('[jebanseo] 본문 없는 슬라이드 '+dropped+'장 제외 — 발표노트는 직전 장에 병합');
+  return out;
+}
 function applyCoverIdentity(){
   const cov=deck.slides.find(s=>s.region==='cover'); if(!cov)return;
   if(topic==='기업컨설팅'){
@@ -4349,7 +4364,12 @@ function confirmQsheet(){
   QS.unknownForGen=(c.confirmItems||[]).filter(function(x){return x.status==='skip';}).map(function(x){return x.label;});
   QS.phase='done';pendingGen=null;closeQsheetModal(false);
   aiReply('답변 확인 완료 ✓ 확인값과 약속드린 구성 그대로 자료를 만들게요.');
-  return generate();
+  /* ★[2026-07-29 보완] 기존 흐름의 필요자금 '기준' 선택 게이트를 건너뛰지 않는다.
+     소득·희망 생활비가 둘 다 있으면 basisAsk가 1문항을 큐에 넣고(3033행과 동일 패턴),
+     해당 없으면 askNext가 큐 비어 있음 → 즉시 generate(). 이 게이트를 건너뛰면
+     chosenBasis=null로 명목 축소 계산이 되어 물가반영 필요자금·수령전략 정밀 장이 빠진다. */
+  preflightQueue=basisAsk(rawInput,topic);
+  return askNext();
 }
 
 /* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
@@ -5252,7 +5272,7 @@ function handleFile(e){
     d=m?JSON.parse(m[1]):JSON.parse(txt);
     if(d&&d.app==='ceoReport'){toast('CEO리포트 파일입니다 — 대표님 리포트에서 여는 중…');openCeoReport();var _fk=new File([txt],'ceo.html',{type:'text/html'});crLoadFile({target:{files:[_fk],value:''}});return;}  /* ★CEO리포트 파일 라우팅 (2026-07-13) */
     if(!d.deck||!d.deck.slides||!d.deck.slides.length)throw new Error('형식 오류');
-    topic=d.topic||topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:d.deck.slides};ensureDeckExtras();
+    topic=d.topic||topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:jbDropEmptySlides(d.deck.slides)};ensureDeckExtras();
     _deckSaved=true;   // 저장된 파일 열기 → 편집 가능 (이미 과금됨)
     document.getElementById('start').style.display='none';
     document.getElementById('topic').textContent=topic+' · '+(clientName||'고객');
