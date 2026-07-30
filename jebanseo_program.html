@@ -4160,6 +4160,49 @@ async function finVerifyAI(){
   }catch(e){if(FIN.verify===V)FIN.verify.state='skip';console.warn('[finVerifyAI] skip:',e&&e.message||e);}
 }
 
+/* ★ 2단계 (2026-07-30): 변동 신호 — 3개년 배열에서 코드가 결정적으로 계산(AI 산출 금지 원칙 유지).
+   잔액이 아니라 '행위'(감자·유출·신설·급변)를 잡아, 생성 AI가 "지금 이 회사에서 일어나고 있는 일"
+   하나의 흐름으로 연결 서술할 재료를 만든다. 임계값 가드로 노이즈 차단, 최대 8건. */
+function finSignals(D){
+  const S=[];
+  const F=(a,i)=>a&&Number.isFinite(a[i]);
+  const fmt=v=>{const e=finToEok(v);return (Math.abs(e)>=100?e.toFixed(0):e.toFixed(1))+'억';};
+  const pair=a=>`${fmt(a[1])} → ${fmt(a[0])}`;
+  if(F(D.자본금,0)&&F(D.자본금,1)&&D.자본금[1]>0){
+    if(D.자본금[0]<D.자본금[1]*0.95)S.push(`자본금 감소(감자 추정): ${pair(D.자본금)}`);
+    else if(D.자본금[0]>D.자본금[1]*1.05)S.push(`자본금 증가(증자 추정): ${pair(D.자본금)}`);
+  }
+  if(F(D.이익잉여금,0)&&F(D.이익잉여금,1)&&F(D.순이익,0)){
+    const out=(D.이익잉여금[1]+D.순이익[0])-D.이익잉여금[0];   /* 직전잉여금+당기순이익-당기잉여금 = 유출분 역산 */
+    if(out>0&&finToEok(out)>=1&&out>=Math.abs(D.순이익[0])*0.15)
+      S.push(`이익잉여금 유출 약 ${fmt(out)} (직전 잉여금+당기순이익 대비 역산 — 배당·처분 등 추정)`);
+  }
+  if(F(D.퇴직충당,0)&&F(D.퇴직충당,1)&&D.퇴직충당[1]===0&&D.퇴직충당[0]>0)
+    S.push(`퇴직급여충당부채 신규 계상: ${fmt(D.퇴직충당[0])}`);
+  if(F(D.차입금,0)&&F(D.차입금,1)){
+    if(D.차입금[1]===0&&D.차입금[0]>0)S.push(`차입금 신규 발생: ${fmt(D.차입금[0])}`);
+    else if(D.차입금[1]>0&&D.차입금[0]>=D.차입금[1]*2)S.push(`차입금 급증: ${pair(D.차입금)}`);
+  }
+  if(F(D.가지급금,0)&&F(D.가지급금,1)&&D.가지급금[1]===0&&D.가지급금[0]>0)
+    S.push(`단기대여금 신규 발생: ${fmt(D.가지급금[0])} (가지급금 여부 확인 필요)`);
+  if(F(D.현금,0)&&F(D.현금,1)&&D.현금[1]>0){
+    if(D.현금[0]<=D.현금[1]*0.6)S.push(`현금 급감: ${pair(D.현금)}`);
+    else if(D.현금[0]>=D.현금[1]*1.8)S.push(`현금 급증: ${pair(D.현금)}`);
+  }
+  if(F(D.매출액,0)&&F(D.매출액,1)&&D.매출액[1]>0){
+    const g=(D.매출액[0]-D.매출액[1])/D.매출액[1];
+    if(g>=0.3)S.push(`매출 급증 +${Math.round(g*100)}%: ${pair(D.매출액)}`);
+    else if(g<=-0.3)S.push(`매출 급감 ${Math.round(g*100)}%: ${pair(D.매출액)}`);
+  }
+  if(F(D.영업이익,0)&&F(D.영업이익,1)){
+    if(D.영업이익[1]<0&&D.영업이익[0]>0)S.push(`영업이익 흑자전환: ${pair(D.영업이익)}`);
+    else if(D.영업이익[1]>0&&D.영업이익[0]<0)S.push(`영업이익 적자전환: ${pair(D.영업이익)}`);
+  }
+  if(F(D.재고자산,0)&&F(D.재고자산,1)&&D.재고자산[1]>0&&D.재고자산[0]>=D.재고자산[1]*1.5)
+    S.push(`재고자산 급증: ${pair(D.재고자산)}`);
+  return S.slice(0,8);
+}
+
 function finToText(){
   if(!FIN.data)return '';
   const D=FIN.data,K=finPick(FIN.calc),Y=D.years;
@@ -4224,6 +4267,12 @@ function finToText(){
     L.push(`- 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (calcUnlistedStockValue · 상증세법 시행령 §54, 순손익가치 3 : 순자산가치 2)`);
     L.push(`- 대표 보유지분 평가액 ${(K.대표지분가치/1e8).toFixed(2)}억원`);
     if(K.상속세!=null)L.push(`- 대표 유고 시 주식분 예상 상속세 ${(K.상속세/1e8).toFixed(2)}억원 (calcInheritanceTax · 배우자 있음·자녀 1인 가정)`);
+  }
+  const SIG=finSignals(D);   /* ★ 2단계 (2026-07-30) */
+  if(SIG.length){
+    L.push('');
+    L.push("[변동 신호 — 3개년 추이에서 코드가 계산한 확정 신호. 개별 나열하지 말고 '지금 이 회사에서 일어나고 있는 일' 하나의 흐름으로 연결해 서술할 것. 아래에 없는 변동·수치를 만들지 말 것]");
+    SIG.forEach(s=>L.push('- '+s));
   }
   if(FIN.risks&&FIN.risks.length){
     L.push('');
