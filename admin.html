@@ -1313,11 +1313,11 @@
         <button class="btn" onclick="showTcwManualForm()" style="background:linear-gradient(135deg,#0f2545,#1a3a6b);color:#fff">✏️ 수동 생성</button>
         <button class="btn" onclick="showTcwAddTopicForm()" style="background:linear-gradient(135deg,#1B5E20,#2E7D32);color:#fff">➕ 신규 주제 추가</button>
         <button class="btn btn-sec" onclick="loadTaxWeeklyTopics()">🔄 새로고침</button>
-        <select id="tw-year-sel" onchange="loadTaxWeeklyTopics()" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
+        <select id="tw-year-sel" onchange="twPageReload()" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
           <option value="2026">2026년</option>
           <option value="2027">2027년</option>
         </select>
-        <select id="tw-month-sel" onchange="loadTaxWeeklyTopics()" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
+        <select id="tw-month-sel" onchange="twPageReload()" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
           <option value="0">전체 월</option>
           <option value="4">4월</option>
           <option value="5">5월</option>
@@ -1328,6 +1328,14 @@
           <option value="10">10월</option>
           <option value="11">11월</option>
           <option value="12">12월</option>
+        </select>
+        <select id="tw-page-size" onchange="twSetPageSize(this.value)" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
+          <option value="10">10개씩</option>
+          <option value="20" selected>20개씩</option>
+          <option value="30">30개씩</option>
+          <option value="40">40개씩</option>
+          <option value="50">50개씩</option>
+          <option value="100">100개씩</option>
         </select>
         <div style="display:inline-flex;gap:4px;margin-left:4px">
           <button class="sub-tab active" id="tw-tab-all" onclick="twFilter('all',this)" style="padding:6px 14px;border-radius:16px;border:1px solid var(--border);background:#fff;font-size:12px;cursor:pointer;font-family:var(--font)">전체</button>
@@ -1447,7 +1455,7 @@
         </div>
       </div>
 
-      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <div id="tw-scroll-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%" onscroll="twSyncScroll('wrap')">
         <table class="tbl mt" style="min-width:1320px;table-layout:fixed;border-collapse:collapse">
           <thead><tr>
             <th style="text-align:center;width:40px">No</th>
@@ -1466,6 +1474,8 @@
           <tbody id="tb-tax-weekly"></tbody>
         </table>
       </div>
+      <div id="tw-scroll-proxy" style="display:none;overflow-x:auto;overflow-y:hidden;position:sticky;bottom:0;z-index:20;background:rgba(255,255,255,.92);border-top:1px solid var(--border)" onscroll="twSyncScroll('proxy')"><div id="tw-scroll-inner" style="height:14px"></div></div>
+      <div id="tw-pagination" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap"></div>
     </div>
 
     <!-- ★ 병의원 컨설팅 (Medical Weekly) 관리 패널 -->
@@ -7333,6 +7343,7 @@ window.showWlForm=showWlForm;window.hideWlForm=hideWlForm;window.wlFileSelected=
 // ★ 택스컨설팅위클리 관리
 let _twAll=[];
 let _twDayFilter='all';
+let _twPage=1,_twPageSize=20; // ★ TCW 페이지네이션 상태 (2026-07-30)
 
 // 주차+요일 → 실제 날짜 계산 (ISO 주 기준)
 function twWeekDate(year,week,day){
@@ -7400,8 +7411,17 @@ async function loadTaxWeeklyTopics(){
 
     if(!filtered.length){
       tb.innerHTML='<tr><td colspan="12" style="text-align:center;padding:20px;color:#999">해당 조건의 주제가 없습니다.</td></tr>';
+      const _pg=$('tw-pagination');if(_pg)_pg.innerHTML='';
+      twUpdateScrollProxy();
       return;
     }
+
+    // ★ 페이지네이션 slice (2026-07-30)
+    const _twTotal=filtered.length;
+    const _twPages=Math.max(1,Math.ceil(_twTotal/_twPageSize));
+    if(_twPage>_twPages)_twPage=_twPages;
+    const _twStart=(_twPage-1)*_twPageSize;
+    const pageRows=filtered.slice(_twStart,_twStart+_twPageSize);
 
     const typeLabel={'A':'보험직결','B':'보험간접','C':'보험무관'};
     const typeColor={'A':'#1565C0','B':'#2e7d32','C':'#888'};
@@ -7411,12 +7431,12 @@ async function loadTaxWeeklyTopics(){
       ?'<span style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;background:#E8F0FE;color:#1A5276">개인</span>'
       :'<span style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;background:#E8F5E9;color:#1B5E20">법인</span>';
 
-    tb.innerHTML=filtered.map((t,i)=>{
+    tb.innerHTML=pageRows.map((t,i)=>{
       const date=twWeekDate(t.year,t.week,t.day);
       const bg=i%2===1?'background:#f8f9fa':'';
       const st=t.status||'pending';
       return`<tr style="${bg};border-bottom:1px solid #e9ecef">
-        <td style="text-align:center;white-space:nowrap">${i+1}</td>
+        <td style="text-align:center;white-space:nowrap">${_twStart+i+1}</td>
         <td style="text-align:center;white-space:nowrap">${t.week}주</td>
         <td style="text-align:center;white-space:nowrap">${date}</td>
         <td style="text-align:center;font-size:11px;white-space:nowrap">${t.generatedAt?fdatetime(t.generatedAt):'-'}</td>
@@ -7442,6 +7462,8 @@ async function loadTaxWeeklyTopics(){
         </td>
       </tr>`;
     }).join('');
+    twRenderPagination(_twTotal,_twPages);
+    twUpdateScrollProxy();
   }catch(e){
     console.error('택스컨설팅위클리 로드 오류:',e);
     tb.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--danger)">로드 실패: ${e.message}</td></tr>`;
@@ -7484,13 +7506,45 @@ async function copyTcwAudioScript(contentId){
 
 function twFilter(day,btn){
   _twDayFilter=day;
+  _twPage=1; // ★ 필터 변경 시 1페이지로 (2026-07-30)
   document.querySelectorAll('#p-tax-weekly .sub-tab').forEach(b=>{
     b.classList.remove('active');b.style.background='#fff';b.style.color='';
   });
   if(btn){btn.classList.add('active');btn.style.background='var(--primary)';btn.style.color='#fff';}
   loadTaxWeeklyTopics();
 }
+
+// ══ ★ TCW 페이지네이션 + 하단 고정 가로 스크롤바 (2026-07-30) ══
+function twRenderPagination(total,pages){
+  const el=$('tw-pagination');if(!el)return;
+  if(total<=_twPageSize){el.innerHTML='';return;}
+  const start=(_twPage-1)*_twPageSize+1,end=Math.min(total,_twPage*_twPageSize);
+  const mk=(p,label,dis,cur)=>`<button onclick="twGoPage(${p})" ${dis?'disabled':''} style="padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:${cur?'var(--primary)':'#fff'};color:${cur?'#fff':(dis?'#bbb':'#333')};font-size:12px;cursor:${dis?'default':'pointer'};font-family:var(--font)">${label}</button>`;
+  let btns=mk(_twPage-1,'◀ 이전',_twPage===1,false);
+  let s=Math.max(1,_twPage-3),e=Math.min(pages,s+6);s=Math.max(1,e-6);
+  for(let p=s;p<=e;p++)btns+=mk(p,p,false,p===_twPage);
+  btns+=mk(_twPage+1,'다음 ▶',_twPage===pages,false);
+  el.innerHTML=`<span style="font-size:12px;color:#666">전체 ${total}건 중 ${start}–${end}</span><div style="display:flex;gap:4px;flex-wrap:wrap">${btns}</div>`;
+}
+function twGoPage(p){_twPage=p;loadTaxWeeklyTopics();}
+function twSetPageSize(v){_twPageSize=parseInt(v)||20;_twPage=1;loadTaxWeeklyTopics();}
+function twPageReload(){_twPage=1;loadTaxWeeklyTopics();}
+function twUpdateScrollProxy(){
+  const wrap=$('tw-scroll-wrap'),inner=$('tw-scroll-inner'),proxy=$('tw-scroll-proxy');
+  if(!wrap||!inner||!proxy)return;
+  inner.style.width=wrap.scrollWidth+'px';
+  proxy.style.display=wrap.scrollWidth>wrap.clientWidth?'block':'none';
+}
+let _twSyncing=false;
+function twSyncScroll(src){
+  if(_twSyncing)return;_twSyncing=true;
+  const wrap=$('tw-scroll-wrap'),proxy=$('tw-scroll-proxy');
+  if(wrap&&proxy){if(src==='wrap')proxy.scrollLeft=wrap.scrollLeft;else wrap.scrollLeft=proxy.scrollLeft;}
+  _twSyncing=false;
+}
+window.addEventListener('resize',()=>{try{twUpdateScrollProxy();}catch(e){}});
 window.loadTaxWeeklyTopics=loadTaxWeeklyTopics;window.twFilter=twFilter;window.copyTcwAudioScript=copyTcwAudioScript;window.tcwPublishContent=tcwPublishContent;window.tcwUnpublishContent=tcwUnpublishContent;
+window.twGoPage=twGoPage;window.twSetPageSize=twSetPageSize;window.twPageReload=twPageReload;window.twSyncScroll=twSyncScroll;
 
 // ═════════════════════════════════════════════════════════════
 // 🏥 병의원 컨설팅 (Medical Weekly) — 관리 함수
