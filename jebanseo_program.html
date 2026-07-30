@@ -2786,6 +2786,40 @@ function finScaleAudit(sp){
   });
   return out;
 }
+/* ★ 확정값 ↔ 파서 배열(D) 교차 검산 (2026-07-31 — 메타케어 '영업이익 250.7억' 10배 오기 재발 방지)
+   배경: 파서 단위 인식이 어긋난 상태에서 사용자가 확인카드를 원본 대조로 정정하면, 확정값(extracted)만
+   정확해지고 D 배열·finUnitScale은 구스케일로 남아 [재무 현황] 블록·표지 수치가 오염된다.
+   동작: 확정 직후 주요 8개 항목을 대조해 ① 전 항목이 동일한 10^n 편차면 FIN.scaleFix로 자동 정렬(사용자 확정값이 진실)
+   ② 항목별 편차가 제각각이면 확정을 취소하고 표로 보여준 뒤 정정을 요구(생성 차단). MANUAL은 대상 아님. */
+function finConfirmScaleSync(cf){
+  if(!cf||!cf.extracted||!FIN.data||FIN.src==='MANUAL')return {ok:true};
+  const D=FIN.data, man=finUnitScale().man;
+  const PAIRS=[['revenue','매출액'],['operatingProfit','영업이익'],['netProfit','순이익'],['totalAssets','자산총계'],['totalLiabilities','부채총계'],['totalEquity','자본총계'],['retainedEarnings','이익잉여금'],['cashAndCashEquivalents','현금']];
+  const rows=[];const ns=new Set();
+  PAIRS.forEach(function(p){
+    const ext=Number(cf.extracted[p[0]]);
+    const dv=(D[p[1]]&&Number.isFinite(D[p[1]][0]))?D[p[1]][0]*man:null;
+    if(!Number.isFinite(ext)||ext===0||dv==null||dv===0)return;
+    const lr=Math.log10(Math.abs(ext/dv)), n=Math.round(lr);
+    if(Math.abs(lr-n)>0.13)return;   /* 10^n 꼴이 아닌 차이(사용자 개별 정정 등)는 배율 문제로 보지 않음 */
+    rows.push({k:p[1],ext:ext,dv:Math.round(dv),n:n});ns.add(n);
+  });
+  if(rows.length<3)return {ok:true};                                   /* 대조쌍 부족 — 판단 유보 */
+  if(ns.size===1){
+    const n=rows[0].n;
+    if(n===0)return {ok:true};
+    FIN.scaleFix=((FIN.scaleFix||1))*Math.pow(10,n);                   /* 확정값 기준으로 D 채널 전체(재무 현황 블록·프리필·jebdata·표지 산출) 정렬 */
+    try{finRender();}catch(_e){}
+    return {ok:true,fixed:n};
+  }
+  return {ok:false,rows:rows};                                          /* 항목별 편차 혼재 — 어느 쪽이 진실인지 코드가 결정 불가 → 차단 */
+}
+function finScaleSyncWarnHtml(rows){
+  return '<div class="fconfirm"><div class="ft">🚨 확인값과 표에서 읽은 값의 배율이 항목마다 다릅니다 — 생성을 진행할 수 없습니다</div>'+
+    '<table class="fgrid"><tr><th>항목</th><th>확인하신 값(만원)</th><th>표에서 읽은 값(만원 환산)</th></tr>'+
+    rows.map(function(r){return '<tr><td>'+r.k+'</td><td>'+r.ext.toLocaleString()+'</td><td>'+r.dv.toLocaleString()+'</td></tr>';}).join('')+
+    '</table><div class="fh">원본 보고서의 <b>금액 단위</b>(백만원/천원)를 확인하시고, 틀린 항목을 <b>“영업이익은 250,700만원”</b>처럼 정정해 주세요. 모든 값이 같은 배율로 정렬되어야 자료 오기를 막을 수 있습니다.</div></div>';
+}
 function finScaleWarnHtml(flags){
   return '<div class="fconfirm"><div class="ft">🚨 금액 배율 검증 실패 — 이 자료를 그대로 사용하지 마세요</div>'+
     '<div class="fissues"><b>서버 생성 수치가 확인·확정된 재무값과 10ⁿ 배율로 어긋납니다.</b><br>'+
@@ -3055,6 +3089,10 @@ async function send(){
         if(hardIssues.length){pendingGen={field:'financialConfirm'};return aiReply('아직 확인이 필요한 항목이 있습니다. <b>기준연도·금액 단위·별도/연결 여부</b> 또는 불일치 수치를 정정해 주세요.');}
         confirmedFinancialData=JSON.parse(JSON.stringify(pendingFinancialData));
         confirmedFinancialData.userConfirmed=true;confirmedFinancialData.confirmed=true;confirmedFinancialData.confirmationStatus='confirmed';
+        const _sync=finConfirmScaleSync(confirmedFinancialData);   /* ★ 확정값↔표 배율 교차 검산 (2026-07-31) */
+        if(!_sync.ok){confirmedFinancialData=null;pendingGen={field:'financialConfirm'};return aiReply(finScaleSyncWarnHtml(_sync.rows));}
+        if(_sync.fixed){financialSourceText=finToText();financialSourceParts=[financialSourceText];   /* 구스케일로 만들어진 [재무 현황] 블록 재생성 — 보정을 프롬프트까지 전파 */
+          aiReply('ℹ️ 표에서 읽은 값의 단위를 확인값 기준으로 <b>자동 정렬</b>했습니다(×10<sup>'+_sync.fixed+'</sup>). 제안서의 모든 금액은 확인하신 값 기준으로 계산됩니다.');}
         collectedParams={...collectedParams,...financialToClientParams(confirmedFinancialData)};
         rawInput+='\n※ 위 재무자료는 사용자가 추출 결과를 확인 완료했습니다.';
         const _unc=_financialUncertain(confirmedFinancialData);
@@ -3276,7 +3314,7 @@ function crSrcPhrase(){
   var b='공개 신용정보('+(finSrcLabel()||'CRETOP')+')';
   return FIN.manual?b+'와 보충 자료':b;
 }   /* 내부 포맷코드 → 표시명 (B2B2C: 코드 노출 금지) */
-function finUnitScale(){return FIN_UNIT_SCALE[finUnit()]||FIN_UNIT_SCALE['백만원'];}
+function finUnitScale(){const b=FIN_UNIT_SCALE[finUnit()]||FIN_UNIT_SCALE['백만원'];const f=(typeof FIN!=='undefined'&&FIN&&Number.isFinite(FIN.scaleFix)&&FIN.scaleFix>0)?FIN.scaleFix:1;return f===1?b:{man:b.man*f,won:b.won*f};}   /* ★ scaleFix: 사용자 확인값 기준 파서 스케일 자동 정렬 (2026-07-31 메타케어 10배 오기 재발 방지) */
 function finToEok(v){return (Number(v)||0)*finUnitScale().won/1e8;}   // 원문단위 → 억 (표시용)
 const FIN_PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const FIN_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -4376,6 +4414,19 @@ function finToText(){
   bad.forEach(x=>L.push(`- 검산 경고: ${x.w||`${x.n} — ${x.d}`}`));   /* ★ A3: 실패 전용 문구 우선 (2026-07-30) */
   if(FIN.verify&&FIN.verify.flags&&FIN.verify.flags.length)FIN.verify.flags.slice(0,4).forEach(f=>L.push('- AI 원문 대조 확인 필요: '+f));   /* ★ B2 (2026-07-30) */
   if(D.대표지분===0)L.push('- ※ 대표 지분 0% → 상속·가업승계·주식가치 논점은 다루지 말 것.');
+  /* ★ 결손 상태 지시 (2026-07-31 — 메타케어 사례: 결손 -658억 회사에 급여 vs 배당 비교가 단서 없이 제시됨) */
+  if(D.이익잉여금&&Number.isFinite(D.이익잉여금[0])&&D.이익잉여금[0]<0){
+    L.push('');
+    L.push('[결손 상태 — 이익잉여금 음수(누적 결손). 반드시 지킬 것]');
+    L.push(`- 이익잉여금 ${finToEok(D.이익잉여금[0]).toFixed(1)}억(음수). 배당가능이익 부재 가능성이 높으므로 배당 경로를 실행 대안으로 단정 제시하지 말 것. 급여·배당 비교를 만들 경우 "결손 상태라 배당 실행 가능성은 별도 확인이 필요합니다" 단서를 반드시 포함할 것.`);
+    L.push('- 결손 누적과 납입자본 구조는 공포 유발 없이 사실로만 서사에 1회 포함할 것(재무구조 이해의 핵심 맥락).');
+  }
+  /* ★ 클로징 접점 (2026-07-31, 마스터교본 §9.3 이식) — 마무리 장에서 유료 컨설팅·설계 검토로 이어지는 접점을 명시적으로 형성 */
+  L.push('');
+  L.push('[클로징 접점 — 마무리 장 필수 구성. 상품명·JARVIA 등 플랫폼명 언급 금지]');
+  L.push('- 마무리 장 content에 "함께 진행하실 경우 지원 항목" 카드를 넣어라. 이 회사의 현안에 맞는 항목만 2~3개 선택: ① 정관·임원보수·퇴직금 규정 정비 지원(필요 자료: 정관·주주명부 / 통상 2~3주) ② 예상 퇴직금 산정과 재원 마련 방안 비교(사내 적립·보장 자산 병행 검토) ③ 주식가치 정밀평가·승계 준비 점검(오너 지분 확인 시) ④ 가지급금 정리 일정 설계(해당 시). 각 항목에 필요 자료를 붙여 실행 제안임을 분명히 하라.');
+  L.push('- 마무리 장 notes에 [클로징 3수준]을 작성하라: (소프트) 자료 요청만 — "준비자료가 도착하면 다음 단계 안을 보내드리겠습니다" / (미디엄) 2차 미팅 확정 — "자료 검토 후 다음 주 중 30분만 다시 뵙고 싶은데, 화·목 중 언제가 편하실까요?" / (하드) 착수 동의 — "비용이 들지 않는 규정 정비부터 바로 시작해 두시겠어요?" 각 수준의 사용 조건(고객 반응이 미온적/관심/적극)을 1줄씩 붙이고, 어느 수준이든 "오늘 결정하지 않으셔도 됩니다"라는 선택권 문구로 완결하라.');
+  L.push('- 준비자료 요청에는 기한 제안을 포함하라(예: "다음 미팅 전까지"). 자료 수령 = 2차 미팅 어젠다 확정임을 notes에 명시하라.');
   return L.join('\n');
 }
 
