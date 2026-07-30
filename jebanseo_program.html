@@ -3700,13 +3700,19 @@ function finParse(pages,fmt){
         let v=finRowAfter(BS,L).map(i=>i.s.replace(/\s/g,'')).filter(t=>/^[\d,]+$/.test(t)).map(t=>parseInt(t.replace(/,/g,'')));
         if(v.length<3)v=(L.s.match(/[\d,]{3,}/g)||[]).map(t=>parseInt(t.replace(/,/g,'')));   /* 라벨과 값이 한 아이템으로 붙은 경우 */
         return v.length>=3?ord(v.slice(0,3)):null;};
-      const _iss=_num3('발행주식수'), _parv=_num3('(1주당금액)');
+      const _iss=_num3('발행주식수'), _parv=_num3('(1주당금액)')||_num3('주당금액)');   /* ★ 2026-07-30: 이 라벨은 '('+'1'+'주당금액)[단위:원]' 세 조각으로 분해되어 나온다 — '('는 한글 없음·'1'은 숫자라 어떤 병합 규칙에도 안 붙어 원 라벨 탐색이 항상 실패했다(모락스트레이딩 실증). 뒷조각 startsWith 폴백 추가 */
       D.주주합산주식=D.주주.reduce((a,b)=>a+b.주식,0);
       if(_iss&&_iss[0]>0){
         if((D.총주식>0&&!_near(D.총주식,_iss[0],0.02))||(D.주주합산주식>0&&!_near(D.주주합산주식,_iss[0],0.02)))D.지분상충=true;
         D.총주식=_iss[0];
+        /* ★ 2026-07-30: 총주식을 재무상태표 값으로 교체했으면 액면도 함께 갱신해야 한다.
+           기존엔 _parv 실패 시 주주현황 구기준 주식수로 역산한 stale 액면이 남아
+           '자본금 739,449,000원 ≠ 주식수×액면가 2,681,245,700원' 같은 거짓 검산 경고를 만들었다(실증).
+           _parv 우선, 없으면 새 총주식 기준 재역산으로 정합 유지 */
+        if(_parv&&_parv[0]>0)D.액면=_parv[0];
+        else if(D.자본금&&Number.isFinite(D.자본금[0])&&D.자본금[0]>0)D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);
       }
-      if(_parv&&_parv[0]>0)D.액면=_parv[0];
+      else if(_parv&&_parv[0]>0)D.액면=_parv[0];
     }
   }
   const me=D.주주.find(s=>s.명===D.대표자);
