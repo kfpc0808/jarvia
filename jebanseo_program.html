@@ -3409,7 +3409,8 @@ function finMerge(items){
     ★ 구형 보고서에는 이런 빈 아이템이 없어 완전 무영향. NUL(\u0000) 잔재는 함께 제거. */
 function finGlue(items){
   const out=[];
-  for(const raw of items){
+  for(let k=0;k<items.length;k++){
+    const raw=items[k];
     let s=String(raw.s).replace(/\uE093/g,',').replace(/\uE094/g,'.')          /* 신형 폰트: 콤마·소수점 PUA 매핑 */
                        .replace(/[\u0000-\u001F\uE000-\uF8FF]/g,'').trim();   /* 그 외 제어문자·PUA 제거 */
     const p=out[out.length-1];
@@ -3423,7 +3424,18 @@ function finGlue(items){
       continue;
     }
     if(p&&p._glue!=null&&/^\d+$/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-p._glue)<=4){
-      p.s+=(p._gc||(s.length===3?',':'.'))+s;               /* 확정 글루 우선, 없으면 3자리=콤마 휴리스틱 */
+      /* ★ 미지 글루 폴백 개정 (2026-07-31 — 메타케어 1/10 오기 클래스 차단):
+         기존 '3자리=콤마, 아니면 소수점' 휴리스틱은 금액의 끝 조각이 1~2자리로 나뉘면
+         소수점을 '만들어' 값을 1/10·1/100로 파괴했다(18,365 + 6 → 18,365.6).
+         재무표 금액은 단위(백만원·천원) 정수이고, 표에서 소수는 구성비(항상 % 동반)뿐이다.
+         → 종류 미상이면 다음 아이템이 %일 때만 소수점, 그 외에는 전부 콤마. 발생 시 진단 기록. */
+      let gc=p._gc;
+      if(gc==null){
+        const nx=items[k+1]; const nxs=nx?String(nx.s).trim():'';
+        gc=(s.length!==3&&/^%/.test(nxs))?'.':',';
+        try{window._finGlueDiag=window._finGlueDiag||[];if(window._finGlueDiag.length<20)window._finGlueDiag.push({조립:p.s+gc+s,다음:nxs.slice(0,4)});}catch(_e){}
+      }
+      p.s+=gc+s;
       p.w=(raw.x+raw.w)-p.x; p._glue=null;
       continue;
     }
@@ -3647,6 +3659,15 @@ function finParse(pages,fmt){
   };
   for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
     if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
+
+  /* ★ 파싱 진단 (2026-07-31 — NICE BizLINE 1/10 오기 추적용): 핵심 항목의 라벨 행 토큰(글루 후)과 D값 기록.
+     소수점이 섞인 토큰·미지 글루 발생이 여기에 그대로 찍혀, 브라우저 실측 형태를 재업로드 한 번으로 특정한다. */
+  try{
+    D._diag={rows:{},glue:(typeof window!=='undefined'&&window._finGlueDiag)||[]};
+    const _dg=(pg,lb,key)=>{const L=finFind(pg,lb);if(!L)return;D._diag.rows[key]=finRowAfter(pg,L).slice(0,8).map(i=>i.s);};
+    _dg(BS,P.자산총계||'자산총계','자산총계');_dg(BS,P.현금,'현금');
+    _dg(IS,P.매출액,'매출액');_dg(IS,P.영업이익,'영업이익');
+  }catch(_e){}
 
   /* ── 기업개요 (좌표 기반 셀 + 명시적 stop 라벨) ── */
   const S=FIN_INFO_LABELS;
@@ -3954,7 +3975,7 @@ async function finPdfHandle(e){
     const pages=await finExtractPages(f);
     const fmt=finDetect(pages);
     if(!fmt)throw new Error('지원하지 않는 보고서입니다. 현재 CRETOP(크레탑)·KODATA·NICE 기업분석보고서를 지원합니다. 다른 양식은 아래 입력창에 직접 붙여넣어 주세요.');
-    FIN.src=fmt; FIN.fileName=f.name;   /* ★ 단위 확정(FIN.src)을 파싱·검산·계산·리스크보다 먼저 — 설정 전엔 finUnit()이 백만원 폴백을 타서 천원 포맷(KODATA_WEB)에서 1,000배 오차 발생 (2026-07-21) */
+    FIN.src=fmt; FIN.fileName=f.name; try{window._finGlueDiag=[];}catch(_e){}   /* ★ 진단 초기화 (2026-07-31) */   /* ★ 단위 확정(FIN.src)을 파싱·검산·계산·리스크보다 먼저 — 설정 전엔 finUnit()이 백만원 폴백을 타서 천원 포맷(KODATA_WEB)에서 1,000배 오차 발생 (2026-07-21) */
     finStat('재무보고서 인식 · 수치 추출 중…');
     const D=finParse(pages,fmt);
     FIN.data=D; FIN.checks=finVerify(D); FIN.calc=finCalc(D); FIN.risks=finRisks(D,FIN.calc);
@@ -3966,6 +3987,22 @@ async function finPdfHandle(e){
       finRender(); return;
     }
     finStat(`📄 ${f.name} · ${pages.length}쪽 중 필요한 부분만 읽었습니다.`);
+    /* ★ 파싱 진단 출력 (2026-07-31): 콘솔 + 접이식 패널. 금액 토큰에 소수점이 보이면 붉게 경고 —
+       1/10 오기의 브라우저 실측 형태가 여기 그대로 찍힌다. 문제없으면 접힌 채 방해하지 않는다. */
+    try{
+      const dg=FIN.data&&FIN.data._diag;
+      if(dg){
+        console.log('[재무파싱 진단] 행 토큰:',dg.rows,'| 미지 글루:',dg.glue);
+        const susp=Object.entries(dg.rows).filter(([k,v])=>(v||[]).some(t=>/^\d[\d,]*\.\d+$/.test(String(t).trim())));
+        const gl=(dg.glue||[]).length;
+        let h='<details style="font-size:12px;color:#8A8378"><summary style="cursor:pointer">🔍 파싱 진단'+(susp.length||gl?' — <b style=\'color:#B0413E\'>확인 필요 '+(susp.length+(gl?1:0))+'건</b>':' (정상)')+'</summary><div style="margin-top:6px;line-height:1.7">';
+        for(const [k,v] of Object.entries(dg.rows))h+='<div><b>'+k+'</b>: '+String((v||[]).join(' · ')).replace(/</g,'&lt;')+'</div>';
+        if(gl)h+='<div style="color:#B0413E"><b>미지 글루 '+gl+'건</b>: '+dg.glue.map(g=>g.조립+'(다음:'+g.다음+')').join(' / ')+'</div>';
+        if(susp.length)h+='<div style="color:#B0413E">금액 위치에 소수 토큰 발견 — 이 화면을 캡처해 주세요(원인 특정에 결정적입니다).</div>';
+        h+='</div></details>';
+        aiReply(h);
+      }
+    }catch(_e){}
     finRender();
     var _jm=document.getElementById('jebManMiss');if(_jm)_jm.innerHTML=crManMissMsg('jeb');
     if(bad)toast('검산에서 '+bad+'건이 확인되었습니다. 내용을 확인해 주세요.',5000);
