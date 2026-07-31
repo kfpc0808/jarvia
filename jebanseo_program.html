@@ -174,8 +174,14 @@
   .litem .li-main{flex:1;min-width:0;cursor:pointer;}.litem .li-t{font-size:14px;font-weight:600;color:var(--ink);}.litem .li-s{font-size:12px;color:var(--mute);margin-top:2px;}
   .litem .li-del{border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;}
   .libempty{text-align:center;color:var(--mute);font-size:13px;padding:30px 10px;}
+  /* ★ 컨설턴트 전용 장 (2026-07-31): 화면 표시 + 발표·인쇄·PDF 자동 제외 */
+  .slide.conly{outline:2px dashed #b8944e;outline-offset:-2px;position:relative;}
+  .conlybadge{position:absolute;top:0;left:0;right:0;z-index:6;background:#b8944e;color:#1a1a1a;font-size:11px;font-weight:700;letter-spacing:.05em;text-align:center;padding:4px 8px;}
+  .conlyimg{position:absolute;right:14px;top:30px;z-index:6;background:#1B2A4A;color:#fff;border:none;border-radius:14px;padding:5px 12px;font-size:11px;cursor:pointer;font-family:inherit;opacity:.75;}
+  .conlyimg:hover{opacity:1;}
   @media print{
     html,body{height:auto;overflow:visible;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .slide.conly,.conlybadge,.conlyimg{display:none!important;}
     .left,.rtop,#start,.modal,.split{display:none!important;}
     .app{display:block;height:auto;}
     .right{flex:none;overflow:visible;height:auto;background:#fff;}
@@ -1689,7 +1695,10 @@ function buildToc(s,idx){
   const ft=elt('div','tfoot edt');ft.setAttribute('data-ph','면책 문구');setRich(ft,s.foot||'');mkEditable(ft,v=>{deck.slides[idx].foot=v;});cv.appendChild(ft);
   return cv;
 }
-function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak':'')+(idx===selectedIdx?' sel':''));sl.onclick=(e)=>{if(e&&e.target&&((e.target.closest&&e.target.closest('.jebsim'))||/^(INPUT|BUTTON|SELECT|TEXTAREA|LABEL)$/.test(e.target.tagName))){selectedIdx=idx;return;}selectedIdx=idx;renderDeck();};
+function makeSlide(s,idx){const sl=elt('div','slide'+(s.emphasis==='peak'?' peak':'')+(idx===selectedIdx?' sel':'')+(s.consultantOnly?' conly':''));
+  if(s.consultantOnly){const bdg=elt('div','conlybadge');bdg.textContent='🔒 컨설턴트 전용 — 발표·인쇄·PDF에서 자동 제외';sl.appendChild(bdg);
+    const ib=elt('button','conlyimg');ib.type='button';ib.textContent='🖼 이미지로 저장';ib.onclick=function(e){e.stopPropagation();jbSaveSlideImage(sl,s);};sl.appendChild(ib);}   /* ★ 후속 실행 플랜 장 (2026-07-31) */
+  sl.onclick=(e)=>{if(e&&e.target&&((e.target.closest&&e.target.closest('.jebsim'))||/^(INPUT|BUTTON|SELECT|TEXTAREA|LABEL)$/.test(e.target.tagName))){selectedIdx=idx;return;}selectedIdx=idx;renderDeck();};
   if(idx!=null)sl.appendChild(makeSlideTb(idx));
   if(idx!=null){
     sl.addEventListener('dragover',function(e){if(window.__dragSlide==null)return;e.preventDefault();e.dataTransfer.dropEffect='move';sl.classList.add('dropmark');});
@@ -2484,6 +2493,25 @@ function addSim(mode){
   const it=Object.assign({type:'sim',mode:mode,domain:cfg.d},simDefaults());
   const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:cfg.t,conclusion:cfg.sub||'슬라이더로 조건을 바꾸면 결과가 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 값을 조절하면 결과가 바로 달라집니다 — 추가 수정 비용 없이 고객 앞에서 시연하실 수 있어요.'};
   const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🎚 '+cfg.t+' 추가됨');
+}
+/* ★ 컨설턴트 전용 장 이미지 저장 (2026-07-31) — html2canvas 지연 로드(버튼 클릭 시에만), 배지·버튼 제외하고 PNG 다운로드 */
+function jbSaveSlideImage(sl,s){
+  const go=function(){
+    const badge=sl.querySelector('.conlybadge'),btn=sl.querySelector('.conlyimg');
+    if(badge)badge.style.display='none'; if(btn)btn.style.display='none';
+    html2canvas(sl,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(function(cv){
+      if(badge)badge.style.display=''; if(btn)btn.style.display='';
+      const a=document.createElement('a');
+      a.download=((companyName||clientName||'제안서')+'_후속실행플랜_'+new Date().toISOString().slice(0,10)+'.png').replace(/[\\/:*?"<>|]/g,'_');
+      a.href=cv.toDataURL('image/png');a.click();
+      aiReply('컨설턴트 전용 장을 <b>PNG 이미지</b>로 저장했습니다. 개인 보관용이며 고객 전달 자료에는 포함되지 않습니다. ✓');
+    }).catch(function(){ if(badge)badge.style.display=''; if(btn)btn.style.display=''; alert('이미지 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.'); });
+  };
+  if(window.html2canvas)return go();
+  const sc=document.createElement('script');
+  sc.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  sc.onload=go; sc.onerror=function(){alert('이미지 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');};
+  document.head.appendChild(sc);
 }
 function renderDeck(){const r=document.getElementById('deck');r.innerHTML='';if(!deck.slides.length){r.innerHTML='<div class="ph">시작 화면에서 고객 정보를 입력하면 여기에 자료가 생성됩니다.</div>';}else{deck.slides.forEach((s,i)=>r.appendChild(makeSlide(s,i)));const bw=document.createElement('div');bw.className='deckbtns';const ab=document.createElement('button');ab.className='addslidebtn';ab.textContent='＋ 새 슬라이드 추가';ab.title='맨 뒤에 빈 슬라이드 추가';ab.onclick=function(){addBlankAt(deck.slides.length);};const sb=document.createElement('button');sb.className='addslidebtn simbtn';sb.textContent='🎚 시뮬레이터 추가';sb.title='고객 앞에서 값을 바꿔 보여주는 라이브 위젯';sb.onclick=function(){openSimPicker();};const cb=document.createElement('button');cb.className='addslidebtn calcbtn2';cb.textContent='🧮 계산기 추가';cb.title='슬라이드에 계산기 버튼 삽입 — 상담 중 새 창으로 열림';cb.onclick=function(){openCalcPicker();};bw.appendChild(ab);bw.appendChild(sb);bw.appendChild(cb);r.appendChild(bw);}document.getElementById('count').textContent=deck.slides.length?('슬라이드 '+deck.slides.length+'장'):'—';autoSave();}
 function renderGenLoading(){const r=document.getElementById('deck');
@@ -5084,7 +5112,7 @@ function jbBuildPrintPages(nodes,H){
 function printA4Preview(){   // (보조) 브라우저 인쇄창 방식 — 기존 동작 그대로 보존
   if(!deck.slides.length){return aiReply('내보낼 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
   // 슬라이드 노드 생성 + 편집 흔적 제거
-  const nodes=deck.slides.map((s,i)=>{const n=makeSlide(s,i);n.onclick=null;return n;});
+  const nodes=deck.slides.filter(s=>!s.consultantOnly).map((s,i)=>{const n=makeSlide(s,i);n.onclick=null;return n;});   /* ★ 컨설턴트 전용 장 인쇄·PDF 제외 (2026-07-31) */
   nodes.forEach(el=>{
     el.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));
     el.querySelectorAll('.edt').forEach(x=>x.classList.remove('edt'));
@@ -5141,7 +5169,7 @@ async function exportPDF(){
     await jbEnsurePdfLibs();
     if(document.fonts&&document.fonts.ready){try{await document.fonts.ready;}catch(e){}}
     // 1) 인쇄와 100% 동일한 페이지 조립
-    const nodes=deck.slides.map((s,i)=>{const n=makeSlide(s,i);n.onclick=null;return n;});
+    const nodes=deck.slides.filter(s=>!s.consultantOnly).map((s,i)=>{const n=makeSlide(s,i);n.onclick=null;return n;});   /* ★ 컨설턴트 전용 장 인쇄·PDF 제외 (2026-07-31) */
     nodes.forEach(el=>{
       el.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));
       el.querySelectorAll('.edt').forEach(x=>x.classList.remove('edt'));
@@ -5237,9 +5265,9 @@ function friendlyErr(e){
 /* ===== 다운로드 HTML에 내장될 자족 뷰어 (발표 + A4 2-up 인쇄) ===== */
 const VIEWER_BAR='<div class="viewerbar"><button onclick="__present()">▶ 발표</button><button onclick="__printA4()">📄 A4 인쇄</button></div>';
 const VIEWER_OVERLAY='<div id="present"><div class="pstage"><button class="pnav" onclick="__pgo(-1)">‹</button><div id="pslide"></div><button class="pnav" onclick="__pgo(1)">›</button></div><div class="pnotes" id="pnotes"></div><div class="pbar"><button onclick="__pgo(-1)">← 이전</button><span id="pcount">1 / 1</span><button onclick="__pgo(1)">다음 →</button><button onclick="__pnotes()">🎤 노트</button><button onclick="__pend()">✕ 종료 (Esc)</button></div><div id="ptoclink">목차</div></div>';
-const VIEWER_CSS='.viewerbar{position:fixed;top:14px;right:16px;z-index:50;display:flex;gap:8px;}.viewerbar button{background:#1B2A4A;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 2px 8px rgba(0,0,0,.18);}.viewerbar button:hover{background:#24375f;}#ptoclink{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:51;background:rgba(27,42,74,.92);color:#fff;font-size:12px;letter-spacing:.08em;padding:5px 16px;border-radius:14px;cursor:pointer;border:1px solid rgba(255,255,255,.18);display:none;}#ptoclink:hover{background:#2d4470;}.jb-tocgo{position:absolute;right:14px;bottom:12px;z-index:5;background:rgba(27,42,74,.85);color:#fff;border:none;border-radius:14px;padding:5px 12px;font-size:11px;letter-spacing:.04em;cursor:pointer;font-family:inherit;opacity:.55;transition:opacity .15s;}.jb-tocgo:hover{opacity:1;background:#2d4470;}.jb-notemark{position:absolute;right:14px;bottom:44px;z-index:5;background:rgba(184,148,62,.85);color:#1a1a1a;border:none;border-radius:14px;padding:5px 12px;font-size:11px;letter-spacing:.04em;cursor:pointer;font-family:inherit;opacity:.55;transition:opacity .15s;}.jb-notemark:hover{opacity:1;}.exwrap .slide .notes{display:none!important;}.exwrap .slide.note-open .notes{display:block!important;}@media print{.jb-tocgo,.jb-notemark{display:none!important;}.viewerbar,#present{display:none!important;}}';
+const VIEWER_CSS='.viewerbar{position:fixed;top:14px;right:16px;z-index:50;display:flex;gap:8px;}.viewerbar button{background:#1B2A4A;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 2px 8px rgba(0,0,0,.18);}.viewerbar button:hover{background:#24375f;}#ptoclink{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:51;background:rgba(27,42,74,.92);color:#fff;font-size:12px;letter-spacing:.08em;padding:5px 16px;border-radius:14px;cursor:pointer;border:1px solid rgba(255,255,255,.18);display:none;}#ptoclink:hover{background:#2d4470;}.jb-tocgo{position:absolute;right:14px;bottom:12px;z-index:5;background:rgba(27,42,74,.85);color:#fff;border:none;border-radius:14px;padding:5px 12px;font-size:11px;letter-spacing:.04em;cursor:pointer;font-family:inherit;opacity:.55;transition:opacity .15s;}.jb-tocgo:hover{opacity:1;background:#2d4470;}.jb-notemark{position:absolute;right:14px;bottom:44px;z-index:5;background:rgba(184,148,62,.85);color:#1a1a1a;border:none;border-radius:14px;padding:5px 12px;font-size:11px;letter-spacing:.04em;cursor:pointer;font-family:inherit;opacity:.55;transition:opacity .15s;}.jb-notemark:hover{opacity:1;}.exwrap .slide .notes{display:none!important;}.exwrap .slide.note-open .notes{display:block!important;}@media print{.jb-tocgo,.jb-notemark{display:none!important;}.viewerbar,#present{display:none!important;}.slide.conly,.conlybadge,.conlyimg{display:none!important;}}.slide.conly{outline:2px dashed #b8944e;outline-offset:-2px;position:relative;}.conlybadge{position:absolute;top:0;left:0;right:0;z-index:6;background:#b8944e;color:#1a1a1a;font-size:11px;font-weight:700;letter-spacing:.05em;text-align:center;padding:4px 8px;}.conlyimg{display:none;}';
 const VIEWER_JS=`(function(){
-  function slides(){return Array.prototype.slice.call(document.querySelectorAll('.deck .slide'));}
+  function slides(){return Array.prototype.slice.call(document.querySelectorAll('.deck .slide:not(.conly)'));}   /* ★ 발표 모드 전용 장 제외 (2026-07-31) — 저장 HTML 열람 시에는 보임 */
   var pIdx=0, present=document.getElementById('present');
   function tocPos(S){for(var i=0;i<S.length;i++){if(S[i].querySelector('.canvas.toc'))return i;}return -1;}
   function rp(){var S=slides();var s=S[pIdx];if(!s)return;var box=document.getElementById('pslide');box.innerHTML='';var c=s.cloneNode(true);c.classList.remove('sel');var nn=c.querySelector('.notes');var t=nn?nn.textContent:'';c.querySelectorAll('.notes,.sledit,.rowtb,.frh,.frdel,.sltb,.jb-tocgo,.jb-notemark').forEach(function(x){x.remove();});var isCover=!!c.querySelector('.canvas.cover'),isToc=!!c.querySelector('.canvas.toc');var T=tocPos(S);if(isToc){var rows=c.querySelectorAll('.trow');Array.prototype.forEach.call(rows,function(row,k){row.style.cursor='pointer';row.onclick=function(e){e.stopPropagation();pIdx=Math.min(S.length-1,(T<0?0:T)+1+k);rp();};});}c.onclick=function(){go(1);};Array.prototype.forEach.call(c.querySelectorAll('.jebsim'),function(j){['click','mousedown','pointerdown','touchstart'].forEach(function(ev){j.addEventListener(ev,function(e){e.stopPropagation();});});});box.appendChild(c);var tl=document.getElementById('ptoclink');if(tl){if(!isCover&&!isToc&&T>=0){tl.style.display='block';tl.onclick=function(e){if(e)e.stopPropagation();pIdx=T;rp();};}else{tl.style.display='none';}}document.getElementById('pcount').textContent=(pIdx+1)+' / '+S.length;document.getElementById('pnotes').textContent=t||'(이 슬라이드엔 발표노트가 없습니다)';}
