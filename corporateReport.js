@@ -1272,7 +1272,7 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 (function(global){
 'use strict';
 
-const VERSION='1.9.1-release-candidate';
+const VERSION='1.9.2-question-engine-production';
 const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
@@ -1981,7 +1981,7 @@ function initEvents(){
  $('pdfInput').onchange=e=>handlePdf(e.target.files?.[0]);const zone=$('uploadZone');['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('drag');}));['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('drag');}));zone.addEventListener('drop',e=>handlePdf(e.dataTransfer.files?.[0]));
  qsa('[data-mode]').forEach(b=>b.onclick=()=>applyMode(b.dataset.mode));$('menuBtn').onclick=()=>$('sidePanel').classList.toggle('on');$('closeSide').onclick=()=>$('sidePanel').classList.remove('on');
  $('factsBtn').onclick=()=>{renderFactsForm();openModal('factsModal');};$('questionsBtn').onclick=()=>{renderQuestions();openModal('questionsModal');};$('regenBtn').onclick=()=>generateReport('regen');
- $('confirmFactsBtn').onclick=()=>{if(!collectFactsForm())return;closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};$('confirmQuestionsBtn').onclick=()=>{collectQuestions();closeModal('questionsModal');generateReport('answers');};
+ $('confirmFactsBtn').onclick=()=>{if(!collectFactsForm())return;closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};$('confirmQuestionsBtn').onclick=()=>{if(!collectQuestions())return;closeModal('questionsModal');generateReport('answers');};
  $('qualityBtn').onclick=()=>{state.quality=runQuality();renderQualityPage();openModal('qualityModal');};$('searchBtn').onclick=()=>openModal('searchModal');$('searchGoBtn').onclick=searchAll;$('searchInput').onkeydown=e=>{if(e.key==='Enter')searchAll();};
  $('printBtn').onclick=()=>window.print();$('exportBtn').onclick=exportCEO;$('saveCaseBtn').onclick=saveCase;$('loadCaseBtn').onclick=()=>$('caseFileInput').click();$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
  $('drawerBackdrop').onclick=closeNotes;$('notesClose').onclick=closeNotes;qsa('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
@@ -2284,7 +2284,7 @@ const CR_FIN_KEYS=['assets','liabilities','equity','revenue','cogs','operatingPr
 function crEmptyFinancialYear(){return Object.fromEntries(CR_FIN_KEYS.map(k=>[k,null]));}
 function crEmptyCase({sourceType='직접입력',sourcePages=0,confirmed=false}={}){
  const years={'2023':crEmptyFinancialYear(),'2024':crEmptyFinancialYear(),'2025':crEmptyFinancialYear()};
- return {meta:{schemaVersion:'CR-1.9.1',caseId:'CR-'+uid().toUpperCase(),sourceType,sourcePages,sourceFileName:'',unit:'백만원',confirmed,createdAt:new Date().toISOString().slice(0,10),statementType:'확인 필요',extractionQualityPassed:false},profile:{companyName:'',displayName:'',businessNumber:'',representative:'',employees:null,established:null,companyType:'',industry:'',industryCode:'',products:'',address:'',website:'',groupName:'',mainBank:'',creditGrade:'',foreignSubsidiaries:[],relatedCompanies:[],shareholders:[],reportDate:null,fiscalDate:null,latestQuarterDate:null},financials:years,latestQuarterly:null,capitalEvents:[],answers:{ceoStyle:'신중보수형',meetingStage:'1차 진단',successorStatus:'미확인',existingInsurance:'미확인',keyPersonMonthlyFixedCost:null,keyPersonEmergencyMonths:12,immediateDebtRepayment:null,availableEmergencyCash:null,existingKeyPersonCoverage:null,topCustomerConcentration:'미확인'},sourceMap:{},warnings:[],speechPlan:null,speechOverrides:{},dynamicQuestions:[],derivedSignals:[],confirmationQueue:[],extractionResult:null};
+ return {meta:{schemaVersion:'CR-1.9.2',caseId:'CR-'+uid().toUpperCase(),sourceType,sourcePages,sourceFileName:'',unit:'백만원',confirmed,createdAt:new Date().toISOString().slice(0,10),statementType:'확인 필요',extractionQualityPassed:false},profile:{companyName:'',displayName:'',businessNumber:'',representative:'',employees:null,established:null,companyType:'',industry:'',industryCode:'',products:'',address:'',website:'',groupName:'',mainBank:'',creditGrade:'',foreignSubsidiaries:[],relatedCompanies:[],shareholders:[],reportDate:null,fiscalDate:null,latestQuarterDate:null},financials:years,latestQuarterly:null,capitalEvents:[],answers:{ceoStyle:'신중보수형',meetingStage:'1차 진단',successorStatus:'미확인',existingInsurance:'미확인',keyPersonMonthlyFixedCost:null,keyPersonEmergencyMonths:12,immediateDebtRepayment:null,availableEmergencyCash:null,existingKeyPersonCoverage:null,topCustomerConcentration:'미확인'},sourceMap:{},warnings:[],speechPlan:null,speechOverrides:{},dynamicQuestions:[],derivedSignals:[],confirmationQueue:[],extractionResult:null};
 }
 function crCleanText(v){if(v===null||v===undefined)return '';const t=String(v).replace(/\s+/g,' ').trim();return (!t||t==='-'||t==='—'||/^미확인$/i.test(t)||/^해당\s*없음$/i.test(t))?'':t;}
 function crNormalizeCase(d){
@@ -2369,12 +2369,34 @@ function crFactSource(k){
 function crCompactFactWarnings(d){
  return [...new Set((d?.warnings||[]).filter(Boolean).filter(x=>!/수치\s*미검출/.test(String(x))))];
 }
+
+function crClassifyFactWarnings(d){
+ const raw=[...new Set((d?.warnings||[]).filter(Boolean).map(x=>String(x).trim()).filter(Boolean))];
+ const groups={blocking:[],sourceMissing:[],partial:[],confirmation:[],review:[]};
+ for(const w of raw){
+  if(/자산\s*=\s*부채|회계등식|필수값|연도.*미확정|단위.*미확정|검증\s*미통과|누락/.test(w)&&!/비핵심|수치\s*미검출/.test(w)){groups.blocking.push(w);continue;}
+  if(/단기대여금|가지급금|상대방|거래\s*실질/.test(w)){groups.confirmation.push(w);continue;}
+  if(/법인세비용/.test(w)){groups.partial.push(w.replace(/자동추출\s*확인\s*:\s*/g,'').replace(/수치\s*미검출\s*:\s*/g,''));continue;}
+  if(/기타비금융자산|단기사채|장기사채|수치\s*미검출|원문.*[-—]/.test(w)){groups.sourceMissing.push(w.replace(/자동추출\s*확인\s*:\s*/g,'').replace(/수치\s*미검출\s*:\s*/g,''));continue;}
+  groups.review.push(w);
+ }
+ const labels={blocking:'승인 차단',sourceMissing:'원문 미제공',partial:'일부 연도만 존재',confirmation:'추가 확인계정',review:'일반 확인'};
+ const all=Object.values(groups).flat();
+ return {raw,groups,labels,all,total:all.length};
+}
+function crFactWarningHtml(info){
+ const order=['blocking','sourceMissing','partial','confirmation','review'];
+ const chips=order.filter(k=>info.groups[k].length).map(k=>`<span class="fact-warning-chip ${k}">${esc(info.labels[k])} ${info.groups[k].length}</span>`).join('');
+ const body=order.filter(k=>info.groups[k].length).map(k=>`<div class="fact-warning-group ${k}"><b>${esc(info.labels[k])}</b>${list(info.groups[k])}</div>`).join('');
+ return `<details class="fact-warning-box ${info.groups.blocking.length?'blocking':''}"><summary><span>확인 항목 ${info.total}건</span><span class="fact-warning-chips">${chips}</span></summary>${body}</details>`;
+}
+
 function crFactNumericInput(attrName,value,label){
  return `<input class="fact-number ${crFactInputState(value)}" data-${attrName} type="text" inputmode="decimal" value="${attr(crFactNumber(value))}" placeholder="—" aria-label="${attr(label)}">`;
 }
 renderFactsForm=function(){
  const d=state.caseData;if(!d)return;
- const warnings=crCompactFactWarnings(d);
+ const warningInfo=crClassifyFactWarnings(d);const warnings=warningInfo.all;
  const statusText=d.meta?.extractionQualityPassed?'좌표추출·회계검산 통과':'추출값 추가확인 필요';
  const html=[];
  html.push(`<div class="facts-compact">`);
@@ -2387,13 +2409,13 @@ renderFactsForm=function(){
     <span class="fact-chip">${esc(d.meta?.originalUnit||'단위 미확인')} → 백만원</span>
    </div>
   </div>`);
- if(warnings.length)html.push(`<details class="fact-warning-box"><summary>확인 경고 ${warnings.length}건</summary>${list(warnings)}</details>`);
+ if(warnings.length)html.push(crFactWarningHtml(warningInfo));
  else html.push(`<div class="fact-clean-note">비핵심 계정의 원문 ‘-’는 오류가 아니라 값 없음·미제공으로 처리했습니다.</div>`);
  html.push(`<div id="factsValidationBox"></div>`);
 
  const profileFields=[
   ['companyName','기업명'],['representative','대표자'],['businessNumber','사업자번호'],['employees','종업원 수'],
-  ['established','설립일'],['industry','업종'],['products','주요 제품'],['creditGrade','신용등급']
+  ['established','설립일'],['industry','업종'],['products','주요 제품'],['creditGrade','기업평가등급']
  ];
  html.push(`<section class="fact-section"><div class="fact-section-head"><b>기업 기본정보</b><span>기업요약 3p · 신용등급 이력 15p</span></div><div class="fact-basic-grid">`);
  for(const [k,label] of profileFields){
@@ -2540,13 +2562,13 @@ function crDebugAllowed(){return location.protocol==='file:'||['localhost','127.
 
 
 /* ==========================================================================
- * V1.9.1 COORDINATE FINANCIAL ENGINE
+ * V1.9.2 COORDINATE FINANCIAL ENGINE
  * Source: the proven coordinate parser from jebanseo_program(2).html.
  * The parser preserves PDF x/y positions through extraction and is authoritative
  * for NICE BizLINE, KODATA/KCR2 and CRETOP web-export reports.
  * ========================================================================== */
 ;const JebFinancialEngine=(()=>{
- const ENGINE_VERSION='1.9.1-coordinate-20260731';
+ const ENGINE_VERSION='1.9.2-coordinate-20260731';
  const FIN={src:'',scaleFix:1};
  const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원',KODATA_WEB:'천원',MANUAL:'원'};
  const FIN_UNIT_SCALE={'원':{man:0.0001,won:1},'천원':{man:0.1,won:1e3},'만원':{man:1,won:1e4},'백만원':{man:100,won:1e6},'억원':{man:10000,won:1e8}};
@@ -3155,7 +3177,7 @@ function crCoordinateToCase(out,file){
   try{standard=global.NiceBizlineExtractor.extractNiceBizline(out.pageObjects,{force:true});standardCase=global.NiceBizlineExtractor.toCorporateReportCase(standard,{sourceFileName:file?.name||''});supplement=standardCase;}catch(e){console.warn('[CorporateReport] NICE 부가정보 보조추출 실패:',e.message);}
  }
  const d=crEmptyCase({sourceType:(out.finFormat==='NICE'?'NICE BizLINE':out.finFormat==='KODATA_WEB'?'CRETOP':'KODATA/KCR2')+' 좌표기반 자동추출',sourcePages:out.pages,confirmed:false});
- d.meta.schemaVersion='CR-1.9.1';d.meta.sourceFileName=file?.name||'';d.meta.extractorVersion=parsedPack.engineVersion;d.meta.originalUnit=parsedPack.unit;d.meta.unit='백만원';d.meta.coordinateEngine=parsedPack.engineVersion;d.meta.parserFormat=out.finFormat;d.meta.statementType=standard?.document?.statementStandard?`${standard.document.statementStandard} 개별 결산`:(/K-?GAAP/i.test((P._srcText?.bs||''))?'K-GAAP 개별 결산':/IFRS/i.test((P._srcText?.bs||''))?'IFRS 개별 결산':'개별 결산');
+ d.meta.schemaVersion='CR-1.9.2';d.meta.sourceFileName=file?.name||'';d.meta.extractorVersion=parsedPack.engineVersion;d.meta.originalUnit=parsedPack.unit;d.meta.unit='백만원';d.meta.coordinateEngine=parsedPack.engineVersion;d.meta.parserFormat=out.finFormat;d.meta.statementType=standard?.document?.statementStandard?`${standard.document.statementStandard} 개별 결산`:(/K-?GAAP/i.test((P._srcText?.bs||''))?'K-GAAP 개별 결산':/IFRS/i.test((P._srcText?.bs||''))?'IFRS 개별 결산':'개별 결산');
  d.profile=Object.assign(d.profile,crProfileFallback(out,P,supplement));
  const toMillion=v=>!Number.isFinite(v)?null:Math.round(v*(parsedPack.unit==='천원'?0.001:parsedPack.unit==='원'?0.000001:parsedPack.unit==='만원'?0.01:parsedPack.unit==='억원'?100:1)*1000)/1000;
  const map={assets:'자산총계',liabilities:'부채총계',equity:'자본총계',revenue:'매출액',cogs:'매출원가',operatingProfit:'영업이익',netIncome:'순이익',operatingCashFlow:'영업현금',cash:'현금',currentAssets:'유동자산',currentLiabilities:'유동부채',receivables:'매출채권',inventory:'재고자산',payables:'매입채무',borrowings:'차입금',currentBorrowings:'유동차입',nonCurrentBorrowings:'비유동차입',shortTermLoanReceivable:'가지급금',retainedEarnings:'이익잉여금',interestExpense:'이자비용',capitalStock:'자본금'};
@@ -3199,6 +3221,194 @@ handlePdf=async function(file){
  }catch(error){window.jvDone?.('corporate_pdf_analysis');console.error(error);setStartStatus('분석 실패: '+error.message,'err');toast('PDF 분석 오류: '+error.message,'err');}
 };
 
-global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText}}:{})};
+
+/* ============================================================================
+ * v1.9.2 — 동적 질문엔진·직접선택 UI·신용등급 기호 보존
+ * - 질문은 보고서 회사가 아니라 활성 재무이슈에 따라 달라진다.
+ * - 드롭다운을 제거하고 단일/복수/우선순위 선택지를 즉시 노출한다.
+ * - 모든 선택형 문항에 직접입력란을 제공한다.
+ * ========================================================================== */
+const CR_QUESTION_ENGINE_VERSION='1.9.2-dynamic-question-20260731';
+const CR_GOAL_OPTIONS=[
+ {value:'운전자금 개선 가능성 점검',issueIds:['WORKING_CAPITAL']},
+ {value:'자금압박 원인 진단',issueIds:['WORKING_CAPITAL']},
+ {value:'차입구조 재정비 여부',issueIds:['WORKING_CAPITAL']},
+ {value:'매출채권 회수위험 점검',issueIds:['WORKING_CAPITAL','EXPORT_CREDIT']},
+ {value:'재고 정상화 가능성 검토',issueIds:['WORKING_CAPITAL']},
+ {value:'수익성 개선 포인트 확인',issueIds:['WORKING_CAPITAL']},
+ {value:'누적결손·자본회복 정책',issueIds:['CAPITAL_POLICY']},
+ {value:'배당·유보·자본정책 검토',issueIds:['CAPITAL_POLICY']},
+ {value:'자기주식·감자·지분거래 검토',issueIds:['CAPITAL_TRANSACTIONS']},
+ {value:'임원퇴직금·지급재원 점검',issueIds:['EXECUTIVE_RETIREMENT']},
+ {value:'대표자·핵심인 유고 대응',issueIds:['KEY_PERSON']},
+ {value:'경영승계·가족지분 정리',issueIds:['SUCCESSION']},
+ {value:'수출채권·해외법인 위험 점검',issueIds:['EXPORT_CREDIT']},
+ {value:'재산·휴업·배상 위험 점검',issueIds:['PROPERTY_BI']},
+ {value:'기존 보험증권 목적·공백 점검',issueIds:['INSURANCE_OPTIMIZATION']},
+ {value:'유료 정밀진단 진행 여부 결정',issueIds:[]},
+ {value:'세무·법무·노무 전문가 협업 범위 결정',issueIds:[]},
+ {value:'당장 실행할 30일 과제 선정',issueIds:[]}
+];
+const CR_COMMON_QUESTIONS=[
+ {id:'consultingGoal',section:'의사결정 우선순위',label:'이번 상담에서 대표가 우선 결정해야 할 주제는 무엇입니까?',reason:'복수선택 후 가장 중요한 1순위를 지정합니다. 리포트의 페이지 순서와 상담 결론에 반영됩니다.',type:'priority-multi',options:CR_GOAL_OPTIONS,required:true,wide:true,otherPlaceholder:'선택지에 없는 의사결정이나 구체적인 목표를 직접 입력해 주세요.'},
+ {id:'cashPressure',section:'현장 체감과 관리수준',label:'매출 증가와 별개로 자금집행이 빠듯했던 시기가 있었습니까?',reason:'손익과 실제 현금 체감의 차이를 확인합니다.',type:'single',options:['없음','간헐적','자주 있음','상시 부담','미확인'],otherPlaceholder:'언제, 어떤 지출 때문에 부담이 발생했는지 적어 주세요.'},
+ {id:'topCustomerConcentration',section:'현장 체감과 관리수준',label:'상위 5개 거래처의 매출 비중과 결제조건을 어느 정도 알고 있습니까?',reason:'매출채권 집중도와 회수위험의 추가 확인 범위를 정합니다.',type:'single',options:['정확히 관리 중','대략 알고 있음','일부만 파악','파악하지 못함','미확인'],otherPlaceholder:'상위 거래처 비중, 결제일, 실제 회수일을 아는 범위에서 입력해 주세요.'},
+ {id:'inventoryAging',section:'현장 체감과 관리수준',label:'정상·저회전·장기재고를 구분하는 기준이 있습니까?',reason:'재고 개선 가능액을 과장하지 않기 위한 기준입니다.',type:'single',options:['명확한 기준과 보고서 있음','대략 구분함','재고총액만 관리','구분하지 않음','해당 없음·미확인'],otherPlaceholder:'예: 90일·180일·1년 이상, 품목별 폐기·할인 기준'},
+ {id:'shareholderStructure',section:'지배구조와 의사결정',label:'현재 주주구조의 특징을 선택해 주세요.',reason:'자본정책·승계·공동주주 의사결정의 전제를 확인합니다.',type:'multi',options:['대표 단독 또는 사실상 단일주주','가족주주 포함','공동창업자·동업주주','법인주주 포함','임직원주주 포함','주주간계약 있음','주주간계약 없음·미확인'],otherPlaceholder:'주주명, 지분율, 가족관계, 의결권 특이사항을 적어 주세요.'},
+ {id:'successorStatus',section:'지배구조와 의사결정',label:'후계자 또는 경영승계 논의 상태는 어떻습니까?',reason:'승계 이슈를 임의로 생성하지 않고 대표의 실제 의사를 확인합니다.',type:'single',options:['계획 없음','가족 내 후보 있음','임직원 후보 있음','외부 매각·M&A 검토','구체적 계획 진행 중','미확인'],otherPlaceholder:'예상 시기, 후보자, 가족·주주의 합의 수준을 적어 주세요.'},
+ {id:'ceoCriticalRoles',section:'대표자·조직 리스크',label:'대표만 최종 승인하거나 직접 관리하는 핵심업무는 무엇입니까?',reason:'대표 부재 시 업무공백과 필요재원을 구분합니다.',type:'multi',options:['자금집행·은행거래','차입·담보·보증','핵심 거래처 영업','주요 계약·가격결정','인사·보상','생산·품질·납기','해외법인·수출','투자·M&A','대표 전결업무 거의 없음'],otherPlaceholder:'대표만 알고 있거나 대체하기 어려운 업무를 적어 주세요.'},
+ {id:'existingInsurance',section:'보험·전문가 협업',label:'법인·대표·주주 관련 기존 보험증권을 확보했습니까?',reason:'신규 제안보다 기존 계약의 목적·공백·중복을 먼저 검토합니다.',type:'single',options:['없음','일부 확보','전체 확보','담당 설계사에게 요청 가능','제출 곤란','미확인'],otherPlaceholder:'보험사, 계약목적, 월보험료, 보장기간 중 아는 내용을 입력해 주세요.'},
+ {id:'advisorTeam',section:'보험·전문가 협업',label:'현재 협업 가능한 전문가를 선택해 주세요.',reason:'기존 전문가를 존중하고 역할 충돌 없이 공동검토 범위를 설계합니다.',type:'multi',options:['세무사','회계사','변호사','노무사','법무사','변리사','보험담당자','주거래은행','별도 전문가 없음'],otherPlaceholder:'전문가 성명·사무실 또는 반드시 공동검토할 쟁점을 적어 주세요.'},
+ {id:'ceoStyle',section:'상담 진행방식',label:'대표의 의사결정 성향은 어디에 가장 가깝습니까?',reason:'설명순서·숫자비중·질문방식·클로징 강도를 맞춥니다.',type:'single',options:['신중보수형','숫자중심형','빠른결정형','관계중심형','회의방어형','전문가위임형','비용민감형'],otherPlaceholder:'대표가 선호하거나 싫어하는 설명방식을 적어 주세요.'},
+ {id:'meetingStage',section:'상담 진행방식',label:'현재 상담단계는 어디입니까?',reason:'질문의 깊이와 다음 행동의 범위를 조정합니다.',type:'single',options:['1차 진단','2차 정밀검토','가족·주주 공동미팅','전문가 공동검토','보험설계 검토','최종 의사결정','사후관리'],otherPlaceholder:'이번 미팅의 참석자와 예정된 다음 절차를 적어 주세요.'},
+ {id:'nextMeetingTarget',section:'상담 진행방식',label:'다음 미팅에서 반드시 남겨야 할 행동을 선택해 주세요.',reason:'상담을 설명으로 끝내지 않고 자료·담당자·기한·결정으로 연결합니다.',type:'multi',options:['자료 제출일 확정','담당자 지정','정밀진단 범위 확정','전문가 공동검토일 확정','A·B·C안 비교','보험증권 분석','가족·주주 공동설명','진행·축소·보류 결정','30일 실행과제 확정'],otherPlaceholder:'다음 미팅의 구체적인 결과물·날짜·담당자를 입력해 주세요.'}
+];
+const CR_ISSUE_QUESTION_BANK={
+ WORKING_CAPITAL:{title:'유동성·운전자금 조건부 질문',questions:[
+  {id:'cashPressureCauses',label:'자금압박의 원인으로 체감되는 항목을 선택해 주세요.',reason:'재무수치와 현장 원인을 연결합니다.',type:'multi',options:['매출채권 회수지연','재고 증가','차입원리금 상환','인건비·고정비','설비·투자지출','세금·배당·일회성 지출','거래처 결제조건 악화','원인을 아직 모름'],otherPlaceholder:'발생 시기와 최대 부족액을 입력해 주세요.'},
+  {id:'receivableManagement',label:'매출채권 회수관리는 어느 수준입니까?',reason:'회수일 단축 가능성의 현실성을 판단합니다.',type:'single',options:['거래처별 약정일·실제회수일 관리','연체채권만 별도관리','월말 잔액만 관리','담당자 경험에 의존','관리하지 않음·미확인'],otherPlaceholder:'상위 거래처의 결제조건·연체경험을 적어 주세요.'},
+  {id:'inventoryManagement',label:'재고 관리상 현재 우려되는 항목을 선택해 주세요.',reason:'정상재고와 처분·평가가 필요한 재고를 구분합니다.',type:'multi',options:['장기·저회전재고','과잉안전재고','품목별 수요예측 부족','반품·폐기 가능성','재고부족·납기위험','재고 이슈 없음','미확인'],otherPlaceholder:'가장 오래된 재고기간과 처리계획을 적어 주세요.'},
+  {id:'borrowingPurpose',label:'최근 차입 증가 또는 만기집중의 주요 배경은 무엇입니까?',reason:'차입을 문제로 단정하지 않고 사용목적과 상환재원을 확인합니다.',type:'multi',options:['운전자금','설비·투자','관계회사·투자자산','기존차입 상환·차환','M&A·지분거래','일회성 손실 보전','증가원인 미확인'],otherPlaceholder:'차입처, 금리, 만기, 담보, 상환계획을 아는 범위에서 적어 주세요.'}
+ ]},
+ CAPITAL_POLICY:{title:'누적결손·자본정책 조건부 질문',questions:[
+  {id:'deficitCauses',label:'누적결손의 주요 원인으로 추정되는 항목을 선택해 주세요.',reason:'결손을 단순 세무문제로 보지 않고 원인별 회복계획을 설계합니다.',type:'multi',options:['과거 영업손실','대규모 투자·평가손실','관계회사·금융자산 손실','일회성 비용·손상','합병·분할·자본거래 영향','원인 분석 완료','원인 미확인'],otherPlaceholder:'발생 연도와 주요 손실항목을 입력해 주세요.'},
+  {id:'capitalRecoveryStatus',label:'결손 해소 또는 자본회복 계획이 있습니까?',reason:'최근 흑자의 지속성과 현금·차입을 함께 평가합니다.',type:'single',options:['3년 이상 구체적 계획 있음','연간 예산에 반영','검토 중','계획 없음','미확인'],otherPlaceholder:'목표연도, 목표이익, 차입상환·투자계획을 적어 주세요.'},
+  {id:'investmentAssetPurpose',label:'대규모 투자자산의 주된 목적을 선택해 주세요.',reason:'장기투자자산과 영업현금 부족의 관계를 확인합니다.',type:'multi',options:['본업 설비·사업확장','관계회사 지분','금융상품·유가증권','부동산·임대','M&A·신사업','매각·회수 예정','세부내역 미확인'],otherPlaceholder:'회수가능 시점과 배당·매각 계획을 입력해 주세요.'},
+  {id:'shareholderCashNeeds',label:'향후 3년 주주·대표의 현금수요를 선택해 주세요.',reason:'회사 유보와 주주이전, 퇴직·승계재원을 분리합니다.',type:'multi',options:['배당','대표·임원 퇴직금','가족 증여·상속','지분매입·공동주주 정리','개인 채무·생활자금','현금수요 없음','미확인'],otherPlaceholder:'예상 시기와 금액범위를 적어 주세요.'}
+ ]},
+ LOAN_RECEIVABLE:{title:'단기대여금·가지급금 조건부 질문',questions:[
+  {id:'loanCounterparty',label:'단기대여금의 상대방은 누구입니까?',reason:'대표자 가지급금으로 단정하지 않고 거래 실질을 확인합니다.',type:'single',options:['관계회사','거래처','임직원','주주·대표','해외법인','기타','미확인'],otherPlaceholder:'상대방명과 관계를 입력해 주세요.'},
+  {id:'loanPurpose',label:'최초 지급 목적을 선택해 주세요.',reason:'사업상 대여·투자·임직원·주주거래를 구분합니다.',type:'multi',options:['사업 운영지원','투자 전 단계','거래처 지원','임직원 복지·대여','주주·대표 관련','일시적 자금이체','목적 미확인'],otherPlaceholder:'지급일·금액·현재 필요성을 적어 주세요.'},
+  {id:'loanContract',label:'증빙과 승인절차가 어느 정도 갖춰져 있습니까?',reason:'정상 거래조건과 보완 범위를 확인합니다.',type:'multi',options:['계약서','이사회·주총 승인','이자율 약정','만기·상환일정','담보·보증','실제 이자수취','자료 없음·미확인'],otherPlaceholder:'누락된 서류와 보완 가능시점을 적어 주세요.'},
+  {id:'loanMaturity',label:'현재 회수 가능성은 어디에 가깝습니까?',reason:'회수·정상화·구조변경 대안을 구분합니다.',type:'single',options:['기한 내 전액회수 가능','분할상환 가능','만기 연장 필요','사업상 계속 유지 필요','회수 곤란 우려','미확인'],otherPlaceholder:'상환재원과 예상 회수일을 입력해 주세요.'}
+ ]},
+ CAPITAL_TRANSACTIONS:{title:'자본거래 조건부 질문',questions:[
+  {id:'capitalTransactionPurpose',label:'과거 또는 예정 자본거래의 목적을 선택해 주세요.',reason:'세금기법이 아니라 현금·지분·경영권의 목적을 확인합니다.',type:'multi',options:['승계','대표·주주 퇴직','공동주주 정리','임직원 보상','투자유치','지배구조 단순화','배당·주주환원','목적 미확인'],otherPlaceholder:'거래연도, 대상주주, 금액, 사용한 평가방법을 적어 주세요.'},
+  {id:'capitalDocuments',label:'자본거래 관련 자료는 어느 수준까지 확보돼 있습니까?',reason:'거래 타임라인과 절차를 복원합니다.',type:'multi',options:['거래 전후 주주명부','가치평가서','이사회·주총 의사록','계약서','세무신고·검토서','자금이체 증빙','일부만 보유','자료 미확인'],otherPlaceholder:'부족한 자료와 담당자를 적어 주세요.'},
+  {id:'futureCapitalPlan',label:'향후 3년 예정된 자본·지분 의사결정을 선택해 주세요.',reason:'같은 거래를 반복하지 않도록 지분정책을 만듭니다.',type:'multi',options:['추가 증자','배당','자기주식 취득·처분','감자','주식양수도','승계·증여','M&A·투자유치','계획 없음·미확인'],otherPlaceholder:'예상 시기와 이해관계자를 적어 주세요.'}
+ ]},
+ EXECUTIVE_RETIREMENT:{title:'임원퇴직재원 조건부 질문',questions:[
+  {id:'retirementRuleStatus',label:'임원퇴직금 규정과 의사결정 자료는 어느 수준입니까?',reason:'규정만으로 지급·손금인정을 보장하지 않고 실제 실행요건을 확인합니다.',type:'multi',options:['정관 반영','임원퇴직금 규정','주총결의','등기임원·보수자료','예상퇴직금 계산','자료 일부만 있음','미확인'],otherPlaceholder:'최근 개정일과 적용대상 임원을 적어 주세요.'},
+  {id:'retirementTiming',label:'대표·핵심임원의 예상 퇴직시점은 언제입니까?',reason:'금액과 지급재원을 기간별로 계산합니다.',type:'single',options:['3년 이내','4~5년','6~10년','10년 이후','퇴직계획 없음','미확인'],otherPlaceholder:'퇴직 후 역할과 지급방식을 적어 주세요.'},
+  {id:'retirementFunding',label:'퇴직금 지급재원으로 고려하는 방법을 선택해 주세요.',reason:'내부현금·금융자산·보험을 비용과 유동성으로 비교합니다.',type:'multi',options:['회사 현금','정기적 적립','금융상품','보험계약','퇴직 시 차입','자산매각','준비 없음·미확인'],otherPlaceholder:'현재 적립액과 연간 준비가능액을 적어 주세요.'}
+ ]},
+ SUCCESSION:{title:'승계·가족합의 조건부 질문',questions:[
+  {id:'successionTimeline',label:'승계 관련 의사결정을 완료해야 할 시기는 언제입니까?',reason:'기업가치·가족합의·세금·재원 준비기간을 정합니다.',type:'single',options:['3년 이내','4~5년','6~10년','10년 이후','시기 미정'],otherPlaceholder:'대표가 생각하는 경영이양·지분이전 시기를 각각 적어 주세요.'},
+  {id:'familyConsensus',label:'가족·주주 간 현재 합의 수준은 어떻습니까?',reason:'경영권과 경제적 공평성의 충돌을 확인합니다.',type:'single',options:['핵심사항 합의','후계자만 합의','가족별 의견 다름','공동주주와 협의 필요','논의 시작 전','미확인'],otherPlaceholder:'반대하거나 추가 설명이 필요한 이해관계자를 적어 주세요.'},
+  {id:'successionFundingNeeds',label:'승계 시 예상되는 현금수요를 선택해 주세요.',reason:'필요재원과 현재재원 확인 후 보험·비보험 대안을 비교합니다.',type:'multi',options:['상속·증여세','비경영 가족 정산','공동주주 지분매입','대표 퇴직금','채무·보증 해소','운영비상자금','금액 미확인'],otherPlaceholder:'현재 예상하는 금액·자산·기존보험을 입력해 주세요.'}
+ ]},
+ KEY_PERSON:{title:'대표자·핵심인 유고 조건부 질문',questions:[
+  {id:'keyPersonMonthlyFixedCost',label:'유고 시에도 유지해야 할 월 고정비는 몇 백만원입니까?',reason:'비상운영 필요재원을 계산합니다.',type:'number',unit:'백만원',otherPlaceholder:'급여·임차료·이자·필수외주비 포함 기준을 적어 주세요.'},
+  {id:'keyPersonEmergencyMonths',label:'비상운영 필요기간은 몇 개월입니까?',reason:'대체경영 체계가 안정될 때까지의 기간입니다.',type:'number',unit:'개월',otherPlaceholder:'기간 판단근거를 적어 주세요.'},
+  {id:'immediateDebtRepayment',label:'즉시 대응해야 할 채무·보증은 몇 백만원입니까?',reason:'운영비 외 즉시 재원을 반영합니다.',type:'number',unit:'백만원',otherPlaceholder:'채무·보증의 종류와 상환조건을 적어 주세요.'},
+  {id:'availableEmergencyCash',label:'실제로 사용할 수 있는 비상현금은 몇 백만원입니까?',reason:'장부상 현금과 운영필수현금을 구분합니다.',type:'number',unit:'백만원',otherPlaceholder:'사용 제한·담보·최소운영현금을 적어 주세요.'},
+  {id:'existingKeyPersonCoverage',label:'유고 시 법인에 지급될 기존 보험금은 몇 백만원입니까?',reason:'부족재원에서 기존 보장을 차감합니다.',type:'number',unit:'백만원',otherPlaceholder:'계약자·피보험자·수익자와 보장기간을 적어 주세요.'}
+ ]},
+ EXPORT_CREDIT:{title:'수출채권·해외법인 조건부 질문',questions:[
+  {id:'exportRiskFactors',label:'해외거래에서 현재 우려되는 위험을 선택해 주세요.',reason:'신용·국가·환율·운송·현지법인 위험을 구분합니다.',type:'multi',options:['바이어 집중','장기 외상결제','연체·대손','국가·정치위험','환율변동','운송·적하','현지법인 자금통제','특별한 우려 없음·미확인'],otherPlaceholder:'국가, 바이어, 최대 미수잔액을 적어 주세요.'},
+  {id:'foreignInsuranceStatus',label:'해외 관련 보험증권 확보 수준은 어떻습니까?',reason:'현지 증권과 본사 증권의 공백을 확인합니다.',type:'multi',options:['무역신용보험','적하보험','해외재산보험','휴업보험','배상책임','D&O','현지보험만 있음','보험 없음·미확인'],otherPlaceholder:'국가별 보험사·가입금액·면책사항을 적어 주세요.'},
+  {id:'customerDelinquency',label:'최근 2년 해외거래 연체·대손·분쟁이 있었습니까?',reason:'보험검토의 실제 근거를 확인합니다.',type:'single',options:['없음','경미한 지연','반복 지연','대손·분쟁 발생','미확인'],otherPlaceholder:'거래처, 국가, 금액, 현재 회수상태를 적어 주세요.'}
+ ]},
+ PROPERTY_BI:{title:'재산·휴업·배상 조건부 질문',questions:[
+  {id:'criticalAssets',label:'영업중단 시 가장 큰 영향을 주는 자산·시설을 선택해 주세요.',reason:'복구기간과 매출·고정비 충격을 계산합니다.',type:'multi',options:['본사·공장','핵심설비','창고·재고','전산·데이터','원재료 공급망','물류·운송','임차시설','미확인'],otherPlaceholder:'자산가액과 대체·복구기간을 적어 주세요.'},
+  {id:'businessInterruptionPeriod',label:'핵심시설이 멈추면 정상화까지 예상기간은?',reason:'휴업손실의 기간가정을 확인합니다.',type:'single',options:['1개월 이내','2~3개월','4~6개월','7~12개월','1년 초과','미확인'],otherPlaceholder:'대체생산·외주·임시사업장 가능성을 적어 주세요.'},
+  {id:'propertyCoverageStatus',label:'재산·휴업·배상 관련 기존 보장 수준은?',reason:'가입금액·면책·복구비용의 공백을 확인합니다.',type:'single',options:['최근 증권 검토 완료','보험은 있으나 내용 미확인','일부만 가입','보험 없음','미확인'],otherPlaceholder:'보험사, 가입금액, 휴업기간, 주요 면책을 적어 주세요.'}
+ ]},
+ INSURANCE_OPTIMIZATION:{title:'기존 보험증권 조건부 질문',questions:[
+  {id:'insuranceReviewGoals',label:'기존 보험에서 가장 먼저 점검할 항목을 선택해 주세요.',reason:'신규가입보다 목적·공백·중복을 우선합니다.',type:'multi',options:['계약목적 불명확','보장금액 부족','중복·과다보험료','보장기간 불일치','계약자·수익자 구조','현금가치·해지손실','세무·회계처리','특별한 문제 없음·미확인'],otherPlaceholder:'현재 가장 불편한 계약이나 담당자 의견을 적어 주세요.'},
+  {id:'insuranceChangeConstraints',label:'보험 변경 시 가장 중요한 제약을 선택해 주세요.',reason:'해지·감액·추가설계를 안전하게 비교합니다.',type:'multi',options:['건강심사','보험료 예산','기존 해지손실','가족·주주 동의','기존 담당자 관계','세무·회계 영향','의사결정 시기','제약 미확인'],otherPlaceholder:'변경하지 말아야 할 계약과 이유를 적어 주세요.'},
+  {id:'insuranceDecisionIntent',label:'이번 상담에서 보험 관련 결정범위는 어디까지입니까?',reason:'진단과 가입결정을 분리합니다.',type:'single',options:['증권 수집만','보장분석까지','A·B안 설계검토','인수심사 가능성 확인','최종 결정 검토','보험검토 원치 않음'],otherPlaceholder:'희망 일정과 참석자를 적어 주세요.'}
+ ]}
+};
+function crQOptionValue(o){return typeof o==='string'?o:o?.value||'';}
+function crQOptionIssueIds(o){return typeof o==='object'&&Array.isArray(o.issueIds)?o.issueIds:[];}
+function crQArray(v){if(Array.isArray(v))return v.map(String).filter(Boolean);if(v===null||v===undefined||v==='')return[];return [String(v)];}
+function crActiveQuestionIssueIds(analysis){
+ const ids=(analysis?.issues||[]).map(x=>x.id);
+ for(const id of analysis?.speechPlan?.activeIssueIds||[])if(!ids.includes(id))ids.push(id);
+ return ids;
+}
+function crBuildQuestionSections(analysis){
+ const active=crActiveQuestionIssueIds(analysis),sections=[];
+ const commonMap=new Map();for(const q of CR_COMMON_QUESTIONS){const s=q.section||'공통질문';if(!commonMap.has(s))commonMap.set(s,[]);commonMap.get(s).push({...q,source:'공통'});}
+ for(const [title,questions] of commonMap)sections.push({id:'common-'+sections.length,title,kind:'common',questions});
+ for(const id of active.slice(0,4)){
+  const bank=CR_ISSUE_QUESTION_BANK[id];if(bank)sections.push({id:'issue-'+id,title:bank.title,kind:'issue',issueId:id,questions:bank.questions.map(q=>({...q,issueId:id,source:'조건부'}))});
+ }
+ const used=new Set(sections.flatMap(s=>s.questions.map(q=>q.id)));
+ const dynamic=(analysis?.dynamicQuestions||[]).filter(q=>q&&q.id&&!used.has(q.id)).slice(0,6).map(q=>({id:q.id,label:q.label||q.question||'추가 확인',reason:q.reason||'PDF 자동추출에서 확인이 필요한 사항입니다.',type:q.type==='number'?'number':'text',example:q.example||'',issueId:q.issueId||'',source:'원문확인',otherPlaceholder:'원문 또는 담당자 확인 결과를 입력해 주세요.'}));
+ if(dynamic.length)sections.push({id:'source-confirmation',title:'원문·담당자 추가확인',kind:'source',questions:dynamic});
+ const activeSet=new Set(active);
+ for(const section of sections)for(const q of section.questions)if(q.id==='consultingGoal')q.options=q.options.map(o=>({...o,recommended:crQOptionIssueIds(o).some(id=>activeSet.has(id))}));
+ return sections;
+}
+allQuestions=function(analysis){return crBuildQuestionSections(analysis).flatMap(s=>s.questions);};
+function crQuestionChoice(option,id,type,selected,priority,recommended,optionIndex){
+ const value=crQOptionValue(option),checked=selected.includes(value),rid=`${id}-${optionIndex}`;
+ if(type==='priority-multi')return `<div class="q-option priority ${checked?'selected':''} ${recommended?'recommended':''}"><label for="${attr(rid)}"><input id="${attr(rid)}" type="checkbox" data-q-choice="${attr(id)}" value="${attr(value)}" ${checked?'checked':''}><span>${esc(value)}</span>${recommended?'<em>분석추천</em>':''}</label><label class="q-priority" title="대표 지정 1순위"><input type="radio" name="q-priority-${attr(id)}" data-q-priority="${attr(id)}" value="${attr(value)}" ${priority===value?'checked':''}><span>1순위</span></label></div>`;
+ return `<label class="q-option ${checked?'selected':''} ${recommended?'recommended':''}" for="${attr(rid)}"><input id="${attr(rid)}" type="${type==='single'?'radio':'checkbox'}" ${type==='single'?`name="q-${attr(id)}"`:''} data-q-choice="${attr(id)}" value="${attr(value)}" ${checked?'checked':''}><span>${esc(value)}</span>${recommended?'<em>분석추천</em>':''}</label>`;
+}
+function crQuestionCard(q,index,answers){
+ const raw=answers[q.id],opts=(q.options||[]).map(crQOptionValue),selected=crQArray(raw).filter(v=>opts.includes(v));
+ const unmatched=Array.isArray(raw)?raw.filter(v=>!opts.includes(String(v))).join(', '):(raw&&!opts.includes(String(raw))?String(raw):'');
+ const other=answers[q.id+'Other']??unmatched??'',priority=String(answers[q.id+'Priority']||'');
+ let control='';
+ if(['single','multi','priority-multi'].includes(q.type))control=`<div class="q-options ${q.type}">${(q.options||[]).map((o,oi)=>crQuestionChoice(o,q.id,q.type,selected,priority,!!o?.recommended,oi)).join('')}</div>`;
+ else if(q.type==='number')control=`<div class="q-number-row"><input data-q-direct="${attr(q.id)}" type="number" inputmode="decimal" value="${attr(Number.isFinite(n(raw))?raw:'')}" placeholder="숫자 입력"><span>${esc(q.unit||'')}</span></div>`;
+ else control=`<textarea data-q-direct="${attr(q.id)}" rows="2" placeholder="${attr(q.example||q.otherPlaceholder||'직접 입력')} ">${esc(raw||'')}</textarea>`;
+ const otherInput=['single','multi','priority-multi','number'].includes(q.type)?`<div class="q-other"><span>직접입력</span><textarea data-q-other="${attr(q.id)}" rows="2" placeholder="${attr(q.otherPlaceholder||'선택지에 없는 내용 또는 상세 설명을 입력해 주세요.')}">${esc(other)}</textarea></div>`:'';
+ return `<article class="question-card ${q.wide?'q-wide':''}" data-q-card="${attr(q.id)}" data-q-type="${attr(q.type||'text')}" data-q-required="${q.required?'1':'0'}" data-q-issue="${attr(q.issueId||'')}"><div class="q-card-head"><span class="q-index">${String(index).padStart(2,'0')}</span><div><h3>${esc(q.label)}</h3><p>${esc(q.reason)}${q.unit?' · 단위 '+esc(q.unit):''}</p></div>${q.source?`<em class="q-source ${q.source==='조건부'?'conditional':''}">${esc(q.source)}</em>`:''}</div>${control}${otherInput}</article>`;
+}
+renderQuestions=function(){
+ if(!state.analysis)state.analysis=buildConfirmedModel(state.caseData);
+ const sections=crBuildQuestionSections(state.analysis),answers=state.caseData.answers||{},active=crActiveQuestionIssueIds(state.analysis),count=sections.reduce((s,x)=>s+x.questions.length,0);let idx=0;
+ const issueTitles=(state.analysis.issues||[]).filter(x=>active.includes(x.id)).slice(0,4).map(x=>x.title);
+ $('questionsBody').innerHTML=`<div class="question-engine-summary"><div><b>맞춤형 질문엔진</b><span>${CR_QUESTION_ENGINE_VERSION}</span></div><div class="question-summary-chips"><span>총 ${count}문항</span><span>공통 ${sections.filter(x=>x.kind==='common').reduce((s,x)=>s+x.questions.length,0)}</span><span>조건부 ${sections.filter(x=>x.kind==='issue').reduce((s,x)=>s+x.questions.length,0)}</span></div><p>보고서 제공기관이 아니라 확인된 재무패턴과 활성 이슈에 따라 조건부 질문이 달라집니다. ${issueTitles.length?'현재 활성: '+esc(issueTitles.join(' · ')):'현재 활성 이슈가 없어 공통 확인질문 중심으로 구성했습니다.'}</p></div>`+
+ sections.map(section=>`<section class="question-section ${section.kind}"><header><div><b>${esc(section.title)}</b><span>${section.kind==='issue'?'재무분석 결과에 따라 자동 추가':'모든 기업 공통'}</span></div>${section.issueId?`<em>${esc(section.issueId)}</em>`:''}</header><div class="question-grid">${section.questions.map(q=>crQuestionCard(q,++idx,answers)).join('')}</div></section>`).join('');
+ const root=$('questionsBody');
+ qsa('[data-q-choice]',root).forEach(el=>el.onchange=()=>{const card=el.closest?.('.question-card');el.closest?.('.q-option')?.classList.toggle('selected',el.checked);if(el.type==='radio')qsa(`[data-q-choice="${el.dataset.qChoice}"]`,card).forEach(x=>x.closest?.('.q-option')?.classList.toggle('selected',x.checked));});
+ qsa('[data-q-priority]',root).forEach(el=>el.onchange=()=>{if(!el.checked)return;const choice=qsa(`[data-q-choice="${el.dataset.qPriority}"]`,root).find(x=>x.value===el.value);if(choice&&!choice.checked){choice.checked=true;choice.closest?.('.q-option')?.classList.add('selected');}});
+};
+collectQuestions=function(){
+ const body=$('questionsBody'),answers=state.caseData.answers=state.caseData.answers||{},missing=[];
+ qsa('[data-q-card]',body).forEach(card=>{
+  const id=card.dataset.qCard,type=card.dataset.qType,required=card.dataset.qRequired==='1';let value=null;
+  if(type==='single'){const x=qsa(`[data-q-choice="${id}"]`,card).find(e=>e.checked);value=x?x.value:'미확인';}
+  else if(type==='multi'||type==='priority-multi')value=qsa(`[data-q-choice="${id}"]`,card).filter(e=>e.checked).map(e=>e.value);
+  else {const x=card.querySelector?.(`[data-q-direct="${id}"]`);value=type==='number'?(n(x?.value)??null):String(x?.value||'').trim();}
+  const other=String(card.querySelector?.(`[data-q-other="${id}"]`)?.value||'').trim();answers[id]=value;if(other)answers[id+'Other']=other;else delete answers[id+'Other'];
+  if(type==='priority-multi'){const p=qsa(`[data-q-priority="${id}"]`,card).find(e=>e.checked);const selected=Array.isArray(value)?value:[];const priority=p&&selected.includes(p.value)?p.value:selected[0]||'';answers[id+'Priority']=priority;answers.consultingGoalSummary=[priority,...selected.filter(x=>x!==priority),other].filter(Boolean).join(' · ');}
+  const empty=(Array.isArray(value)?value.length===0:(value===null||value===''||value==='미확인'))&&!other;if(required&&empty)missing.push(card.querySelector?.('h3')?.textContent||id);
+ });
+ if(missing.length){toast('필수 질문을 확인해 주세요: '+missing.slice(0,2).join(' · '),'err');return false;}
+ answers.questionnaireMeta={version:CR_QUESTION_ENGINE_VERSION,answeredAt:nowIso(),activeIssueIds:crActiveQuestionIssueIds(state.analysis)};
+ crApplyConfirmationAnswers(state.caseData);state.questionsConfirmed=true;return true;
+};
+const crBuildConfirmedModelV192=buildConfirmedModel;
+buildConfirmedModel=function(data){
+ const model=crBuildConfirmedModelV192(data),a=model.answers||{},selected=crQArray(a.consultingGoal),primary=String(a.consultingGoalPriority||selected[0]||a.consultingGoalOther||'');
+ model.decisionPriorities={selected,primary,other:String(a.consultingGoalOther||''),summary:String(a.consultingGoalSummary||[primary,...selected.filter(x=>x!==primary),a.consultingGoalOther].filter(Boolean).join(' · '))};
+ const goalMap=new Map(CR_GOAL_OPTIONS.map(x=>[x.value,x.issueIds]));
+ for(const issue of model.issues||[]){const matches=selected.filter(v=>(goalMap.get(v)||[]).includes(issue.id));if(matches.length){issue.userPriority=matches;issue.facts=[...new Set([...(issue.facts||[]),`대표 우선의사결정: ${matches.join(' · ')}`])];}if(primary&&(goalMap.get(primary)||[]).includes(issue.id)){issue.primaryDecision=true;issue.score=Math.min(5,(issue.score||0)+0.25);}}
+ const sections=crBuildQuestionSections(model);for(const q of sections.flatMap(s=>s.questions)){if(!q.issueId)continue;const val=a[q.id],other=a[q.id+'Other'];const values=[...(Array.isArray(val)?val:[val]),other].filter(v=>v!==null&&v!==undefined&&String(v).trim()&&String(v)!=='미확인');if(!values.length)continue;const issue=(model.issues||[]).find(x=>x.id===q.issueId);if(issue)issue.facts=[...new Set([...(issue.facts||[]),`추가답변 · ${q.label}: ${values.join(' · ')}`])];}
+ model.issues=(model.issues||[]).sort((x,y)=>(Number(!!y.primaryDecision)-Number(!!x.primaryDecision))+(Number(!!y.userPriority?.length)-Number(!!x.userPriority?.length))||((y.score||0)-(x.score||0)));
+ model.questionnaire={version:CR_QUESTION_ENGINE_VERSION,sections:sections.map(s=>({id:s.id,title:s.title,kind:s.kind,questionIds:s.questions.map(q=>q.id)})),answeredAt:a.questionnaireMeta?.answeredAt||null,decisionPriorities:model.decisionPriorities};
+ return model;
+};
+const crCoordinateCreditV192Base=crCoordinateCredit;
+crCoordinateCredit=function(out){
+ const gradePattern='AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW';
+ for(const pg of out?.coordPages||[]){
+  if(!/기업평가등급\s*이력/.test(pg.text||''))continue;
+  const compact=String(pg.text||'').replace(/\s+/g,' ');
+  const textMatch=compact.match(new RegExp(`\\b(${gradePattern})\\s+(?=20\\d{2}[.\\-/])`,'i'));if(textMatch)return textMatch[1].replace(/\s+/g,'').toUpperCase();
+  const header=(pg||[]).filter(i=>String(i.s).replace(/\s+/g,'')==='등급').sort((a,b)=>b.y-a.y)[0];if(!header)continue;
+  const candidates=(pg||[]).filter(i=>i.y<header.y-1&&i.x>=header.x-15&&i.x<header.x+95).sort((a,b)=>b.y-a.y||a.x-b.x);
+  for(const item of candidates){const raw=String(item.s).trim().replace(/\s+/g,'');if(!new RegExp(`^(${gradePattern})$`,'i').test(raw))continue;if(/[+-]$/.test(raw))return raw.toUpperCase();const sign=(pg||[]).filter(s=>/^[+-]$/.test(String(s.s).trim())&&Math.abs(s.y-item.y)<=7&&s.x>=item.x&&s.x-item.x<45).sort((a,b)=>Math.abs(a.y-item.y)-Math.abs(b.y-item.y)||a.x-b.x)[0];if(sign)return (raw+String(sign.s).trim()).toUpperCase();return raw.toUpperCase();}
+ }
+ const base=crCoordinateCreditV192Base(out);if(base&&!/[+-]$/.test(base)){const all=(out?.coordPages||[]).filter(pg=>/기업평가등급\s*이력/.test(pg.text||'')).map(pg=>pg.text||'').join(' ');const m=all.match(new RegExp(`\\b(${base.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}[+-])\\b`,'i'));if(m)return m[1].toUpperCase();}return base;
+};
+
+global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText,crCoordinateCredit,crClassifyFactWarnings,crBuildQuestionSections,renderQuestions,collectQuestions}}:{})};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })(window);
