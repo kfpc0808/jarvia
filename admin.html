@@ -2090,6 +2090,21 @@
     <div class="toolbar"><label>기간:</label><input id="as-from" type="date"> ~ <input id="as-to" type="date"><button class="btn" onclick="loadAccessStats()">조회</button><button class="btn btn-sec" onclick="setAsRange('today')">오늘</button><button class="btn btn-sec" onclick="setAsRange('week')">이번주</button><button class="btn btn-sec" onclick="setAsRange('month')">당월</button><button class="btn btn-sec" onclick="setAsRange('all')">전체</button><button class="btn btn-sec" onclick="exportAccessCSV()">CSV 다운로드</button></div>
     <div class="toolbar"><input id="as-search" placeholder="회원명·소속 검색" oninput="renderAccessPage(1)" style="flex:1;min-width:0"><select id="as-sort" onchange="renderAccessPage(1)"><option value="total_desc">합계 많은순</option><option value="total_asc">합계 적은순</option><option value="access_desc">메인노출순</option><option value="name">이름순</option></select><select id="as-per-page" onchange="renderAccessPage(1)"><option value="50">50명씩</option><option value="100">100명씩</option><option value="150">150명씩</option><option value="200">200명씩</option></select></div>
     <div id="as-summary" class="dash-row mt"></div>
+    <!-- ★ [2026-07-31] 접속 추이 그래프 — 일별·주별·월별 / 지표 선택 (조회 기간 반영, _asRows 재집계라 추가 조회 없음) -->
+    <div class="toolbar mt" style="align-items:center">
+      <label style="font-weight:700">📈 접속 추이:</label>
+      <button class="btn" id="as-cu-day" onclick="setAsChartUnit('day')">일별</button>
+      <button class="btn btn-sec" id="as-cu-week" onclick="setAsChartUnit('week')">주별</button>
+      <button class="btn btn-sec" id="as-cu-month" onclick="setAsChartUnit('month')">월별</button>
+      <select id="as-chart-metric" onchange="renderAsChart()">
+        <option value="all">전체 이벤트</option>
+        <option value="main">메인노출</option>
+        <option value="content">콘텐츠 열람</option>
+        <option value="tool">도구·서비스</option>
+        <option value="client">고객 채널방문</option>
+      </select>
+    </div>
+    <div id="as-chart" class="aps-chart mt"><div class="tc" style="color:#999;padding:30px">[조회]를 누르면 추이 그래프가 표시됩니다.</div></div>
     <p style="font-size:12px;color:#888;margin:8px 0">💡 회원 행을 클릭하면 일자별 상세가 펼쳐집니다. 콘텐츠 열은 실제 열람(view_logs), 도구·서비스 열은 진입 기록(service_logs/calc_logs) 기준입니다. 기간 내 활동이 있는 회원만 표시되며, 관리자·직원 계정은 집계에서 제외됩니다.</p>
     <span id="as-page-info" style="font-size:13px;color:var(--text-lt)"></span>
     <style>
@@ -14015,7 +14030,46 @@ async function loadAccessStats(){
     const totEvent=_asRows.reduce((s,r)=>s+r.total,0);
     $('as-summary').innerHTML=`<div class="dash-c"><span>활동 회원수</span><strong>${fmt(_asRows.length)}</strong></div><div class="dash-c"><span>총 메인노출</span><strong>${fmt(totAccess)}</strong></div><div class="dash-c"><span>총 이벤트</span><strong>${fmt(totEvent)}</strong></div>`;
     renderAccessPage(1);
+    renderAsChart();   /* ★ [2026-07-31] 접속 추이 그래프 갱신 */
   }catch(e){console.error('접속통계 로드 실패:',e);tb.innerHTML=`<tr><td colspan="36" class="tc" style="color:var(--danger)">로드 실패: ${esc(e.message)}</td></tr>`;}
+}
+/* ★ [2026-07-31] 접속 추이 그래프 — _asRows.daily 전 회원 합산 → 일·주·월 버킷 → renderApsBars 재사용 */
+let _asChartUnit='day';
+function setAsChartUnit(u){
+  _asChartUnit=u;
+  ['day','week','month'].forEach(k=>{const b=$('as-cu-'+k);if(b)b.className=(k===u)?'btn':'btn btn-sec';});
+  renderAsChart();
+}
+function renderAsChart(){
+  const box=$('as-chart');if(!box)return;
+  if(!_asRows.length){box.innerHTML='<div class="tc" style="color:#999;padding:30px">기간 내 데이터가 없습니다.</div>';return;}
+  const metric=($('as-chart-metric')&&$('as-chart-metric').value)||'all';
+  const CLIENT_KEYS=new Set(AS_CLIENT_COLS.map(c=>c.key));
+  const pick=k=>{   /* 지표별 키 판정 */
+    if(metric==='all')return !CLIENT_KEYS.has(k);
+    if(metric==='main')return k==='main_access';
+    if(metric==='content')return AS_CONTENT_KEYS.has(k);
+    if(metric==='tool')return k!=='main_access'&&k!=='my_platform'&&!AS_CONTENT_KEYS.has(k)&&!CLIENT_KEYS.has(k);
+    if(metric==='client')return k==='channelVisit'||k==='dailyVisit';
+    return false;
+  };
+  /* 전 회원 daily 합산 → 일별 합계 */
+  const byDay={};
+  _asRows.forEach(r=>{Object.keys(r.daily||{}).forEach(day=>{const o=r.daily[day];let s=0;Object.keys(o).forEach(k=>{if(pick(k))s+=o[k];});if(s)byDay[day]=(byDay[day]||0)+s;});});
+  /* 조회 기간 내 빈 날짜 0 채움 */
+  const from=new Date($('as-from').value+'T00:00:00'),to=new Date($('as-to').value+'T00:00:00');
+  const days=[];for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1))days.push(_asYmd(d));
+  /* 단위별 버킷 */
+  const buckets=[];const idx={};
+  days.forEach(ymd=>{
+    let key,label;
+    if(_asChartUnit==='day'){key=ymd;label=parseInt(ymd.slice(5,7),10)+'/'+parseInt(ymd.slice(8,10),10);}
+    else if(_asChartUnit==='week'){const d=new Date(ymd+'T00:00:00');const mon=new Date(d);mon.setDate(d.getDate()-((d.getDay()+6)%7));key=_asYmd(mon);label=(mon.getMonth()+1)+'/'+mon.getDate()+'~';}
+    else{key=ymd.slice(0,7);label=ymd.slice(0,4)+'.'+ymd.slice(5,7);}
+    if(idx[key]===undefined){idx[key]=buckets.length;buckets.push({label,value:0});}
+    buckets[idx[key]].value+=byDay[ymd]||0;
+  });
+  renderApsBars('as-chart',buckets,true);
 }
 function renderAccessPage(page){
   if(page)_asPage=page;
@@ -14222,7 +14276,7 @@ function renderApsRank(page){
   const info=$('aps-rank-info');if(info)info.textContent=total?('전체 '+total+'명 중 '+(st+1)+'~'+Math.min(st+per,total)+'명'):'';
   mkPager($('aps-pager'),total,page,per,'renderApsRank');
 }
-window.loadAiProposalStats=loadAiProposalStats;window.loadAiProposalRanking=loadAiProposalRanking;window.renderApsRank=renderApsRank;window.setApsRankRange=setApsRankRange;window.loadAccessStats=loadAccessStats;window.renderAccessPage=renderAccessPage;window.setAsRange=setAsRange;window.toggleAccessDetail=toggleAccessDetail;window.exportAccessCSV=exportAccessCSV;window.initAsDates=initAsDates;
+window.loadAiProposalStats=loadAiProposalStats;window.loadAiProposalRanking=loadAiProposalRanking;window.renderApsRank=renderApsRank;window.setApsRankRange=setApsRankRange;window.loadAccessStats=loadAccessStats;window.renderAccessPage=renderAccessPage;window.setAsRange=setAsRange;window.toggleAccessDetail=toggleAccessDetail;window.exportAccessCSV=exportAccessCSV;window.initAsDates=initAsDates;window.setAsChartUnit=setAsChartUnit;window.renderAsChart=renderAsChart;
 
 // ═══ 📊 CEO리포트 현황 (2026-07-17) — 데이터 소스: transactions.refType==='ceo_report'
 //     저장(teaserCharge)=이용 확정 시점에 기록 · type: 'free_use'(무료) | 'deduct'(유료). 생성만 하고 저장 안 한 건은 기록되지 않음. ═══
