@@ -1,3 +1,1260 @@
+/* ==========================================================================
+ * EMBEDDED MODULE: NICE BizLINE EXTRACTOR v1.1.0
+ * Restored after v1.6 speech-engine regression.
+ * ========================================================================== */
+/**
+ * JARVIA NICE BizLINE PDF 표준추출 모듈 v1.0.0
+ * ------------------------------------------------------------
+ * 목적
+ * - PDF.js 또는 서버 PDF 텍스트 추출기가 만든 페이지별 텍스트를 입력받아
+ *   JARVIA 기업종합Report 표준 JSON으로 변환한다.
+ * - 개별/연결, 결산/분기를 분리한다.
+ * - 원문 '-'를 0으로 바꾸지 않는다.
+ * - 모든 핵심값에 페이지·단위·기간·범위·확정상태를 붙인다.
+ * - 화법 원문을 복제하지 않고, 기존 corporateReport.js의 v3.0 화법엔진이
+ *   30초·90초·3분·5분·10단 노트·7분기·반론·보험 8단계·음성강의를
+ *   빠짐없이 적용할 수 있도록 speechPlan을 만든다.
+ *
+ * 입력 형식
+ * 1) ["1페이지 텍스트", "2페이지 텍스트", ...]
+ * 2) [{ pageNumber: 1, text: "..." }, ...]
+ * 3) pdftotext 결과처럼 form-feed(\f)로 구분된 문자열
+ *
+ * CommonJS:
+ *   const { extractNiceBizline } = require("./niceBizlineExtractor");
+ *
+ * Browser:
+ *   window.NiceBizlineExtractor.extractNiceBizline(pages)
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) root.NiceBizlineExtractor = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const VERSION = "1.2.0";
+  const DEFAULT_UNIT = "KRW_MILLION";
+
+  const BALANCE_ROWS = [
+    ["nonCurrentAssets", /^비유동자산/],
+    ["propertyPlantEquipment", /^유형자산/],
+    ["intangibleAssets", /^무형자산/],
+    ["longTermInvestments", /^장기투자자산/],
+    ["nonCurrentReceivables", /^매출채권\s*및\s*기타채권/],
+    ["otherNonFinancialAssetsNonCurrent", /^기타비금융자산/],
+    ["currentAssets", /^유동자산/],
+    ["inventory", /^재고자산/],
+    ["currentReceivables", /^매출채권\s*및\s*기타채권/],
+    ["shortTermInvestments", /^단기투자자산/],
+    ["otherNonFinancialAssetsCurrent", /^기타비금융자산/],
+    ["cashAndCashEquivalents", /^현금\s*및\s*현금성자산/],
+    ["totalAssets", /^자산총계/],
+    ["paidInCapital", /^납입자본/],
+    ["capitalStock", /^자본금/],
+    ["retainedEarnings", /^이익잉여금/],
+    ["otherCapitalComponents", /^기타자본구성요소/],
+    ["totalEquity", /^자본총계/],
+    ["nonCurrentLiabilities", /^비유동부채/],
+    ["nonCurrentBorrowings", /^비유동차입부채/],
+    ["currentLiabilities", /^유동부채/],
+    ["tradeAndOtherPayables", /^매입채무\s*및\s*기타채무/],
+    ["currentBorrowings", /^유동차입부채/],
+    ["totalLiabilities", /^부채총계/]
+  ];
+
+  const BORROWING_ROWS = [
+    ["currentBorrowings", /^유동차입부채/],
+    ["shortTermLoans", /^단기차입금/],
+    ["currentPortionLongTermDebt", /^유동성장기부채/],
+    ["shortTermBonds", /^단기사채/],
+    ["nonCurrentBorrowings", /^비유동차입부채/],
+    ["longTermBonds", /^장기사채/],
+    ["longTermLoans", /^장기차입금/],
+    ["totalBorrowings", /^차입금총계/],
+    ["otherFinancialLiabilities", /^기타금융부채/],
+    ["totalBorrowingsIncludingOther", /^총차입금/]
+  ];
+
+  const INCOME_ROWS = [
+    ["revenue", /^매출액/],
+    ["costOfSales", /^매출원가/],
+    ["grossProfit", /^매출총이익/],
+    ["sellingGeneralAdmin", /^판매비와\s*관리비/],
+    ["depreciation", /^감가상각비/],
+    ["badDebtExpense", /^대손상각비/],
+    ["laborCost", /^인건비/],
+    ["operatingProfit", /^영업이익/],
+    ["nonOperatingIncome", /^영업외수익/],
+    ["financeIncome", /^금융수익/],
+    ["nonOperatingExpense", /^영업외비용/],
+    ["financeCost", /^금융비용/],
+    ["profitBeforeTax", /^법인세차감전순이익/],
+    ["incomeTaxExpense", /^법인세비용/],
+    ["netIncome", /^당기순이익/]
+  ];
+
+  const CASHFLOW_ROWS = [
+    ["netIncome", /^당기순이익/],
+    ["adjustedNetIncome", /^조정당기순이익/],
+    ["changeInReceivables", /^매출채권순증/],
+    ["changeInInventory", /^재고자산순증/],
+    ["changeInPayables", /^매입채무순증/],
+    ["operatingCashGenerated", /^영업활동조달현금/],
+    ["nonOperatingFundingUse", /^비영업부분\s*조달/],
+    ["cashSurplusDeficit", /^자금과부족/],
+    ["externalFunding", /^외부자금조달/],
+    ["equityIssuance", /^유상증자/],
+    ["netChangeLongTermBorrowing", /^장기차입금순증/],
+    ["netChangeBonds", /^사채순증/],
+    ["netChangeShortTermBorrowing", /^단기차입금순증/],
+    ["netChangeCash", /^현금과예금의순증/],
+    ["beginningCash", /^기초현금/],
+    ["endingCash", /^기말현금/]
+  ];
+
+  const RATIO_PAGES = [
+    {
+      page: 6,
+      rows: [
+        ["equityRatio", /^자기자본비율/, "PERCENT"],
+        ["debtRatio", /^부채비율/, "PERCENT"],
+        ["borrowingDependency", /^차입금의존도/, "PERCENT"],
+        ["interestCoverage", /^영업이익이자보상비율/, "MULTIPLE"]
+      ]
+    },
+    {
+      page: 7,
+      rows: [
+        ["netWorkingCapitalTurnover", /^순영업자본회전율/, "MULTIPLE"],
+        ["currentRatio", /^유동비율/, "PERCENT"],
+        ["quickRatio", /^당좌비율/, "PERCENT"],
+        ["cashRatio", /^현금비율/, "PERCENT"]
+      ]
+    },
+    {
+      page: 8,
+      rows: [
+        ["roa", /^총자본순이익률/, "PERCENT"],
+        ["financeCostToRevenue", /^금융비용\/매출액/, "PERCENT"],
+        ["operatingMargin", /^매출액영업이익률/, "PERCENT"],
+        ["ebitdaMargin", /^EBITDA\/매출액/i, "PERCENT"]
+      ]
+    },
+    {
+      page: 9,
+      rows: [
+        ["revenueGrowth", /^매출액증가율/, "PERCENT"],
+        ["assetGrowth", /^총자산증가율/, "PERCENT"],
+        ["operatingProfitGrowth", /^영업이익증가율/, "PERCENT"],
+        ["netIncomeGrowth", /^순이익증가율/, "PERCENT"]
+      ]
+    },
+    {
+      page: 10,
+      rows: [
+        ["totalAssetTurnover", /^총자본회전율/, "MULTIPLE"],
+        ["receivablesTurnover", /^매출채권회전율/, "MULTIPLE"],
+        ["payablesTurnover", /^매입채무회전율/, "MULTIPLE"],
+        ["inventoryTurnover", /^재고자산회전율/, "MULTIPLE"]
+      ]
+    }
+  ];
+
+  const LABELS = {
+    nonCurrentAssets: "비유동자산",
+    propertyPlantEquipment: "유형자산",
+    intangibleAssets: "무형자산",
+    longTermInvestments: "장기투자자산",
+    nonCurrentReceivables: "매출채권 및 기타채권(비유동)",
+    otherNonFinancialAssetsNonCurrent: "기타비금융자산(비유동)",
+    currentAssets: "유동자산",
+    inventory: "재고자산",
+    currentReceivables: "매출채권 및 기타채권(유동)",
+    shortTermInvestments: "단기투자자산",
+    otherNonFinancialAssetsCurrent: "기타비금융자산(유동)",
+    cashAndCashEquivalents: "현금 및 현금성자산",
+    totalAssets: "자산총계",
+    paidInCapital: "납입자본",
+    capitalStock: "자본금",
+    retainedEarnings: "이익잉여금",
+    otherCapitalComponents: "기타자본구성요소",
+    totalEquity: "자본총계",
+    nonCurrentLiabilities: "비유동부채",
+    nonCurrentBorrowings: "비유동차입부채",
+    currentLiabilities: "유동부채",
+    tradeAndOtherPayables: "매입채무 및 기타채무",
+    currentBorrowings: "유동차입부채",
+    totalLiabilities: "부채총계",
+    shortTermLoans: "단기차입금",
+    currentPortionLongTermDebt: "유동성장기부채",
+    shortTermBonds: "단기사채",
+    longTermBonds: "장기사채",
+    longTermLoans: "장기차입금",
+    totalBorrowings: "차입금총계",
+    otherFinancialLiabilities: "기타금융부채(금융리스 포함)",
+    totalBorrowingsIncludingOther: "총차입금(기타금융부채 포함)",
+    revenue: "매출액",
+    costOfSales: "매출원가",
+    grossProfit: "매출총이익(손실)",
+    sellingGeneralAdmin: "판매비와 관리비",
+    depreciation: "감가상각비",
+    badDebtExpense: "대손상각비",
+    laborCost: "인건비",
+    operatingProfit: "영업이익(손실)",
+    nonOperatingIncome: "영업외수익",
+    financeIncome: "금융수익",
+    nonOperatingExpense: "영업외비용",
+    financeCost: "금융비용",
+    profitBeforeTax: "법인세차감전순이익",
+    incomeTaxExpense: "법인세비용(부의법인세비용)",
+    netIncome: "당기순이익(손실)",
+    adjustedNetIncome: "조정당기순이익",
+    changeInReceivables: "매출채권순증",
+    changeInInventory: "재고자산순증",
+    changeInPayables: "매입채무순증",
+    operatingCashGenerated: "영업활동조달현금",
+    nonOperatingFundingUse: "비영업부분 조달(+) 운용(-)",
+    cashSurplusDeficit: "자금과부족",
+    externalFunding: "외부자금조달",
+    equityIssuance: "유상증자",
+    netChangeLongTermBorrowing: "장기차입금순증",
+    netChangeBonds: "사채순증",
+    netChangeShortTermBorrowing: "단기차입금순증",
+    netChangeCash: "현금과예금의순증",
+    beginningCash: "기초현금",
+    endingCash: "기말현금"
+  };
+
+  function normalizePages(input) {
+    if (Array.isArray(input)) {
+      return input.map((p, i) => ({
+        pageNumber: Number(p && typeof p === "object" ? p.pageNumber : i + 1),
+        text: normalizeText(p && typeof p === "object" ? p.text : p)
+      }));
+    }
+    if (typeof input === "string") {
+      const parts = input.split("\f");
+      if (parts.length > 1 && parts[parts.length - 1].trim() === "") parts.pop();
+      return parts.map((text, i) => ({ pageNumber: i + 1, text: normalizeText(text) }));
+    }
+    throw new TypeError("페이지 텍스트 배열 또는 form-feed 문자열이 필요합니다.");
+  }
+
+  function normalizeText(value) {
+    return String(value == null ? "" : value)
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "")
+      .replace(/[ \t]+$/gm, "")
+      .trim();
+  }
+
+  function normalizeLine(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function getPage(pages, n) {
+    return pages.find((p) => p.pageNumber === n) || { pageNumber: n, text: "" };
+  }
+
+  function detectNiceBizline(input) {
+    const pages = normalizePages(input);
+    const joined = pages.slice(0, 6).map((p) => p.text).join("\n");
+    const phrases = [
+      "기업 분석 보고서",
+      "기업분석보고서",
+      "상세 보고서",
+      "NICE BizLINE",
+      "주요 재무 분석",
+      "재무제표",
+      "IFRS, 개별, 결산",
+      "K-GAAP, 개별, 결산"
+    ];
+    const matched = phrases.filter((x) => joined.includes(x) || pages.some((p) => p.text.includes(x)));
+    return {
+      detected: matched.length >= 3,
+      provider: "NICE평가정보 / NICE BizLINE",
+      reportType: "기업분석보고서 상세보고서",
+      matchedPhrases: matched,
+      confidence: Math.min(1, matched.length / 5)
+    };
+  }
+
+  function parseDate(value) {
+    const m = String(value || "").match(/(20\d{2})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})/);
+    if (!m) return null;
+    return `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+  }
+
+  function numberOrNull(token) {
+    const value = String(token == null ? "" : token).trim();
+    if (!value || value === "-" || value === "—") return null;
+    const n = Number(value.replace(/,/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function field(value, unit, page, section, extra) {
+    let normalized = value;
+    if (typeof normalized === "string") {
+      const t = normalized.replace(/\s+/g, " ").trim();
+      normalized = (!t || t === "-" || t === "—" || /^해당\s*없음$/i.test(t) || /^미제공$/i.test(t)) ? null : t;
+    }
+    if (Array.isArray(normalized)) {
+      normalized = normalized.map((x) => typeof x === "string" ? x.trim() : x)
+        .filter((x) => x !== null && x !== undefined && x !== "" && x !== "-" && x !== "—");
+      if (!normalized.length) normalized = null;
+    }
+    const status = normalized === null ? "notProvided" : "extracted";
+    return Object.assign({
+      value: normalized,
+      unit,
+      sourcePage: page,
+      sourceSection: section,
+      sourceLabel: "",
+      status,
+      confirmed: false,
+      confidence: normalized === null ? 0 : 0.99
+    }, extra || {});
+  }
+
+  function extractPeriods(text, max) {
+    const all = Array.from(String(text || "").matchAll(/20\d{2}\.\d{2}\.\d{2}/g), (m) => m[0]);
+    const unique = [];
+    for (const x of all) if (!unique.includes(x)) unique.push(x);
+    return unique.slice(0, max || 3).map((x) => x.replace(/\./g, "-"));
+  }
+
+  function sectionBetween(text, start, end) {
+    const source = String(text || "");
+    const s = typeof start === "string" ? source.indexOf(start) : source.search(start);
+    if (s < 0) return "";
+    const after = source.slice(s);
+    if (!end) return after;
+    const e = typeof end === "string" ? after.indexOf(end, 1) : after.search(end);
+    return e > 0 ? after.slice(0, e) : after;
+  }
+
+  function amountPercentPairs(line) {
+    const out = [];
+    const regex = /(-?(?:\d{1,3}(?:,\d{3})+|\d+)|-)\s+(-?(?:\d+(?:\.\d+)?)%|-%|-\s*%)/g;
+    let m;
+    while ((m = regex.exec(line))) out.push({ amount: numberOrNull(m[1]), ratio: numberOrNull(m[2].replace("%", "")) });
+    return out;
+  }
+
+  function parseSequentialRows(sectionText, rowSpecs, periods, context) {
+    const lines = sectionText.split("\n").map(normalizeLine).filter(Boolean);
+    const byPeriod = Object.fromEntries(periods.map((p) => [p, {}]));
+    let cursor = 0;
+    const warnings = [];
+    for (const [key, matcher] of rowSpecs) {
+      let foundIndex = -1;
+      for (let i = cursor; i < lines.length; i++) {
+        const comparable = lines[i].replace(/^\(+/, "").replace(/\)/g, "");
+        if (matcher.test(comparable)) { foundIndex = i; break; }
+      }
+      if (foundIndex < 0) {
+        warnings.push(`행 미검출: ${LABELS[key] || key}`);
+        continue;
+      }
+      cursor = foundIndex + 1;
+      const pairs = amountPercentPairs(lines[foundIndex]);
+      if (!pairs.length) {
+        warnings.push(`수치 미검출: ${LABELS[key] || key}`);
+        continue;
+      }
+      periods.forEach((period, idx) => {
+        const pair = pairs[idx] || { amount: null, ratio: null };
+        byPeriod[period][key] = field(pair.amount, context.unit, context.page, context.section, {
+          sourceLabel: LABELS[key] || key,
+          scope: context.scope,
+          periodType: context.periodType,
+          periodEnd: period,
+          compositionRatio: pair.ratio
+        });
+      });
+    }
+    return { byPeriod, warnings };
+  }
+
+  function mergePeriodBlocks(target, parsed, blockName) {
+    Object.entries(parsed.byPeriod).forEach(([period, values]) => {
+      if (!target[period]) target[period] = {};
+      target[period][blockName] = Object.assign(target[period][blockName] || {}, values);
+    });
+  }
+
+  function extractCompany(pages) {
+    const p1=getPage(pages,1).text,p3=getPage(pages,3).text,p11=getPage(pages,11).text;
+    const line=(re,group,source)=>{const m=String(source||"").match(re);return m?normalizeLine(m[group||1]):null;};
+    const companyName=line(/기업명\s+(.+?)\s+대표자명/,1,p3)||line(/\n\s*((?:\(주\)|㈜)[^\n]+)\n/,1,p1);
+    const ceoName=line(/대표자명\s+([^\s]+)/,1,p3)||line(/대표자\s+([^\s]+)/,1,p11);
+    const businessNumber=line(/사업자번호\s+(\d{3}-\d{2}-\d{5})/,1,p3)||line(/(\d{3}-\d{2}-\d{5})/,1,p1);
+    const corporateNumber=line(/법인번호\s+(\d{6}-\d{7})/,1,p3);
+    const established=line(/설립일자\s+([0-9.년월일]+)/,1,p3);
+    const businessStart=line(/개업일자\s+([0-9.년월일]+)/,1,p3);
+    const listingDate=line(/기업공개일자\s+([0-9.년월일]+)/,1,p3);
+    const type=line(/기업\s*형태\s+(.+?)\s+소속그룹명/,1,p3);
+    const group=line(/소속그룹명\s+([^\s]+)/,1,p3);
+    const employee=line(/종업원수\s+(\d+)명/,1,p3);
+    const address=line(/(\(\d{5}\)[^\n]+)\n본사\s*주소/,1,p3)||line(/본사\s*주소\s*\n?\s*(\([0-9]+\)[^\n]+)/,1,p3)||line(/(\(\d{5}\)[^\n]+)\n본사\s*주소/,1,p11);
+    const phone=line(/Tel:\s*([0-9-]+)/,1,p3),fax=line(/Fax:\s*([0-9-]+)/,1,p3),product=line(/주요상품\s+(.+)/,1,p3);
+    const industry=p3.match(/표준산업분류\s+\(([^)]+)\)\s*(.+)/);
+    const website=line(/홈페이지\s+([^\s]+)/,1,p11),certifications=line(/인증정보\s+(.+)/,1,p11),mainBank=line(/주거래은행\s+([^\s]+)/,1,p11);
+    return {name:field(companyName,"TEXT",3,"기업요약 기업개요",{sourceLabel:"기업명"}),businessNumber:field(businessNumber,"TEXT",3,"기업요약 기업개요",{sourceLabel:"사업자번호"}),corporateNumber:field(corporateNumber,"TEXT",3,"기업요약 기업개요",{sourceLabel:"법인번호"}),ceoName:field(ceoName,"TEXT",3,"기업요약 기업개요",{sourceLabel:"대표자명"}),establishedDate:field(parseDate(established),"DATE",3,"기업요약 기업개요",{sourceLabel:"설립일자"}),businessStartDate:field(parseDate(businessStart),"DATE",3,"기업요약 기업개요",{sourceLabel:"개업일자"}),listingDate:field(parseDate(listingDate),"DATE",3,"기업요약 기업개요",{sourceLabel:"기업공개일자"}),companyType:field(type?type.split(/[,\s/]+/).filter(Boolean):null,"TEXT_ARRAY",3,"기업요약 기업개요",{sourceLabel:"기업 형태"}),groupName:field(group,"TEXT",3,"기업요약 기업개요",{sourceLabel:"소속그룹명"}),employeeCount:field(numberOrNull(employee),"PERSON",3,"기업요약 기업개요",{sourceLabel:"종업원수"}),headOfficeAddress:field(address,"TEXT",3,"기업요약 기업개요",{sourceLabel:"본사 주소"}),phone:field(phone,"TEXT",3,"기업요약 기업개요",{sourceLabel:"Tel"}),fax:field(fax,"TEXT",3,"기업요약 기업개요",{sourceLabel:"Fax"}),website:field(website,"TEXT",11,"기업현황 기업개요",{sourceLabel:"홈페이지"}),mainBank:field(mainBank,"TEXT",11,"기업현황 기업개요",{sourceLabel:"주거래은행"}),mainProducts:field(product,"TEXT",3,"기업요약 기업개요",{sourceLabel:"주요상품"}),industryCode:field(industry?industry[1].trim():null,"TEXT",3,"기업요약 기업개요",{sourceLabel:"표준산업분류"}),industryName:field(industry?industry[2].trim():null,"TEXT",3,"기업요약 기업개요",{sourceLabel:"표준산업분류"}),certifications:field(certifications?[certifications]:null,"TEXT_ARRAY",11,"기업현황 기업개요",{sourceLabel:"인증정보"})};
+  }
+
+
+  const KGAAP_BALANCE_ROWS = [
+    ["currentAssets", /^유동자산/],
+    ["cashAndCashEquivalents", /^현금\s*및\s*현금(?:성자산|등가물)/],
+    ["currentReceivables", /^매출채권(?:,\s*공사\/영업미수금|\s*및\s*기타채권)?/],
+    ["inventory", /^재고자산/],
+    ["nonCurrentAssets", /^비유동자산/],
+    ["propertyPlantEquipment", /^유형자산/],
+    ["intangibleAssets", /^무형자산/],
+    ["longTermInvestments", /^(?:장기)?투자자산/],
+    ["totalAssets", /^자산총계/],
+    ["currentLiabilities", /^유동부채/],
+    ["tradeAndOtherPayables", /^매입채무(?:\s*및\s*기타채무)?/],
+    ["currentBorrowings", /^단기차입금/],
+    ["nonCurrentLiabilities", /^비유동부채/],
+    ["nonCurrentBorrowings", /^장기차입금/],
+    ["totalLiabilities", /^부채총계/],
+    ["capitalStock", /^자본금/],
+    ["retainedEarnings", /^이익잉여금/],
+    ["otherCapitalComponents", /^(?:기타자본구성요소|기타)$/],
+    ["totalEquity", /^자본총계/]
+  ];
+  const KGAAP_BORROWING_ROWS = [
+    ["currentBorrowings", /^단기차입금/],
+    ["shortTermLoans", /^단기차입금/],
+    ["currentPortionLongTermDebt", /^유동성(?:장기부채|장기차입금)/],
+    ["shortTermBonds", /^단기사채/],
+    ["nonCurrentBorrowings", /^장기차입금/],
+    ["longTermBonds", /^(?:장기사채|회사채)/],
+    ["longTermLoans", /^장기차입금/],
+    ["totalBorrowings", /^차입금총계/],
+    ["otherFinancialLiabilities", /^(?:기타금융부채|금융리스부채)/],
+    ["totalBorrowingsIncludingOther", /^총차입금/]
+  ];
+  const KGAAP_INCOME_ROWS = INCOME_ROWS.map(([key, re]) => {
+    if (key === "financeIncome") return [key, /^(?:금융수익|이자수익)/];
+    if (key === "financeCost") return [key, /^(?:금융비용|이자비용)/];
+    return [key, re];
+  });
+
+  function extractFinancialStatements(pages) {
+    const warnings = [];
+    const separateAnnual = {};
+    const annualBalancePage = getPage(pages, 18).text;
+    const annualIncomePage = getPage(pages, 19).text;
+    const quarterlyPage = getPage(pages, 20).text;
+    const consolidatedPage = getPage(pages, 21).text;
+    const statementStandard = /K-?GAAP/i.test(annualBalancePage) ? "K-GAAP" : /IFRS/i.test(annualBalancePage) ? "IFRS" : "UNKNOWN";
+    const balanceRows = statementStandard === "K-GAAP" ? KGAAP_BALANCE_ROWS : BALANCE_ROWS;
+    const borrowingRows = statementStandard === "K-GAAP" ? KGAAP_BORROWING_ROWS : BORROWING_ROWS;
+    const incomeRows = statementStandard === "K-GAAP" ? KGAAP_INCOME_ROWS : INCOME_ROWS;
+
+    const annualBalanceSection = sectionBetween(annualBalancePage, "재무상태표", "차입금구조");
+    const annualBorrowingSection = sectionBetween(annualBalancePage, "차입금구조");
+    const annualIncomeSection = sectionBetween(annualIncomePage, "손익계산서", "현금흐름분석");
+    const annualCashSection = sectionBetween(annualIncomePage, "현금흐름분석");
+    const annualPeriods = extractPeriods(annualBalanceSection, 3);
+    if (!annualPeriods.length) warnings.push("연간 결산기간 미검출");
+
+    const parsedAnnualBalance = parseSequentialRows(annualBalanceSection, balanceRows, annualPeriods, {
+      unit: DEFAULT_UNIT, page: 18, section: `${statementStandard} 개별 결산 재무상태표`, scope: "separate", periodType: "annual"
+    });
+    const parsedAnnualBorrowing = parseSequentialRows(annualBorrowingSection, borrowingRows, annualPeriods, {
+      unit: DEFAULT_UNIT, page: 18, section: `${statementStandard} 개별 결산 차입금구조`, scope: "separate", periodType: "annual"
+    });
+    const parsedAnnualIncome = parseSequentialRows(annualIncomeSection, incomeRows, annualPeriods, {
+      unit: DEFAULT_UNIT, page: 19, section: `${statementStandard} 개별 결산 손익계산서`, scope: "separate", periodType: "annual"
+    });
+    const parsedAnnualCash = parseSequentialRows(annualCashSection, CASHFLOW_ROWS, annualPeriods, {
+      unit: DEFAULT_UNIT, page: 19, section: `${statementStandard} 개별 결산 현금흐름분석`, scope: "separate", periodType: "annual"
+    });
+    mergePeriodBlocks(separateAnnual, parsedAnnualBalance, "balanceSheet");
+    mergePeriodBlocks(separateAnnual, parsedAnnualBorrowing, "balanceSheet");
+    mergePeriodBlocks(separateAnnual, parsedAnnualIncome, "incomeStatement");
+    mergePeriodBlocks(separateAnnual, parsedAnnualCash, "cashFlowAnalysis");
+    warnings.push(...parsedAnnualBalance.warnings, ...parsedAnnualBorrowing.warnings, ...parsedAnnualIncome.warnings, ...parsedAnnualCash.warnings);
+
+    const separateQuarterly = {};
+    const qBalance = sectionBetween(quarterlyPage, "재무상태표", "손익계산서");
+    const qIncome = sectionBetween(quarterlyPage, "손익계산서");
+    const qPeriodsRaw = extractPeriods(qBalance, 3);
+    const annualSet = new Set(annualPeriods);
+    const hasTrueQuarter = qPeriodsRaw.some((p) => !annualSet.has(p) && !/-12-31$/.test(p));
+    const qPeriods = hasTrueQuarter ? qPeriodsRaw.filter((p) => !annualSet.has(p) && !/-12-31$/.test(p)) : [];
+    if (/분기/.test(quarterlyPage) && qPeriodsRaw.length && !hasTrueQuarter) warnings.push("분기 표기가 있으나 연말 결산기간과 동일하여 최근분기에서 제외");
+    if (qPeriods.length) {
+      const parsedQBalance = parseSequentialRows(qBalance, balanceRows, qPeriods, {
+        unit: DEFAULT_UNIT, page: 20, section: `${statementStandard} 개별 분기 재무상태표`, scope: "separate", periodType: "quarterly"
+      });
+      const parsedQIncome = parseSequentialRows(qIncome, incomeRows, qPeriods, {
+        unit: DEFAULT_UNIT, page: 20, section: `${statementStandard} 개별 분기 손익계산서`, scope: "separate", periodType: "quarterly"
+      });
+      mergePeriodBlocks(separateQuarterly, parsedQBalance, "balanceSheet");
+      mergePeriodBlocks(separateQuarterly, parsedQIncome, "incomeStatement");
+      warnings.push(...parsedQBalance.warnings, ...parsedQIncome.warnings);
+    }
+
+    const consolidatedAnnual = {};
+    const cBalance = sectionBetween(consolidatedPage, "재무상태표", "손익계산서");
+    const cIncome = sectionBetween(consolidatedPage, "손익계산서");
+    const cPeriods = extractPeriods(cBalance, 3);
+    if (cPeriods.length) {
+      const parsedCBalance = parseSequentialRows(cBalance, balanceRows, cPeriods, {
+        unit: DEFAULT_UNIT, page: 21, section: `${statementStandard} 연결 결산 재무상태표`, scope: "consolidated", periodType: "annual"
+      });
+      const parsedCIncome = parseSequentialRows(cIncome, incomeRows, cPeriods, {
+        unit: DEFAULT_UNIT, page: 21, section: `${statementStandard} 연결 결산 손익계산서`, scope: "consolidated", periodType: "annual"
+      });
+      mergePeriodBlocks(consolidatedAnnual, parsedCBalance, "balanceSheet");
+      mergePeriodBlocks(consolidatedAnnual, parsedCIncome, "incomeStatement");
+      warnings.push(...parsedCBalance.warnings, ...parsedCIncome.warnings);
+    }
+
+    return {
+      statementStandard,
+      financialStatements: { separateAnnual, separateQuarterly, consolidatedAnnual },
+      warnings: unique(warnings)
+    };
+  }
+
+  function numericTokens(line) {
+    return Array.from(String(line || "").matchAll(/(?<![A-Za-z가-힣])(-?\d+(?:,\d{3})*(?:\.\d+)?|-)(?![A-Za-z가-힣])/g), (m) => m[1]);
+  }
+
+  function extractRatios(pages) {
+    const ratios = {};
+    const warnings = [];
+    for (const group of RATIO_PAGES) {
+      const page = getPage(pages, group.page).text;
+      const lines = page.split("\n").map(normalizeLine).filter(Boolean);
+      for (const [key, matcher, unit] of group.rows) {
+        const line = lines.find((x) => matcher.test(x));
+        if (!line) {
+          warnings.push(`비율 행 미검출: ${key}`);
+          continue;
+        }
+        const values = numericTokens(line)
+          .filter((x) => x !== "-")
+          .map(numberOrNull)
+          .filter((x) => x !== null);
+        const companyValues = values.slice(0, 3);
+        ["2025-12-31", "2024-12-31", "2023-12-31"].forEach((period, idx) => {
+          if (!ratios[period]) ratios[period] = {};
+          ratios[period][key] = field(companyValues[idx] == null ? null : companyValues[idx], unit, group.page, "재무비율분석", {
+            sourceLabel: key,
+            scope: "separate",
+            periodType: "annual",
+            periodEnd: period
+          });
+        });
+      }
+    }
+    return { financialRatios: ratios, warnings: unique(warnings) };
+  }
+
+  function extractShareholdersAndAffiliates(pages) {
+    const page=getPage(pages,11).text;
+    const shareholderSection=sectionBetween(page,/주요주주\s*\(단위/,/관계사현황\s*\(단위/);
+    const affiliateSection=sectionBetween(page,/관계사현황\s*\(단위/,/기업분석보고서/);
+    const shareholderDate=parseDate((shareholderSection.match(/기준\s*일자\s*:\s*([0-9.]+)/)||[])[1]);
+    const affiliateDate=parseDate((affiliateSection.match(/기준\s*일자\s*:\s*([0-9.]+)/)||[])[1]);
+    const shareholders=[];
+    for(const raw of shareholderSection.split("\n")){const line=normalizeLine(raw);const m=line.match(/^(.+?)\s+([\d,]+)\s+([\d.]+)\s+(.+)$/);if(!m||m[1]==='주주명'||m[1]==='-')continue;shareholders.push({name:m[1],sharesOwned:numberOrNull(m[2]),ownershipPercent:numberOrNull(m[3]),relationship:m[4],asOfDate:shareholderDate,sourcePage:11,status:"extracted",confirmed:false,confidence:0.99});}
+    const affiliates=[];
+    for(const raw of affiliateSection.split("\n")){const line=normalizeLine(raw);const m=line.match(/^(.+?)\s+([가-힣A-Za-z]+)\s+(.+?)\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d,]+)$/);if(!m||m[1]==='업체명'||m[1]==='-')continue;affiliates.push({name:m[1],ceo:m[2],industry:m[3],totalAssets:numberOrNull(m[4]),revenue:numberOrNull(m[5]),netIncome:numberOrNull(m[6]),unit:DEFAULT_UNIT,asOfDate:affiliateDate,sourcePage:11,status:"extracted",confirmed:false});}
+    return {shareholders,affiliates};
+  }
+
+  function extractEmployment(pages) {
+    const page = getPage(pages, 12).text;
+    const month = (page.match(/기준\s*연월\s*:\s*(20\d{2}\.\d{2})/) || [])[1];
+    const values = Array.from(page.matchAll(/([\d,.]+)(만원|명|%)/g), (m) => ({ value: numberOrNull(m[1]), unit: m[2] }));
+    return {
+      asOfMonth: month ? month.replace(".", "-") : null,
+      estimatedAverageSalaryKRW10K: field(values[0]?.value ?? null, "KRW_10K", 12, "종업원 현황", { sourceLabel: "예상 평균 연봉", notes: "추정" }),
+      estimatedNewHireSalaryKRW10K: field(values[1]?.value ?? null, "KRW_10K", 12, "종업원 현황", { sourceLabel: "올해 입사자 평균 연봉", notes: "추정" }),
+      estimatedEmployeeCount: field(values[2]?.value ?? null, "PERSON", 12, "종업원 현황", { sourceLabel: "종업원 수(국민연금 기준)", notes: "추정" }),
+      annualHireRate: field(values[3]?.value ?? null, "PERCENT", 12, "종업원 현황", { sourceLabel: "입사율" }),
+      annualTurnoverRate: field(values[4]?.value ?? null, "PERCENT", 12, "종업원 현황", { sourceLabel: "퇴사율" })
+    };
+  }
+
+  function extractCredit(pages) {
+    const p3=getPage(pages,3).text,p15=getPage(pages,15).text,p16=getPage(pages,16).text,p17=getPage(pages,17).text;
+    const history=[];const ratingSection=sectionBetween(p15,/기업평가등급\s*이력/,/WATCH등급\s*이력/);
+    for(const raw of ratingSection.split("\n")){const line=normalizeLine(raw);const m=line.match(/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR)\s+(20\d{2}\.\d{2}\.\d{2})\s+(20\d{2}\.\d{2}\.\d{2})\s+(.+)$/);if(m)history.push({grade:m[1],evaluationDate:parseDate(m[2]),financialDate:parseDate(m[3]),ratingType:m[4]});}
+    const watchHistory=[];const watchSection=sectionBetween(p15,/WATCH등급\s*이력/,/현금흐름등급\s*이력/);
+    for(const raw of watchSection.split("\n")){const line=normalizeLine(raw);const m=line.match(/^(20\d{2}\.\d{2}\.\d{2})\s+(정상|유보|관찰|주의|경보|위험|회수의문|휴폐업|부도|산출유보)\s*(.*)$/);if(m)watchHistory.push({asOfDate:parseDate(m[1]),grade:m[2],reason:m[3]==='-'?null:m[3]||null});}
+    const cfGrade=(p3.match(/현금흐름등급[\s\S]{0,500}?(CF[1-6])/m)||[])[1]||null;const labels={CF1:"우수",CF2:"양호",CF3:"보통",CF4:"열위",CF5:"위험",CF6:"부실"};
+    const noEvents=!/[0-9]{4}\.\d{2}\.\d{2}/.test(sectionBetween(p16,/10일\s*이상\s*연체/))&&!/[0-9]{4}\.\d{2}\.\d{2}/.test(p17);
+    return {companyRatingCurrent:history[0]?Object.assign({sourcePage:15},history[0]):null,companyRatingHistory:history,watchCurrent:watchHistory[0]?Object.assign({sourcePage:15},watchHistory[0]):null,watchHistory,cashFlowGradeCurrent:{grade:cfGrade,label:cfGrade?labels[cfGrade]:null,financialDate:history[0]?.financialDate||null,sourcePage:3,status:cfGrade?"extracted":"notProvided"},creditEvents:{status:noEvents?"noneReported":"needsDetailedParsing",sourcePages:[16,17],unresolved10DayDelinquency:null,kCreditInformationEvents:null,publicInformation:null,creditBureauEvents:null,currentAccountSuspension:null,courtReceivershipOrWorkout:null}};
+  }
+
+  function valueAt(result, path) {
+    return path.split(".").reduce((acc, k) => acc && acc[k], result);
+  }
+
+  function metricValue(result, path) {
+    const x = valueAt(result, path);
+    return x && typeof x === "object" && "value" in x ? x.value : x;
+  }
+
+  function deriveSignals(result) {
+    const f = result.financialStatements;
+    const r = result.financialRatios;
+    const annual = f.separateAnnual || {};
+    const q = f.separateQuarterly || {};
+    const y25 = annual["2025-12-31"] || {};
+    const y24 = annual["2024-12-31"] || {};
+    const y23 = annual["2023-12-31"] || {};
+    const qLatestKey = Object.keys(q).sort().reverse()[0];
+    const qLatest = qLatestKey ? q[qLatestKey] : {};
+
+    const currentRatio = metricValue(r, "2025-12-31.currentRatio");
+    const quickRatio = metricValue(r, "2025-12-31.quickRatio");
+    const cashRatio = metricValue(r, "2025-12-31.cashRatio");
+    const b23 = metricValue(y23, "balanceSheet.totalBorrowingsIncludingOther");
+    const b24 = metricValue(y24, "balanceSheet.totalBorrowingsIncludingOther");
+    const b25 = metricValue(y25, "balanceSheet.totalBorrowingsIncludingOther");
+    const cash24 = metricValue(y24, "balanceSheet.cashAndCashEquivalents");
+    const cash25 = metricValue(y25, "balanceSheet.cashAndCashEquivalents");
+    const retained = metricValue(y25, "balanceSheet.retainedEarnings");
+    const nc25 = metricValue(y25, "balanceSheet.nonCurrentBorrowings");
+    const c25 = metricValue(y25, "balanceSheet.currentBorrowings");
+    const ncQ = metricValue(qLatest, "balanceSheet.nonCurrentBorrowings");
+    const cQ = metricValue(qLatest, "balanceSheet.currentBorrowings");
+    const assets25 = metricValue(y25, "balanceSheet.totalAssets");
+    const equity25 = metricValue(y25, "balanceSheet.totalEquity");
+    const inventory25 = metricValue(y25, "balanceSheet.inventory");
+    const receivables25 = metricValue(y25, "balanceSheet.currentReceivables");
+    const payables25 = metricValue(y25, "balanceSheet.tradeAndOtherPayables");
+    const revenue25 = metricValue(y25, "incomeStatement.revenue");
+    const cogs25 = metricValue(y25, "incomeStatement.costOfSales");
+    const operatingProfit25 = metricValue(y25, "incomeStatement.operatingProfit");
+    const financeCost25 = metricValue(y25, "incomeStatement.financeCost");
+    const otherCapital25 = metricValue(y25, "balanceSheet.otherCapitalComponents");
+
+    const out = [];
+    if ([currentRatio, quickRatio, cashRatio].some((x) => Number.isFinite(x)) && (currentRatio < 100 || cashRatio < 10)) {
+      out.push({
+        signalId: "LIQUIDITY_STRESS",
+        severity: currentRatio < 50 || cashRatio < 5 ? "HIGH" : "MEDIUM",
+        basis: { currentRatio, quickRatio, cashRatio },
+        status: "codeDerived",
+        requiresHumanConfirmation: false,
+        speechIssueId: "WORKING_CAPITAL"
+      });
+    }
+    if (Number.isFinite(b25) && Number.isFinite(b24) && b25 > b24 * 1.5) {
+      out.push({
+        signalId: "BORROWING_SURGE",
+        severity: "HIGH",
+        basis: [
+          { period: "2023-12-31", value: b23 },
+          { period: "2024-12-31", value: b24 },
+          { period: "2025-12-31", value: b25 }
+        ],
+        unit: DEFAULT_UNIT,
+        status: "codeDerived",
+        requiresHumanConfirmation: false,
+        speechIssueId: "WORKING_CAPITAL"
+      });
+    }
+    if (Number.isFinite(cash24) && Number.isFinite(cash25) && cash25 < cash24 * 0.5) {
+      out.push({
+        signalId: "CASH_DROP",
+        severity: "HIGH",
+        basis: [{ period: "2024-12-31", value: cash24 }, { period: "2025-12-31", value: cash25 }],
+        change: cash25 - cash24,
+        unit: DEFAULT_UNIT,
+        status: "codeDerived",
+        requiresHumanConfirmation: false,
+        speechIssueId: "WORKING_CAPITAL"
+      });
+    }
+    const inventoryDays = Number.isFinite(inventory25) && Number.isFinite(cogs25) && cogs25 > 0 ? inventory25 / cogs25 * 365 : null;
+    const receivableDays = Number.isFinite(receivables25) && Number.isFinite(revenue25) && revenue25 > 0 ? receivables25 / revenue25 * 365 : null;
+    const payableDays = Number.isFinite(payables25) && Number.isFinite(cogs25) && cogs25 > 0 ? payables25 / cogs25 * 365 : null;
+    const ccc = [inventoryDays, receivableDays, payableDays].every(Number.isFinite) ? inventoryDays + receivableDays - payableDays : null;
+    if ((Number.isFinite(ccc) && ccc > 180) || (Number.isFinite(inventoryDays) && inventoryDays > 180)) {
+      out.push({
+        signalId: "WORKING_CAPITAL_CYCLE",
+        severity: (ccc > 240 || inventoryDays > 240) ? "HIGH" : "MEDIUM",
+        basis: { inventoryDays: Math.round(inventoryDays*10)/10, receivableDays: Math.round(receivableDays*10)/10, payableDays: Math.round(payableDays*10)/10, ccc: Math.round(ccc*10)/10 },
+        status: "codeDerived", requiresHumanConfirmation: false, speechIssueId: "WORKING_CAPITAL",
+        guardrail: "회전일수는 결산잔액 기준 추정치이며 거래처·재고연령표 확인 전 회수가능액으로 단정하지 않는다."
+      });
+    }
+    const borrowingDependency = Number.isFinite(b25) && Number.isFinite(assets25) && assets25 > 0 ? b25 / assets25 * 100 : null;
+    const interestCoverage = Number.isFinite(operatingProfit25) && Number.isFinite(financeCost25) && financeCost25 > 0 ? operatingProfit25 / financeCost25 : null;
+    if (Number.isFinite(borrowingDependency) && borrowingDependency >= 50 && Number.isFinite(interestCoverage) && interestCoverage < 2) {
+      out.push({
+        signalId: "LEVERAGE_PRESSURE", severity: interestCoverage < 1.5 ? "HIGH" : "MEDIUM",
+        basis: { borrowingDependency: Math.round(borrowingDependency*100)/100, interestCoverage: Math.round(interestCoverage*100)/100 },
+        status: "codeDerived", requiresHumanConfirmation: false, speechIssueId: "WORKING_CAPITAL",
+        guardrail: "차입의존도와 이자보상배율만으로 부실을 단정하지 않고 만기·담보·금리·자금용도를 확인한다."
+      });
+    }
+    if (Number.isFinite(otherCapital25) && Math.abs(otherCapital25) >= Math.max(500, Math.abs(equity25 || 0) * 0.3, Math.abs(assets25 || 0) * 0.01)) {
+      out.push({
+        signalId: "MATERIAL_OTHER_CAPITAL", severity: "MEDIUM",
+        basis: { otherCapitalComponents: otherCapital25, totalEquity: equity25, totalAssets: assets25 }, unit: DEFAULT_UNIT,
+        status: "codeDerived", requiresHumanConfirmation: true, speechIssueId: "CAPITAL_TRANSACTIONS",
+        guardrail: "세부 자본변동표 확인 전 자기주식·감자·배당·증자 등 특정 거래를 추정하지 않는다."
+      });
+    }
+    if (Number.isFinite(retained) && retained < 0) {
+      out.push({
+        signalId: "NEGATIVE_RETAINED_EARNINGS",
+        severity: "HIGH",
+        basis: [{ period: "2025-12-31", value: retained }],
+        unit: DEFAULT_UNIT,
+        status: "codeDerived",
+        requiresHumanConfirmation: false,
+        speechIssueId: "CAPITAL_POLICY",
+        speechVariant: "DEFICIT_REPAIR",
+        mustOverrideBaseSpeech: true,
+        guardrail: "과다 유보·배당재원·이익소각 재원으로 해석하거나 기존 CAPITAL_POLICY의 '이익잉여금이 많다' 화법을 그대로 사용하지 않는다."
+      });
+    }
+    if (Number.isFinite(c25) && Number.isFinite(cQ) && cQ > c25 && Number.isFinite(nc25) && ncQ !== null && ncQ < nc25) {
+      out.push({
+        signalId: "MATURITY_CONCENTRATION_WARNING",
+        severity: "HIGH",
+        basis: [
+          { period: "2025-12-31", nonCurrentBorrowings: nc25, currentBorrowings: c25 },
+          { period: qLatestKey, nonCurrentBorrowings: ncQ, currentBorrowings: cQ }
+        ],
+        unit: DEFAULT_UNIT,
+        status: "codeDerived",
+        requiresHumanConfirmation: true,
+        speechIssueId: "WORKING_CAPITAL",
+        guardrail: "만기 재분류·상환·차환·신규조달 중 어느 원인인지 확인 전 단정하지 않는다."
+      });
+    }
+    return out;
+  }
+
+  function buildConfirmationQueue(result) {
+    const y25 = result.financialStatements.separateAnnual["2025-12-31"] || {};
+    const qKeys = Object.keys(result.financialStatements.separateQuarterly || {}).sort().reverse();
+    const q = qKeys.length ? result.financialStatements.separateQuarterly[qKeys[0]] : {};
+    const totalAssets = metricValue(y25, "balanceSheet.totalAssets");
+    const longInvest = metricValue(y25, "balanceSheet.longTermInvestments");
+    const currentRatio = metricValue(result.financialRatios, "2025-12-31.currentRatio");
+    const cashRatio = metricValue(result.financialRatios, "2025-12-31.cashRatio");
+    const nonOpUse = metricValue(y25, "cashFlowAnalysis.nonOperatingFundingUse");
+    const revenue = metricValue(y25, "incomeStatement.revenue");
+    const financeCost = metricValue(y25, "incomeStatement.financeCost");
+    const otherCapital = metricValue(y25, "balanceSheet.otherCapitalComponents");
+    const nc25 = metricValue(y25, "balanceSheet.nonCurrentBorrowings");
+    const cq = metricValue(q, "balanceSheet.currentBorrowings");
+
+    const out = [];
+    if (Number.isFinite(longInvest) && Number.isFinite(totalAssets) && longInvest / totalAssets >= 0.3) {
+      out.push(question("HIGH", "장기투자자산의 세부 구성, 처분 가능성, 담보 제공 여부를 확인해 주세요.",
+        ["financialStatements.separateAnnual.2025-12-31.balanceSheet.longTermInvestments"],
+        "총자산의 30% 이상이나 보고서에 상세 구성이 없습니다.", "CAPITAL_POLICY"));
+    }
+    if (Number.isFinite(currentRatio) && currentRatio < 100) {
+      out.push(question("HIGH", "단기차입과 유동부채의 월별 만기, 차환계획, 금융기관 약정을 확인해 주세요.",
+        ["financialRatios.2025-12-31.currentRatio"], "유동비율이 100% 미만입니다.", "WORKING_CAPITAL"));
+    }
+    if (Number.isFinite(cashRatio) && cashRatio < 10) {
+      out.push(question("HIGH", "실제로 사용할 수 있는 최소 운영현금과 미사용 신용한도를 확인해 주세요.",
+        ["financialRatios.2025-12-31.cashRatio"], "현금비율이 10% 미만입니다.", "WORKING_CAPITAL"));
+    }
+    if (Number.isFinite(nonOpUse) && Number.isFinite(revenue) && Math.abs(nonOpUse) > revenue * 0.5) {
+      out.push(question("HIGH", "비영업부분 자금운용의 실제 사용처와 의사결정 자료를 확인해 주세요.",
+        ["financialStatements.separateAnnual.2025-12-31.cashFlowAnalysis.nonOperatingFundingUse"],
+        "비영업 자금운용 규모가 연 매출의 50%를 초과합니다.", "CAPITAL_POLICY"));
+    }
+    if (Number.isFinite(financeCost) && financeCost > 0) {
+      out.push(question("MEDIUM", "차입처별 금리·만기·담보·변동금리 조건과 연간 금융비용을 확인해 주세요.",
+        ["financialStatements.separateAnnual.2025-12-31.incomeStatement.financeCost"],
+        "금융비용과 이자보상능력을 함께 검토해야 합니다.", "WORKING_CAPITAL"));
+    }
+    if (Number.isFinite(otherCapital) && Math.abs(otherCapital) > 0) {
+      out.push(question("MEDIUM", "기타자본구성요소의 세부 내역과 과거 자본거래 자료를 확인해 주세요.",
+        ["financialStatements.separateAnnual.2025-12-31.balanceSheet.otherCapitalComponents"],
+        "자본정책과 주주거래 판단을 위해 세부 구성이 필요합니다.", "CAPITAL_TRANSACTIONS"));
+    }
+    if (Number.isFinite(nc25) && Number.isFinite(cq) && cq > nc25) {
+      out.push(question("HIGH", "결산 이후 차입금의 유동성 대체 또는 만기 재분류 여부와 실제 상환일정을 확인해 주세요.",
+        ["financialStatements.separateAnnual.2025-12-31.balanceSheet.nonCurrentBorrowings"],
+        "최근 분기에 단기 상환부담이 확대된 정황이 있습니다.", "WORKING_CAPITAL"));
+    }
+    return out;
+  }
+
+  function question(priority, text, fields, reason, speechIssueId) {
+    return { priority, question: text, relatedFields: fields, reason, speechIssueId };
+  }
+
+  function buildSpeechPlan(result) {
+    const detected = unique((result.derivedSignals || []).map((x) => x.speechIssueId).filter(Boolean));
+    const conditional = unique((result.confirmationQueue || []).map((x) => x.speechIssueId).filter(Boolean));
+    const active = detected;
+
+    const allIssueIds = [
+      "WORKING_CAPITAL", "LOAN_RECEIVABLE", "CAPITAL_POLICY", "CAPITAL_TRANSACTIONS",
+      "EXECUTIVE_RETIREMENT", "SUCCESSION", "KEY_PERSON", "EXPORT_CREDIT",
+      "PROPERTY_BI", "INSURANCE_OPTIMIZATION"
+    ];
+    const pending = allIssueIds.filter((id) => !active.includes(id));
+
+    const negativeRE = (result.derivedSignals || []).find((x) => x.signalId === "NEGATIVE_RETAINED_EARNINGS");
+    const overrides = [];
+    if (negativeRE) {
+      overrides.push({
+        issueId: "CAPITAL_POLICY",
+        variant: "DEFICIT_REPAIR",
+        reason: "이익잉여금이 음수",
+        prohibitedBasePhrases: [
+          "이익잉여금이 많다", "회사에 현금이 많이 쌓였다", "배당재원이 충분하다", "이익소각 재원이 충분하다"
+        ],
+        requiredMessage: "누적결손의 원인, 자본구조, 현금유출, 손실 회복계획과 주주정책을 구분해 설명한다.",
+        mustRegenerateSpeech: true
+      });
+    }
+
+    return {
+      masterVersion: "기업경영 종합리포트 실전상담화법 마스터교본 v3.0",
+      engineTarget: "corporateReport.js SpeechEngine",
+      rule: "추출모듈은 화법 원문을 복제하지 않고 이슈·근거·금지조건·질문을 전달한다. 최종 화법은 서버 또는 corporateReport.js의 승인된 v3.0 라이브러리에서 생성한다.",
+      activeIssueIds: active,
+      conditionalIssueIds: conditional.filter((id) => !active.includes(id)),
+      pendingIssueIds: pending,
+      prohibitedIssueIds: [
+        ...(result.derivedSignals || []).some((x) => x.signalId === "NEGATIVE_RETAINED_EARNINGS") ? ["CAPITAL_POLICY_BASE_WITH_POSITIVE_RETAINED_EARNINGS_ASSUMPTION"] : [],
+        ...!(result.shareholders || []).length ? ["SUCCESSION_CONFIRMED"] : [],
+        "LOAN_RECEIVABLE_CONFIRMED_WITHOUT_COUNTERPARTY_AND_CONTRACT",
+        "INSURANCE_RECOMMENDATION_WITHOUT_FUNDING_GAP"
+      ],
+      issueOverrides: overrides,
+      requiredSpeechDurations: ["speech30", "speech90", "speech3m", "speech5m"],
+      requiredNoteSections: [
+        "01_PAGE_PURPOSE", "02_KEY_DIAGNOSIS", "03_SPEECH", "04_QUESTIONS",
+        "05_RESPONSE_BRANCHES", "06_OBJECTIONS", "07_ADVANCED_GUIDE",
+        "08_CONTRACT_CONNECTION", "09_TRANSITION", "10_DOCUMENTS"
+      ],
+      responseBranchRequirement: {
+        count: 7,
+        types: ["즉시 동의", "부분 동의", "부정", "정보 부족", "전문가 위임", "비용 우려", "결정 유예"],
+        requiredForActiveIssues: active,
+        fallbackToUnrelatedIssueAllowed: false,
+        rule: "활성 이슈는 반드시 해당 이슈 전용 7분기를 사용한다. WORKING_CAPITAL 분기를 다른 이슈에 대체 적용하지 않는다."
+      },
+      generationTasks: active.map((issueId) => ({
+        issueId,
+        baseLibraryRequired: true,
+        durationsRequired: ["speech30", "speech90", "speech3m", "speech5m"],
+        issueSpecificBranchesRequired: 7,
+        objectionsRequired: true,
+        tenPartNotesRequired: true,
+        aiCustomizationRequired: issueId !== "WORKING_CAPITAL" || overrides.some((x) => x.issueId === issueId),
+        override: overrides.find((x) => x.issueId === issueId) || null
+      })),
+      objectionFramework: ["인정", "진짜 이유 확인", "범위 축소", "근거 제시", "다음 행동 합의"],
+      insuranceProcessRequirement: {
+        stages: 8,
+        order: [
+          "보험 가능성 발견", "필요재원 계산 동의", "기존 준비재원·증권 분석", "보험 외 대안 비교",
+          "보험설계 검토 동의", "계약구조·인수심사", "최종 결정", "계약 후 실행관리"
+        ],
+        gate: "위험사건→재무충격→필요재원→현재재원→부족재원→대안비교가 끝나기 전 상품·보험료·계약을 제시하지 않는다."
+      },
+      customizationRequirement: {
+        ceoStyles: ["신중보수형", "숫자중심형", "빠른결정형", "관계중심형", "회의방어형", "전문가위임형", "비용민감형"],
+        companyContext: ["제조", "서비스", "수출", "해외법인", "가족기업", "공동주주", "고성장", "승계", "부동산·시설", "기존보험 다수"],
+        meetingStages: ["1차 진단", "2차 정밀검토", "가족·주주 공동미팅", "보험설계 검토", "최종 의사결정", "사후관리"]
+      },
+      audioRequirement: {
+        targetMinutes: "18~25",
+        type: "리포트 낭독이 아닌 기업별 해설교육",
+        chaptersMustInclude: ["숫자의 경영적 의미", "CEO 질문", "답변 분기", "반론", "유료진단", "보험을 꺼낼 시점", "다음 행동"],
+        ttsRules: ["청취 단위 변환", "영문약어 첫 등장 풀이", "산식 자연어화", "질문 전후 휴지", "법률·세무 실무의미 우선", "리포트 수치와 완전 일치"]
+      },
+      hardFailRules: [
+        "원문 수치·연도·단위 불일치",
+        "미확인 사실 확정 또는 가지급금·위법·탈세 단정",
+        "필요재원과 기존재원 확인 전 보험 제안",
+        "세금절감·비용처리·수익률·인수·보험금 지급 보장",
+        "보험으로 해결할 수 없는 대여금·절차·신고 문제를 보험으로 연결",
+        "CEO 전달본에 컨설턴트 내부 화법·보험등급·클로징 노출",
+        "리포트·상담노트·음성강의 숫자와 결론 불일치",
+        "공포·비하·기존 전문가 폄하·즉시계약 압박",
+        "AI가 법률·세무·보험구조를 최종 확정"
+      ]
+    };
+  }
+
+  function validate(result) {
+    const errors = [];
+    const warnings = [];
+    const annual = result.financialStatements.separateAnnual || {};
+    const annualPeriods = Object.keys(annual).sort();
+    if (!annualPeriods.length) errors.push("개별 연간 재무제표 미검출");
+    const required = [
+      ["balanceSheet.totalAssets", "자산총계"], ["balanceSheet.totalLiabilities", "부채총계"],
+      ["balanceSheet.totalEquity", "자본총계"], ["incomeStatement.revenue", "매출액"],
+      ["incomeStatement.operatingProfit", "영업이익"], ["incomeStatement.netIncome", "당기순이익"]
+    ];
+    for (const [period, block] of Object.entries(annual)) {
+      const read = (path) => path.split(".").reduce((o, k) => o == null ? undefined : o[k], block)?.value;
+      for (const [path, label] of required) if (!Number.isFinite(read(path))) errors.push(`${period} ${label} 누락`);
+      const bs = block.balanceSheet || {};
+      const assets = bs.totalAssets?.value, liabilities = bs.totalLiabilities?.value, equity = bs.totalEquity?.value;
+      const tol = Number.isFinite(assets) ? Math.max(2, Math.abs(assets) * 0.001) : 2;
+      if ([assets, liabilities, equity].every(Number.isFinite) && Math.abs(assets - liabilities - equity) > tol) errors.push(`${period} 자산≠부채+자본`);
+      const current = bs.currentAssets?.value, nonCurrent = bs.nonCurrentAssets?.value;
+      if ([assets, current, nonCurrent].every(Number.isFinite) && Math.abs(assets-current-nonCurrent)>Math.max(2,Math.abs(assets)*0.002)) warnings.push(`${period} 유동+비유동자산 합계 차이`);
+      const is = block.incomeStatement || {};
+      if ([is.revenue?.value,is.costOfSales?.value,is.grossProfit?.value].every(Number.isFinite) && Math.abs(is.revenue.value-is.costOfSales.value-is.grossProfit.value)>2) warnings.push(`${period} 매출총이익 검산 차이`);
+      const cf = block.cashFlowAnalysis || {};
+      if ([cf.beginningCash?.value,cf.netChangeCash?.value,cf.endingCash?.value].every(Number.isFinite) && Math.abs(cf.beginningCash.value+cf.netChangeCash.value-cf.endingCash.value)>2) errors.push(`${period} 기초현금+순증≠기말현금`);
+    }
+    const q = result.financialStatements.separateQuarterly || {};
+    const latestAnnual = annualPeriods[annualPeriods.length-1] || null;
+    for (const period of Object.keys(q)) if (period === latestAnnual || /-12-31$/.test(period)) errors.push(`${period} 연말 결산값을 분기로 분류`);
+    const mixed=[];
+    for (const groupName of ["separateAnnual","separateQuarterly","consolidatedAnnual"]) {
+      const expectedScope=groupName==="consolidatedAnnual"?"consolidated":"separate";
+      const expectedPeriod=groupName==="separateQuarterly"?"quarterly":"annual";
+      walk(result.financialStatements[groupName],(x,path)=>{if(x&&typeof x==="object"&&"value" in x&&(x.scope!==expectedScope||x.periodType!==expectedPeriod))mixed.push(`${groupName}.${path}`);});
+    }
+    if(mixed.length) errors.push(`회계범위·기간 혼합 ${mixed.length}건`);
+    return {passed:errors.length===0,errors:unique(errors),warnings:unique(warnings),checkedAt:new Date().toISOString()};
+  }
+
+  function walk(value, fn, path) {
+    const p = path || "";
+    if (!value || typeof value !== "object") return;
+    fn(value, p);
+    for (const [k, v] of Object.entries(value)) walk(v, fn, p ? `${p}.${k}` : k);
+  }
+
+  function buildSourceConflicts(result, pages) {
+    const p3 = getPage(pages, 3).text;
+    const summaryRows = {};
+    for (const raw of p3.split("\n")) {
+      const line = normalizeLine(raw);
+      const m = line.match(/^(20\d{2}\.\d{2}\.\d{2})\s+\S+\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d,]+)/);
+      if (m) summaryRows[parseDate(m[1])] = {
+        totalAssets: numberOrNull(m[2]), totalLiabilities: numberOrNull(m[3]),
+        revenue: numberOrNull(m[4]), operatingProfit: numberOrNull(m[5])
+      };
+    }
+    const conflicts = [];
+    for (const [period, summary] of Object.entries(summaryRows)) {
+      const detail = result.financialStatements.separateAnnual[period];
+      if (!detail) continue;
+      for (const [fieldName, summaryValue] of Object.entries(summary)) {
+        const detailValue = fieldName === "totalAssets" || fieldName === "totalLiabilities"
+          ? detail.balanceSheet?.[fieldName]?.value
+          : detail.incomeStatement?.[fieldName]?.value;
+        if (Number.isFinite(summaryValue) && Number.isFinite(detailValue) && summaryValue !== detailValue) {
+          conflicts.push({
+            field: `${period}.${fieldName}`,
+            summaryValue,
+            detailValue,
+            selectedValue: detailValue,
+            reason: "상세 재무제표 우선",
+            summaryPage: 3,
+            detailPage: fieldName.includes("Assets") || fieldName.includes("Liabilities") ? 18 : 19
+          });
+        }
+      }
+    }
+    return conflicts;
+  }
+
+  function extractNiceBizline(input, options) {
+    const pages = normalizePages(input);
+    const detection = detectNiceBizline(pages);
+    if (!detection.detected && !(options && options.force)) {
+      const err = new Error("NICE BizLINE 상세보고서로 확인되지 않습니다.");
+      err.code = "UNSUPPORTED_DOCUMENT";
+      throw err;
+    }
+
+    const p1 = getPage(pages, 1).text;
+    const reportDate = parseDate((p1.match(/작성\s*일자\s*:\s*([0-9.]+)/) || [])[1]);
+    const financial = extractFinancialStatements(pages);
+    const ratio = extractRatios(pages);
+    const relations = extractShareholdersAndAffiliates(pages);
+
+    const result = {
+      schemaVersion: "1.0.0",
+      extractorVersion: VERSION,
+      generatedAt: new Date().toISOString(),
+      document: {
+        provider: detection.provider,
+        reportType: detection.reportType,
+        reportDate,
+        pageCount: pages.length,
+        language: "ko-KR",
+        textLayerDetected: true,
+        ocrRequired: false,
+        defaultCurrency: "KRW",
+        defaultFinancialUnit: DEFAULT_UNIT,
+        providerConfidence: detection.confidence,
+        matchedPhrases: detection.matchedPhrases,
+        statementStandard: financial.statementStandard
+      },
+      company: extractCompany(pages),
+      shareholders: relations.shareholders,
+      affiliates: relations.affiliates,
+      employment: extractEmployment(pages),
+      financialStatements: financial.financialStatements,
+      financialRatios: ratio.financialRatios,
+      credit: extractCredit(pages),
+      validation: {
+        sourcePriority: ["상세 재무제표(18~21p)", "재무비율표(4~10p)", "기업요약(3p)"],
+        nullPolicy: "원문 '-' 또는 미제공은 null/notProvided로 저장하며 0으로 대체하지 않음",
+        scopePolicy: "개별/연결 및 결산/분기 자료를 혼합하지 않음",
+        extractionWarnings: unique([...financial.warnings, ...ratio.warnings]),
+        sourceConflicts: []
+      },
+      confirmationQueue: [],
+      derivedSignals: [],
+      speechPlan: null,
+      quality: null
+    };
+
+    result.validation.sourceConflicts = buildSourceConflicts(result, pages);
+    result.derivedSignals = deriveSignals(result);
+    result.confirmationQueue = buildConfirmationQueue(result);
+    result.speechPlan = buildSpeechPlan(result);
+    result.quality = validate(result);
+    return result;
+  }
+
+  function unique(values) {
+    return [...new Set((values || []).filter(Boolean))];
+  }
+
+  function essentialSnapshot(result) {
+    const a = result.financialStatements.separateAnnual;
+    const q = result.financialStatements.separateQuarterly;
+    const c = result.financialStatements.consolidatedAnnual;
+    return {
+      companyName: result.company.name.value,
+      businessNumber: result.company.businessNumber.value,
+      reportDate: result.document.reportDate,
+      pageCount: result.document.pageCount,
+      assets2025: a["2025-12-31"]?.balanceSheet?.totalAssets?.value,
+      liabilities2025: a["2025-12-31"]?.balanceSheet?.totalLiabilities?.value,
+      equity2025: a["2025-12-31"]?.balanceSheet?.totalEquity?.value,
+      cash2025: a["2025-12-31"]?.balanceSheet?.cashAndCashEquivalents?.value,
+      borrowings2025: a["2025-12-31"]?.balanceSheet?.totalBorrowingsIncludingOther?.value,
+      revenue2025: a["2025-12-31"]?.incomeStatement?.revenue?.value,
+      operatingProfit2025: a["2025-12-31"]?.incomeStatement?.operatingProfit?.value,
+      netIncome2025: a["2025-12-31"]?.incomeStatement?.netIncome?.value,
+      operatingCash2025: a["2025-12-31"]?.cashFlowAnalysis?.operatingCashGenerated?.value,
+      quarterlyCurrentBorrowings: q["2026-03-31"]?.balanceSheet?.currentBorrowings?.value,
+      consolidatedRevenue2025: c["2025-12-31"]?.incomeStatement?.revenue?.value,
+      shareholderCount: result.shareholders.length,
+      affiliateCount: result.affiliates.length,
+      activeSpeechIssues: result.speechPlan.activeIssueIds,
+      speechLayers: result.speechPlan.requiredNoteSections.length,
+      insuranceStages: result.speechPlan.insuranceProcessRequirement.stages,
+      qualityPassed: result.quality.passed
+    };
+  }
+
+
+  /**
+   * 표준 추출 JSON을 현재 corporateReport.js가 사용하는 ConfirmedAnalysisModel 입력형으로 변환한다.
+   * 원문 추출값은 extractionResult에 그대로 보존하고, 화면/계산용 필드만 백만원 기준으로 평탄화한다.
+   */
+  function toCorporateReportCase(result, options) {
+    const opt = options || {};
+    if (!result || !result.financialStatements) throw new Error("표준 추출 결과가 없습니다.");
+    const metric = (obj, path) => {
+      let cur = obj;
+      for (const key of String(path || "").split(".")) cur = cur == null ? undefined : cur[key];
+      if (cur && typeof cur === "object" && Object.prototype.hasOwnProperty.call(cur, "value")) return cur.value;
+      return cur == null ? null : cur;
+    };
+    const annual = result.financialStatements.separateAnnual || {};
+    const q = result.financialStatements.separateQuarterly || {};
+    const annualKeys = Object.keys(annual).sort();
+    const latestAnnualKey = annualKeys[annualKeys.length - 1] || null;
+    const qKeys = Object.keys(q).sort();
+    const latestQuarterKey = qKeys[qKeys.length - 1] || null;
+    const companyName = metric(result, "company.name") || "미확인 기업";
+    const companyType = metric(result, "company.companyType");
+    const affiliates = Array.isArray(result.affiliates) ? result.affiliates : [];
+    const shareholders = Array.isArray(result.shareholders) ? result.shareholders : [];
+    const creditGrade = result.credit && result.credit.companyRatingCurrent ? result.credit.companyRatingCurrent.grade : null;
+
+    const mapYear = (year) => {
+      const key = Object.keys(annual).find((x) => x.startsWith(String(year))) || `${year}-12-31`;
+      const block = annual[key] || {};
+      const bs = block.balanceSheet || {};
+      const is = block.incomeStatement || {};
+      const cf = block.cashFlowAnalysis || {};
+      return {
+        assets: metric(bs, "totalAssets"),
+        liabilities: metric(bs, "totalLiabilities"),
+        equity: metric(bs, "totalEquity"),
+        revenue: metric(is, "revenue"),
+        cogs: metric(is, "costOfSales"),
+        operatingProfit: metric(is, "operatingProfit"),
+        netIncome: metric(is, "netIncome"),
+        cash: metric(bs, "cashAndCashEquivalents"),
+        currentAssets: metric(bs, "currentAssets"),
+        currentLiabilities: metric(bs, "currentLiabilities"),
+        receivables: metric(bs, "currentReceivables"),
+        inventory: metric(bs, "inventory"),
+        payables: metric(bs, "tradeAndOtherPayables"),
+        borrowings: metric(bs, "totalBorrowingsIncludingOther") ?? metric(bs, "totalBorrowings"),
+        currentBorrowings: metric(bs, "currentBorrowings") ?? metric(bs, "shortTermLoans"),
+        nonCurrentBorrowings: metric(bs, "nonCurrentBorrowings") ?? metric(bs, "longTermLoans"),
+        shortTermLoanReceivable: null,
+        retainedEarnings: metric(bs, "retainedEarnings"),
+        operatingCashFlow: metric(cf, "operatingCashGenerated"),
+        interestExpense: metric(is, "financeCost"),
+        capitalStock: metric(bs, "capitalStock")
+      };
+    };
+
+    const latestQuarter = latestQuarterKey ? q[latestQuarterKey] : null;
+    const latestQuarterly = latestQuarter ? {
+      periodEnd: latestQuarterKey,
+      assets: metric(latestQuarter, "balanceSheet.totalAssets"),
+      liabilities: metric(latestQuarter, "balanceSheet.totalLiabilities"),
+      equity: metric(latestQuarter, "balanceSheet.totalEquity"),
+      cash: metric(latestQuarter, "balanceSheet.cashAndCashEquivalents"),
+      currentAssets: metric(latestQuarter, "balanceSheet.currentAssets"),
+      currentLiabilities: metric(latestQuarter, "balanceSheet.currentLiabilities"),
+      currentBorrowings: metric(latestQuarter, "balanceSheet.currentBorrowings"),
+      nonCurrentBorrowings: metric(latestQuarter, "balanceSheet.nonCurrentBorrowings"),
+      revenue: metric(latestQuarter, "incomeStatement.revenue"),
+      operatingProfit: metric(latestQuarter, "incomeStatement.operatingProfit"),
+      netIncome: metric(latestQuarter, "incomeStatement.netIncome"),
+      financeCost: metric(latestQuarter, "incomeStatement.financeCost"),
+      sourcePage: 20,
+      confirmed: false
+    } : null;
+
+    const issueQuestion = (x, i) => ({
+      id: `extractConfirm_${i + 1}`,
+      label: x.question || x.text || "추가 확인이 필요합니다.",
+      type: "textarea",
+      reason: x.reason || "PDF만으로 확정할 수 없는 항목입니다.",
+      issueId: x.speechIssueId || null,
+      priority: x.priority || "MEDIUM",
+      relatedFields: x.relatedFields || []
+    });
+
+    const warnings = [];
+    const validationWarnings = result.validation && Array.isArray(result.validation.extractionWarnings)
+      ? result.validation.extractionWarnings : [];
+    if (validationWarnings.length) warnings.push(...validationWarnings.map((x) => `자동추출 확인: ${x}`));
+    if (result.quality && !result.quality.passed) warnings.push(...(result.quality.errors || []).map((x) => `추출검증 오류: ${x}`));
+    warnings.push("개별·연결·분기 재무제표를 구분했으며 리포트 계산은 개별 결산값을 기본으로 사용합니다.");
+    warnings.push("단기대여금·가지급금은 계정명과 거래상대방이 확인되지 않아 값으로 생성하지 않았습니다.");
+    warnings.push("보험은 위험사건·필요재원·현재재원·부족재원 확인 전에는 상품·보험료 단계로 진행하지 않습니다.");
+
+    return {
+      meta: {
+        caseId: opt.caseId || `CR-NICE-${Date.now().toString(36).toUpperCase()}`,
+        sourceType: "NICE BizLINE 텍스트형 PDF",
+        sourcePages: result.document.pageCount || 0,
+        sourceFileName: opt.sourceFileName || "",
+        unit: "백만원",
+        confirmed: false,
+        createdAt: new Date().toISOString().slice(0, 10),
+        extractorVersion: result.extractorVersion || VERSION,
+        extractionQualityPassed: !!(result.quality && result.quality.passed),
+        statementType: `${result.document.statementStandard || "회계기준 미확인"} 개별 결산(기본) / 개별 분기·연결 결산(참고)`
+      },
+      profile: {
+        companyName,
+        displayName: companyName,
+        businessNumber: metric(result, "company.businessNumber") || "",
+        representative: metric(result, "company.ceoName") || "미확인",
+        employees: metric(result, "company.employeeCount"),
+        established: metric(result, "company.establishedDate"),
+        companyType: Array.isArray(companyType) ? companyType.join("·") : (companyType || "미확인"),
+        industry: metric(result, "company.industryName") || "미확인",
+        industryCode: metric(result, "company.industryCode") || "",
+        products: metric(result, "company.mainProducts") || "미확인",
+        address: metric(result, "company.headOfficeAddress") || "",
+        website: metric(result, "company.website") || "",
+        mainBank: metric(result, "company.mainBank") || "",
+        groupName: metric(result, "company.groupName") || "",
+        creditGrade: creditGrade || "미확인",
+        foreignSubsidiaries: [],
+        relatedCompanies: affiliates.map((x) => x.name).filter(Boolean),
+        shareholders,
+        reportDate: result.document.reportDate || null,
+        fiscalDate: latestAnnualKey,
+        latestQuarterDate: latestQuarterKey
+      },
+      financials: {
+        "2023": mapYear(2023),
+        "2024": mapYear(2024),
+        "2025": mapYear(2025)
+      },
+      latestQuarterly,
+      capitalEvents: [],
+      answers: {
+        ceoStyle: "신중보수형",
+        meetingStage: "1차 진단",
+        successorStatus: "미확인",
+        existingInsurance: "미확인",
+        keyPersonMonthlyFixedCost: null,
+        keyPersonEmergencyMonths: 12,
+        immediateDebtRepayment: null,
+        availableEmergencyCash: null,
+        existingKeyPersonCoverage: null,
+        topCustomerConcentration: "미확인"
+      },
+      sourceMap: {
+        profile: "NICE BizLINE 3p·11p",
+        credit: "NICE BizLINE 15~17p",
+        financials: "NICE BizLINE 18~19p",
+        quarterly: "NICE BizLINE 20p",
+        consolidated: "NICE BizLINE 21p",
+        shareholders: "NICE BizLINE 11p"
+      },
+      warnings: unique(warnings),
+      speechPlan: result.speechPlan || null,
+      dynamicQuestions: (result.confirmationQueue || []).map(issueQuestion),
+      derivedSignals: result.derivedSignals || [],
+      confirmationQueue: result.confirmationQueue || [],
+      extractionResult: result
+    };
+  }
+
+  return {
+    VERSION,
+    detectNiceBizline,
+    extractNiceBizline,
+    normalizePages,
+    validate,
+    buildSpeechPlan,
+    essentialSnapshot,
+    toCorporateReportCase
+  };
+});
+
+
+/* ==========================================================================
+ * JARVIA CORPORATE REPORT APPLICATION v1.6.3
+ * ========================================================================== */
 /* AUTO-EXTRACTED DATA FROM APPROVED v3.0 PLAN & SPEECH MASTER */
 const ISSUE_SPEECH_LIBRARY = {"WORKING_CAPITAL":{"title":"성장·이익과 현금전환","signal":"매출과 이익이 증가했지만 영업현금흐름이 순이익을 따라가지 못하고 매출채권·재고가 함께 증가한 기업","guardrail":"채권·재고 세부자료가 없을 때 개선금액을 확정적으로 말하지 않는다.","speech30":"대표님, 실적이 좋아진 것은 분명한 강점입니다. 다만 이익이 늘어난 속도만큼 현금이 들어오지 않았다면 성장의 일부가 거래처와 재고에 머물러 있을 수 있습니다. 오늘은 성장을 문제 삼는 것이 아니라, 성장한 만큼 현금이 남는 구조인지 확인하겠습니다.","speech90":"대표님, 이번 실적은 매출과 이익 면에서 긍정적입니다. 그런데 영업현금흐름이 순이익보다 낮고 매출채권과 재고가 동시에 늘었다면, 회사가 돈을 못 번 것이 아니라 번 돈이 현금으로 전환되는 시간이 길어진 것입니다. 이 상태가 계속되면 매출이 늘수록 외부차입이나 대표님의 자금관여가 커질 수 있습니다. 거래처별 실제 회수일과 재고연령을 확인해 차입 전에 내부에서 확보할 수 있는 현금부터 계산하겠습니다. 최근 매출 증가와 별개로 자금집행이 빠듯한 시기가 있었습니까?","speech3m":"대표님, 실적 회복과 성장 자체는 분명히 긍정적입니다. 다만 손익계산서의 이익과 통장에 남는 현금은 같은 숫자가 아닙니다. 매출채권이 늘었다는 것은 매출은 인식됐지만 아직 받지 못한 돈이 늘었다는 뜻이고, 재고가 늘었다는 것은 판매 전 상품과 원재료에 현금이 더 오래 묶였다는 뜻입니다. 중요한 것은 증가액 전체가 아니라 매출 증가에 비해 회수기간과 재고기간이 얼마나 길어졌는지입니다. 거래처별 약정 결제일과 실제 회수일을 구분해 보고받고 계십니까? 장기재고도 정상재고와 별도로 표시합니까? 이 자료가 있으면 회수일수 5일·10일, 재고일수 3일·5일 개선 시 확보 가능한 현금의 범위를 계산할 수 있습니다. 그 금액은 보장되는 절감액이 아니라 실행 우선순위를 정하는 시나리오입니다. 상위 거래처와 장기재고부터 집중하고 13주 현금흐름표로 실제 개선 여부를 확인하겠습니다.","speech5m":"대표님, 이 페이지는 실적이 나쁘다는 이야기가 아닙니다. 오히려 매출과 이익이 크게 회복됐기 때문에 지금 관리기준을 만들 필요가 있다는 의미입니다. 손익계산서에는 매출이 발생한 시점에 수익이 잡히지만 회사가 실제로 쓸 수 있는 돈은 거래처가 대금을 지급하고 재고가 판매돼야 들어옵니다. 순이익이 50억원 발생했더라도 영업현금흐름이 30억원이라면 20억원의 차이가 어디에서 생겼는지 설명할 수 있어야 합니다. 대개 매출채권, 재고, 선급금, 매입채무의 변화가 원인입니다. 매출채권과 재고가 동시에 증가했다면 성장에 필요한 운전자금이 내부에 묶였을 가능성이 있습니다. 그렇다고 증가액 전체가 회수 가능한 현금이라는 뜻은 아닙니다. 매출채권에는 정상채권과 연체채권이 섞여 있고 재고에도 정상재고와 장기·저회전재고가 섞여 있습니다. 첫 질문은 “얼마나 늘었습니까?”가 아니라 “누구에게, 얼마 동안, 어떤 마진으로 묶여 있습니까?”여야 합니다. 순서는 세 단계입니다. 첫째 상위 거래처별 매출비중, 약정 결제일, 실제 회수일, 신용한도, 연체이력을 한 장에 놓습니다. 둘째 재고를 원재료·재공품·제품으로 나누고 90일·180일·1년 이상 재고를 구분합니다. 셋째 회수일수 5일과 10일, 재고일수 3일과 5일 시나리오를 계산하되 보수적·기준·도전 목표로 나눕니다. 대표님께 확인할 것은 두 가지입니다. 매출을 더 늘리는 과정에서 추가차입이 필요한 상황을 어느 수준까지 허용할 것인지, 거래처 관계를 해치지 않으면서 결제조건을 조정할 범위가 어디까지인지입니다. 대표님의 기준을 먼저 정해야 숫자가 정책이 됩니다. 다음 미팅에서는 채권연령표, 재고명세, 13주 자금수지와 주요 거래처 조건을 받아 8주 운전자금 개선안을 만들겠습니다. 거래처 부도나 국가위험이 크면 신용보험·무역보험을 검토하되 보험이 회수관리 자체를 대신하지는 않습니다. 오늘 결정할 것은 보험이 아니라 정밀진단 진행 여부, 담당자와 자료제출일입니다.","nextAction":"채권연령표·재고명세·13주 자금수지·상위 거래처 결제조건을 받아 8주 운전자금 정밀진단 일정과 담당자를 확정한다."},"LOAN_RECEIVABLE":{"title":"단기대여금·가지급금 가능성","signal":"재무상태표 또는 계정명세에 단기대여금·기타채권이 있고 상대방·목적·계약조건이 확인되지 않는 기업","guardrail":"상대방과 거래 실질 확인 전 대표자 가지급금·사적 사용·세무위반으로 단정하지 않는다.","speech30":"보고서에 대여금이 보이지만 누구에게 왜 지급됐는지를 모른 채 대표자 가지급금이라고 단정하면 안 됩니다. 정상적인 사업상 대여인지, 회수계획이 약한 채권인지부터 계약과 자금흐름으로 확인하겠습니다.","speech90":"대표님, 대여금은 금액보다 거래의 실질이 중요합니다. 관계회사 운영자금, 임직원 대여, 거래처 지원, 투자 전 단계 등 목적이 다를 수 있고 계약서·이자율·만기·담보·이사회 승인·실제 이자수취가 있다면 정상거래로 설명할 수 있습니다. 반대로 상환재원과 관리기록이 없다면 현금회수와 세무상 위험이 커질 수 있습니다. 상대방과 목적, 지급일, 계약조건, 잔액, 상환계획을 확인하고 회수·정상화·구조변경 중 어떤 방향이 적절한지 비교하겠습니다.","speech3m":"대표님, 이 계정은 이름만 보고 결론을 내리면 가장 위험한 항목 중 하나입니다. 같은 단기대여금이라도 해외 관계회사 운영자금, 거래처 지원금, 임직원 또는 주주 관련 자금일 수 있습니다. 먼저 상대방, 지급목적, 의사결정 절차, 계약서, 이자율, 만기, 담보, 실제 이자수취, 상환재원을 확인해야 합니다. 이 금액이 누구에게 어떤 목적으로 나갔는지 한 문장으로 설명할 수 있습니까? 담당 임원이 관리하는 상환일정표가 있습니까? 만기가 연장됐다면 이유와 승인기록이 있습니까? 자료가 갖춰져 있다면 정상거래를 더 명확하게 설명할 수 있고, 부족하다면 지금부터 거래를 재구성해 회수 또는 정상화 계획을 세워야 합니다. 이 문제는 보험이 아니라 계정원장·계약·상환계획을 정리하는 유료 정밀진단과 세무·법률 검토가 우선입니다.","speech5m":"대표님, 단기대여금이라는 계정이 보인다고 곧바로 대표자 가지급금이나 사적 사용으로 판단해서는 안 됩니다. 같은 계정에 서로 다른 거래가 묶여 있을 수 있기 때문입니다. 확인할 것은 돈을 받은 상대방, 지급목적, 회사가 언제 어떤 재원으로 회수할 계획인지입니다. 정상적인 사업상 거래라면 계약서, 이자율, 만기, 담보 또는 보증, 이사회 승인, 실제 이자수취, 상환스케줄이 있어야 합니다. 해외 관계회사 지원이라면 현지사업 목적과 자금사용, 이전가격·외환·관련자 거래 검토가 필요할 수 있습니다. 임직원이나 주주 관련 자금이면 지급경위와 업무관련성, 회수가능성, 승인절차를 더 세밀하게 봐야 합니다. 과거를 공격하는 것이 아니라 지금 설명 가능한 상태로 만드는 것이 목적입니다. 이 자금은 최초 지급 시 어떤 의사결정으로 나갔습니까? 계약서와 이자수취 내역이 있습니까? 만기가 지났다면 연장사유와 상환재원은 무엇입니까? 회사가 회수를 요구했을 때 상대방이 실제 상환할 수 있습니까? 대표님 답변과 자료가 일치해야 대안을 정할 수 있습니다. 대안은 보통 네 방향입니다. 상환재원이 충분하면 회수일정을 문서화합니다. 사업상 필요가 계속되면 이자·만기·담보·승인을 정상화합니다. 거래 실질이 출자나 투자에 가깝다면 세무·법률 검토 후 구조변경을 비교합니다. 회수가능성이 낮다면 손실·세무·책임 문제를 포함한 대응계획을 세웁니다. 이 페이지에서 보험상품을 연결하지 않는 것이 전문적인 판단입니다. 보험은 우연한 위험으로 생길 자금공백을 전가하는 수단이지 이미 발생한 대여금 회수문제를 해결하지 않습니다. 다음 단계는 계정별 원장, 자금이체, 계약·승인자료로 거래 타임라인을 복원하는 유료 정밀진단입니다.","nextAction":"계정별 원장·상대방·계약서·이자수취·만기·승인자료를 확보해 거래 타임라인과 회수·정상화 대안을 작성한다."},"CAPITAL_POLICY":{"title":"이익잉여금·배당·자본정책","signal":"미처분이익잉여금이 크거나 최근 배당·대규모 자본거래가 있고 투자·퇴직·승계계획이 분리되지 않은 기업","guardrail":"이익잉여금을 현금과 동일시하거나 “보험으로 빼낸다”는 표현을 사용하지 않는다.","speech30":"이익잉여금이 많다는 사실보다 회사가 앞으로 투자와 운영에 얼마를 남기고, 주주에게 언제 어떤 방식으로 이전할지가 중요합니다. 배당·보수·퇴직·승계·보험을 한꺼번에 섞지 않고 목적별로 나누겠습니다.","speech90":"대표님, 이익잉여금은 과거에 벌어 내부에 누적한 이익이지만 통장에 같은 금액의 현금이 있다는 뜻은 아닙니다. 이미 설비·재고·채권·관계회사 투자에 사용됐을 수 있습니다. “얼마를 빼낼까”보다 최소 운영현금, 향후 투자, 차입상환, 주주별 현금수요, 대표 퇴직, 승계재원을 3년 기준으로 나눠야 합니다. 그 뒤 배당·보수·퇴직·주식거래의 목적과 세금·현금·경영권 효과를 비교하고, 유고·퇴직·승계의 부족재원이 확인될 때만 보험을 별도로 검토하겠습니다.","speech3m":"대표님, 이익잉여금이 많으면 세금문제부터 이야기하지만 실제 경영에서는 자금배분 문제로 보는 것이 정확합니다. 성장투자와 운전자금으로 남겨야 할 돈, 금융기관 신뢰와 위기대응을 위한 돈, 주주가 필요로 하는 현금, 대표님의 퇴직과 승계에 필요한 자금을 구분해야 합니다. 향후 3년의 투자계획과 최소 운영현금, 차입상환과 배당계획, 주주별 현금 필요시점을 확인하겠습니다. 배당은 주주에게 현금을 이전하는 수단이고 보수는 경영기여의 대가이며 퇴직금은 규정과 실제 퇴직에 따른 지급입니다. 보험은 이익잉여금을 인출하는 방법이 아니라 유고·퇴직·승계 시점의 부족재원을 준비하는 수단입니다. 목적이 다른 수단을 세금 하나만 보고 섞지 않는 것이 핵심입니다.","speech5m":"대표님, 이익잉여금이 크다는 숫자만 보면 회사에 현금이 많이 쌓여 있다고 오해하기 쉽습니다. 하지만 이익잉여금은 누적된 회계상 이익이고 그 돈은 이미 설비·재고·매출채권·관계회사 투자에 사용됐을 수 있습니다. 가장 먼저 확인할 것은 “얼마를 인출할 수 있습니까?”가 아니라 “회사에 반드시 남겨야 할 현금이 얼마입니까?”입니다. 저희는 3년 자본정책표를 만들겠습니다. 최소 운영현금과 13주 자금수요, 설비·인력·해외법인·연구개발 투자, 차입상환과 금융기관 약정, 주주별 현금수요와 배당, 대표 퇴직과 승계재원을 한 표에 넣습니다. 이 표가 있어야 회사에 남길 돈과 주주에게 이전할 돈을 구분할 수 있습니다. 향후 3년 안에 예정된 대규모 투자와 차입상환은 무엇입니까? 주주별 현금 필요시점이 같습니까? 대표님의 퇴직과 후계구도는 언제부터 논의해야 합니까? 배당을 늘릴 경우 운전자금과 금융기관 평가에 미치는 영향을 검토했습니까? 이 답변이 배당정책과 승계정책의 기준입니다. 안정형은 회사에 충분한 현금을 남기고 배당을 보수적으로 운영합니다. 균형형은 일정한 배당정책과 대표 보수·퇴직·승계재원을 단계적으로 설계합니다. 적극형은 지분정리나 대규모 투자·승계를 전제로 자본거래까지 포함하지만 가치평가와 절차가 더 중요합니다. 각 안은 세금뿐 아니라 현금유출, 경영권, 법적 절차, 사후관리로 비교해야 합니다. 보험은 대표 유고나 퇴직, 승계 시점의 돈이 내부현금과 금융자산으로 부족하고 위험이 우연성과 장기성을 가질 때만 들어옵니다. 이익잉여금이 많다는 이유만으로 보험을 제안해서는 안 됩니다. 오늘 합의할 것은 3년 자본정책 시뮬레이션과 자료 담당자·제출일입니다.","nextAction":"3년 투자·운영·차입·배당·퇴직·승계 자금표를 작성하고 회사유보와 주주이전 기준을 합의한다."},"CAPITAL_TRANSACTIONS":{"title":"자기주식·감자·주식거래","signal":"최근 자기주식 취득·처분, 감자, 대규모 배당, 주식이동이 있었거나 향후 승계·공동주주 정리가 필요한 기업","guardrail":"과거 거래를 위법·탈세로 단정하거나 세금효과만으로 재거래를 제안하지 않는다.","speech30":"자기주식과 감자는 세금기법이 아니라 회사 현금, 주주지분, 경영권이 동시에 움직이는 자본거래입니다. 과거 거래의 목적과 절차를 먼저 복원하고 향후 주식이동 원칙을 정하겠습니다.","speech90":"대표님, 자기주식 취득·처분이나 감자는 거래 목적, 주식가치, 주주별 지분변화, 회사 현금유출입, 이사회·주총 절차가 모두 맞물립니다. 과거 거래를 좋다 나쁘다 평가하기 전에 거래 전후 주주구성과 현금흐름을 타임라인으로 복원해야 합니다. 그 결과를 바탕으로 승계, 공동주주 정리, 임직원 보상, 투자유치 때 어떤 원칙을 적용할지 3년 지분정책을 만들겠습니다. 보험은 향후 지분매입이나 승계 부족재원이 계산될 때만 검토합니다.","speech3m":"대표님, 자기주식과 감자는 한 번의 세무거래로 끝나는 것이 아니라 향후 지분구조를 바꾸는 사건입니다. 거래 목적, 누구의 주식을 어떤 가치로 취득했는지, 회사에서 얼마의 현금이 나갔는지, 거래 후 의결권과 지분율이 어떻게 변했는지 확인해야 합니다. 당시 거래의 가장 중요한 목적은 무엇이었습니까? 승계, 퇴직, 공동주주 정리, 주가관리 중 어느 목적이었습니까? 가치평가와 이사회·주총자료, 세무신고가 같은 논리를 갖고 있습니까? 과거 사실을 복원한 뒤 향후 3년 cap table과 주식이동 원칙을 만들면 같은 거래를 반복할 때 오류를 줄일 수 있습니다. 보험은 거래를 정당화하는 수단이 아니라 향후 지분매입이나 승계의 현금부족이 확인될 때만 사용합니다.","speech5m":"대표님, 자기주식이나 감자를 “세금을 줄이기 위한 방법”으로만 설명하면 위험합니다. 회사 현금, 주주별 현금수령, 지분율, 의결권, 기업가치, 이사회·주총 절차가 동시에 움직이기 때문입니다. 과거 거래의 적법성이나 세무효과를 여기서 단정하기보다 거래를 하나의 타임라인으로 복원하겠습니다. 거래 전 주주명부와 거래 후 주주명부를 비교하고, 당시 가치평가와 실제 거래가격, 회사에서 나간 현금과 주주가 받은 현금, 이사회·주총결의와 계약서·세무신고가 같은 목적을 설명하는지 확인합니다. 거래 후 회사 유동성과 경영권 변화도 봅니다. 이 다섯 가지가 맞아야 과거 거래를 설명하고 향후 정책을 세울 수 있습니다. 당시 거래의 목적은 퇴직재원, 승계, 공동주주 정리 중 무엇이었습니까? 거래가격은 어떤 평가로 정했습니까? 거래 후 운영현금 부담은 없었습니까? 향후 추가 주식이동 계획이 있습니까? 이 답변이 다음 설계의 출발점입니다. 향후에는 3년 지분정책을 만듭니다. 누가 경영하고 누가 주식을 보유할지, 비경영 주주에게 어떤 현금을 제공할지, 회사가 자기주식을 보유·처분할 원칙을 정합니다. 승계, 임직원 보상, 투자유치, 공동주주 정리마다 적합한 수단이 다르므로 하나의 기법을 반복하지 않습니다. 보험은 향후 주식매입이나 승계·유고 시 특정시점 현금이 필요하고 내부재원만으로 부족할 때 유동성 수단이 될 수 있습니다. 과거 거래의 세무위험은 보험으로 해결할 수 없습니다. 다음 단계는 거래 전후 cap table, 평가·결의·계약·세무자료를 복원하고 3년 지분정책을 설계하는 것입니다.","nextAction":"거래 전후 cap table·가치평가·결의·계약·세무자료를 복원하고 3년 지분정책 프로젝트 여부를 결정한다."},"EXECUTIVE_RETIREMENT":{"title":"임원퇴직금과 지급재원","signal":"대표·임원 근속이 길고 퇴직규정은 있으나 예상퇴직금, 실제 퇴직시점, 지급재원이 함께 계산되지 않은 기업","guardrail":"규정만으로 손금 인정이나 지급가능성을 보장하지 않고 보험을 퇴직금 자체와 동일시하지 않는다.","speech30":"퇴직금은 규정만 있다고 끝나는 문제가 아닙니다. 실제 퇴직시점에 지급할 금액과 회사가 운영에 지장 없이 마련할 수 있는 현금을 함께 계산해야 합니다.","speech90":"대표님, 임원퇴직금은 정관·규정·주총결의·등기임원 여부·보수·근속·실제 퇴직사실이 함께 맞아야 하고 지급시점에 회사가 감당할 현금도 있어야 합니다. 예상퇴직금을 범위로 계산하고 그 시점의 운영현금과 투자계획을 비교하겠습니다. 일시지급, 분할준비, 금융자산, 보험 등 적립수단은 비용과 세금뿐 아니라 확정성·유동성·해지위험·인수가능성으로 비교합니다.","speech3m":"대표님, 퇴직금은 세무규정만 확인해서는 실행계획이 되지 않습니다. 현재 정관과 임원퇴직금 규정이 실제 등기임원과 보수체계에 맞는지, 예상 퇴직시점과 그때의 근속·보수를 기준으로 금액 범위가 얼마인지, 회사가 지급 후에도 급여·매입·투자에 필요한 현금을 유지할 수 있는지 봐야 합니다. 퇴직시점과 퇴직 후 역할을 어느 정도 생각하고 계십니까? 퇴직금 전액을 한 번에 지급할 계획입니까? 회사가 지금부터 어느 정도를 별도 준비할 수 있습니까? 이 질문이 정리된 뒤 적립수단을 비교합니다. 보험은 장기적이고 우연한 위험과 함께 준비할 필요가 있을 때 한 수단이지만 비용처리나 수익을 보장하지 않습니다.","speech5m":"대표님, 임원퇴직금은 “규정이 있으니 나중에 지급하면 된다”는 접근으로는 부족합니다. 규정의 적정성, 실제 퇴직사실, 예상금액, 지급시점, 회사 현금능력이 함께 맞아야 실행 가능한 계획입니다. 정관과 임원퇴직금 규정, 주총결의, 등기임원 현황, 보수자료, 근속기간을 확인하고 예상 퇴직시점을 여러 구간으로 나눠 예상퇴직금 범위를 계산합니다. 금액은 한 숫자로 확정하기보다 보수·근속·규정변경 가능성을 반영해 최소·기준·상한 시나리오로 봅니다. 퇴직금이 20억원이라고 가정해도 지급시점에 회사가 보유한 20억원 전부를 사용할 수 있는 것은 아닙니다. 급여, 매입대금, 세금, 설비투자, 금융기관 약정에 필요한 운영필수현금을 제외해야 합니다. 내부현금, 정기적 적립, 금융자산, 분할지급 가능성, 보험의 현금가치와 보장을 각각 비교합니다. 보험을 활용한다면 계약자·피보험자·수익자, 보장목적, 해지환급, 건강심사, 회계·세무 처리를 확인해야 합니다. 퇴직은 경영에서 완전히 물러나는 시점입니까, 회장이나 고문으로 역할이 바뀌는 시점입니까? 후계자와 주주가 퇴직금 규모를 알고 동의하고 있습니까? 회사가 매년 부담 가능한 준비금액은 어느 정도입니까? 기존 법인보험 중 퇴직재원으로 의도된 계약이 있습니까? 오늘은 보험가입을 결정하는 자리가 아닙니다. 규정과 예상퇴직금, 회사 현금능력을 계산하고 부족재원이 확인되면 적립대안을 비교하는 데 동의받는 자리입니다. 다음 미팅에는 정관·규정·보수·근속·기존증권을 준비하고 세무·법률 검토가 필요한 항목은 기존 전문가와 확인하겠습니다.","nextAction":"정관·퇴직규정·임원현황·보수·근속·퇴직시점·기존증권을 받아 예상퇴직금과 지급가능 현금을 시뮬레이션한다."},"SUCCESSION":{"title":"경영승계·가족·주주 유동성","signal":"대표 연령·근속이 높거나 후계자·가족·공동주주가 있으나 경영권과 현금배분 원칙이 정리되지 않은 기업","guardrail":"상속세 절감이나 보험금만으로 승계를 해결한다고 표현하지 않는다.","speech30":"승계는 상속세만의 문제가 아닙니다. 누가 경영하고 누가 주식을 보유하며, 경영에 참여하지 않는 가족과 공동주주에게 어떤 현금을 제공할지를 함께 정해야 합니다.","speech90":"대표님, 회사가 성장할수록 비상장주식 가치는 커지지만 가족이 즉시 사용할 현금은 부족할 수 있습니다. 후계자에게 주식이 집중되면 비경영 가족과 형평성 문제가 생기고, 여러 명에게 분산되면 경영권 충돌이 생길 수 있습니다. 최신 주주명부, 후계자 의사, 가족별 역할과 현금수요, 기업가치 범위를 확인한 뒤 상속·증여·매매·자기주식·주주간계약을 A/B/C안으로 비교하고 확정된 부족재원에 대해서만 보험을 포함한 유동성 수단을 검토하겠습니다.","speech3m":"대표님, 승계를 준비한다고 당장 주식을 이전하자는 의미는 아닙니다. 지금 필요한 것은 의사결정 기준을 만드는 일입니다. 누가 다음 경영을 맡고, 경영하지 않는 가족은 어떤 권리와 현금을 받으며, 공동주주와의 관계를 어떻게 유지하고, 대표 유고 시 임시 의사결정을 누가 할지 정해야 합니다. 후계자를 어느 정도 생각하고 계십니까? 가족이 그 방향을 알고 있습니까? 회사 주식을 공평하게 나누는 것과 경영권을 안정적으로 유지하는 것 사이에서 어떤 원칙을 우선합니까? 최신 주주명부와 기업가치 범위를 확인한 뒤 후계자 중심, 공동경영, 외부매각 또는 전문경영체제를 비교할 수 있습니다. 보험은 상속세 해결책이 아니라 가족과 주주합의를 실행할 때 부족한 현금을 보완하는 수단입니다.","speech5m":"대표님, 승계는 먼 미래의 세금문제로 생각하기 쉽지만 실제로는 가족, 주주, 경영권, 현금의 문제입니다. 회사의 주식가치가 높아질수록 후계자에게 필요한 주식은 커지고, 경영에 참여하지 않는 가족에게 제공할 현금도 커질 수 있습니다. 준비가 없으면 주식은 많지만 현금이 부족해 지분이 분산되거나 급하게 매각해야 할 수 있습니다. 첫 단계는 사람과 역할입니다. 누가 후계자인지, 실제 경영할 의사와 역량이 있는지, 비경영 가족이 원하는 것은 주식인지 현금인지, 공동주주가 어떤 권리를 갖는지 확인합니다. 두 번째는 숫자입니다. 최신 주주명부와 기업가치 범위, 대표 개인재산, 예상 세금과 정산재원, 회사가 사용할 수 있는 현금을 구분합니다. 세 번째는 구조입니다. 상속·증여·매매·자기주식·주주간계약·지주구조 등을 세금·현금·경영권·절차·사후관리로 비교합니다. 대표님이 원하는 최종 모습은 후계자가 단독 경영하는 것입니까, 가족이 공동 소유하는 것입니까? 비경영 가족에게 주식보다 현금을 제공한다면 규모와 시점은 언제입니까? 공동주주가 대표 유고 시 주식을 매입하거나 매각할 원칙이 있습니까? 후계자가 정해지지 않았다면 비상경영체계부터 준비할 의사가 있습니까? 보험 필요성은 이 질문 뒤에 판단합니다. 대표 유고나 승계 시 지분매입, 세금, 가족정산, 운영자금을 합산하고 회사·개인 금융자산, 기존 보험, 차입가능액을 차감합니다. 부족분이 없으면 보험을 줄이거나 제외합니다. 부족분이 있더라도 보장기간과 보험료 부담, 계약자·피보험자·수익자, 주주합의, 세무·법률 검토를 거쳐야 합니다. 다음 단계는 가족과 주주의 결정을 요구하는 것이 아니라 1차 승계진단입니다. 주주명부, 가족관계, 후계자 의사, 기존 보험, 개인보증을 받아 세 가지 시나리오를 만들고 공동설명에서 판단기준을 합의하겠습니다.","nextAction":"최신 주주명부·가족·후계자·기업가치·기존보험을 확보해 승계 A/B/C안과 부족재원을 산출하고 공동설명 일정을 잡는다."},"KEY_PERSON":{"title":"대표자·핵심인 유고와 비상재원","signal":"대표 의존도가 높고 주요 고객·금융·해외법인·생산·지분결정이 특정 인물에게 집중된 기업","guardrail":"사망 공포를 조장하거나 회사현금과 기존보험을 확인하지 않고 보장금액을 제시하지 않는다.","speech30":"보험을 먼저 말씀드리려는 것이 아닙니다. 대표님이 일정 기간 경영에 참여하지 못할 때 어떤 업무가 멈추고, 회사를 유지하는 데 얼마의 현금이 필요한지를 계산해 보자는 것입니다.","speech90":"대표님, 유고는 사망만이 아니라 중대한 질병이나 장기부재도 포함합니다. 필요한 돈은 단순 대출상환액이 아니라 6~12개월 운영자금, 거래처와 금융기관 대응, 핵심인 유지, 해외법인 자금, 지분정리 비용까지 포함될 수 있습니다. 대체경영체계와 개인보증, 기존 보험, 실제 사용 가능한 현금을 확인하고 부족재원이 있으면 내부현금·신용한도·보험을 비교하겠습니다. 보험은 예고 없이 필요한 현금을 확보하는 역할로만 제시합니다.","speech3m":"대표님, 대표 유고 문제를 보험상품으로 시작하면 방어감이 생길 수 있습니다. 먼저 대표님이 한 달 이상 의사결정에 참여하지 못한다고 가정했을 때 멈추는 업무를 확인하겠습니다. 주요 거래처와 금융기관은 누가 대응합니까? 해외법인 자금집행과 계약서명은 누가 합니까? 핵심인력이 이탈하지 않도록 유지할 예산은 얼마입니까? 개인보증이나 즉시 대응해야 할 채무가 있습니까? 이 업무와 금액을 6개월·12개월로 계산하고 회사가 실제 사용할 수 있는 현금, 금융자산, 신용한도, 기존 보험을 차감합니다. 부족분이 없으면 보험을 확대할 이유가 없습니다. 부족분이 있으면 대체경영체계와 함께 보험의 역할을 검토합니다. 오늘 목표는 가입이 아니라 필요재원 계산과 기존증권 분석 동의입니다.","speech5m":"대표님, 이 페이지에서 가장 중요한 것은 보험가입 여부가 아닙니다. 대표님이 일정 기간 경영에 참여하지 못할 경우 회사가 어떤 순서로 흔들리고 그 충격을 막는 데 얼마가 필요한지를 확인하는 것입니다. 유고는 사망뿐 아니라 중대한 질병, 장기입원, 해외체류 중 사고처럼 의사결정이 중단되는 상황도 포함합니다. 먼저 업무공백을 봅니다. 주요 거래처와 금융기관이 대표님 개인의 신뢰에 의존합니까? 해외법인 자금과 중요한 계약을 대표님만 승인합니까? 생산, 품질, 영업, 인사 중 대표님이 빠지면 멈추는 의사결정은 무엇입니까? 대체할 임원과 권한위임 문서가 있습니까? 보험금이 있어도 대체경영체계가 없으면 회사가 자동으로 운영되는 것은 아닙니다. 필요재원은 6개월 또는 12개월의 급여·임차·이자·필수 매입 등 고정성 운영자금, 금융기관과 개인보증 대응금, 핵심인력 유지비, 긴급 전문경영인·자문비, 거래처 이탈 방지비, 주주간 지분매입 또는 가족정산 자금을 합산합니다. 그다음 회사의 가용현금과 금융자산, 실제 사용할 수 있는 신용한도, 기존 보험금, 주주 개인재원을 차감합니다. 운영에 이미 필요한 현금은 비상재원으로 중복 계산하지 않습니다. 대표님이 한 달 자리를 비웠을 때 가장 먼저 연락이 올 곳은 거래처입니까, 은행입니까, 해외법인입니까? 개인보증과 담보는 어느 정도입니까? 기존 법인·개인보험은 어떤 목적과 수익자로 구성돼 있습니까? 대체 임원에게 실제 권한이 있습니까? 이 네 가지가 확인돼야 보장 필요성과 금액을 판단합니다. 보험은 예고 없이 발생하는 시점에 약정된 현금을 확보할 수 있지만 모든 문제를 해결하지는 못합니다. 내부현금이 충분하거나 대체경영체계가 안정돼 있으면 보험규모를 줄입니다. 부족재원이 있더라도 보험료 부담, 건강심사, 보장기간, 계약자·피보험자·수익자 구조를 검토해야 합니다. 오늘은 가입이 아니라 대표 역할표, 개인보증, 기존증권, 월고정비를 받아 부족재원을 계산하는 데 동의해 주시면 됩니다.","nextAction":"대표 역할표·권한위임·개인보증·월고정비·기존증권을 받아 6·12개월 필요재원과 부족재원을 계산한다."},"EXPORT_CREDIT":{"title":"수출채권·거래처 신용위험","signal":"상위 거래처 집중도가 높거나 수출채권·장기미수·국가·환율위험이 있는 기업","guardrail":"수출매출이 있다는 이유만으로 신용보험을 제안하지 않고 거래처별 손실감내능력을 먼저 계산한다.","speech30":"매출이 늘어도 거래처 한 곳의 부도나 국가위험이 회사 현금흐름을 멈출 수 있다면 회수정책과 위험전가를 함께 봐야 합니다. 보험은 채권관리를 대신하지 않고 감당하기 어려운 손실만 넘기는 수단입니다.","speech90":"대표님, 수출채권 위험은 매출액보다 상위 거래처 집중도와 최대 미수잔액, 결제조건, 국가·통화, 연체경험이 중요합니다. 거래처별 한도와 실제 회수일을 관리하고 LC·담보·선수금·신용보험을 비교해야 합니다. 회사가 스스로 감당할 수 있는 손실은 내부관리로 두고, 한 번의 부도로 운영자금이 흔들리는 부분만 보험으로 전가하는 것이 합리적입니다. 기존 무역보험의 한도·면책·자기부담도 확인하겠습니다.","speech3m":"대표님, 신용보험은 매출을 보장하는 상품이 아니라 특정 거래처의 부도나 지급불능으로 생기는 손실 일부를 전가하는 장치입니다. 먼저 상위 거래처별 매출비중, 평균·최대 미수잔액, 약정과 실제 회수일, 연체와 분쟁, 국가·통화위험을 봐야 합니다. 거래처별 신용한도를 누가 승인합니까? 한 거래처의 최대 미수금이 손실돼도 회사가 운영될 수 있습니까? 기존 무역보험의 한도와 면책을 실제 거래조건과 비교했습니까? 이 자료를 바탕으로 회수정책, 담보·선수금, LC, 신용보험을 순서대로 비교하고 보험료와 자기부담까지 포함한 손익을 계산하겠습니다.","speech5m":"대표님, 수출채권은 매출이 성장할수록 커지기 때문에 “매출이 많으니 좋은 일”과 “한 번의 부도가 회사현금을 멈출 수 있다”는 두 사실을 동시에 봐야 합니다. 상위 거래처 몇 곳에 매출이 집중되거나 결제기간이 길고 국가·통화위험이 있으면 최대 손실액을 관리해야 합니다. 상위 거래처의 매출비중, 평균 미수잔액, 최대 미수잔액, 약정 결제일, 실제 회수일, 연체경험, 분쟁, 국가·통화, 담보와 LC 사용 여부를 한 장으로 정리합니다. 그다음 회사가 감당 가능한 손실한도를 정합니다. 한 거래처 부도로 10억원 손실이 나도 운영에 문제가 없다면 전액 보험이 필요하지 않을 수 있습니다. 반대로 5억원만 발생해도 급여와 매입대금이 흔들리면 위험전가 필요성이 높습니다. 거래처별 신용한도는 누가 어떤 기준으로 승인합니까? 연체가 시작됐을 때 출하중단과 회수조치를 언제 실행합니까? 상위 거래처 한 곳이 지급을 멈추면 몇 개월 버틸 수 있습니까? 기존 무역보험의 한도와 면책을 실제 거래와 맞춰 봤습니까? 대안은 내부 신용한도와 연체관리, 선수금·LC·담보·보증, 거래처·국가 분산, 그리고 남는 대규모 손실의 보험전가 순서입니다. 보험료, 자기부담, 면책, 보상절차, 신용한도 축소 가능성까지 봐야 합니다. 오늘 결론은 가입이 아니라 상위 거래처별 채권현황과 기존 보험으로 보장공백과 적정한도를 계산하는 것입니다. 회수관리 개선만으로 충분하면 보험을 확대하지 않고 감당하기 어려운 손실이 확인될 때만 제안하겠습니다.","nextAction":"상위 거래처별 매출·미수·회수일·연체·국가·담보·기존 무역보험을 받아 최대손실과 보장공백을 산출한다."},"PROPERTY_BI":{"title":"재산·휴업·해외사업장 위험","signal":"제조설비·창고·해외생산법인·핵심공급망이 있고 사고 시 복구기간과 영업손실이 큰 기업","guardrail":"장부가만으로 가입금액을 정하거나 국내증권만 보고 해외보장 중복·공백을 단정하지 않는다.","speech30":"재산위험은 건물과 기계를 다시 사는 비용만의 문제가 아닙니다. 공장이 멈춘 기간의 매출총이익과 고정비를 회사가 얼마나 버틸 수 있는지가 핵심입니다.","speech90":"대표님, 장부가나 과거 취득가로 가입된 재산보험은 실제 재조달가액과 차이가 날 수 있고 휴업손실 보상기간이 복구기간보다 짧으면 공장이 복구되기 전에 현금이 먼저 고갈될 수 있습니다. 국내 본사와 해외법인의 자산, 적하, 배상, 공급망, 휴업을 한 지도에 놓고 재조달가액·최대예상손실·대체생산·복구기간을 확인하겠습니다. 기존증권의 한도·면책·자기부담·현지조건을 비교해 공백과 중복만 조정하겠습니다.","speech3m":"대표님, 재산보험은 가입금액이 있다는 사실보다 사고 후 실제 복구와 영업재개가 가능한지가 중요합니다. 건물·기계·재고의 재조달가액, 최대예상손실, 대체생산 가능성, 핵심설비 납기, 공급망 중단, 휴업기간의 매출총이익과 고정비를 확인해야 합니다. 핵심설비가 손상되면 정상가동까지 몇 개월이 걸립니까? 해외법인이나 특정 공급처가 멈추면 대체할 곳이 있습니까? 현지증권의 보장범위와 본사보험이 연결돼 있습니까? 자산명세와 증권으로 보장공백·중복·휴업기간을 분석하고 재보험·현지법상 제한은 전문가와 확인하겠습니다.","speech5m":"대표님, 화재나 자연재해가 발생하면 눈에 보이는 손실은 건물과 기계이지만 실제 회사가 무너지는 이유는 복구기간의 현금흐름일 수 있습니다. 설비를 다시 구입하는 데 8개월이 걸리고 그동안 급여·임차·이자·고정비가 계속 나간다면 재산복구비만 받아서는 충분하지 않습니다. 자산을 장부가가 아니라 실제 재조달가액과 복구기간으로 보고, 한 번의 사고에서 실제로 손실될 수 있는 최대범위와 방재수준을 확인합니다. 공장이 멈춘 기간의 매출총이익과 고정비, 고객이탈, 긴급외주와 운송비를 계산하고 국내 본사와 해외법인, 적하, 배상, 공급망, 휴업보험을 한 지도에 놓아 중복과 공백을 찾습니다. 가장 긴 납기의 핵심설비는 무엇이며 교체에 몇 개월이 걸립니까? 국내 또는 해외에 대체생산이 가능합니까? 주요 고객은 납품이 몇 주 지연되면 거래를 중단할 수 있습니까? 현지법인 증권의 면책과 보상한도를 본사에서 통합관리합니까? 이 답이 휴업보상기간과 적정한도를 결정합니다. 보험은 방재와 비상계획을 대신하지 않습니다. 예방투자, 재고분산, 대체생산계약, 데이터백업, 비상구매처를 정비하고 남는 대규모 손실을 보험으로 전가합니다. 가입금액과 보상기간은 실제 복구시나리오와 손실감내능력에 맞춥니다. 해외현지법, 보험조건, 재보험 가능성도 확인합니다. 다음 미팅에는 자산명세, 생산흐름, 핵심설비 납기, 국내외 증권, 사고이력, 방재점검표를 준비해 주시면 됩니다. 최대예상손실과 휴업기간을 산출하고 유지·조정·추가할 보장만 제시하겠습니다.","nextAction":"자산명세·핵심설비 복구기간·생산대체·국내외 증권·사고이력을 받아 재산·휴업 보장공백 지도를 만든다."},"INSURANCE_OPTIMIZATION":{"title":"기존 법인·대표 보험증권 최적화","signal":"법인·대표 개인보험이 여러 건 있으나 가입목적, 수익자, 보장기간, 현금가치, 필요재원과의 연결이 불명확한 기업","guardrail":"기존 계약의 해지손실·신규심사·면책을 확인하지 않고 교체·해지를 권하지 않는다.","speech30":"새로운 가입보다 먼저 현재 보험이 왜 가입됐고 지금의 경영목적과 맞는지 확인하겠습니다. 보험이 많다는 사실과 필요한 때 사용할 수 있다는 사실은 다를 수 있습니다.","speech90":"대표님, 기존 보험은 보장금액 합계만 보면 충분해 보여도 계약자·피보험자·수익자, 보장기간, 현금가치, 해지손실, 실제 필요재원과 맞지 않으면 유고·퇴직·승계 때 원하는 역할을 하지 못할 수 있습니다. 모든 법인·개인 증권을 목적별로 분류하고 유지·감액·전환·추가가입을 비교하되 신규심사와 해지손실을 먼저 확인하겠습니다. 목적과 부족재원이 맞으면 유지하고 맞지 않는 부분만 조정하는 것이 원칙입니다.","speech3m":"대표님, 보험이 많다고 보장이 충분한 것도 아니고 보험료가 많다고 잘못된 것도 아닙니다. 중요한 것은 각 계약이 어떤 경영목적을 위해 가입됐고 지금도 그 목적과 맞는지입니다. 대표 유고, 퇴직재원, 승계유동성, 대출보장, 직원복지, 재산·배상 등으로 분류하겠습니다. 계약자·피보험자·수익자, 보장기간, 보험금 지급조건, 현금가치, 납입기간, 해지손실, 신규심사 가능성을 확인합니다. 각 계약을 누가 왜 가입했는지 설명할 수 있습니까? 유고 시 보험금이 회사와 가족 중 누구에게 가야 하는지 합의돼 있습니까? 목적이 맞는 계약은 유지하고 중복이나 목적불일치가 확인될 때만 조정·추가를 비교하겠습니다.","speech5m":"대표님, 기존 보험증권 분석의 목적은 새로운 계약을 만들기 위한 것이 아닙니다. 현재 계약이 회사의 경영위험과 필요한 자금시점에 맞는지 확인하는 것입니다. 보험금 총액이 커도 대표 유고 시 가족에게만 지급되거나 회사 운영자금이 필요한 기간보다 보장기간이 짧거나 승계재원이 필요한 시점에 현금가치가 부족하면 목적을 달성하기 어렵습니다. 법인과 대표 개인의 모든 증권을 대표 유고, 핵심인, 퇴직, 승계, 대출·보증, 직원복지, 재산·휴업·배상으로 분류합니다. 각 계약의 계약자·피보험자·수익자, 보장금액, 보장기간, 납입기간, 현금가치, 해지환급, 대출, 특약, 면책을 정리하고 앞서 계산한 필요재원과 비교합니다. 각 계약을 가입할 당시 가장 중요한 목적은 무엇이었습니까? 지금도 그 목적이 유효합니까? 유고 시 보험금이 회사운영, 가족생활, 주식매입 중 어디에 사용돼야 합니까? 퇴직이나 승계시점에 현금가치를 활용할 계획이라면 실제 시점과 금액을 확인했습니까? 보험료가 회사 현금흐름에 부담입니까? 목적과 필요재원이 맞는 계약은 유지합니다. 금액이 과다하거나 기간이 맞지 않으면 감액과 구조조정을 검토합니다. 해지손실과 신규심사 위험이 큰 계약은 섣불리 전환하지 않습니다. 실제 부족재원이 남고 인수가능성과 보험료 부담이 적절할 때만 추가가입을 제안합니다. 기존 설계사와의 관계도 존중하고 필요하면 공동검토합니다. 오늘은 해지나 가입을 결정하지 않습니다. 증권 전체를 제출받아 목적·필요재원·수익자·기간·손실을 비교하는 데 동의받는 단계입니다. 변경이 필요해도 기존계약을 먼저 유지한 상태에서 신규심사와 대체가능성을 확인하겠습니다.","nextAction":"법인·개인 증권 전체를 표준표로 정리하고 목적·필요재원·수익자·기간·해지손실·신규심사를 비교한다."}};
 const CEO_RESPONSE_BRANCHES = {"WORKING_CAPITAL":[{"type":"즉시 동의","expression":"“맞습니다. 매출은 늘었는데 현금이 빠듯합니다.”","response":"“체감과 숫자가 같은 방향입니다. 원인을 채권·재고·매입조건으로 나누겠습니다.”","followUp":"“최근 3개월 중 가장 자금이 빠듯했던 주와 원인은 무엇이었습니까?”","agreement":"채권연령표·재고연령표·13주 자금계획 제출일 확정"},{"type":"부분 동의","expression":"“채권은 괜찮은데 재고가 조금 많습니다.”","response":"“그렇다면 문제를 넓히지 않고 재고의 회전과 장기재고부터 보겠습니다.”","followUp":"“정상·저회전·장기재고를 구분하는 기준과 담당자는 누구입니까?”","agreement":"상위 20개 장기재고와 5일 개선 시나리오 작성"},{"type":"부정","expression":"“현금은 충분하고 문제없습니다.”","response":"“현재 유동성이 안정적이라는 점은 강점입니다. 점검 목적은 위기판정이 아니라 성장 여력을 확인하는 것입니다.”","followUp":"“매출이 20% 더 늘어도 현재 결제조건으로 추가 운전자금을 내부에서 감당할 수 있습니까?”","agreement":"성장률별 필요운전자금 민감도표 검토 동의"},{"type":"정보 부족","expression":"“정확한 회수일이나 재고일수는 모릅니다.”","response":"“대표님이 모르는 것이 문제가 아니라 관리정보가 한 장으로 올라오지 않는 것이 과제입니다.”","followUp":"“재무팀과 영업팀 중 거래처별 실제 회수일을 바로 뽑을 수 있는 곳은 어디입니까?”","agreement":"자료 담당자와 추출기한 지정"},{"type":"전문가 위임","expression":"“회계사와 재무팀이 관리합니다.”","response":"“기존 전문가의 결산·세무 역할은 존중합니다. 이번 작업은 경영 의사결정용 현금 KPI를 만드는 일입니다.”","followUp":"“월별 회의에서 DSO·재고일수·13주 현금전망을 보고받고 계십니까?”","agreement":"기존 전문가 포함 30분 데이터 미팅 제안"},{"type":"비용 우려","expression":"“진단까지 비용을 들일 필요가 있습니까?”","response":"“전체 프로젝트를 결정하지 말고 회수일 10일·재고일 5일 개선 가능금액을 먼저 산출하겠습니다.”","followUp":"“그 잠재금액이 진단비보다 충분히 크면 다음 단계로 가는 방식은 어떻습니까?”","agreement":"1차 정밀진단 범위·산출물·비용 합의"},{"type":"결정 유예","expression":"“연말 결산 후 보겠습니다.”","response":"“결산까지 미루는 것도 선택입니다. 다만 그 사이 자료가 누적되므로 확인일을 정해 두는 것이 좋습니다.”","followUp":"“결산 전에는 자료만 준비하고, 결산 직후 1시간 검토일을 잡아도 괜찮겠습니까?”","agreement":"재검토일과 선행자료 목록 확정"}],"LOAN_RECEIVABLE":[{"type":"즉시 동의","expression":"“회수계획을 정리해야 합니다.”","response":"“좋습니다. 회수·사업성 대여·자본거래 가능성을 분리해 가장 실행 가능한 안부터 보겠습니다.”","followUp":"“상대방과 최초 목적, 만기, 이자, 현재 회수 가능액은 무엇입니까?”","agreement":"원장·계약·결의·이자·상환자료 확보"},{"type":"부분 동의","expression":"“일부는 받을 수 있지만 전액은 어렵습니다.”","response":"“그렇다면 회수 가능액과 장기정상화 대상액을 나누는 것이 첫 단계입니다.”","followUp":"“현금회수 외에 상계·분할상환·담보보강이 가능한 항목이 있습니까?”","agreement":"금액별 A/B/C 정상화안 작성"},{"type":"부정","expression":"“관계회사 거래라 문제없습니다.”","response":"“관계회사 거래 자체를 문제로 보는 것이 아닙니다. 독립된 사업거래로 설명 가능한 문서와 조건이 있는지가 핵심입니다.”","followUp":"“제3자 거래와 같은 계약·이자·만기·승인 절차가 갖춰져 있습니까?”","agreement":"증빙 적정성 체크리스트 검토"},{"type":"정보 부족","expression":"“누가 언제 가져갔는지 정확하지 않습니다.”","response":"“이 경우 결론보다 원장 복원이 우선입니다. 사적 사용이라고 단정하지 않겠습니다.”","followUp":"“세부원장·통장·전표를 연결할 담당자를 지정할 수 있습니까?”","agreement":"거래 타임라인 복원 일정 확정"},{"type":"전문가 위임","expression":"“세무사가 처리하고 있습니다.”","response":"“세무처리는 전문가가 잘하고 있을 것입니다. 경영 측면에서는 회수와 현금계획이 필요합니다.”","followUp":"“세무상 처리 외에 실제 상환일정과 책임자가 정해져 있습니까?”","agreement":"세무사 동석 정상화 미팅 제안"},{"type":"비용 우려","expression":"“금액도 크지 않은데 컨설팅까지 필요합니까?”","response":"“금액·기간·증빙을 확인해 단순정리로 끝날 사안이면 프로젝트를 확대하지 않겠습니다.”","followUp":"“1차 서류진단으로 범위를 판단하는 데 동의하십니까?”","agreement":"단계형 진단 계약 또는 무료 제외 판단"},{"type":"결정 유예","expression":"“나중에 관계회사 정리할 때 함께 보겠습니다.”","response":"“그 시점까지 이자·인정이자·증빙공백이 누적될 수 있으므로 최소한 현 상태를 확정해 두겠습니다.”","followUp":"“이번 달에는 원장과 계약 유무만 확인하고 정리시점은 별도로 정할까요?”","agreement":"현황확정일과 재검토일 지정"}],"SUCCESSION":[{"type":"즉시 동의","expression":"“이제 준비해야 합니다.”","response":"“주식이전부터가 아니라 사람·경영권·현금의 원칙부터 정하겠습니다.”","followUp":"“후계자, 비경영 가족, 공동주주 중 가장 먼저 합의해야 할 사람은 누구입니까?”","agreement":"1차 인터뷰와 주주명부 제출"},{"type":"부분 동의","expression":"“아들은 생각하지만 아직 확정은 아닙니다.”","response":"“확정하지 않아도 됩니다. 후계자 A안과 미확정 B안을 함께 비교하겠습니다.”","followUp":"“아들이 경영하지 않을 경우 회사가 유지될 대안은 무엇입니까?”","agreement":"2개 승계시나리오 작성"},{"type":"부정","expression":"“아직 건강하고 너무 이릅니다.”","response":"“지금 주식을 넘기자는 뜻이 아닙니다. 유고 시 임시 의사결정과 가족 갈등 방지 기준만 먼저 만드는 것입니다.”","followUp":"“한 달간 대표님이 부재하면 누가 은행·거래처·해외법인을 결정합니까?”","agreement":"비상경영체계 점검 동의"},{"type":"정보 부족","expression":"“주식가치나 세금은 모릅니다.”","response":"“정확한 숫자를 모르기 때문에 범위평가가 필요합니다. 추정과 확정을 구분하겠습니다.”","followUp":"“최신 주주명부와 최근 재무제표를 기준으로 1차 범위를 계산해도 되겠습니까?”","agreement":"기업가치 범위 산정"},{"type":"전문가 위임","expression":"“세무사에게 승계를 맡길 생각입니다.”","response":"“세무사의 세무검토가 핵심입니다. 저희는 가족·주주·보험·현금흐름을 연결해 의사결정안을 만들겠습니다.”","followUp":"“세무사와 가족이 함께 볼 한 장짜리 A/B/C안이 필요하십니까?”","agreement":"협업설명회 일정 제안"},{"type":"비용 우려","expression":"“승계 컨설팅은 비용이 많이 듭니다.”","response":"“전체 실행 전에 진단단계만 분리하겠습니다. 의사결정이 없으면 구조설계는 진행하지 않습니다.”","followUp":"“주주·후계자·기업가치·부족재원만 확인하는 1차 진단부터 보시겠습니까?”","agreement":"1차 진단 범위 계약"},{"type":"결정 유예","expression":"“가족과 먼저 상의하겠습니다.”","response":"“가족에게 바로 결정을 요구하면 부담이 큽니다. 중립적인 현황자료를 먼저 만들겠습니다.”","followUp":"“가족회의 전 대표님 단독 사전정리 후 공동설명 날짜를 잡을까요?”","agreement":"가족 공동설명 일정과 참석자 확정"}],"KEY_PERSON":[{"type":"즉시 동의","expression":"“제가 없으면 회사가 많이 흔들릴 겁니다.”","response":"“그렇다면 업무공백과 필요현금을 각각 계산해 실행순서를 정하겠습니다.”","followUp":"“가장 먼저 멈출 업무와 6개월간 필요한 고정비는 무엇입니까?”","agreement":"역할표·고정비·증권 제출"},{"type":"부분 동의","expression":"“임원들이 운영은 할 수 있습니다.”","response":"“그 점은 큰 강점입니다. 다만 권한과 현금이 실제로 준비돼 있는지 확인하겠습니다.”","followUp":"“은행·대형거래처·해외법인 서명권까지 임원에게 위임돼 있습니까?”","agreement":"권한위임·비상결재 점검"},{"type":"부정","expression":"“저에게 그런 일은 없을 겁니다.”","response":"“가능성을 높게 보는 것이 아니라, 영향이 큰 사건을 사전에 관리하는 경영원칙입니다.”","followUp":"“화재 확률이 낮아도 공장 방재를 하듯, 한 달 부재 시 대응표만 확인해도 괜찮겠습니까?”","agreement":"비상대응표 작성 동의"},{"type":"정보 부족","expression":"“필요한 돈이 얼마인지 모르겠습니다.”","response":"“그래서 보험금부터 정하지 않고 6·12개월 필요재원을 계산합니다.”","followUp":"“월 고정비·보증·핵심인 유지비·지분정리 중 회사에 해당하는 항목은 무엇입니까?”","agreement":"필요재원 산출자료 요청"},{"type":"전문가 위임","expression":"“기존 설계사가 보험을 잘 관리합니다.”","response":"“기존 관계를 바꿀 목적이 아닙니다. 경영 필요재원과 증권이 맞는지만 공동검토하겠습니다.”","followUp":"“기존 설계사와 함께 목적별 증권표를 검토해도 되겠습니까?”","agreement":"공동 증권분석 제안"},{"type":"비용 우려","expression":"“보험료가 부담됩니다.”","response":"“보험료를 논의하기 전에 부족재원이 있는지부터 확인하겠습니다. 부족분이 없으면 제안하지 않습니다.”","followUp":"“내부현금·신용한도·기존보험을 차감한 최소 부족분만 비교할까요?”","agreement":"최소·기준·상한 설계 범위 동의"},{"type":"결정 유예","expression":"“배우자와 상의해야 합니다.”","response":"“당연합니다. 가족에게 상품을 설명하기보다 필요재원과 선택안을 함께 보여드리겠습니다.”","followUp":"“배우자와 공동주주가 참여하는 설명일을 정할까요?”","agreement":"공동설명 일정·자료 확정"}],"INSURANCE_OPTIMIZATION":[{"type":"즉시 동의","expression":"“보험이 너무 많아 정리가 필요합니다.”","response":"“해지부터 하지 않고 목적·필요재원·해지손실·신규심사를 비교하겠습니다.”","followUp":"“각 계약을 가입한 목적을 기억하는 순서대로 말씀해 주시겠습니까?”","agreement":"전체 증권 수집·목적분류"},{"type":"부분 동의","expression":"“몇 건만 오래돼 확인이 필요합니다.”","response":"“그 계약부터 우선순위로 보되 전체 중복 여부는 함께 확인하겠습니다.”","followUp":"“보장기간·수익자·현금가치 중 가장 걱정되는 것은 무엇입니까?”","agreement":"우선계약 분석"},{"type":"부정","expression":"“기존 설계사가 알아서 잘해 줍니다.”","response":"“기존 관리가 잘돼 있다면 확인 결과도 유지가 결론일 수 있습니다.”","followUp":"“경영 필요재원과 증권 목적을 한 장으로 연결해 본 적이 있습니까?”","agreement":"공동검토 또는 유지 확인"},{"type":"정보 부족","expression":"“계약이 많아 내용을 모릅니다.”","response":"“모르는 상태에서 해지·추가를 결정하지 않겠습니다. 표준표로 먼저 정리하겠습니다.”","followUp":"“법인과 개인 증권을 한 번에 받을 담당자를 지정할 수 있습니까?”","agreement":"증권 수집기한 확정"},{"type":"전문가 위임","expression":"“보험 담당자에게 물어보면 됩니다.”","response":"“좋습니다. 담당자의 상품정보와 저희의 경영 필요재원 분석을 결합하겠습니다.”","followUp":"“담당자와 30분 공동검토를 잡을까요?”","agreement":"3자 미팅 제안"},{"type":"비용 우려","expression":"“분석비까지 내야 합니까?”","response":"“신규가입을 전제로 하지 않는 독립분석이라면 비용과 산출물을 분명히 해야 합니다.”","followUp":"“유지·감액·추가 각각의 근거와 손실을 보여주는 보고서가 필요하십니까?”","agreement":"유료 증권분석 범위 합의"},{"type":"결정 유예","expression":"“만기 때 다시 보겠습니다.”","response":"“만기 전에도 수익자·목적·보장기간이 맞지 않으면 사고 시 문제가 될 수 있습니다.”","followUp":"“변경 없이 현황만 확정하고 만기 3개월 전 재검토일을 잡을까요?”","agreement":"현황보고서와 재검토 알림 확정"}]};
@@ -15,7 +1272,7 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 (function(global){
 'use strict';
 
-const VERSION='1.6.0-speech-final-pass1';
+const VERSION='1.9.0-release-candidate';
 const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
@@ -28,11 +1285,11 @@ const qsa=(s,r=document)=>Array.from(r.querySelectorAll(s));
 const clone=o=>JSON.parse(JSON.stringify(o));
 const nowIso=()=>new Date().toISOString();
 const n=v=>{if(v===null||v===undefined)return null;const t=String(v).replace(/,/g,'').trim();if(!t)return null;const x=Number(t);return Number.isFinite(x)?x:null;};
-const safeNum=(v,d=0)=>Number.isFinite(Number(v))?Number(v):d;
+const safeNum=(v,d=0)=>v!==null&&v!==undefined&&String(v).trim()!==''&&Number.isFinite(Number(v))?Number(v):d;
 const pct=(v,d=1)=>Number.isFinite(v)?v.toFixed(d)+'%':'—';
-const wonEok=(m,d=1)=>Number.isFinite(Number(m))?(Number(m)/100).toFixed(d)+'억원':'—'; // 백만원→억원
-const man=(m)=>Number.isFinite(Number(m))?Math.round(Number(m)*100).toLocaleString('ko-KR')+'만원':'—';
-const mm=(m)=>Number.isFinite(Number(m))?Math.round(Number(m)).toLocaleString('ko-KR')+'백만원':'—';
+const wonEok=(m,d=1)=>m!==null&&m!==undefined&&String(m).trim()!==''&&Number.isFinite(Number(m))?(Number(m)/100).toFixed(d)+'억원':'미확인'; // 백만원→억원
+const man=(m)=>m!==null&&m!==undefined&&String(m).trim()!==''&&Number.isFinite(Number(m))?Math.round(Number(m)*100).toLocaleString('ko-KR')+'만원':'미확인';
+const mm=(m)=>m!==null&&m!==undefined&&String(m).trim()!==''&&Number.isFinite(Number(m))?Math.round(Number(m)).toLocaleString('ko-KR')+'백만원':'미확인';
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const attr=s=>esc(s).replace(/`/g,'&#96;');
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
@@ -62,7 +1319,7 @@ function memberInfo(){
   return {loginId:String(loginId).trim(),name:p.get('name')||'',company:p.get('company')||'',title:p.get('title')||'',role:p.get('role')||''};
 }
 function canAccess(){
-  const p=new URLSearchParams(location.search);if(location.protocol==='file:'||['localhost','127.0.0.1'].includes(location.hostname)||p.get('demo')==='1')return true;
+  const p=new URLSearchParams(location.search);if(location.protocol==='file:'||['localhost','127.0.0.1'].includes(location.hostname))return true;
   const m=memberInfo();if(ACCESS.mode==='off')return false;if(ACCESS.mode==='members')return !!m.loginId;
   return ACCESS.allowedLoginIds.includes(m.loginId);
 }
@@ -85,7 +1342,7 @@ async function serverCall(endpoint,payload,timeout=180000){
   }finally{clearTimeout(timer);}
 }
 const ServerAdapter={
-  async extractFinancial(text){return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:String(text).slice(0,5000)});},
+  async extractFinancial(text){const t=String(text||'').trim();return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:t.slice(0,120000)});},
   async legalSearch(issue){try{const out=await serverCall(ENDPOINTS.corporate,{action:'legalSearch',issueId:issue.id,queries:issue.evidenceQueries||[]},120000);state.live.taxnavi=true;return out;}catch(e){return {ok:false,pending:true,error:e.message,results:[]};}},
   async tts(script){try{const out=await serverCall(ENDPOINTS.corporate,{action:'tts',script,caseId:state.caseData?.meta?.caseId},240000);state.live.tts=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}},
   async runAI(action,payload){try{const out=await serverCall(ENDPOINTS.corporate,{action,payload},360000);state.live.ai=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}}
@@ -96,15 +1353,15 @@ async function ensurePdfJs(){if(global.pdfjsLib)return global.pdfjsLib;await loa
 const PDFParser={
  async extract(file){
   const pdfjs=await ensurePdfJs();const buf=await file.arrayBuffer();const pdf=await pdfjs.getDocument({data:buf,cMapUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/'}).promise;
-  const texts=[];for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const tc=await pg.getTextContent();texts.push(tc.items.map(x=>x.str).join(' '));}
-  const text=texts.join('\n\n--- PAGE ---\n\n');return {text,pages:pdf.numPages,format:this.detect(text)};
+  const pageTexts=[];const pageObjects=[];for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const tc=await pg.getTextContent();const rows=[];for(const item of tc.items||[]){const str=String(item.str||'').trim();if(!str)continue;const tr=item.transform||[];const x=Number(tr[4]||0),y=Number(tr[5]||0);let row=rows.find(r=>Math.abs(r.y-y)<=2.6);if(!row){row={y,items:[]};rows.push(row);}row.items.push({x,str,width:Number(item.width||0)});}rows.sort((a,b)=>b.y-a.y);const lines=rows.map(r=>{r.items.sort((a,b)=>a.x-b.x);let line='',lastEnd=null;for(const it of r.items){if(lastEnd!==null){const gap=it.x-lastEnd;line+=gap>12?'   ':gap>3?' ':'';}line+=it.str;lastEnd=it.x+it.width;}return line.trim();}).filter(Boolean);const layout=lines.join('\n');pageTexts.push(layout);pageObjects.push({pageNumber:i,text:layout});}
+  const text=pageTexts.join('\n\n--- PAGE ---\n\n');return {text,pageTexts,pageObjects,pages:pdf.numPages,format:this.detect(text,pageObjects)};
  },
- detect(text){if(/CRETOP|KODATA|기업종합보고서/i.test(text))return 'CRETOP/KODATA';if(/NICE|비즈라인|기업정보보고서/i.test(text))return 'NICE';return 'GENERIC';},
+ detect(text,pageObjects){try{if(global.NiceBizlineExtractor?.detectNiceBizline(pageObjects||text)?.detected)return 'NICE BizLINE';}catch(_e){}if(/CRETOP|KODATA|기업종합보고서/i.test(text))return 'CRETOP/KODATA';if(/NICE|비즈라인|기업정보보고서/i.test(text))return 'NICE';return 'GENERIC';},
  isGolden(text){return /모락스트레이딩/.test(text)&&/220[- ]?81[- ]?16162/.test(text);},
  generic(text,pages){
   const grab=(re,d='')=>{const m=text.match(re);return m?String(m[1]).trim():d;};
-  const company=grab(/기업명\s*[:：]?\s*([^\n]{2,40})/,'미확인 기업');
-  const rep=grab(/대표자(?:명)?\s*[:：]?\s*([가-힣A-Za-z ]{2,30})/,'미확인');
+  const company=grab(/기업명\s*[:：]?\s*(.{2,60}?)(?=\s+(?:대표자(?:명)?|사업자(?:등록)?번호|설립일|종업원|업종|주요\s*제품)|$)/m,'미확인 기업');
+  const rep=grab(/대표자(?:명)?\s*[:：]?\s*([가-힣A-Za-z ]{2,30}?)(?=\s+(?:사업자(?:등록)?번호|설립일|종업원|업종|주요\s*제품)|$)/m,'미확인');
   const bn=grab(/사업자(?:등록)?번호\s*[:：]?\s*([0-9-]{10,12})/,'');
   const d=clone(GOLDEN_SAMPLE);d.meta.caseId='CR-'+uid().toUpperCase();d.meta.sourceType='일반 텍스트형 PDF';d.meta.sourcePages=pages;d.meta.confirmed=false;d.profile.companyName=company;d.profile.displayName=company;d.profile.representative=rep;d.profile.businessNumber=bn;
   Object.keys(d.financials).forEach(y=>Object.keys(d.financials[y]).forEach(k=>d.financials[y][k]=null));d.capitalEvents=[];d.warnings=['일반 PDF에서 기본정보만 탐지했습니다. 핵심 재무수치를 확인·수정해야 합니다.'];return d;
@@ -126,9 +1383,86 @@ async function enrichWithExistingFinancialExtractor(data,text){
   return data;
 }
 
+function extractNiceBizlineCase(out,file){
+ if(!global.NiceBizlineExtractor?.extractNiceBizline||!global.NiceBizlineExtractor?.toCorporateReportCase)throw new Error('NICE BizLINE 추출모듈이 로드되지 않았습니다.');
+ const extracted=global.NiceBizlineExtractor.extractNiceBizline(out.pageObjects||out.pageTexts||out.text);
+ const data=global.NiceBizlineExtractor.toCorporateReportCase(extracted,{sourceFileName:file?.name||'',caseId:'CR-NICE-'+uid().toUpperCase()});
+ data.meta.sourceType='NICE BizLINE 자동추출 PDF';
+ data.meta.sourcePages=out.pages;
+ data.meta.confirmed=false;
+ return data;
+}
+function metricValueAt(obj,path){let cur=obj;for(const k of String(path||'').split('.'))cur=cur==null?undefined:cur[k];return cur&&typeof cur==='object'&&Object.prototype.hasOwnProperty.call(cur,'value')?cur.value:(cur??null);}
+function signalValue(data,signalId){return (data.derivedSignals||[]).find(x=>x.signalId===signalId)||null;}
+function buildSpeechOverrides(data){
+ const overrides={};const plan=data.speechPlan||{};const find=id=>(plan.issueOverrides||[]).find(x=>x.issueId===id);
+ const deficit=find('CAPITAL_POLICY');
+ if(deficit?.variant==='DEFICIT_REPAIR')overrides.CAPITAL_POLICY={
+  title:'누적결손·자본회복 정책',
+  signal:'이익잉여금이 음수이며 누적결손의 원인과 자본·현금정책을 분리해 확인해야 하는 기업',
+  guardrail:'누적결손을 과다 유보나 즉시 사용 가능한 현금으로 해석하지 않습니다.',
+  speech30:'대표님, 이 회사는 이익잉여금이 누적된 상태가 아니라 재무제표상 누적결손이 남아 있습니다. 따라서 자금을 어떻게 빼낼지가 아니라 결손의 원인과 회복계획, 차입상환과 투자우선순위를 먼저 확인하겠습니다.',
+  speech90:'대표님, 2025년 영업이익은 발생했지만 이익잉여금은 여전히 음수입니다. 이 숫자는 현재 현금부족과 같은 뜻도 아니고, 과거 손실의 원인이 지금도 계속된다는 뜻도 아닙니다. 먼저 손실이 어느 사업·투자·자본거래에서 생겼는지, 현재 영업이 그 손실을 어느 속도로 회복할 수 있는지, 차입상환과 장기투자자산이 회복을 방해하는지를 나눠 보겠습니다. 배당이나 이익소각을 논의하기 전에 결손 해소 로드맵과 최소 운영현금, 자본정책을 확정하는 것이 순서입니다.',
+  speech3m:'대표님, 이 페이지에서 가장 중요한 것은 이익잉여금이 마이너스라는 숫자를 위기라고 단정하지 않는 것입니다. 누적결손은 과거 손실이 자본에 남아 있는 회계상 결과입니다. 현재 영업은 흑자일 수 있고, 자본총계도 양수일 수 있습니다. 그래서 첫째 과거 손실의 발생원인, 둘째 현재 영업의 정상수익력, 셋째 장기투자자산과 기타자본구성요소, 넷째 차입금과 현금유출을 분리해 봐야 합니다. 대표님께는 최근 흑자가 일회성인지 반복 가능한지, 결손을 어느 기간에 해소할 계획인지, 그 기간 동안 배당·퇴직·주식거래를 어떻게 관리할지를 묻겠습니다. 결론은 배당기법이 아니라 3년 자본회복표입니다.',
+  speech5m:'대표님, 재무제표상 이익잉여금이 음수라는 사실은 과거 누적손실이 아직 자본에 남아 있다는 뜻입니다. 이 숫자만으로 회사의 현재 지급능력이나 사업성을 확정할 수는 없습니다. 반대로 최근 영업이익이 흑자라는 이유만으로 자본문제가 해결됐다고 볼 수도 없습니다. 분석은 네 갈래로 나눕니다. 첫째 과거 손실이 본업, 투자, 관계회사, 자산손상, 금융비용 중 어디에서 발생했는지 복원합니다. 둘째 최근 영업이익이 반복 가능한 정상수익인지 확인합니다. 셋째 장기투자자산과 기타자본구성요소의 실제 내용과 처분 가능성을 확인합니다. 넷째 차입만기와 금융비용을 반영해 향후 3년 결손 해소 속도를 계산합니다. 대표님께 확인할 질문은 “결손의 가장 큰 원인을 한 문장으로 설명할 수 있습니까?”, “최근 흑자는 본업에서 반복 가능한 수익입니까?”, “장기투자자산은 현금화 또는 배당 가능한 자산입니까?”, “결손이 해소되기 전 배당·퇴직·주식거래에 어떤 원칙을 적용할 것입니까?”입니다. 이 답변과 원문 자료를 맞춘 뒤 보수·기준·개선 시나리오를 만듭니다. 보험은 누적결손을 해결하는 수단이 아닙니다. 대표 유고나 승계처럼 우연한 사건의 부족재원이 별도로 계산될 때만 검토합니다. 오늘 합의할 것은 결손원인 자료, 3년 회복목표, 담당자와 다음 검토일입니다.',
+  nextAction:'결손 발생원인·장기투자자산·기타자본구성요소·차입만기 자료를 받아 3년 자본회복 시나리오를 작성합니다.'
+ };
+ if(signalValue(data,'LIQUIDITY_STRESS')||signalValue(data,'BORROWING_SURGE')||signalValue(data,'CASH_DROP'))overrides.WORKING_CAPITAL={
+  title:'유동성·차입금·현금구조',
+  signal:'영업이익은 발생하지만 현금·유동비율·차입만기 구조가 급변한 기업',
+  guardrail:'차입증가 원인과 투자자금 사용처를 확인하기 전 자금난·부실로 단정하지 않습니다.',
+  speech30:'대표님, 영업이익은 개선됐지만 현금은 크게 줄고 차입금과 단기상환 부담은 늘었습니다. 회사가 돈을 못 번다고 단정할 문제가 아니라, 번 돈과 조달한 돈이 어디에 사용됐고 앞으로 언제 상환되는지를 확인해야 합니다.',
+  speech90:'대표님, 2025년에는 영업이익이 발생했지만 현금비율과 유동비율은 낮아졌고 총차입금은 크게 증가했습니다. 동시에 장기투자자산 비중이 높고 비영업 자금운용 규모도 큽니다. 핵심은 차입 자체가 아니라 자금의 사용처와 만기입니다. 투자자산의 회수시점과 차입상환일이 맞지 않으면 흑자기업도 단기 유동성 압박을 받을 수 있습니다. 13주 현금계획과 차입처별 만기표, 투자자산 회수계획을 한 장으로 맞춰 보겠습니다.',
+  speech3m:'대표님, 손익과 유동성은 별도로 봐야 합니다. 영업이익이 흑자여도 투자와 차입상환이 집중되면 현금은 줄 수 있습니다. 이번 자료에서는 현금이 급감하고 총차입금이 증가했으며 최근 분기에는 유동차입부채 비중이 커졌습니다. 이것이 신규투자에 따른 정상적인 조달인지, 만기 재분류인지, 차환이 필요한 구조인지는 원문만으로 확정할 수 없습니다. 차입처·금리·만기·담보·자금용도, 장기투자자산의 회수 가능성, 13주 현금수지를 함께 확인하겠습니다. 목표는 차입을 비판하는 것이 아니라 만기와 현금유입을 맞추는 것입니다.',
+  speech5m:'대표님, 이 회사의 핵심은 매출이 늘었느냐보다 현금과 만기가 같은 방향으로 움직이느냐입니다. 2025년 영업이익은 발생했지만 현금은 전년보다 크게 감소했고 총차입금은 증가했습니다. 최근 분기에는 비유동차입부채가 줄고 유동차입부채가 늘어 만기집중 또는 재분류 가능성도 확인해야 합니다. 장기투자자산이 자산에서 큰 비중을 차지하므로 투자자산의 성격과 회수시점도 중요합니다. 순서는 첫째 차입처별 원금·금리·만기·담보·약정표를 만듭니다. 둘째 13주 현금수지에 급여·매입·이자·원금상환을 넣습니다. 셋째 장기투자자산과 비영업 자금운용의 실제 사용처와 회수계획을 확인합니다. 넷째 보수·기준·차환 시나리오별 최소 현금과 신용한도를 계산합니다. 대표님께는 “차입 증가분은 어디에 사용됐습니까?”, “향후 6개월 안에 반드시 상환할 금액은 얼마입니까?”, “투자자산에서 예정된 현금유입은 언제입니까?”, “차환이 지연돼도 운영을 유지할 수 있는 현금한도는 얼마입니까?”를 묻겠습니다. 보험은 차입금 자체를 해결하지 않습니다. 대표 유고나 재산손해처럼 예고 없는 사건이 현금계획을 깨뜨릴 때 부족재원을 보완하는 수단으로만 검토합니다. 오늘 결정할 것은 차입만기표·13주 현금표·투자자산 명세의 제출일입니다.',
+  nextAction:'차입처별 만기·금리·담보표, 13주 현금수지, 장기투자자산 명세와 회수계획을 확보합니다.'
+ };
+ if(!overrides.WORKING_CAPITAL&&(signalValue(data,'WORKING_CAPITAL_CYCLE')||signalValue(data,'LEVERAGE_PRESSURE')))overrides.WORKING_CAPITAL={
+  title:signalValue(data,'WORKING_CAPITAL_CYCLE')&&signalValue(data,'LEVERAGE_PRESSURE')?'재고회전·차입의존·현금구조':'재고·채권 회전과 운전자금',
+  signal:'재고·채권 회전기간 또는 차입의존·이자부담이 현금전환 속도에 영향을 주는 기업',
+  guardrail:'결산잔액으로 계산한 회전일수는 추정치이며 재고연령·거래처별 채권자료 확인 전 회수가능액이나 부실로 단정하지 않습니다.',
+  speech30:'대표님, 현재 유동비율만 보면 여유가 있어 보일 수 있지만 재고와 채권이 현금으로 바뀌는 기간, 차입금과 이자부담을 함께 보면 운전자금의 속도를 별도로 점검할 필요가 있습니다.',
+  speech90:'대표님, 이 회사는 단기 지급능력만으로 판단하기보다 재고와 매출채권이 실제 현금으로 전환되는 기간을 봐야 합니다. 결산자료상 재고일수와 채권회수일수가 길고 차입의존도와 이자보상능력도 함께 확인할 필요가 있습니다. 이것이 곧 회수불능이나 부실을 뜻하지는 않습니다. 거래처별 채권연령과 품목별 재고연령, 차입처별 만기·금리 자료를 맞춰 실현 가능한 개선범위를 정하겠습니다.',
+  speech3m:'대표님, 유동자산이 충분해 보여도 그 대부분이 재고나 채권이면 실제 현금화 속도는 다를 수 있습니다. 먼저 재고를 정상·장기·불용 가능성으로 나누고, 매출채권은 거래처별 약정일과 실제 회수일을 확인합니다. 다음으로 차입금의 만기와 이자비용을 놓고 회전기간이 길어질 때 필요한 추가 운전자금을 계산합니다. 개선효과는 5일·10일 시나리오로 보되 전액 회수 가능한 돈처럼 표현하지 않습니다.',
+  speech5m:'대표님, 이번 진단의 목적은 재고가 많다거나 차입금이 크다고 지적하는 것이 아닙니다. 매출이 발생한 뒤 현금으로 들어오기까지 걸리는 시간을 품목·거래처·차입만기와 연결해 보는 것입니다. 첫째 재고연령표에서 정상재고와 장기재고를 구분합니다. 둘째 거래처별 채권연령과 실제 결제일을 확인합니다. 셋째 매입채무 결제일과 차입금 원리금 상환일을 13주 현금수지에 넣습니다. 넷째 재고 5일, 채권 10일 개선 시나리오를 계산하되 영업부서와 생산부서가 실행 가능한 범위만 확정합니다. 다섯째 이자보상능력과 차입금의존도를 함께 보아 금융비용이 본업수익을 얼마나 흡수하는지 확인합니다. 보험은 재고·채권관리나 차입구조를 해결하지 않습니다. 거래처 부도, 대표 유고, 재산손해처럼 우연한 사건의 손실과 부족재원이 별도로 확인될 때만 검토합니다.',
+  nextAction:'재고연령표·거래처별 채권연령표·차입처별 만기·금리표·13주 현금수지를 받아 운전자금 개선범위를 확정합니다.'
+ };
+ if((plan.activeIssueIds||[]).includes('CAPITAL_TRANSACTIONS')&&!(data.capitalEvents||[]).length)overrides.CAPITAL_TRANSACTIONS={
+  title:'기타자본구성요소·자본거래 확인',
+  signal:'기타자본구성요소가 크고 납입자본이 변동했으나 세부 자본거래가 보고서에 제시되지 않은 기업',
+  guardrail:'세부내역 확인 전 특정 자본거래가 있었다고 단정하지 않고 자본변동표와 의사결정 자료를 확인합니다.',
+  speech30:'대표님, 기타자본구성요소와 자본금 변동이 크게 보이지만 이 보고서만으로 어떤 자본거래가 있었는지는 확정할 수 없습니다. 자본변동표와 주식수, 의사록을 받아 거래의 실질부터 복원하겠습니다.',
+  speech90:'대표님, 자본총계 안에서 기타자본구성요소가 큰 비중을 차지하고 납입자본도 연도별로 변했습니다. 하지만 이것이 자기주식, 주식발행초과금, 평가차이, 감자 또는 다른 거래 중 무엇인지는 현재 보고서만으로 알 수 없습니다. 과거 거래를 평가하기 전에 자본변동표, 주식수 변동, 이사회·주총 의사록, 가치평가와 현금흐름을 맞춰 보겠습니다. 목적은 잘못을 찾는 것이 아니라 향후 배당·승계·투자유치 때 설명 가능한 자본정책을 만드는 것입니다.',
+  speech3m:'대표님, 자본계정은 이름이 비슷해도 거래 실질이 전혀 다릅니다. 기타자본구성요소가 크다는 숫자만으로 자기주식이나 감자, 평가이익을 추정해서는 안 됩니다. 자본금 증가가 유상증자 때문인지 주식전환 때문인지도 확인해야 합니다. 필요한 자료는 자본변동표, 주주명부와 발행주식수, 주식발행·취득·처분 계약, 이사회·주총 의사록, 회계처리 근거입니다. 이 자료로 거래 전후 지분율, 회사 현금유출입, 주주별 권리변화를 하나의 타임라인으로 만들겠습니다.',
+  speech5m:'대표님, 이 페이지의 목적은 과거 자본거래를 세무기법으로 평가하는 것이 아니라 앞으로 설명 가능한 자본정책을 만드는 것입니다. 현재 자료에는 기타자본구성요소가 큰 금액으로 표시되고 자본금도 연도별로 변하지만 세부 자본변동표는 없습니다. 따라서 자기주식 취득·처분, 감자, 유상증자, 전환, 평가차이 중 어느 거래가 있었는지 단정하지 않습니다. 먼저 연도별 발행주식수와 주주명부를 맞추고, 자본금과 주식발행초과금·기타자본의 증감, 회사 현금의 유출입, 이사회·주총 결의, 가치평가와 세무신고를 같은 시간축에 놓습니다. 대표님께는 “자본금이 증가한 당시 거래 목적은 무엇이었습니까?”, “주주별 지분율과 의결권은 어떻게 바뀌었습니까?”, “기타자본구성요소의 세부내역을 재무팀이 설명할 수 있습니까?”, “향후 투자유치·배당·승계 때 적용할 주식가치 원칙이 있습니까?”를 묻겠습니다. 자료가 정리되면 과거 거래의 적정성은 세무·법률 전문가가 검토하고, 저희는 향후 3년 주식이동과 자금수요를 설계합니다. 보험은 자본거래를 정당화하는 수단이 아닙니다. 향후 대표 유고나 승계에 따른 지분매입 부족재원이 확인될 때만 별도 검토합니다.',
+  nextAction:'자본변동표·주주명부·발행주식수·의사록·거래계약·가치평가 자료를 받아 자본거래 타임라인을 작성합니다.'
+ };
+ return overrides;
+}
+function buildIssueSpecificBranches(id,data){
+ const lib=(data?.speechOverrides||{})[id]||ISSUE_SPEECH_LIBRARY[id]||{};const title=lib.title||id;const next=lib.nextAction||'관련 자료와 담당자·기한을 확정합니다.';
+ const rows=[
+  ['즉시 동의',`“${title}을 바로 점검해야겠습니다.”`,`“좋습니다. 결론부터 정하지 않고 원문과 자료를 맞춰 우선순위를 확정하겠습니다.”`,`“가장 먼저 확인할 자료와 담당자는 누구입니까?”`],
+  ['부분 동의',`“일부는 맞지만 전부 문제는 아닙니다.”`,`“동의합니다. 범위를 넓히지 않고 대표님이 인정하는 부분부터 숫자와 자료로 확인하겠습니다.”`,`“어느 항목까지는 사실이고 어느 부분은 다른 설명이 필요합니까?”`],
+  ['부정',`“${title}은 문제가 없습니다.”`,`“문제로 단정하려는 것이 아닙니다. 현재 강점이 유지되는 조건과 변동 시 대응기준을 확인하겠습니다.”`,`“어떤 자료를 보면 문제가 없다는 판단을 함께 확인할 수 있습니까?”`],
+  ['정보 부족',`“정확한 내용은 재무팀이 압니다.”`,`“대표님이 모든 숫자를 기억할 필요는 없습니다. 의사결정에 필요한 정보가 한 장으로 올라오게 만들겠습니다.”`,`“자료를 바로 준비할 담당자와 가능한 날짜는 언제입니까?”`],
+  ['전문가 위임',`“회계사나 세무사가 보고 있습니다.”`,`“기존 전문가의 역할을 존중합니다. 저희는 그 검토를 CEO의 실행결정과 자금계획에 연결하겠습니다.”`,`“기존 전문가와 함께 확인할 핵심 쟁점을 세 가지로 정해도 되겠습니까?”`],
+  ['비용 우려',`“진단 비용까지 들일 필요가 있습니까?”`,`“전체 프로젝트가 아니라 1차 사실확정과 의사결정표까지만 범위를 줄여 효과를 확인할 수 있습니다.”`,`“산출물·기간·비용을 한정한 1차 진단부터 비교하시겠습니까?”`],
+  ['결정 유예',`“조금 더 두고 보겠습니다.”`,`“보류도 가능한 선택입니다. 다만 자료확인일과 재검토일을 정해 두면 같은 논의를 처음부터 반복하지 않습니다.”`,`“이번에는 자료만 준비하고 재검토 날짜를 확정할까요?”`]
+ ];return rows.map(x=>({type:x[0],expression:x[1],response:x[2],followUp:x[3],agreement:next}));
+}
+function buildIssueSpecificObjections(id,data){
+ const lib=(data?.speechOverrides||{})[id]||ISSUE_SPEECH_LIBRARY[id]||{};const title=lib.title||id;
+ return [
+  {title:'“지금 급한 문제는 아닙니다.”',dialogue:[{speaker:'컨설턴트',text:'급한 실행을 권하는 것이 아니라, 현재 상태와 재검토 기준을 문서로 남기자는 제안입니다.'},{speaker:'컨설턴트',text:`${title}에서 어떤 변화가 생기면 즉시 다시 보아야 하는지 기준을 정해도 되겠습니까?`}]},
+  {title:'“기존 전문가가 이미 보고 있습니다.”',dialogue:[{speaker:'컨설턴트',text:'기존 전문가의 판단을 대체하지 않습니다. 그 판단을 현금·담당자·기한이 있는 경영실행으로 연결하겠습니다.'},{speaker:'컨설턴트',text:'전문가에게 확인할 질문과 필요한 원문자료를 함께 정리하겠습니다.'}]},
+  {title:'“비용이 부담됩니다.”',dialogue:[{speaker:'컨설턴트',text:'전체 실행을 한 번에 결정하지 않고, 사실확정과 선택지 비교까지만 1차 범위로 제한할 수 있습니다.'},{speaker:'컨설턴트',text:'범위·산출물·기간을 먼저 확인한 뒤 진행 여부를 판단하십시오.'}]}
+ ];
+}
+
 const FIELD_META={
  companyName:['기업명','text'],representative:['대표자','text'],businessNumber:['사업자번호','text'],employees:['종업원 수','number'],established:['설립일','date'],industry:['업종','text'],products:['주요 제품','text'],creditGrade:['신용등급','text'],
- assets:['자산총계','number'],liabilities:['부채총계','number'],equity:['자본총계','number'],revenue:['매출액','number'],cogs:['매출원가','number'],operatingProfit:['영업이익','number'],netIncome:['당기순이익','number'],cash:['현금성자산','number'],currentAssets:['유동자산','number'],currentLiabilities:['유동부채','number'],receivables:['매출채권','number'],inventory:['재고자산','number'],payables:['매입채무','number'],borrowings:['차입금','number'],shortTermLoanReceivable:['단기대여금','number'],retainedEarnings:['미처분이익잉여금','number'],operatingCashFlow:['영업현금흐름','number'],interestExpense:['이자비용','number'],capitalStock:['자본금','number']
+ assets:['자산총계','number'],liabilities:['부채총계','number'],equity:['자본총계','number'],revenue:['매출액','number'],cogs:['매출원가','number'],operatingProfit:['영업이익','number'],netIncome:['당기순이익','number'],cash:['현금성자산','number'],currentAssets:['유동자산','number'],currentLiabilities:['유동부채','number'],receivables:['매출채권','number'],inventory:['재고자산','number'],payables:['매입채무','number'],borrowings:['차입금','number'],shortTermLoanReceivable:['단기대여금','number'],retainedEarnings:['이익잉여금(결손금)','number'],operatingCashFlow:['영업현금흐름','number'],interestExpense:['이자비용','number'],capitalStock:['자본금','number']
 };
 
 function tryCalculator(calculatorId,input){
@@ -139,9 +1473,9 @@ function computeAnalysis(data){
  const r={};
  r.salesGrowth=div(c.revenue-p.revenue,p.revenue)*100;r.operatingMargin=div(c.operatingProfit,c.revenue)*100;r.netMargin=div(c.netIncome,c.revenue)*100;r.roe=div(c.netIncome,avg(c.equity,p.equity))*100;
  r.debtRatio=div(c.liabilities,c.equity)*100;r.currentRatio=div(c.currentAssets,c.currentLiabilities)*100;r.quickRatio=div(c.currentAssets-c.inventory,c.currentLiabilities)*100;r.cashRatio=div(c.cash,c.currentLiabilities)*100;r.borrowingDependency=div(c.borrowings,c.assets)*100;r.interestCoverage=div(c.operatingProfit,c.interestExpense);
- r.dso=div(avg(c.receivables,p.receivables),c.revenue)*365;r.inventoryDaysReported=45.04;r.ocfConversion=div(c.operatingCashFlow,c.netIncome)*100;
+ r.dso=div(avg(c.receivables,p.receivables),c.revenue)*365;r.inventoryDaysReported=div(avg(c.inventory,p.inventory),c.cogs)*365;r.ocfConversion=div(c.operatingCashFlow,c.netIncome)*100;
  r.receivableIncrease=c.receivables-p.receivables;r.inventoryIncrease=c.inventory-p.inventory;r.cashAbsorption=r.receivableIncrease+r.inventoryIncrease;
- r.dso10Potential=div(c.revenue,365)*10;r.inventory5Potential=div(c.cogs,365)*5;r.basePotential=r.dso10Potential+r.inventory5Potential;r.conservativePotential=2570;r.stretchPotential=7130;
+ r.dso10Potential=div(c.revenue,365)*10;r.inventory5Potential=div(c.cogs,365)*5;r.basePotential=r.dso10Potential+r.inventory5Potential;r.conservativePotential=Number.isFinite(r.basePotential)?r.basePotential*0.5:null;r.stretchPotential=Number.isFinite(r.basePotential)?r.basePotential*1.5:null;
  r.totalCapitalOutflow=(data.capitalEvents||[]).filter(x=>x.status==='confirmed'&&['자기주식 취득','현금배당 지급','자본금 감소'].includes(x.type)).reduce((s,x)=>s+x.amount,0);
  const calculatorInputs={current:{revenue:c.revenue,operatingProfit:c.operatingProfit,netProfit:c.netIncome,totalAssets:c.assets,totalLiabilities:c.liabilities,totalEquity:c.equity,currentAssets:c.currentAssets,currentLiabilities:c.currentLiabilities,cash:c.cash,inventory:c.inventory,receivables:c.receivables,borrowings:c.borrowings,interestExpense:c.interestExpense,operatingCashFlow:c.operatingCashFlow},previous:{revenue:p.revenue,operatingProfit:p.operatingProfit,netProfit:p.netIncome,totalAssets:p.assets,totalLiabilities:p.liabilities,totalEquity:p.equity,currentAssets:p.currentAssets,currentLiabilities:p.currentLiabilities,cash:p.cash,inventory:p.inventory,receivables:p.receivables,borrowings:p.borrowings,operatingCashFlow:p.operatingCashFlow},employees:data.profile.employees};
  const calcRatios=tryCalculator('calcFinancialRatios',calculatorInputs);
@@ -154,7 +1488,35 @@ function computeAnalysis(data){
 }
 
 function severity(score){return score>=4.5?'CRITICAL':score>=3.7?'HIGH':score>=2.8?'MEDIUM':'LOW';}
+function buildSpeechPlanIssues(data,calc){
+ const active=data.speechPlan?.activeIssueIds||[],signals=new Set((data.derivedSignals||[]).map(x=>x.signalId));const c=data.financials?.['2025']||{},p=data.financials?.['2024']||{},q=data.latestQuarterly||{},r=calc.ratios||{};const out=[];
+ const add=(id,title,score,confidence,facts,meaning,risks,solutions,extras={})=>out.push({id,title,score,severity:severity(score),confidence,facts:facts.filter(Boolean),meaning,risks,solutions,...extras});
+ if(active.includes('WORKING_CAPITAL')){
+  const liquidity=[...signals].some(id=>['LIQUIDITY_STRESS','BORROWING_SURGE','CASH_DROP','MATURITY_CONCENTRATION_WARNING'].includes(id));
+  const cycle=signals.has('WORKING_CAPITAL_CYCLE'),leverage=signals.has('LEVERAGE_PRESSURE');
+  const title=liquidity?'유동성·차입금·현금구조':cycle&&leverage?'재고회전·차입의존·현금구조':cycle?'재고·채권 회전과 운전자금':'운전자금·현금전환';
+  const facts=[];
+  if(liquidity){facts.push(`2025 유동비율 ${pct(r.currentRatio)}·현금비율 ${pct(r.cashRatio)}`,`총차입금 ${wonEok(p.borrowings)} → ${wonEok(c.borrowings)}`,`현금 ${wonEok(p.cash)} → ${wonEok(c.cash)}`);if(Number.isFinite(q.currentBorrowings))facts.push(`${q.periodEnd} 유동차입부채 ${wonEok(q.currentBorrowings)}`);}
+  if(cycle){facts.push(`재고일수 ${Number.isFinite(r.inventoryDaysReported)?r.inventoryDaysReported.toFixed(1)+'일':'미확인'}`,`매출채권회수일 ${Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'미확인'}`);const calcCcc=calc?.calculator?.cashFlow?.result?.ratios?.ccc??calc?.calculator?.cashFlow?.envelope?.result?.turnover?.ccc;if(Number.isFinite(calcCcc))facts.push(`현금전환주기 ${calcCcc}일`);}
+  if(leverage)facts.push(`차입금의존도 ${pct(r.borrowingDependency)}`,`이자보상배율 ${Number.isFinite(r.interestCoverage)?r.interestCoverage.toFixed(2)+'배':'미확인'}`);
+  const meaning=liquidity?'영업수익과 별개로 투자자산·차입만기·현금유출입을 함께 관리해야 하는 구조입니다.':cycle?'재고와 채권이 현금으로 전환되는 기간이 길어 매출성장과 별도로 운전자금 기준을 정해야 합니다.':'확인된 차입·현금자료를 기준으로 상환부담과 운영현금의 균형을 점검해야 합니다.';
+  const risks=liquidity?['차입만기와 현금유입 시점 불일치','차환 지연 시 단기 지급여력 저하','투자자산 회수계획 부재']:['장기재고·채권회수 지연에 따른 운전자금 고착','금융비용 증가 시 영업이익의 현금전환 저하','회전일수 개선목표와 담당자 부재'];
+  const solutions=liquidity?['차입처별 만기·금리·담보표','13주 현금수지','장기투자자산 회수계획']:['재고연령·거래처별 채권연령 분석','현금전환주기 개선 시나리오','차입만기·금융비용 관리표'];
+  add('WORKING_CAPITAL',title,liquidity?4.9:4.3,liquidity?'A':'B',facts,meaning,risks,solutions,{consulting:liquidity?'유동성·차입구조 정밀진단':'운전자금·회전일수 정밀진단',insurance:'거래처 부도·대표 유고 등 별도 위험과 부족재원 확인 후 조건부'});
+ }
+ if(active.includes('CAPITAL_POLICY'))add('CAPITAL_POLICY',c.retainedEarnings<0?'누적결손·자본회복 정책':'이익잉여금·자본정책',4.6,'A',[
+  `2025 이익잉여금 ${wonEok(c.retainedEarnings)}`,`자본총계 ${wonEok(c.equity)}`,`자본금 ${wonEok(c.capitalStock)}`,
+  `장기투자자산 ${wonEok(metricValueAt(data.extractionResult,'financialStatements.separateAnnual.2025-12-31.balanceSheet.longTermInvestments'))}`
+ ],c.retainedEarnings<0?'누적결손의 원인과 현재 수익력, 투자자산, 차입상환을 분리해 3년 회복정책을 만들어야 합니다.':'회사 유보와 주주이전, 투자·차입·퇴직·승계 재원을 구분해야 합니다.',c.retainedEarnings<0?['결손원인 미확인 상태의 자본·주주거래 판단','투자자산과 차입만기의 불일치','회복목표·주주정책 부재']:['투자·배당·퇴직·승계 재원의 충돌','최소 운영현금 기준 부재'],c.retainedEarnings<0?['결손원인 브리지 분석','3년 자본회복 시나리오','회사유보·주주정책 기준']:['3년 자금배분 정책','최소 운영현금 기준','주주이전 원칙'],{consulting:c.retainedEarnings<0?'자본회복·주주정책 설계':'자본·주주정책 설계',insurance:'자본정책 해결수단 아님·별도 위험재원만 조건부'});
+ if(active.includes('CAPITAL_TRANSACTIONS'))add('CAPITAL_TRANSACTIONS','기타자본구성요소·자본거래 확인',4.2,'B',[
+  `기타자본구성요소 ${wonEok(metricValueAt(data.extractionResult,'financialStatements.separateAnnual.2025-12-31.balanceSheet.otherCapitalComponents'))}`,
+  `자본금 2023 ${wonEok(data.financials?.['2023']?.capitalStock)} → 2025 ${wonEok(c.capitalStock)}`,'세부 자본변동표·거래 목적은 현재 보고서에서 미확인'
+ ],'자본금과 기타자본의 변동을 실제 주식수·현금·의사결정 자료와 연결해야 합니다.',['거래 실질을 추정해 잘못된 세무·지분 결론 도출','향후 투자유치·주식이동과 과거 자본변동의 충돌'],['자본변동표·주주명부 복원','연도별 주식수·현금 타임라인','가치평가·세무·법률 공동검토'],{consulting:'자본거래 타임라인 정밀진단',insurance:'직접 연계 아님'});
+ return out.sort((a,b)=>b.score-a.score);
+}
+
 function buildIssues(data,calc){
+ if(data?.speechPlan?.activeIssueIds?.length)return buildSpeechPlanIssues(data,calc);
  const c=data.financials['2025']||{},r=calc.ratios,answers=data.answers||{};const list=[];
  function add(id,title,score,confidence,facts,meaning,risks,solutions,extras={}){list.push({id,title,score,severity:severity(score),confidence,facts,meaning,risks,solutions,...extras});}
  add('WORKING_CAPITAL','성장과 현금전환',4.8,'A',[`매출 ${wonEok(c.revenue)}·영업이익 ${wonEok(c.operatingProfit)}`,`매출채권·재고 증가 ${wonEok(r.cashAbsorption)}`,`영업현금흐름/순이익 ${pct(r.ocfConversion)}`],'성장은 회복됐지만 증가한 매출채권과 재고가 현금전환 속도를 낮추고 있습니다.',['성장할수록 추가 운전자금 수요 확대','거래처·품목별 회수·재고 관리 부재 시 차입 선행'],['채권연령·재고연령 진단','13주 현금흐름표','거래처 신용한도·회수정책'],{consulting:'8~12주 운전자금 개선 프로젝트',insurance:'수출·거래처 신용위험 확인 후 조건부'});
@@ -170,6 +1532,14 @@ function buildIssues(data,calc){
 
 function buildInsuranceOpportunities(data,issues,calc){
  const by=id=>issues.find(x=>x.id===id);const a=data.answers||{},c=data.financials['2025']||{};const rows=[];
+ if(data?.speechPlan?.activeIssueIds?.length){
+  rows.push({id:'INS-KEYPERSON',title:'대표자·핵심인 유고',grade:'D',basis:'대표 역할·월 고정비·즉시상환·기존 보장 미확인',need:null,current:null,gap:null,role:'예고 없는 유고 시 부족재원이 확인되는 경우에만 일부 전가',limits:'현재 PDF만으로 필요재원과 보험 적합성 판단 불가',next:'대표 역할표·월 고정비·가용현금·기존 증권 확인'});
+  rows.push({id:'INS-SUCCESSION',title:'승계·지분정리 유동성',grade:'D',basis:'후계자·가족관계·기업가치·주주별 현금수요 미확인',need:null,current:null,gap:null,role:'승계시점 부족재원이 계산된 경우에만 검토',limits:'누적결손·자본거래·승계구조를 보험으로 해결하지 않음',next:'승계의사 확인 전 보류'});
+  rows.push({id:'INS-CREDIT',title:'거래처 신용위험',grade:'C',basis:`매출채권 ${wonEok(c.receivables)}이나 거래처 집중도·연체이력 미확인`,need:null,current:null,gap:null,role:'특정 거래처 부도에 따른 회수손실의 일부 전가 가능성',limits:'회수정책·신용한도·채권관리 선행',next:'거래처별 채권연령·집중도·연체·계약조건 확인'});
+  rows.push({id:'INS-PROPERTY',title:'재산·휴업·배상 위험',grade:'D',basis:'사업장 자산·복구기간·기존 증권 미확인',need:null,current:null,gap:null,role:'재산손해·영업중단·배상손실의 일부 전가',limits:'자산명세와 기존 증권 전에는 보장공백 단정 금지',next:'사업장·자산·기존 증권 수집'});
+  rows.push({id:'INS-LIQUIDITY',title:'유동성·차입구조',grade:'D',basis:'차입금과 만기집중은 재무관리 과제',need:null,current:null,gap:null,role:'직접 해결수단 아님',limits:'차입상환·차환·투자자산 회수계획이 우선',next:'13주 현금수지와 차입만기표 작성'});
+  return rows;
+ }
  const keyCalc=calc.calculator.keyman?.result;const keyOk=!!(calc.calculator.keyman?.ok&&keyCalc);
  rows.push({id:'INS-KEYPERSON',title:'대표자·핵심인 유고',grade:(keyOk&&keyCalc.requiredCoverageGap>0)?'A':(keyOk?'C':'B'),basis:'대표 경영집중·해외법인·거래처·자금결정 연결',need:keyOk?Math.round(keyCalc.totalNeed/1000000):null,current:keyOk?Math.round(keyCalc.offset/1000000):null,gap:(keyOk&&keyCalc.requiredCoverageGap>0)?Math.round(keyCalc.requiredCoverageGap/1000000):null,role:'예고 없는 유고 시 비상운영·채무·지분정리 현금의 일부',limits:'업무승계·정관·세무·가족합의를 대신하지 않음',next:keyOk?(keyCalc.requiredCoverageGap>0?'기존 증권과 인수 가능성 검토':'내부재원 충분 여부와 기존 보장 유지 필요성 확인'):'월 고정비·필요기간·즉시상환·가용현금·기존보험 확인'});
  rows.push({id:'INS-SUCCESSION',title:'승계·지분정리 유동성',grade:'B',basis:'장수기업·누적이익·자본거래·후계자 미확인',need:null,current:null,gap:null,role:'사망·승계 시점의 세금·지분매입·정산 부족재원 중 보험 적합 부분',limits:'기업가치·가족합의·법률구조 확정 전 가입금액 단정 금지',next:'주주명부·가족관계·후계자·기업가치·기존 보험 확인'});
@@ -219,7 +1589,7 @@ const CONDITIONAL_QUESTIONS={
 };
 
 const SpeechEngine={
- get(id){return ISSUE_SPEECH_LIBRARY[id]||ISSUE_SPEECH_LIBRARY.WORKING_CAPITAL;},
+ get(id,data=state.caseData){return (data?.speechOverrides||state.caseData?.speechOverrides||{})[id]||ISSUE_SPEECH_LIBRARY[id]||ISSUE_SPEECH_LIBRARY.WORKING_CAPITAL;},
  branches(id){return CEO_RESPONSE_BRANCHES[id]||CEO_RESPONSE_BRANCHES.WORKING_CAPITAL||[];},
  objectionsFor(id){
   const match={KEY_PERSON:['보험료가 부담된다는 대표','배우자·가족의 반대','할증·부담보·인수제한'],SUCCESSION:['배우자·가족의 반대','공동주주의 반대'],INSURANCE_OPTIMIZATION:['기존 설계사·타 제안과 비교','보험료가 부담된다는 대표'],EXPORT_CREDIT:['보험 근거가 부족한 기업'],LOAN_RECEIVABLE:['보험 근거가 부족한 기업']};
@@ -227,7 +1597,7 @@ const SpeechEngine={
  },
  companyContext(data){const p=data.profile||{};const arr=[];if(/제조/.test(p.industry))arr.push('제조업 특성상 가동률·재고·납기·설비·휴업을 중심으로 설명합니다.');if(p.foreignSubsidiaries?.length)arr.push('수출·해외법인 특성상 거래처·국가·환율·물류·현지증권을 함께 확인합니다.');if(data.answers?.ceoStyle)arr.push(`CEO 성향은 ${data.answers.ceoStyle}으로 설정해 설명의 속도와 근거 수준을 조정합니다.`);return arr;},
  notes(page,data,analysis){
-  const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null;const lib=page.issueId?this.get(page.issueId):null;const branches=page.issueId?this.branches(page.issueId):[];const objections=page.issueId?this.objectionsFor(page.issueId):[];
+  const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null;const lib=page.issueId?this.get(page.issueId,data):null;const branches=page.issueId?this.branches(page.issueId):[];const objections=page.issueId?this.objectionsFor(page.issueId):[];
   const purpose=page.notePurpose || (issue?`${issue.title}을 CEO가 경영 의사결정 과제로 이해하고 다음 확인 행동에 동의하도록 합니다.`:'이 페이지의 핵심 사실과 의사결정 순서를 대표가 이해하도록 합니다.');
   const diagnosis=issue?.meaning||page.summary||'확인된 사실과 계산값을 경영 언어로 번역해 설명합니다.';
   const speech=lib?.speech90||`대표님, 이 페이지는 ${page.title}을 설명하기 위한 자료입니다. 확정된 숫자와 추가 확인이 필요한 사항을 구분해 보겠습니다.`;
@@ -283,7 +1653,8 @@ function speechScenarioFor(issueId,stage){
  return SCENARIO_LIBRARY.find(x=>x.title===map[issueId])||null;
 }
 function speechIssueQuestions(issueId,data){
- const base=(CONDITIONAL_QUESTIONS[issueId]||COMMON_QUESTIONS).slice(0,4).map(x=>x.label);
+ const dynamic=(data?.dynamicQuestions||[]).filter(q=>q.issueId===issueId).map(q=>q.label);
+ const base=[...(CONDITIONAL_QUESTIONS[issueId]||[]).map(x=>x.label),...dynamic,...COMMON_QUESTIONS.map(x=>x.label)].filter((v,i,a)=>a.indexOf(v)===i).slice(0,4);
  const style=speechStyleProfile(data),companies=speechCompanyProfiles(data);
  return [...new Set([...base,style.question,...companies.slice(0,2).map(x=>x.question)])].slice(0,5);
 }
@@ -293,12 +1664,12 @@ function speechCompletionStats(){
  return {issues:issueIds.length,completeIssueScripts:issueIds.filter(id=>['speech30','speech90','speech3m','speech5m','guardrail','nextAction'].every(k=>String(ISSUE_SPEECH_LIBRARY[id]?.[k]||'').trim())).length,branchIssues:issueIds.filter(id=>Array.isArray(CEO_RESPONSE_BRANCHES[id])&&CEO_RESPONSE_BRANCHES[id].length===7&&new Set(CEO_RESPONSE_BRANCHES[id].map(x=>x.type)).size===7).length,objections:OBJECTION_LIBRARY.length,scenarios:SCENARIO_LIBRARY.length,ceoStyles:Object.keys(SPEECH_CEO_STYLE_PROFILES).length,companyTypes:Object.keys(SPEECH_COMPANY_TYPE_PROFILES).length,insuranceStages:INSURANCE_SPEECH_STAGES.length};
 }
 
-SpeechEngine.get=function(id){return ISSUE_SPEECH_LIBRARY[id]||null;};
+SpeechEngine.get=function(id,data=state.caseData){return (data?.speechOverrides||state.caseData?.speechOverrides||{})[id]||ISSUE_SPEECH_LIBRARY[id]||null;};
 SpeechEngine.branches=function(id){return Array.isArray(CEO_RESPONSE_BRANCHES[id])?CEO_RESPONSE_BRANCHES[id]:[];};
 SpeechEngine.objectionsFor=function(id){const titles=SPEECH_ISSUE_OBJECTION_MAP[id]||OBJECTION_LIBRARY.slice(0,4).map(x=>x.title);return titles.map(speechObjectionDialogue).filter(Boolean).slice(0,4);};
 SpeechEngine.companyContext=function(data){const style=speechStyleProfile(data);return [`CEO 성향 ${data?.answers?.ceoStyle||'신중보수형'}: ${style.order}`,`금지 접근: ${style.forbidden}`,...speechCompanyProfiles(data).map(x=>`${x.name}: ${x.context} · 보험 검토경계 ${x.insurance}`)];};
 SpeechEngine.notes=function(page,data,analysis){
- const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null,lib=page.issueId?this.get(page.issueId):null;
+ const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null,lib=page.issueId?this.get(page.issueId,data):null;
  const branches=page.issueId?this.branches(page.issueId):[],objections=page.issueId?this.objectionsFor(page.issueId):[],scenario=page.issueId?speechScenarioFor(page.issueId,data?.answers?.meetingStage):null;
  const purpose=page.notePurpose||(issue?`${issue.title}을 CEO가 경영 의사결정 과제로 이해하고 다음 확인 행동에 동의하도록 합니다.`:'이 페이지의 핵심 사실과 의사결정 순서를 대표가 이해하도록 합니다.');
  const diagnosis=issue?.meaning||page.summary||'확인된 사실과 계산값을 경영 언어로 번역해 설명합니다.';
@@ -307,13 +1678,22 @@ SpeechEngine.notes=function(page,data,analysis){
  return {purpose,diagnosis,speech30:lib?speechCustomize(lib.speech30,data,page.issueId,'speech30'):sentence(base,150),speech90:lib?speechCustomize(lib.speech90,data,page.issueId,'speech90'):base,speech3m:lib?speechCustomize(lib.speech3m,data,page.issueId,'speech3m'):base,speech5m:lib?speechCustomize(lib.speech5m,data,page.issueId,'speech5m'):base,questions:page.issueId?speechIssueQuestions(page.issueId,data):(COMMON_QUESTIONS||[]).slice(0,4).map(x=>x.label),branches:branches.slice(0,7),objections:objections.map(o=>({title:o.title,dialogue:o.dialogue,framework:o.framework,actionAgreement:o.actionAgreement})),scenario,customization:{ceoStyle:data?.answers?.ceoStyle||'신중보수형',styleOrder:style.order,companyTypes:companies.map(x=>x.name),companyContext:companies.map(x=>x.context)},advanced:[lib?.guardrail||'미확인 사실은 확정적으로 표현하지 않습니다.',...this.companyContext(data),'계산값·연도·단위·법인/주주 주체를 본문과 일치시킵니다.'],connection:issue?`${issue.consulting||'정밀진단'} / 보험: ${issue.insurance||'추가 확인 후 판단'}`:'다음 자료와 의사결정 항목을 합의합니다.',transition:lib?.nextAction||style.closing,documents:documentList(page.issueId)};
 };
 
-function documentList(id){return ({WORKING_CAPITAL:['거래처별 채권연령표','재고연령·품목별 재고명세','13주 자금수지','상위 거래처 결제조건'],LOAN_RECEIVABLE:['계정별 원장','계약서·이사회 결의','이자수취 내역','상환·담보 자료'],CAPITAL_POLICY:['3년 투자·자금계획','배당·보수·퇴직 규정','주주명부','이사회·주총 의사록'],CAPITAL_TRANSACTIONS:['자기주식 취득·처분 계약','주식수 변동표','감자·배당 의사록','당시 가치평가·세무검토'],SUCCESSION:['주주명부·정관','가족관계·후계자 의사','기업가치 자료','기존 승계·증여 내역'],KEY_PERSON:['대표 업무·권한표','월 고정비·채무·보증','가용현금','기존 보험증권'],EXPORT_CREDIT:['거래처별 채권연령','매출집중도','연체·대손 이력','해외법인·현지 보험증권'],INSURANCE_OPTIMIZATION:['전체 보험증권','계약자·피보험자·수익자','보험료·보장·환급금','가입 목적·회계처리']})[id]||['원본 기업보고서','관련 원장·계약·의사록','대표 추가답변','전문가 검토자료'];}
+function documentList(id,data=state.analysis||state.caseData){
+ const c=data?.financials?.['2025']||{},override=(data?.speechOverrides||{})[id]||{};
+ if(id==='WORKING_CAPITAL'){
+  if(/유동성|차입금|만기/.test(override.title||''))return ['차입처별 원금·금리·만기·담보표','최근 13주 자금수지와 향후 13주 전망','최소 운영현금·미사용 신용한도','장기투자자산·비영업 자금운용 명세'];
+  return ['거래처별 채권연령표','재고연령·품목별 재고명세','차입처별 만기·금리표','최근 13주 자금수지'];
+ }
+ if(id==='CAPITAL_POLICY')return Number.isFinite(c.retainedEarnings)&&c.retainedEarnings<0?['누적결손 발생원인 브리지 자료','최근 3년 사업별·투자별 손익자료','차입만기·금융비용·투자자산 명세','3년 결손해소·최소운영현금 계획']:['3년 투자·자금계획','최소 운영현금 기준','배당·보수·퇴직 규정','주주명부·주주별 현금수요'];
+ if(id==='CAPITAL_TRANSACTIONS')return (data?.capitalEvents||[]).length?['확인된 자본거래 계약·결의서','거래 전후 주주명부·발행주식수','당시 가치평가·세무검토','회사·주주별 현금흐름 자료']:['자본변동표·기타자본 세부명세','연도별 주주명부·발행주식수','자본금 변동 관련 이사회·주총 의사록(해당 시)','주식발행·취득·처분·전환 계약자료(해당 시)'];
+ return ({LOAN_RECEIVABLE:['계정별 원장','계약서·이사회 결의','이자수취 내역','상환·담보 자료'],SUCCESSION:['주주명부·정관','가족관계·후계자 의사','기업가치 자료','기존 승계·증여 내역'],KEY_PERSON:['대표 업무·권한표','월 고정비·채무·보증','가용현금','기존 보험증권'],EXPORT_CREDIT:['거래처별 채권연령','매출집중도','연체·대손 이력','해외법인·현지 보험증권'],INSURANCE_OPTIMIZATION:['전체 보험증권','계약자·피보험자·수익자','보험료·보장·환급금','가입 목적·회계처리']})[id]||['원본 기업보고서','관련 원장·계약·의사록','대표 추가답변','전문가 검토자료'];
+}
 
-function allQuestions(analysis){const ids=new Set();const out=[];for(const q of COMMON_QUESTIONS){if(!ids.has(q.id)){ids.add(q.id);out.push(q);}}for(const issue of analysis.issues||[]){for(const q of CONDITIONAL_QUESTIONS[issue.id]||[]){if(!ids.has(q.id)){ids.add(q.id);out.push(q);}}}return out;}
+function allQuestions(analysis){const ids=new Set();const out=[];for(const q of COMMON_QUESTIONS){if(!ids.has(q.id)){ids.add(q.id);out.push(q);}}for(const issue of analysis.issues||[]){for(const q of CONDITIONAL_QUESTIONS[issue.id]||[]){if(!ids.has(q.id)){ids.add(q.id);out.push(q);}}}for(const q of analysis.dynamicQuestions||[]){if(!ids.has(q.id)){ids.add(q.id);out.push(q);}}return out;}
 
 function buildConfirmedModel(data){
  const calculations=computeAnalysis(data);const issues=buildIssues(data,calculations);const insurance=buildInsuranceOpportunities(data,issues,calculations);
- const model={version:'CAM-1.0',caseId:data.meta.caseId,meta:clone(data.meta),confirmedAt:nowIso(),profile:clone(data.profile),financials:clone(data.financials),capitalEvents:clone(data.capitalEvents),answers:clone(data.answers||{}),sourceMap:clone(data.sourceMap||{}),warnings:clone(data.warnings||[]),calculations,issues,insurance,legalEvidence:[],unconfirmed:[],quality:null};
+ const model={version:'CAM-1.3',caseId:data.meta.caseId,meta:clone(data.meta),confirmedAt:nowIso(),profile:clone(data.profile),financials:clone(data.financials),latestQuarterly:clone(data.latestQuarterly||null),capitalEvents:clone(data.capitalEvents),answers:clone(data.answers||{}),sourceMap:clone(data.sourceMap||{}),warnings:clone(data.warnings||[]),speechPlan:clone(data.speechPlan||null),speechOverrides:clone(data.speechOverrides||buildSpeechOverrides(data)),dynamicQuestions:clone(data.dynamicQuestions||[]),derivedSignals:clone(data.derivedSignals||[]),confirmationQueue:clone(data.confirmationQueue||[]),extractionResult:clone(data.extractionResult||null),calculations,issues,insurance,legalEvidence:[],unconfirmed:[],quality:null};
  model.unconfirmed=[...Object.entries(model.answers).filter(([,v])=>v===null||v===''||v==='미확인').map(([k])=>k),...(data.capitalEvents||[]).filter(x=>x.status!=='confirmed').map(x=>x.type)];return model;
 }
 
@@ -328,12 +1708,12 @@ function pageShell({id,title,subtitle='',section='CORPORATE REPORT',visibility='
 function addPage(spec){const p=pageShell(spec);state.pages.push(p);return p;}
 function issueFlow(issue){return `<div class="issue-flow"><article class="fact"><span>01</span><h3>확인된 팩트</h3>${list(issue.facts)}</article><article class="meaning"><span>02</span><h3>경영상 의미</h3><p>${esc(issue.meaning)}</p></article><article class="risk"><span>03</span><h3>방치 시 위험</h3>${list(issue.risks)}</article><article class="benefit"><span>04</span><h3>해결 방향</h3>${list(issue.solutions)}</article><article class="decision"><span>05</span><h3>결정·계약 연결</h3><p><b>유료컨설팅:</b> ${esc(issue.consulting||'정밀진단')}</p><p><b>보험 검토:</b> ${esc(issue.insurance||'추가 확인 후 판단')}</p></article></div>`;}
 function issuePage(issue,index){
- const lib=SpeechEngine.get(issue.id);const body=`<div class="lead"><b>${esc(issue.title)} — ${esc(issue.severity)} / 근거 ${esc(issue.confidence)}</b><p>${esc(issue.meaning)}</p></div>${issueFlow(issue)}<div class="notice amber"><b>표현 경계</b>${esc(lib.guardrail||'미확인 사실은 단정하지 않습니다.')}</div><div class="source-box"><b>근거</b> ${esc(issue.facts.join(' · '))}</div>`;
+ const lib=SpeechEngine.get(issue.id,state.caseData);const body=`<div class="lead"><b>${esc(issue.title)} — ${esc(issue.severity)} / 근거 ${esc(issue.confidence)}</b><p>${esc(issue.meaning)}</p></div>${issueFlow(issue)}<div class="notice amber"><b>표현 경계</b>${esc(lib.guardrail||'미확인 사실은 단정하지 않습니다.')}</div><div class="source-box"><b>근거</b> ${esc(issue.facts.join(' · '))}</div>`;
  return addPage({id:'issue-'+issue.id.toLowerCase(),title:issue.title,subtitle:'사실 → 의미 → 위험 → 해결 → 다음 행동의 순서로 판단합니다.',section:'CORE ISSUE '+String(index+1).padStart(2,'0'),visibility:'common',issueId:issue.id,summary:issue.meaning,body});
 }
 function solutionPage(issue,index){
  const docs=documentList(issue.id);const options=issue.id==='WORKING_CAPITAL'?[['A안','현황 유지·월간 모니터링','비용은 낮지만 현금개선 속도가 느립니다.'],['B안','8~12주 정밀 프로젝트','채권·재고·13주 현금흐름을 동시에 개선합니다.'],['C안','프로젝트+위험전가','거래처·수출·휴업 위험이 확인될 때 보험을 결합합니다.']]:[['A안','자료 복원·사실확정','확정 전 단정과 실행을 막습니다.'],['B안','전문가 공동 정밀진단','세무·법률·가치·지배구조를 함께 검토합니다.'],['C안','실행·사후관리','의사록·계약·지급·회수·보험을 단계적으로 실행합니다.']];
- const body=`<div class="lead"><b>${esc(issue.title)} 실행설계</b><p>전체 결정을 한 번에 요구하지 않고 자료확인 → 정량화 → 대안비교 → 실행합의의 단계로 진행합니다.</p></div><div class="options">${options.map((o,i)=>`<div class="option ${i===1?'recommended':''}"><em>${i===1?'권장':''}</em><h3>${esc(o[0])} · ${esc(o[1])}</h3><p>${esc(o[2])}</p></div>`).join('')}</div><div class="cols2" style="margin-top:5mm"><div class="card mint"><h3>다음 미팅 전 준비자료</h3>${list(docs)}</div><div class="card"><h3>실행 산출물</h3>${list(issue.solutions.map(x=>x+' 결과표').concat(['CEO 결정사항·담당자·기한','전문가 검토 및 보험 적합성 확인']))}</div></div><div class="decision-bar"><b>이번 페이지에서 합의할 것</b><span>${esc(SpeechEngine.get(issue.id).nextAction||'자료와 다음 미팅 일정을 확정합니다.')}</span></div>`;
+ const body=`<div class="lead"><b>${esc(issue.title)} 실행설계</b><p>전체 결정을 한 번에 요구하지 않고 자료확인 → 정량화 → 대안비교 → 실행합의의 단계로 진행합니다.</p></div><div class="options">${options.map((o,i)=>`<div class="option ${i===1?'recommended':''}"><em>${i===1?'권장':''}</em><h3>${esc(o[0])} · ${esc(o[1])}</h3><p>${esc(o[2])}</p></div>`).join('')}</div><div class="cols2" style="margin-top:5mm"><div class="card mint"><h3>다음 미팅 전 준비자료</h3>${list(docs)}</div><div class="card"><h3>실행 산출물</h3>${list(issue.solutions.map(x=>x+' 결과표').concat(['CEO 결정사항·담당자·기한','전문가 검토 및 보험 적합성 확인']))}</div></div><div class="decision-bar"><b>이번 페이지에서 합의할 것</b><span>${esc(SpeechEngine.get(issue.id,state.caseData).nextAction||'자료와 다음 미팅 일정을 확정합니다.')}</span></div>`;
  return addPage({id:'solution-'+issue.id.toLowerCase(),title:issue.title+' 실행대안',subtitle:'A·B·C안의 범위와 다음 행동을 결정합니다.',section:'SOLUTION '+String(index+1).padStart(2,'0'),visibility:'common',issueId:issue.id,summary:'실행범위와 자료·담당자·기한을 합의합니다.',body});
 }
 
@@ -345,9 +1725,9 @@ function buildAudioChapters(model){
  const lectureType=optimize?'INSURANCE_OPTIMIZATION':insuranceHigh?'INSURANCE_OPPORTUNITY':'CONSULTING_PRIORITY';
  model.audioLectureType=lectureType;
  const company=p.displayName||p.companyName||'이 기업';
- const introType={INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
+ const introType=!activeIssues.length?'현재 자동 임계치상 핵심 이슈를 확정하지 않고 추가 확인이 필요한 기업':{INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
  const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:2,sourceIssueIds:active.slice(),script:`자비아 기업경영 의사결정 해설교육, 시작하겠습니다. 오늘의 목표는 리포트를 외우는 것이 아니라 ${company}에서 무엇을 묻고 어떤 순서로 상담해야 하는지 익히는 것입니다. 이번 기업은 ${introType}입니다. 보험은 분석의 출발점이 아니라 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
- active.slice(0,3).forEach((id,idx)=>{const lib=SpeechEngine.get(id),note=SpeechEngine.notes({issueId:id,title:lib.title,summary:lib.signal},model,model),branch=note.branches[idx%note.branches.length],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${lib.title}`,minutes:4,sourceIssueIds:[id],script:`학습목표는 ${lib.title}의 숫자를 경영언어로 설명하고 다음 행동에 합의하는 것입니다.\n\n${note.speech3m}\n\n실전 질문은 다음과 같습니다. ${note.questions.slice(0,3).join(' ')}\n\n대표가 ${branch?.expression||'다른 의견을 제시'}하면 ${branch?.response||'우려를 인정합니다.'} 이어서 ${branch?.followUp||'판단기준을 질문합니다.'} 최종 행동은 ${branch?.agreement||lib.nextAction}입니다.${obj?`\n\n대표 반론 “${obj.title}”에는 ${obj.dialogue.filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
+ active.slice(0,3).forEach((id,idx)=>{const lib=SpeechEngine.get(id,model),note=SpeechEngine.notes({issueId:id,title:lib.title,summary:lib.signal},model,model),branch=note.branches[idx%note.branches.length],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${lib.title}`,minutes:4,sourceIssueIds:[id],script:`학습목표는 ${lib.title}의 숫자를 경영언어로 설명하고 다음 행동에 합의하는 것입니다.\n\n${note.speech3m}\n\n실전 질문은 다음과 같습니다. ${note.questions.slice(0,3).join(' ')}\n\n대표가 ${branch?.expression||'다른 의견을 제시'}하면 ${branch?.response||'우려를 인정합니다.'} 이어서 ${branch?.followUp||'판단기준을 질문합니다.'} 최종 행동은 ${branch?.agreement||lib.nextAction}입니다.${obj?`\n\n대표 반론 “${obj.title}”에는 ${obj.dialogue.filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
  if(lectureType==='INSURANCE_OPPORTUNITY')chapters.push({title:'보험을 꺼내는 시점과 8단계',minutes:4,sourceIssueIds:active.filter(id=>['KEY_PERSON','SUCCESSION','EXECUTIVE_RETIREMENT','EXPORT_CREDIT','PROPERTY_BI','INSURANCE_OPTIMIZATION'].includes(id)),script:`잘못된 접근은 상품과 세금부터 말하는 것입니다. 올바른 순서는 위험사건, 재무충격, 필요재원, 현재재원, 부족재원, 보험 외 대안, 보험 역할입니다. ${INSURANCE_SPEECH_STAGES.map(x=>`${x.stage}. ${x.speech} 완료조건은 ${x.gate}.`).join(' ')} 부족재원이 없으면 보험을 확대하지 않습니다.`});
  else if(lectureType==='INSURANCE_OPTIMIZATION')chapters.push({title:'기존 증권 최적화 원칙',minutes:4,sourceIssueIds:['INSURANCE_OPTIMIZATION'],script:`신규가입보다 모든 법인·개인 증권을 목적별로 분류합니다. 계약자·피보험자·수익자, 보장금액·기간, 현금가치, 해지손실, 면책, 신규심사를 필요재원과 비교합니다. 목적과 기간이 맞으면 유지가 결론이고, 과다하면 감액을 검토하며, 실제 부족분에만 추가설계를 검토합니다. 기존 담당자와의 관계를 존중하고 공동검토할 수 있습니다.`});
  else chapters.push({title:'보험을 배제하고 유료진단을 제안하는 법',minutes:3,sourceIssueIds:active.slice(),script:`현재 분석에서 보험의 직접 당위성이 낮다면 명확히 배제해야 신뢰가 생깁니다. 운전자금, 대여금, 자본거래, 규정과 절차는 보험으로 해결하지 않습니다. 정밀진단의 산출물, 담당자, 기한, KPI와 중단조건을 먼저 합의하고 별도의 우연한 위험과 부족재원이 발견될 때만 보험 게이트를 엽니다.`});
@@ -363,27 +1743,46 @@ function generatePages(model){
  addPage({id:'guide',title:'이 리포트는 무엇을 결정하게 하는가',subtitle:'팩트 → 계산 → 근거 → 대안 → 다음 행동의 순서로 읽습니다.',section:'REPORT GUIDE',visibility:'common',summary:'리포트의 사용 목적과 모드 구분',body:`<div class="lead"><b>재무설명이 아니라 CEO의 결정과 컨설턴트의 실행을 지원합니다.</b><p>확인된 팩트와 계산값에서 출발해 유료컨설팅·전문가 협업·보험의 역할을 구분합니다.</p></div><div class="cols3"><div class="card mint"><h3>CEO용</h3>${list(['확인된 사실과 경영적 의미','방치위험과 해결이익','A·B·C 대안','30·90·365일 결정'])}</div><div class="card consultant-only"><h3>컨설턴트용</h3>${list(['페이지별 10단 상담노트','질문·답변분기·반론','유료컨설팅과 보험기회','다음 미팅·계약전환'])}</div><div class="card amber consultant-only"><h3>음성강의용</h3>${list(['리포트 낭독 금지','숫자의 실무 의미','CEO 질문·역할극','보험을 꺼낼 시점'])}</div></div><div class="notice"><b>보험 원칙</b>위험 확인 → 필요재원 → 현재재원 → 부족재원 → 대안 비교 → 보험의 역할 순서로만 접근합니다.</div>`});
  addPage({id:'toc',title:'통합 목차',subtitle:'현재 기업에 실제로 활성화된 페이지만 구성합니다.',section:'CONTENTS',visibility:'common',summary:'조건부 페이지 목차',body:`<div class="toc-grid" id="tocInside"></div><div class="notice amber"><b>조건부 생성</b>내용이 부족하면 페이지를 만들지 않으며, 미확인 사실로 페이지 수를 채우지 않습니다.</div>`});
  const r=model.calculations.ratios,c=model.financials['2025'],p=model.profile;
- addPage({id:'executive-summary',title:'CEO가 먼저 볼 5가지 결정',subtitle:'핵심 숫자와 다음 행동을 한 장에 압축했습니다.',section:'EXECUTIVE SUMMARY',visibility:'common',summary:'CEO 핵심 결정',body:`<div class="kpis">${kpi('매출 성장률',pct(r.salesGrowth),'2024→2025','good')}${kpi('영업이익률',pct(r.operatingMargin),'수익성 회복','good')}${kpi('현금흡수',wonEok(r.cashAbsorption),'채권+재고 증가','warn')}${kpi('OCF/순이익',pct(r.ocfConversion),'현금전환 점검','warn')}</div><div class="cols2"><div class="card mint"><h3>강점</h3>${list(['2025년 매출·영업이익·순이익 회복','차입금 의존도 '+pct(r.borrowingDependency),'유동비율 '+pct(r.currentRatio)])}</div><div class="card red"><h3>우선 확인</h3>${list(['매출채권·재고 증가의 원인과 회수 가능성','단기대여금 거래 실질','자기주식·감자·배당의 목적과 절차','승계·대표 유고 필요재원과 기존 보장'])}</div></div><div class="decision-bar"><b>권장 우선순위</b><span>① 운전자금 정밀진단</span><span>② 대여금·자본거래 사실확정</span><span>③ 승계·유고 필요재원 계산</span></div>`});
- addPage({id:'company-facts',title:'기업 팩트 대시보드',subtitle:'원문에서 확인된 정보와 최신 확인이 필요한 정보를 분리합니다.',section:'CONFIRMED FACTS',visibility:'common',summary:'기업 기본정보와 출처',body:`<div class="cols2"><div class="card"><h3>기업 개요</h3><table><tbody>${[['기업명',p.companyName],['대표자',p.representative],['설립일',p.established],['종업원',p.employees+'명'],['업종',p.industry],['주요제품',p.products],['신용등급',p.creditGrade]].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('')}</tbody></table></div><div class="card"><h3>관계회사·해외법인</h3>${list((p.foreignSubsidiaries||[]).concat(p.relatedCompanies||[]))}<div class="notice amber"><b>확인 필요</b>거래조건·보증·지분·현지 보험은 추가자료로 확인합니다.</div></div></div><div class="source-box"><b>Source Map</b> ${Object.entries(model.sourceMap||{}).map(([k,v])=>esc(k+': '+v)).join(' · ')}</div>`});
- addPage({id:'financial-trend',title:'3개년 재무 추세',subtitle:'단위·연도·주체를 통일해 변화 방향을 확인합니다.',section:'FINANCIAL TREND',visibility:'common',summary:'3개년 재무표',body:`<table><thead><tr><th>항목(백만원)</th><th class="num">2023</th><th class="num">2024</th><th class="num">2025</th><th>해석</th></tr></thead><tbody>${[['매출액','revenue','성장 회복'],['영업이익','operatingProfit','흑자 전환'],['당기순이익','netIncome','수익성 회복'],['영업현금흐름','operatingCashFlow','이익 대비 현금전환 낮음'],['현금성자산','cash','2023년 대비 감소'],['매출채권','receivables','증가'],['재고자산','inventory','빠른 증가'],['단기대여금','shortTermLoanReceivable','2025년 신규 확인']].map(([l,k,note])=>`<tr><td>${l}</td>${['2023','2024','2025'].map(y=>`<td class="num ${(model.financials[y][k]||0)<0?'neg':''}">${Number.isFinite(model.financials[y][k])?model.financials[y][k].toLocaleString('ko-KR'):'—'}</td>`).join('')}<td>${note}</td></tr>`).join('')}</tbody></table><div class="notice"><b>핵심</b>2025년 실적 회복은 강점이지만 매출채권·재고·자본거래와 영업현금흐름을 함께 봐야 합니다.</div>`});
- addPage({id:'financial-ratios',title:'핵심 재무비율과 경영적 의미',subtitle:'비율은 판정이 아니라 질문과 의사결정의 출발점입니다.',section:'RATIO ANALYSIS',visibility:'common',summary:'주요 재무비율',body:`<div class="kpis">${kpi('부채비율',pct(r.debtRatio),'과도하지 않으나 증가','warn')}${kpi('유동비율',pct(r.currentRatio),'단기 지급능력','good')}${kpi('당좌비율',pct(r.quickRatio),'재고 제외 시 약화','warn')}${kpi('현금비율',pct(r.cashRatio),'즉시 가용성 점검','warn')}</div><div class="stat-strip"><div><span>차입금의존도</span><b>${pct(r.borrowingDependency)}</b></div><div><span>이자보상배수</span><b>${Number.isFinite(r.interestCoverage)?r.interestCoverage.toFixed(2)+'배':'—'}</b></div><div><span>매출채권회수일</span><b>${Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'—'}</b></div></div><div class="notice amber"><b>주의</b>비율의 원인과 비교기준을 확인하기 전 정상·위험을 단정하지 않습니다.</div>`});
+ const ratioClass=(v,good,warn)=>!Number.isFinite(v)?'warn':v>=good?'good':v>=warn?'warn':'bad';
+ const debtComment=!Number.isFinite(r.debtRatio)?'확인 필요':r.debtRatio<100?'100% 미만':r.debtRatio<200?'100~200% · 업종비교 필요':'200% 이상 · 구조 확인';
+ const currentComment=!Number.isFinite(r.currentRatio)?'확인 필요':r.currentRatio>=150?'150% 이상 · 구성 확인':r.currentRatio>=100?'100% 이상':'100% 미만 · 주의';
+ const quickComment=!Number.isFinite(r.quickRatio)?'확인 필요':r.quickRatio>=100?'100% 이상':r.quickRatio>=70?'70~100%':'70% 미만';
+ const cashComment=!Number.isFinite(r.cashRatio)?'확인 필요':r.cashRatio>=20?'20% 이상':r.cashRatio>=10?'10~20%':'10% 미만';
+ const confirmedStrengths=[];if(Number.isFinite(c.operatingProfit))confirmedStrengths.push(c.operatingProfit>0?`2025년 영업이익 ${wonEok(c.operatingProfit)}`:`2025년 영업손실 ${wonEok(c.operatingProfit)}`);if(Number.isFinite(c.equity))confirmedStrengths.push(c.equity>0?`자본총계 ${wonEok(c.equity)}`:`자본총계 ${wonEok(c.equity)} · 자본잠식 검토`);if(p.creditGrade)confirmedStrengths.push(`기업평가등급 ${p.creditGrade}`);
+ addPage({id:'executive-summary',title:'CEO가 먼저 볼 핵심 결정',subtitle:'확인된 숫자와 활성 이슈의 다음 행동을 한 장에 압축했습니다.',section:'EXECUTIVE SUMMARY',visibility:'common',summary:'CEO 핵심 결정',body:`<div class="kpis">${kpi('매출 성장률',pct(r.salesGrowth),'2024→2025',Number.isFinite(r.salesGrowth)&&r.salesGrowth>=0?'good':'warn')}${kpi('영업이익률',pct(r.operatingMargin),'2025',Number.isFinite(r.operatingMargin)&&r.operatingMargin>0?'good':'warn')}${kpi('유동비율',pct(r.currentRatio),currentComment,ratioClass(r.currentRatio,150,100))}${kpi('차입금의존도',pct(r.borrowingDependency),'총차입금÷자산',Number.isFinite(r.borrowingDependency)&&r.borrowingDependency<30?'good':Number.isFinite(r.borrowingDependency)&&r.borrowingDependency<50?'warn':'bad')}</div><div class="cols2"><div class="card mint"><h3>확인된 현황</h3>${list(confirmedStrengths.length?confirmedStrengths:['추가 확인 필요'])}</div><div class="card red"><h3>우선 확인</h3>${list(model.issues.length?model.issues.map(x=>x.title+' — '+x.solutions[0]):['현재 자동 활성화된 핵심 이슈 없음 · 확인질문과 원자료 검토'])}</div></div><div class="decision-bar"><b>권장 우선순위</b>${model.issues.length?model.issues.map((x,i)=>`<span>${i+1}. ${esc(x.title)}</span>`).join(''):'<span>원자료 확인 후 우선순위 확정</span>'}</div>`});
+ addPage({id:'company-facts',title:'기업 팩트 대시보드',subtitle:'원문에서 확인된 정보와 최신 확인이 필요한 정보를 분리합니다.',section:'CONFIRMED FACTS',visibility:'common',summary:'기업 기본정보와 출처',body:`<div class="cols2"><div class="card"><h3>기업 개요</h3><table><tbody>${[['기업명',p.companyName],['대표자',p.representative],['설립일',p.established],['종업원',Number.isFinite(p.employees)?p.employees+'명':'미확인'],['업종',p.industry],['주요제품',p.products],['신용등급',p.creditGrade]].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('')}</tbody></table></div><div class="card"><h3>주주·관계사</h3>${list((p.shareholders||[]).map(x=>`${x.name} ${x.ownershipPercent}%`).concat(p.relatedCompanies||[]))}<div class="notice amber"><b>확인 필요</b>관계사 거래조건·보증·지분변동은 추가자료로 확인합니다.</div></div></div><div class="source-box"><b>Source Map</b> ${Object.entries(model.sourceMap||{}).map(([k,v])=>esc(k+': '+v)).join(' · ')}</div>`});
+ const trendRows=[['매출액','revenue','매출 규모'],['영업이익','operatingProfit','본업 수익력'],['당기순이익','netIncome','최종 손익'],['영업활동조달현금','operatingCashFlow','영업 현금창출'],['현금성자산','cash','가용성 별도 확인'],['매출채권','receivables','회수조건 확인'],['재고자산','inventory','재고구성 확인'],['총차입금','borrowings','만기·금리·담보 확인'],['이익잉여금','retainedEarnings','누적결손 여부']];
+ addPage({id:'financial-trend',title:'3개년 재무 추세',subtitle:'개별 결산 기준으로 단위·연도·주체를 통일했습니다.',section:'FINANCIAL TREND',visibility:'common',summary:'3개년 재무표',body:`<table><thead><tr><th>항목(백만원)</th><th class="num">2023</th><th class="num">2024</th><th class="num">2025</th><th>확인 포인트</th></tr></thead><tbody>${trendRows.map(([l,k,note])=>`<tr><td>${l}</td>${['2023','2024','2025'].map(y=>`<td class="num ${Number(model.financials[y][k])<0?'neg':''}">${Number.isFinite(model.financials[y][k])?model.financials[y][k].toLocaleString('ko-KR'):'—'}</td>`).join('')}<td>${note}</td></tr>`).join('')}</tbody></table><div class="notice"><b>핵심</b>실적·현금·차입·자본을 같은 방향으로 단정하지 않고 각 변동의 원인을 추가자료로 확인합니다.</div>`});
+ addPage({id:'financial-ratios',title:'핵심 재무비율과 경영적 의미',subtitle:'비율은 판정이 아니라 질문과 의사결정의 출발점입니다.',section:'RATIO ANALYSIS',visibility:'common',summary:'주요 재무비율',body:`<div class="kpis">${kpi('부채비율',pct(r.debtRatio),debtComment,Number.isFinite(r.debtRatio)&&r.debtRatio<100?'good':Number.isFinite(r.debtRatio)&&r.debtRatio<200?'warn':'bad')}${kpi('유동비율',pct(r.currentRatio),currentComment,ratioClass(r.currentRatio,150,100))}${kpi('당좌비율',pct(r.quickRatio),quickComment,ratioClass(r.quickRatio,100,70))}${kpi('현금비율',pct(r.cashRatio),cashComment,ratioClass(r.cashRatio,20,10))}</div><div class="stat-strip"><div><span>차입금의존도</span><b>${pct(r.borrowingDependency)}</b></div><div><span>이자보상배수</span><b>${Number.isFinite(r.interestCoverage)?r.interestCoverage.toFixed(2)+'배':'—'}</b></div><div><span>매출채권회수일</span><b>${Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'—'}</b></div></div><div class="notice amber"><b>해석 경계</b>동일 업종·규모 비교와 월별 원자료를 확인하기 전 정상·위험을 확정하지 않습니다.</div>`});
  model.issues.slice(0,7).forEach((issue,idx)=>{issuePage(issue,idx);solutionPage(issue,idx);});
- addPage({id:'working-capital-scenario',title:'운전자금 개선 시나리오',subtitle:'확정효과가 아니라 실행가능성을 검증할 의사결정 범위입니다.',section:'CALCULATED SCENARIO',visibility:'common',issueId:'WORKING_CAPITAL',summary:'회수기간·재고일수 개선 잠재현금',body:`<div class="kpis">${kpi('채권 10일 단축',wonEok(r.dso10Potential),'매출액/365×10','good')}${kpi('재고 5일 단축',wonEok(r.inventory5Potential),'매출원가/365×5','good')}${kpi('기준 잠재현금',wonEok(r.basePotential),'합산 시나리오','good')}${kpi('보수 시나리오',wonEok(r.conservativePotential),'실행성 검증 전','warn')}</div><div class="cols2"><div class="card mint"><h3>실행 KPI</h3>${list(['DSO·연체채권·상위거래처 집중','재고일수·장기재고·품목별 회전','13주 현금전망 정확도','월간 개선현금·담당자·기한'])}</div><div class="card amber"><h3>확정 전 금지</h3>${list(['개선액을 회수 보장금액으로 표현','거래처·재고 상세 없이 목표 확정','보험을 회수정책보다 먼저 제안'])}</div></div>`});
- addPage({id:'capital-timeline',title:'자기주식·감자·배당 타임라인',subtitle:'불법성 판단이 아니라 목적·절차·현금효과를 복원합니다.',section:'CAPITAL TRANSACTIONS',visibility:'common',issueId:'CAPITAL_TRANSACTIONS',summary:'자본거래 흐름',body:`<div class="timeline">${(model.capitalEvents||[]).map(x=>`<article><span>${esc(x.year)}</span><b>${esc(x.type)}</b><p>${wonEok(x.amount)} · ${x.status==='confirmed'?'확인값':'추가 확인'}</p></article>`).join('')}</div><div class="notice red"><b>단정 금지</b>각 거래의 주식수·상대방·가치·의사록·세무처리를 확인하기 전 적법성·절세효과·주주이익을 확정하지 않습니다.</div>`});
- addPage({id:'insurance-ceo',title:'경영위험 재원 확보 원칙',subtitle:'CEO에게는 상품이 아니라 필요재원과 대안 비교를 설명합니다.',section:'RISK FINANCING',visibility:'common',issueId:'KEY_PERSON',summary:'CEO용 위험재원 원칙',body:`<div class="lead"><b>필요재원 − 사용 가능한 현재재원 = 확인 가능한 부족재원</b><p>부족재원을 현금·금융자산·신용한도·계약·보험으로 나누어 준비합니다.</p></div><div class="issue-flow"><article class="fact"><span>01</span><h3>위험사건</h3><p>대표 유고, 거래처 부도, 해외사업장 중단, 승계·지분정리</p></article><article class="meaning"><span>02</span><h3>재무충격</h3><p>운영비·매입·급여·채무·세금·지분정산·복구비</p></article><article class="risk"><span>03</span><h3>현재재원</h3><p>가용현금·금융자산·신용한도·기존 보험·계약상 권리</p></article><article class="benefit"><span>04</span><h3>부족재원</h3><p>확인되지 않은 항목은 질문으로 남기고 금액을 만들지 않습니다.</p></article><article class="decision"><span>05</span><h3>의사결정</h3><p>보험은 예고 없는 시점의 현금을 확보하는 수단 중 하나이며 경영승계·법률·세무절차를 대신하지 않습니다.</p></article></div>`});
- addPage({id:'insurance-matrix',title:'보험계약 기회 종합진단',subtitle:'근거·위험·필요재원·현재재원·보험적합성을 등급별로 구분합니다.',section:'CONSULTANT ONLY · INSURANCE',visibility:'consultant',issueId:'INSURANCE_OPTIMIZATION',summary:'보험기회 A~D 매트릭스',body:`<table><thead><tr><th>영역</th><th>등급</th><th>근거·역할</th><th>금액</th><th>다음 행동</th></tr></thead><tbody>${model.insurance.map(x=>`<tr><td><b>${esc(x.title)}</b><br><span class="pill">${esc(x.id)}</span></td><td><span class="grade ${x.grade}">${x.grade}</span></td><td>${esc(x.basis)}<br><small>${esc(x.role)}</small></td><td>${Number.isFinite(x.gap)?wonEok(x.gap):'추가 확인 후 산출'}</td><td>${esc(x.next)}</td></tr>`).join('')}</tbody></table><div class="notice red"><b>컴플라이언스 경계</b>보험기회 탐지는 상품추천이 아닙니다. 상품명·보험료·심사결과·계약구조는 최신 약관·설계·적합성·실제 인수심사 전에는 생성하지 않습니다.</div>`});
- addPage({id:'insurance-stages',title:'보험계약 8단계 상담 로드맵',subtitle:'필요성 발견에서 최종결정·사후관리까지 단계를 건너뛰지 않습니다.',section:'CONSULTANT ONLY · SALES PROCESS',visibility:'consultant',issueId:'KEY_PERSON',summary:'보험계약 8단계',body:`<table><thead><tr><th>단계</th><th>핵심 화법</th><th>필수 검증</th><th>통과 기준</th></tr></thead><tbody>${INSURANCE_SPEECH_STAGES.map(x=>`<tr><td><b>${esc(x.stage)}</b></td><td>${esc(x.speech)}</td><td>${esc(x.validation)}</td><td>${esc(x.gate)}</td></tr>`).join('')}</tbody></table>`});
+ const activeIssueIds=new Set((model.issues||[]).map(x=>x.id)),signalIds=new Set((model.derivedSignals||[]).map(x=>x.signalId));
+ const hasWorkingCapital=activeIssueIds.has('WORKING_CAPITAL'),isLiquidityCase=[...signalIds].some(id=>['LIQUIDITY_STRESS','BORROWING_SURGE','CASH_DROP','MATURITY_CONCENTRATION_WARNING'].includes(id)),isCycleCase=signalIds.has('WORKING_CAPITAL_CYCLE')||signalIds.has('LEVERAGE_PRESSURE');
+ const cashCalc=model.calculations?.calculator?.cashFlow?.result||model.calculations?.calculator?.cashFlow?.envelope?.result||{},cccValue=cashCalc?.turnover?.ccc;
+ const liquidityBody=`<div class="kpis">${kpi('유동비율',pct(r.currentRatio),'2025 개별결산','warn')}${kpi('현금비율',pct(r.cashRatio),'2025 개별결산','warn')}${kpi('총차입금',wonEok(model.financials['2025'].borrowings),'2025','warn')}${kpi('최근분기 유동차입',wonEok(model.latestQuarterly?.currentBorrowings),model.latestQuarterly?.periodEnd||'최근분기','warn')}</div><div class="cols2"><div class="card mint"><h3>필수 실행표</h3>${list(documentList('WORKING_CAPITAL',model))}</div><div class="card amber"><h3>확정 전 금지</h3>${list(['차입증가를 부실로 단정','투자자산을 즉시가용현금으로 간주','차환 가능성을 보장','보험을 차입해결책으로 제시'])}</div></div>`;
+ const cycleBody=`<div class="kpis">${kpi('재고일수',Number.isFinite(r.inventoryDaysReported)?r.inventoryDaysReported.toFixed(1)+'일':'미확인','결산잔액 기준','warn')}${kpi('채권회수일',Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'미확인','결산잔액 기준','warn')}${kpi('현금전환주기',Number.isFinite(cccValue)?cccValue+'일':'미확인','재고+채권−매입','warn')}${kpi('차입금의존도',pct(r.borrowingDependency),'2025','warn')}</div><div class="cols2"><div class="card mint"><h3>필수 실행자료</h3>${list(documentList('WORKING_CAPITAL',model))}</div><div class="card amber"><h3>해석 경계</h3>${list(['회전일수를 회수불능으로 단정하지 않음','결산잔액 추정치를 월별 실적처럼 사용하지 않음','개선 시나리오를 확보 가능한 현금으로 보장하지 않음','거래처·품목별 원자료 확인 전 목표 확정 금지'])}</div></div>`;
+ if(hasWorkingCapital)addPage({id:'working-capital-scenario',title:isLiquidityCase?'유동성·차입만기 관리 시나리오':isCycleCase?'재고·채권 회전 개선 시나리오':'운전자금 개선 시나리오',subtitle:isLiquidityCase?'현금유입·상환일·투자회수 시점을 13주 기준으로 맞춥니다.':'결산잔액 추정치를 거래처·품목별 원자료로 검증합니다.',section:'CALCULATED SCENARIO',visibility:'common',issueId:'WORKING_CAPITAL',summary:isLiquidityCase?'유동성·차입만기 관리':'회전일수·운전자금 관리',body:isLiquidityCase?liquidityBody:cycleBody});
+ const capitalBody=(model.capitalEvents||[]).length?`<div class="timeline">${model.capitalEvents.map(x=>`<article><span>${esc(x.year)}</span><b>${esc(x.type)}</b><p>${wonEok(x.amount)} · ${x.status==='confirmed'?'확인값':'추가 확인'}</p></article>`).join('')}</div>`:`<div class="kpis">${kpi('2023 자본금',wonEok(model.financials['2023'].capitalStock),'개별결산')}${kpi('2025 자본금',wonEok(model.financials['2025'].capitalStock),'개별결산','warn')}${kpi('기타자본구성요소',wonEok(metricValueAt(model.extractionResult,'financialStatements.separateAnnual.2025-12-31.balanceSheet.otherCapitalComponents')),'세부내역 확인','warn')}${kpi('2025 이익잉여금',wonEok(model.financials['2025'].retainedEarnings),'누적결손','warn')}</div><div class="card mint"><h3>복원할 타임라인</h3>${list(documentList('CAPITAL_TRANSACTIONS',model))}</div>`;
+ if(activeIssueIds.has('CAPITAL_TRANSACTIONS')||(model.capitalEvents||[]).length)addPage({id:'capital-timeline',title:(model.capitalEvents||[]).length?'자본거래 타임라인':'자본변동·기타자본 확인',subtitle:'거래를 추정하지 않고 주식수·현금·의사결정 자료를 복원합니다.',section:'CAPITAL TRANSACTIONS',visibility:'common',issueId:'CAPITAL_TRANSACTIONS',summary:'자본변동 확인',body:`${capitalBody}<div class="notice red"><b>단정 금지</b>세부 자본변동표를 확인하기 전 특정 자본거래가 있었다고 확정하지 않습니다.</div>`});
+ const actionableInsurance=(model.insurance||[]).filter(x=>!['D','D_LOW'].includes(x.grade));
+ if(actionableInsurance.length)addPage({id:'insurance-ceo',title:'경영위험 재원 확보 원칙',subtitle:'CEO에게는 상품이 아니라 필요재원과 대안 비교를 설명합니다.',section:'RISK FINANCING',visibility:'common',issueId:'',summary:'CEO용 위험재원 원칙',body:`<div class="lead"><b>필요재원 − 사용 가능한 현재재원 = 확인 가능한 부족재원</b><p>부족재원을 현금·금융자산·신용한도·계약·보험으로 나누어 준비합니다.</p></div><div class="issue-flow"><article class="fact"><span>01</span><h3>확인된 위험사건</h3><p>${esc(actionableInsurance.map(x=>x.title).join(' · '))}</p></article><article class="meaning"><span>02</span><h3>재무충격</h3><p>각 위험별 필요재원과 기간을 별도 계산합니다.</p></article><article class="risk"><span>03</span><h3>현재재원</h3><p>가용현금·금융자산·신용한도·기존 보험·계약상 권리</p></article><article class="benefit"><span>04</span><h3>부족재원</h3><p>확인되지 않은 항목은 질문으로 남기고 금액을 만들지 않습니다.</p></article><article class="decision"><span>05</span><h3>의사결정</h3><p>보험은 예고 없는 시점의 현금을 확보하는 수단 중 하나이며 법률·세무·경영절차를 대신하지 않습니다.</p></article></div>`});
+ addPage({id:'insurance-matrix',title:'보험계약 기회 종합진단',subtitle:'근거·위험·필요재원·현재재원·보험적합성을 등급별로 구분합니다.',section:'CONSULTANT ONLY · INSURANCE',visibility:'consultant',issueId:'',summary:'보험기회 A~D 매트릭스',body:`<table><thead><tr><th>영역</th><th>등급</th><th>근거·역할</th><th>금액</th><th>다음 행동</th></tr></thead><tbody>${model.insurance.map(x=>`<tr><td><b>${esc(x.title)}</b><br><span class="pill">${esc(x.id)}</span></td><td><span class="grade ${x.grade}">${x.grade}</span></td><td>${esc(x.basis)}<br><small>${esc(x.role)}</small></td><td>${Number.isFinite(x.gap)?wonEok(x.gap):'추가 확인 후 산출'}</td><td>${esc(x.next)}</td></tr>`).join('')}</tbody></table><div class="notice red"><b>컴플라이언스 경계</b>보험기회 탐지는 상품추천이 아닙니다. 상품명·보험료·심사결과·계약구조는 최신 약관·설계·적합성·실제 인수심사 전에는 생성하지 않습니다.</div>`});
+ if(actionableInsurance.length)addPage({id:'insurance-stages',title:'보험계약 8단계 상담 로드맵',subtitle:'필요성 발견에서 최종결정·사후관리까지 단계를 건너뛰지 않습니다.',section:'CONSULTANT ONLY · SALES PROCESS',visibility:'consultant',issueId:'',summary:'보험계약 8단계',body:`<table><thead><tr><th>단계</th><th>핵심 화법</th><th>필수 검증</th><th>통과 기준</th></tr></thead><tbody>${INSURANCE_SPEECH_STAGES.map(x=>`<tr><td><b>${esc(x.stage)}</b></td><td>${esc(x.speech)}</td><td>${esc(x.validation)}</td><td>${esc(x.gate)}</td></tr>`).join('')}</tbody></table>`});
  addPage({id:'consulting-map',title:'유료컨설팅·전문가·보험 연결지도',subtitle:'보험으로 해결할 문제와 그렇지 않은 문제를 명확히 구분합니다.',section:'CONSULTANT ONLY · OPPORTUNITY',visibility:'consultant',summary:'실행계약 기회',body:`<table><thead><tr><th>이슈</th><th>우선 계약</th><th>전문가 협업</th><th>보험 위치</th></tr></thead><tbody>${model.issues.map(x=>`<tr><td>${esc(x.title)}</td><td>${esc(x.consulting||'정밀진단')}</td><td>${esc(['LOAN_RECEIVABLE','CAPITAL_POLICY','CAPITAL_TRANSACTIONS','SUCCESSION'].includes(x.id)?'세무·법률·가치평가 공동검토':'필요 시 회계·세무 검토')}</td><td>${esc(x.insurance||'추가 확인')}</td></tr>`).join('')}</tbody></table><div class="decision-bar"><b>권장 상업화 순서</b><span>1차 유료 정밀진단</span><span>주제별 프로젝트</span><span>전문가 실행</span><span>검증된 보장공백의 보험</span><span>연례관리</span></div>`});
- addPage({id:'roadmap',title:'30·90·365일 실행 로드맵',subtitle:'분석결과를 자료·담당자·기한·산출물로 전환합니다.',section:'IMPLEMENTATION',visibility:'common',summary:'실행 로드맵',body:`<div class="timeline"><article><span>0~30 DAYS</span><b>사실확정</b><p>채권·재고·대여금·자본거래·주주·보험증권 수집</p></article><article><span>31~90 DAYS</span><b>정밀진단</b><p>운전자금·자본정책·승계·유고 필요재원 A/B/C 시나리오</p></article><article><span>91~180 DAYS</span><b>실행</b><p>회수·재고·계약·의사록·전문가 검토·적합한 보장 설계</p></article><article><span>181~365 DAYS</span><b>사후관리</b><p>KPI·자금계획·승계·보험·법령변화를 연례 점검</p></article></div><div class="notice"><b>완료의 정의</b>문서가 만들어진 것이 아니라 CEO가 담당자·자료·기한·다음 미팅 또는 실행계약을 결정한 상태입니다.</div>`});
- addPage({id:'decision-sheet',title:'CEO 의사결정 시트',subtitle:'오늘 확정할 것과 다음 확인일까지 보류할 것을 구분합니다.',section:'DECISION SHEET',visibility:'common',summary:'CEO 결재·합의 항목',body:`<table><thead><tr><th>결정항목</th><th>현재 판단</th><th>필요자료</th><th>담당자·기한</th></tr></thead><tbody>${[['운전자금 정밀진단','권장','채권·재고·13주 현금표'],['단기대여금 사실확정','필수','원장·계약·이자·만기'],['자본거래 타임라인','필수','의사록·계약·가치·세무'],['승계·유고 필요재원','조건부 권장','주주·가족·고정비·기존보험'],['보험설계 검토','추가 확인 후','부족재원·증권·적합성']].map(x=>`<tr><td><b>${x[0]}</b></td><td>${x[1]}</td><td>${x[2]}</td><td>□ 담당 ______ □ 기한 ______</td></tr>`).join('')}</tbody></table><div class="decision-bar"><b>오늘의 최소 합의</b><span>자료 담당자</span><span>제출기한</span><span>2차 미팅일</span></div>`});
+ const activeDocs=model.issues.flatMap(x=>documentList(x.id,model).slice(0,2));
+ addPage({id:'roadmap',title:'30·90·365일 실행 로드맵',subtitle:'활성 이슈를 자료·담당자·기한·산출물로 전환합니다.',section:'IMPLEMENTATION',visibility:'common',summary:'실행 로드맵',body:`<div class="timeline"><article><span>0~30 DAYS</span><b>사실확정</b><p>${esc(activeDocs.slice(0,4).join(' · '))}</p></article><article><span>31~90 DAYS</span><b>정밀진단</b><p>${esc(model.issues.map(x=>x.consulting).join(' · '))}</p></article><article><span>91~180 DAYS</span><b>실행</b><p>선택안 확정 · 전문가 검토 · 의사록·계약·자금계획 반영</p></article><article><span>181~365 DAYS</span><b>사후관리</b><p>유동성·차입·자본회복 KPI와 법령·보험 적합성 재점검</p></article></div><div class="notice"><b>완료의 정의</b>문서가 만들어진 것이 아니라 CEO가 담당자·자료·기한·다음 미팅 또는 실행계약을 결정한 상태입니다.</div>`});
+ const decisionRows=model.issues.map(x=>[x.title,x.severity==='CRITICAL'||x.severity==='HIGH'?'우선 권장':'조건부',documentList(x.id,model).slice(0,2).join(' · ')]).concat([['보험설계 검토','부족재원 확인 후','기존 증권·가용현금·필요재원']]);
+ addPage({id:'decision-sheet',title:'CEO 의사결정 시트',subtitle:'오늘 확정할 것과 다음 확인일까지 보류할 것을 구분합니다.',section:'DECISION SHEET',visibility:'common',summary:'CEO 결재·합의 항목',body:`<table><thead><tr><th>결정항목</th><th>현재 판단</th><th>필요자료</th><th>담당자·기한</th></tr></thead><tbody>${decisionRows.map(x=>`<tr><td><b>${esc(x[0])}</b></td><td>${esc(x[1])}</td><td>${esc(x[2])}</td><td>□ 담당 ______ □ 기한 ______</td></tr>`).join('')}</tbody></table><div class="decision-bar"><b>오늘의 최소 합의</b><span>자료 담당자</span><span>제출기한</span><span>2차 미팅일</span></div>`});
  addPage({id:'next-meeting',title:'2차 미팅 운영 스크립트',subtitle:'보고서 설명을 실행합의와 계약검토로 연결합니다.',section:'CONSULTANT ONLY · NEXT MEETING',visibility:'consultant',summary:'다음 미팅 화법',body:`<div class="cols2"><div class="card mint"><h3>오프닝</h3><p>“대표님, 지난번에는 가능성을 말씀드렸고 오늘은 제출해 주신 자료로 금액과 선택지를 확인하겠습니다. 오늘 전체 실행이 아니라 우선순위와 다음 한 단계만 결정하시면 됩니다.”</p></div><div class="card"><h3>마무리</h3><p>“오늘 합의한 범위는 ○○입니다. 담당자는 ○○, 자료제출은 ○월 ○일, 다음 회의에서는 A·B·C안을 비교하겠습니다.”</p></div></div><div class="card" style="margin-top:5mm"><h3>미팅 체크</h3>${list(['확인된 숫자와 미확인 가정 분리','대표 답변을 재진술해 동의 확인','보험을 필요재원 계산보다 먼저 제시하지 않음','자료·담당자·기한·다음 미팅 중 최소 2개 확정'])}</div>`});
  addPage({id:'documents',title:'필요자료 통합 체크리스트',subtitle:'기업별 조건부 이슈에 필요한 서류만 요청합니다.',section:'DATA REQUEST',visibility:'common',summary:'필요자료',body:`<div class="cols2">${model.issues.slice(0,6).map(x=>`<div class="card"><h3>${esc(x.title)}</h3>${list(documentList(x.id))}</div>`).join('')}</div>`});
  addPage({id:'evidence',title:'법령·예규·판례 근거 계획',subtitle:'TaxNavi는 이슈별 우선 출처를 검색하고 실무 의미만 요약합니다.',section:'EVIDENCE',visibility:'common',summary:'법률·세무 근거',body:`<table><thead><tr><th>이슈</th><th>우선 근거</th><th>검색목표</th><th>상태</th></tr></thead><tbody>${model.issues.filter(x=>['LOAN_RECEIVABLE','CAPITAL_POLICY','CAPITAL_TRANSACTIONS','SUCCESSION','KEY_PERSON'].includes(x.id)).map(x=>`<tr><td>${esc(x.title)}</td><td>${esc(x.id==='LOAN_RECEIVABLE'?'세법·예규·판례':x.id==='SUCCESSION'?'상속·증여·가업승계 법령':'상법·세법·예규')}</td><td>요건·절차·경계선·전문가 확인사항</td><td><span class="pill gold">서버 TaxNavi 연결 시 실시간</span></td></tr>`).join('')}</tbody></table><div class="notice amber"><b>베타 상태</b>현재 1차 파일에는 안전한 서버 어댑터가 포함돼 있습니다. 실제 근거검색 결과는 corporateReportApi가 index.js에 추가된 뒤 채워집니다.</div>`});
  addPage({id:'quality-page',title:'품질·한계·사용상 주의',subtitle:'정확성·모드분리·보험경계·수치일치를 최종 게이트로 검사합니다.',section:'QUALITY GATE',visibility:'consultant',summary:'품질 및 유의사항',body:`<div id="qualityPageBody"></div>`});
- addPage({id:'calculation-appendix',title:'계산 근거 부록',subtitle:'모든 시나리오는 동일 ConfirmedAnalysisModel의 값만 참조합니다.',section:'CALCULATION APPENDIX',visibility:'common',summary:'산식과 계산근거',body:`<table><thead><tr><th>산출</th><th>산식</th><th>결과</th><th>성격</th></tr></thead><tbody><tr><td>채권 증가</td><td>2025 매출채권−2024 매출채권</td><td>${wonEok(r.receivableIncrease)}</td><td>계산값</td></tr><tr><td>재고 증가</td><td>2025 재고−2024 재고</td><td>${wonEok(r.inventoryIncrease)}</td><td>계산값</td></tr><tr><td>현금흡수</td><td>채권 증가+재고 증가</td><td>${wonEok(r.cashAbsorption)}</td><td>계산값</td></tr><tr><td>채권 10일 개선</td><td>매출액÷365×10</td><td>${wonEok(r.dso10Potential)}</td><td>시나리오</td></tr><tr><td>재고 5일 개선</td><td>매출원가÷365×5</td><td>${wonEok(r.inventory5Potential)}</td><td>시나리오</td></tr></tbody></table><div class="source-box"><b>계산기 연결</b> ${model.calculations.calculator.ratios.ok?'JarviaCalculators 호출 성공':'직접 검산값 사용·계산기 입력계약 추가 확인'} · ${esc(model.calculations.calculatorVersion||'version 미표시')}</div>`});
+ const calcRows=[];const addCalc=(label,formula,value,type='계산값')=>{if(value!==null&&value!==undefined&&value!=='—'&&value!=='미확인')calcRows.push([label,formula,value,type]);};
+ addCalc('매출 성장률','(2025 매출−2024 매출)÷2024 매출×100',pct(r.salesGrowth));addCalc('영업이익률','영업이익÷매출액×100',pct(r.operatingMargin));addCalc('유동비율','유동자산÷유동부채×100',pct(r.currentRatio));addCalc('현금비율','현금및현금성자산÷유동부채×100',pct(r.cashRatio));addCalc('차입금의존도','총차입금÷자산총계×100',pct(r.borrowingDependency));addCalc('이자보상배율','영업이익÷금융비용',Number.isFinite(r.interestCoverage)?r.interestCoverage.toFixed(2)+'배':'—');addCalc('재고일수','평균재고÷매출원가×365',Number.isFinite(r.inventoryDaysReported)?r.inventoryDaysReported.toFixed(1)+'일':'—','결산잔액 추정');addCalc('매출채권회수일','평균매출채권÷매출액×365',Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'—','결산잔액 추정');addCalc('현금전환주기','재고일수+채권회수일−매입채무일',Number.isFinite(cccValue)?cccValue+'일':'—','결산잔액 추정');
+ if(signalIds.has('CASH_DROP'))addCalc('현금 증감','2025 현금−2024 현금',Number.isFinite(model.financials['2025'].cash)&&Number.isFinite(model.financials['2024'].cash)?wonEok(model.financials['2025'].cash-model.financials['2024'].cash):'—','원문 차이');if(signalIds.has('BORROWING_SURGE'))addCalc('차입금 증감','2025 총차입금−2024 총차입금',Number.isFinite(model.financials['2025'].borrowings)&&Number.isFinite(model.financials['2024'].borrowings)?wonEok(model.financials['2025'].borrowings-model.financials['2024'].borrowings):'—','원문 차이');if(activeIssueIds.has('CAPITAL_POLICY'))addCalc('이익잉여금','2025 개별 결산',wonEok(model.financials['2025'].retainedEarnings),'원문값');if(activeIssueIds.has('CAPITAL_TRANSACTIONS'))addCalc('기타자본구성요소','2025 개별 결산',wonEok(metricValueAt(model.extractionResult,'financialStatements.separateAnnual.2025-12-31.balanceSheet.otherCapitalComponents')),'원문값');
+ addPage({id:'calculation-appendix',title:'계산 근거 부록',subtitle:'모든 계산은 동일 ConfirmedAnalysisModel의 원문값만 참조합니다.',section:'CALCULATION APPENDIX',visibility:'common',summary:'산식과 계산근거',body:`<table><thead><tr><th>산출</th><th>산식</th><th>결과</th><th>성격</th></tr></thead><tbody>${calcRows.map(x=>`<tr><td>${esc(x[0])}</td><td>${esc(x[1])}</td><td>${esc(x[2])}</td><td>${esc(x[3])}</td></tr>`).join('')}</tbody></table><div class="source-box"><b>계산기 연결</b> ${model.calculations.calculator.ratios.ok?'JarviaCalculators 호출 성공':'브라우저 직접 검산·계산기 입력계약 추가 확인'} · ${esc(model.calculations.calculatorVersion||'version 미표시')}</div>`});
  model.audioChapters=buildAudioChapters(model);
  addPage({id:'audio-course',title:'실전 컨설팅 해설강의',subtitle:'리포트 낭독이 아니라 숫자·질문·반론·보험시점을 교육합니다.',section:'AUDIO LEARNING',visibility:'audio',summary:'18~25분 맞춤형 강의',body:`<div class="audio-hero"><div class="course-cover"><div class="ic">🎧</div><div class="eyebrow">CONSULTANT LEARNING</div><h2>${esc(p.displayName||p.companyName)} 기업경영<br>의사결정 해설강의</h2><p>복잡한 숫자의 경영적 의미와 CEO에게 물어볼 질문, 유료컨설팅과 보험검토의 조건을 쉽게 설명합니다.</p><button type="button" data-audio-action="play">▶ 브라우저 강의 시작</button><div style="margin-top:6mm;font-size:9px;color:#99f6e4">권장 학습시간 ${model.audioChapters.reduce((s,x)=>s+x.minutes,0)}분 · ${model.audioChapters.length}개 챕터</div></div><div><div class="chapter-list" id="audioChapterList">${model.audioChapters.map((x,i)=>`<button type="button" data-chapter="${i}" class="${i===0?'on':''}"><span>CHAPTER ${String(i+1).padStart(2,'0')} · ${x.minutes}분</span><b>${esc(x.title)}</b><p>${esc(sentence(x.script,100))}</p></button>`).join('')}</div><div class="audio-controls"><button data-audio-action="play">▶ 재생</button><button data-audio-action="pause">⏸ 일시정지</button><button data-audio-action="stop">■ 정지</button><select id="audioRate"><option value="0.9">0.9×</option><option value="1" selected>1.0×</option><option value="1.15">1.15×</option><option value="1.3">1.3×</option></select><button data-audio-action="mp3">고급 MP3 생성</button></div><div class="audio-transcript" id="audioTranscript">${esc(model.audioChapters[0].script)}</div></div></div>`});
- addPage({id:'closing',title:'최종 제안과 다음 행동',subtitle:'리포트 생성이 아니라 CEO의 실행결정으로 마무리합니다.',section:'FINAL PROPOSAL',visibility:'common',summary:'최종 제안',body:`<div class="lead"><b>1차 유료 정밀진단을 우선 제안합니다.</b><p>운전자금·대여금·자본거래·승계·유고 재원을 확정한 뒤, 전문가 실행과 보험 적합성을 순서대로 검토합니다.</p></div><div class="options"><div class="option"><em>STEP 1</em><h3>팩트·자료 확정</h3><p>채권·재고·대여금·자본거래·주주·증권</p></div><div class="option recommended"><em>STEP 2 · 권장</em><h3>정밀진단 프로젝트</h3><p>계산·시나리오·의사결정·실행계획</p></div><div class="option"><em>STEP 3</em><h3>전문가·보험 실행</h3><p>확인된 법률·세무·가치·보장공백만 실행</p></div></div><div class="decision-bar"><b>다음 미팅</b><span>날짜 ______</span><span>담당자 ______</span><span>제출자료 ______</span><span>결정사항 ______</span></div>`});
+ addPage({id:'closing',title:'최종 제안과 다음 행동',subtitle:'리포트 생성이 아니라 CEO의 실행결정으로 마무리합니다.',section:'FINAL PROPOSAL',visibility:'common',summary:'최종 제안',body:`<div class="lead"><b>활성 이슈에 대한 1차 사실확정·정밀진단을 우선 제안합니다.</b><p>${esc(model.issues.map(x=>x.title).join(' · '))}의 자료와 원인을 확정한 뒤 전문가 실행과 보험 적합성을 순서대로 검토합니다.</p></div><div class="options"><div class="option"><em>STEP 1</em><h3>팩트·자료 확정</h3><p>${esc(activeDocs.slice(0,4).join(' · '))}</p></div><div class="option recommended"><em>STEP 2 · 권장</em><h3>정밀진단 프로젝트</h3><p>계산·시나리오·의사결정·실행계획</p></div><div class="option"><em>STEP 3</em><h3>전문가·보험 실행</h3><p>확인된 법률·세무·자본·보장공백만 실행</p></div></div><div class="decision-bar"><b>다음 미팅</b><span>날짜 ______</span><span>담당자 ______</span><span>제출자료 ______</span><span>결정사항 ______</span></div>`});
  state.caseData=model;state.pages.forEach(p=>p.notes=SpeechEngine.notes(p,model,model));return state.pages;
 }
 
@@ -429,14 +1828,14 @@ function openNotes(pageId){
 function closeNotes(){$('drawerBackdrop').classList.remove('on');$('notesDrawer').classList.remove('on');}
 
 function renderFactsForm(){
- const d=state.caseData;if(!d)return;const html=[];html.push('<div class="form-group-title">기업 기본정보</div>');
+ const d=state.caseData;if(!d)return;const html=[];if(d.meta?.extractorVersion){html.push(`<div class="form-group-title">NICE BizLINE 자동추출 · v${esc(d.meta.extractorVersion)}</div><div class="support-note"><strong>${d.meta.extractionQualityPassed?'추출검증 통과':'추출값 추가확인 필요'}</strong> · ${esc(d.meta.statementType||'')} · 원문 ${safeNum(d.meta.sourcePages)}페이지<br>${esc((d.warnings||[]).slice(0,3).join(' / '))}</div>`);}html.push('<div class="form-group-title">기업 기본정보</div>');
  ['companyName','representative','businessNumber','employees','established','industry','products','creditGrade'].forEach(k=>{const [label,type]=FIELD_META[k];html.push(`<div class="form-row"><label>${esc(label)}</label><input data-profile="${k}" type="${type}" value="${attr(d.profile[k]??'')}"></div>`);});
- for(const y of ['2023','2024','2025']){html.push(`<div class="form-group-title">${y}년 재무 · 단위 백만원</div>`);for(const k of ['assets','liabilities','equity','revenue','cogs','operatingProfit','netIncome','operatingCashFlow','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','shortTermLoanReceivable','retainedEarnings','interestExpense','capitalStock']){const [label]=FIELD_META[k];html.push(`<div class="form-row"><label>${esc(label)}</label><input data-financial="${y}.${k}" type="number" step="0.01" value="${attr(d.financials[y]?.[k]??'')}"></div>`);}}
+ for(const y of ['2023','2024','2025']){html.push(`<div class="form-group-title">${y}년 재무 · 단위 백만원</div>`);for(const k of ['assets','liabilities','equity','revenue','cogs','operatingProfit','netIncome','operatingCashFlow','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','shortTermLoanReceivable','retainedEarnings','interestExpense','capitalStock']){const [label]=FIELD_META[k];html.push(`<div class="form-row"><label>${esc(label)}</label><input data-financial="${y}.${k}" type="number" step="0.01" value="${attr(d.financials[y]?.[k]??'')}"></div>`);}}if(d.latestQuarterly){html.push(`<div class="form-group-title">최근 분기 ${esc(d.latestQuarterly.periodEnd||'')} · 참고자료</div>`);for(const [k,label] of [['assets','자산총계'],['currentLiabilities','유동부채'],['currentBorrowings','유동차입부채'],['cash','현금'],['revenue','분기 매출'],['operatingProfit','분기 영업이익'],['netIncome','분기 순이익'],['financeCost','분기 금융비용']])html.push(`<div class="form-row"><label>${label}</label><input data-quarterly="${k}" type="number" step="0.01" value="${attr(d.latestQuarterly[k]??'')}"></div>`);}
  $('factsForm').innerHTML=html.join('');
 }
 function collectFactsForm(){
  const d=state.caseData;qsa('[data-profile]',$('factsForm')).forEach(el=>{d.profile[el.dataset.profile]=el.type==='number'?(n(el.value)??null):el.value.trim();});
- qsa('[data-financial]',$('factsForm')).forEach(el=>{const [y,k]=el.dataset.financial.split('.');if(!d.financials[y])d.financials[y]={};d.financials[y][k]=n(el.value);});d.meta.confirmed=true;state.factsConfirmed=true;return d;
+ qsa('[data-financial]',$('factsForm')).forEach(el=>{const [y,k]=el.dataset.financial.split('.');if(!d.financials[y])d.financials[y]={};d.financials[y][k]=n(el.value);});qsa('[data-quarterly]',$('factsForm')).forEach(el=>{if(d.latestQuarterly)d.latestQuarterly[el.dataset.quarterly]=n(el.value);});d.speechOverrides=buildSpeechOverrides(d);d.meta.confirmed=true;state.factsConfirmed=true;return d;
 }
 function renderQuestions(){
  if(!state.analysis)state.analysis=buildConfirmedModel(state.caseData);const questions=allQuestions(state.analysis);const ans=state.caseData.answers||{};$('questionsBody').innerHTML=questions.map((q,i)=>{let input='';const val=ans[q.id]??'';if(q.type==='select')input=`<select data-question="${q.id}">${q.options.map(o=>`<option ${String(val)===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`;else if(q.type==='textarea')input=`<textarea data-question="${q.id}" placeholder="${attr(q.example||'')}">${esc(val)}</textarea>`;else input=`<input data-question="${q.id}" type="${q.type||'text'}" value="${attr(val)}" placeholder="${attr(q.example||'')}">`;return `<div class="question-card"><h3>${i+1}. ${esc(q.label)}</h3><p>${esc(q.reason)}${q.unit?' · 단위 '+esc(q.unit):''}</p>${input}</div>`;}).join('');
@@ -512,12 +1911,12 @@ async function tryLiveEnhancements(){
  state.quality=runQuality();renderQualityPage();
 }
 function prepareCase(data,{confirmed=false,autoGenerate=false}={}){
- state.caseData=clone(data);state.analysis=null;state.pages=[];state.factsConfirmed=confirmed||data.meta?.confirmed===true;state.questionsConfirmed=false;state.sourceName=data.meta?.sourceType||'';renderFactsForm();showWorkspace();updateStatus();if(autoGenerate)generateReport('auto');else openModal('factsModal');
+ state.caseData=clone(data);state.caseData.speechOverrides=state.caseData.speechOverrides||buildSpeechOverrides(state.caseData);state.analysis=null;state.pages=[];state.factsConfirmed=confirmed||data.meta?.confirmed===true;state.questionsConfirmed=false;state.sourceName=data.meta?.sourceType||'';renderFactsForm();showWorkspace();updateStatus();if(autoGenerate)generateReport('auto');else openModal('factsModal');
 }
 async function handlePdf(file){
  if(!file)return;if(file.size>30*1024*1024){setStartStatus('PDF는 30MB 이하를 사용해 주세요.','err');return;}window.jvTrack?.('corporate_pdf_analysis');setStartStatus('PDF 텍스트와 페이지를 분석하고 있습니다…');
- try{const out=await PDFParser.extract(file);state.sourceText=out.text;state.sourceName=file.name;state.pdfMeta=out;let data;if(PDFParser.isGolden(out.text)){data=clone(GOLDEN_SAMPLE);data.meta.sourcePages=out.pages;data.meta.sourceType=out.format+' PDF';data.meta.confirmed=false;data.warnings.unshift('PDF에서 모락스트레이딩 골든케이스를 식별했습니다. 모든 핵심값은 승인 후 사용됩니다.');}else{data=PDFParser.generic(out.text,out.pages);data.meta.sourceType=out.format+' PDF';data=await enrichWithExistingFinancialExtractor(data,out.text);}
-  setStartStatus(`${out.format} · ${out.pages}페이지 · 텍스트 추출 완료. 핵심값을 확인해 주세요.`,'ok');window.jvDone?.('corporate_pdf_analysis');prepareCase(data,{confirmed:false,autoGenerate:false});
+ try{const out=await PDFParser.extract(file);state.sourceText=out.text;state.sourceName=file.name;state.pdfMeta=out;let data;if(out.format==='NICE BizLINE'){setStartStatus('NICE BizLINE 전용엔진으로 재무·주주·관계사·신용정보를 구조화하고 있습니다…');data=extractNiceBizlineCase(out,file);}else if(PDFParser.isGolden(out.text)){data=clone(GOLDEN_SAMPLE);data.meta.sourcePages=out.pages;data.meta.sourceType=out.format+' PDF';data.meta.confirmed=false;data.warnings.unshift('PDF에서 모락스트레이딩 골든케이스를 식별했습니다. 모든 핵심값은 승인 후 사용됩니다.');}else{data=PDFParser.generic(out.text,out.pages);data.meta.sourceType=out.format+' PDF';data=await enrichWithExistingFinancialExtractor(data,out.text);}
+  setStartStatus(`${out.format} · ${out.pages}페이지 · 자동추출 완료. 원문과 핵심값을 확인해 주세요.`,'ok');window.jvDone?.('corporate_pdf_analysis');prepareCase(data,{confirmed:false,autoGenerate:false});
  }catch(error){window.jvDone?.('corporate_pdf_analysis');console.error(error);setStartStatus('분석 실패: 텍스트 선택·복사가 가능한 PDF인지 확인하거나 직접입력을 사용해 주세요.','err');}
 }
 
@@ -539,14 +1938,35 @@ function loadCaseFile(file){const r=new FileReader();r.onload=()=>{try{const p=J
 function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
 function buildCEOExportHtml(){
  const css=qs('style')?.textContent||'';
- const raw=state.pages.filter(p=>p.visibility==='common').map(p=>$(p.id)?.outerHTML||p.html).join('');
+ const commonPages=state.pages.filter(p=>p.visibility==='common');
+ const raw=commonPages.map(p=>$(p.id)?.outerHTML||p.html).join('');
  const holder=document.createElement('div');holder.innerHTML=raw;
  holder.querySelectorAll('.consultant-only,.consultant-block,.note-trigger,[data-note-page],[data-visibility="consultant"],[data-visibility="audio"]').forEach(el=>el.remove());
  holder.querySelectorAll('.report-page').forEach(el=>{el.classList.remove('hidden-mode');el.removeAttribute('data-issue');el.setAttribute('data-visibility','common');});
+ const guide=holder.querySelector('#guide');
+ if(guide){
+  const leadB=guide.querySelector('.lead b');
+  const leadP=guide.querySelector('.lead p');
+  if(leadB)leadB.textContent='재무설명이 아니라 CEO의 합리적인 의사결정을 지원합니다.';
+  if(leadP)leadP.textContent='확인된 팩트와 계산값에서 출발해 실행대안, 전문가 확인사항, 위험재원의 역할을 구분합니다.';
+ }
+ const sections=[...holder.querySelectorAll('.report-page')];
+ sections.forEach((el,i)=>{
+  const footerNo=el.querySelector('.page-footer b');
+  if(footerNo)footerNo.textContent=String(i+1).padStart(2,'0');
+ });
+ const toc=holder.querySelector('#tocInside');
+ if(toc){
+  toc.innerHTML=sections.map((el,i)=>{
+   const title=el.querySelector('.page-header h1')?.textContent?.trim()||commonPages[i]?.title||'';
+   return `<button type="button" data-jump="${esc(el.id)}"><b>${String(i+1).padStart(2,'0')}</b><span>${esc(title)}</span></button>`;
+  }).join('');
+ }
  const common=holder.innerHTML;
- const leakTerms=['CONSULTANT ONLY','컨설턴트 상담노트','페이지별 10단 상담노트','보험계약 기회 종합진단','유료컨설팅·전문가·보험 연결지도','2차 미팅 운영 스크립트','반론 대응','보험계약 8단계 상담 로드맵'];
+ const leakTerms=['CONSULTANT ONLY','컨설턴트 상담노트','페이지별 10단 상담노트','보험계약 기회 종합진단','유료컨설팅·전문가·보험 연결지도','2차 미팅 운영 스크립트','반론 대응','보험계약 8단계 상담 로드맵','컨설턴트용','음성강의용','유료컨설팅과 보험기회','다음 미팅·계약전환','CEO 7분기','반론 25종'];
  const leaks=leakTerms.filter(t=>common.includes(t));
- return {leaks,html:`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(state.caseData.profile?.displayName||'기업')} CEO 의사결정 리포트</title><style>${css}\nbody{padding:12mm 0}.ceo-toolbar{position:fixed;z-index:9999;right:14px;top:14px}.ceo-toolbar button{border:0;border-radius:10px;background:#102642;color:#fff;padding:10px 14px;font-weight:800}@media print{.ceo-toolbar{display:none}}</style></head><body class="mode-ceo"><div class="ceo-toolbar"><button onclick="window.print()">인쇄·PDF</button></div><main>${common}</main><script>document.querySelectorAll('[data-jump]').forEach(function(b){b.onclick=function(){var e=document.getElementById(b.dataset.jump);if(e)e.scrollIntoView({behavior:'smooth'});};});<\/script></body></html>`};
+ return {leaks,html:`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(state.caseData.profile?.displayName||'기업')} CEO 의사결정 리포트</title><style>${css}
+body{padding:12mm 0}.ceo-toolbar{position:fixed;z-index:9999;right:14px;top:14px}.ceo-toolbar button{border:0;border-radius:10px;background:#102642;color:#fff;padding:10px 14px;font-weight:800}@media print{body{padding:0}.ceo-toolbar{display:none}}</style></head><body class="mode-ceo"><div class="ceo-toolbar"><button onclick="window.print()">인쇄·PDF</button></div><main>${common}</main><script>document.querySelectorAll('[data-jump]').forEach(function(b){b.onclick=function(){var e=document.getElementById(b.dataset.jump);if(e)e.scrollIntoView({behavior:'smooth'});};});<\/script></body></html>`};
 }
 function exportCEO(){if(!state.pages.length)return;const out=buildCEOExportHtml();if(out.leaks.length){toast('CEO 전달본 내부정보 누출검사 실패: '+out.leaks.join(', '),'err');return;}downloadBlob(new Blob([out.html],{type:'text/html;charset=utf-8'}),`${state.caseData.profile?.displayName||'기업'}_CEO_의사결정리포트.html`);toast('내부정보가 제거된 CEO 전달본을 생성했습니다.','ok');}
 function searchAll(){const q=$('searchInput').value.trim();if(!q){$('searchResults').innerHTML='<p>검색어를 입력해 주세요.</p>';return;}const qp=q.toLowerCase();const pages=state.pages.filter(p=>(p.title+' '+p.subtitle+' '+p.summary+' '+p.html.replace(/<[^>]+>/g,' ')).toLowerCase().includes(qp)).slice(0,20);const speech=SpeechEngine.search(q).slice(0,15);$('searchResults').innerHTML=`<h3>리포트 ${pages.length}건</h3>${pages.map(p=>`<button class="card" style="display:block;width:100%;text-align:left;margin:6px 0" data-search-jump="${p.id}"><b>${esc(p.title)}</b><p>${esc(p.summary||p.subtitle)}</p></button>`).join('')||'<p>결과 없음</p>'}<h3>화법교본 ${speech.length}건</h3>${speech.map(x=>`<details class="card" style="margin:6px 0"><summary><b>${esc(x.title)}</b></summary><p>${esc(sentence(x.text,700))}</p></details>`).join('')||'<p>결과 없음</p>'}`;qsa('[data-search-jump]').forEach(b=>b.onclick=()=>{closeModal('searchModal');$(b.dataset.searchJump)?.scrollIntoView({behavior:'smooth'});});}
@@ -561,7 +1981,7 @@ function initEvents(){
  $('pdfInput').onchange=e=>handlePdf(e.target.files?.[0]);const zone=$('uploadZone');['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('drag');}));['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('drag');}));zone.addEventListener('drop',e=>handlePdf(e.dataTransfer.files?.[0]));
  qsa('[data-mode]').forEach(b=>b.onclick=()=>applyMode(b.dataset.mode));$('menuBtn').onclick=()=>$('sidePanel').classList.toggle('on');$('closeSide').onclick=()=>$('sidePanel').classList.remove('on');
  $('factsBtn').onclick=()=>{renderFactsForm();openModal('factsModal');};$('questionsBtn').onclick=()=>{renderQuestions();openModal('questionsModal');};$('regenBtn').onclick=()=>generateReport('regen');
- $('confirmFactsBtn').onclick=()=>{collectFactsForm();closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};$('confirmQuestionsBtn').onclick=()=>{collectQuestions();closeModal('questionsModal');generateReport('answers');};
+ $('confirmFactsBtn').onclick=()=>{if(!collectFactsForm())return;closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};$('confirmQuestionsBtn').onclick=()=>{collectQuestions();closeModal('questionsModal');generateReport('answers');};
  $('qualityBtn').onclick=()=>{state.quality=runQuality();renderQualityPage();openModal('qualityModal');};$('searchBtn').onclick=()=>openModal('searchModal');$('searchGoBtn').onclick=searchAll;$('searchInput').onkeydown=e=>{if(e.key==='Enter')searchAll();};
  $('printBtn').onclick=()=>window.print();$('exportBtn').onclick=exportCEO;$('saveCaseBtn').onclick=saveCase;$('loadCaseBtn').onclick=()=>$('caseFileInput').click();$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
  $('drawerBackdrop').onclick=closeNotes;$('notesClose').onclick=closeNotes;qsa('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
@@ -572,7 +1992,7 @@ function initEvents(){
 }
 
 function init(){
- if(!canAccess())$('accessGate').classList.add('on');initEvents();renderManualForm();const p=new URLSearchParams(location.search);if(p.get('sample')==='1'||p.get('demo')==='sample')prepareCase(clone(GOLDEN_SAMPLE),{confirmed:true,autoGenerate:true});
+ if(!canAccess())$('accessGate').classList.add('on');initEvents();renderManualForm();
  console.info('[CorporateReport]',VERSION,'ready · speech',Object.keys(ISSUE_SPEECH_LIBRARY).length,'issues · registry',ISSUE_REGISTRY.length);
 }
 
@@ -750,7 +2170,7 @@ function speechV16IssuePageText(text,page){
  return `${focus} 페이지 주제는 ${page?.title||'해당 이슈'}입니다. ${text} 이 페이지에서 합의할 다음 단계는 ${page?.summary||page?.notePurpose||'자료와 재검토 일정 확정'}입니다.`;
 }
 SpeechEngine.notes=function(page,data,analysis){
- const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null,lib=page.issueId?this.get(page.issueId):null,role=speechV16PageRole(page),generic=speechV16GenericScripts(page,data);
+ const issue=page.issueId?analysis.issues.find(x=>x.id===page.issueId):null,lib=page.issueId?this.get(page.issueId,data):null,role=speechV16PageRole(page),generic=speechV16GenericScripts(page,data);
  const branches=page.issueId?this.branches(page.issueId):speechV16CommonBranches(page),objections=speechV16ObjectionsFor(page,data),scenarios=speechV16ScenariosFor(page,data),style=speechStyleProfile(data),companies=speechCompanyProfiles(data);
  const purpose=page.notePurpose||(issue?`${issue.title}을 CEO가 경영 의사결정 과제로 이해하고 다음 확인 행동에 동의하도록 합니다.`:`${page.title}의 핵심 사실을 이해하고 대표가 판단할 기준과 다음 행동을 합의하도록 합니다.`);
  const diagnosis=issue?.meaning||page.summary||'확인된 사실과 계산값을 경영 언어로 번역해 설명합니다.';
@@ -776,18 +2196,25 @@ buildAudioChapters=function(model){
  const insuranceHigh=(model.insurance||[]).some(x=>['A','B','A_CORE','B_CONDITIONAL'].includes(x.grade))&&(active.includes('KEY_PERSON')||active.includes('SUCCESSION'));
  const optimize=active.includes('INSURANCE_OPTIMIZATION')||['일부 확보','전체 확보'].includes(model.answers?.existingInsurance);
  const lectureType=optimize?'INSURANCE_OPTIMIZATION':insuranceHigh?'INSURANCE_OPPORTUNITY':'CONSULTING_PRIORITY';model.audioLectureType=lectureType;
- const introType={INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
+ const introType=!activeIssues.length?'현재 자동 임계치상 핵심 이슈를 확정하지 않고 추가 확인이 필요한 기업':{INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
  const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:3,sourceIssueIds:active.slice(),script:`자비아 기업경영 의사결정 해설교육, 시작하겠습니다. 오늘은 ${company}의 리포트를 읽는 것이 아니라 무엇을 묻고 어떤 순서로 상담할지 훈련합니다. 이 기업은 ${introType}입니다. 활성 이슈는 ${activeIssues.map(x=>x.title).join(', ')||'추가 확인 필요'}입니다. 보험은 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
  chapters.push({title:'숫자를 경영언어로 번역하는 법',minutes:3,sourceIssueIds:active.slice(),script:`숫자는 매출·자산·비율을 나열하지 않습니다. 현금이 어디에 묶였는지, 1년 안에 갚을 돈과 즉시 쓸 자산의 여유가 어떤지, 대표와 주주의 의사결정에 어떤 영향을 주는지 설명합니다. 원본·계산값·시나리오·확인필요를 구분하고, 확인되지 않은 금액은 질문과 자료요청으로 남깁니다.`});
+ if(!activeIssues.length){
+  chapters.push({title:'자동 이슈 미확정 시 상담 원칙',minutes:4,sourceIssueIds:[],script:'현재 자료에서 자동 임계치를 넘는 핵심 이슈가 확정되지 않았습니다. 이것은 문제가 전혀 없다는 뜻이 아니라, 추가 근거 없이 대여금·자본거래·승계·대표 유고를 가정하지 않는다는 뜻입니다. 대표가 체감하는 경영과제와 자료의 공백을 먼저 확인하고, 근거가 확인될 때만 진단범위를 넓힙니다.'});
+  chapters.push({title:'추가 확인질문과 자료 요청',minutes:4,sourceIssueIds:[],script:'대표님이 현재 가장 먼저 해결하고 싶은 경영과제, 보고서 수치와 체감이 다른 부분, 향후 1년의 투자·차입·주주 의사결정을 질문합니다. 최근 자금수지, 차입만기, 주요 거래처와 재고, 주주·임원 관련 변동자료 중 실제로 존재하는 자료만 요청하고 미확인 항목을 0이나 없음으로 단정하지 않습니다.'});
+  chapters.push({title:'문제가 없다는 반론과 재검토 기준',minutes:4,sourceIssueIds:[],script:'대표가 현재 문제가 없다고 답하면 그 판단을 존중합니다. 어느 수치나 사건부터 관리가 필요하다고 판단할지 경계값을 합의하고, 매출·현금·차입·주주구조에 의미 있는 변화가 생길 때만 재검토합니다. 오늘은 전체 프로젝트가 아니라 모니터링 기준과 재확인일을 정하는 것으로 충분합니다.'});
+  chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:[],script:'다음 미팅에는 원본 기업보고서, 최신 결산자료, 최근 자금수지와 대표가 중요하다고 보는 의사결정 목록을 준비하십시오. 확인된 이슈가 없으면 보험이나 유료프로젝트를 억지로 만들지 않습니다. 오늘 주제에서 딱 하나만 기억한다면 확인되지 않은 사실을 문제로 만들어서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.'});
+  return chapters;
+ }
  const top=activeIssues.slice(0,3),per=activeIssues.length===1?5:activeIssues.length===2?4:3;
- top.forEach((issue,idx)=>{const id=issue.id,lib=SpeechEngine.get(id),note=SpeechEngine.notes({id:'audio-'+id,issueId:id,title:lib.title,summary:issue.meaning},model,model),branch=note.branches[idx%7],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${lib.title}`,minutes:per,sourceIssueIds:[id],script:`학습목표는 ${lib.title}의 사실과 경영적 의미를 설명하고 다음 행동에 합의하는 것입니다. ${note.speech3m} 실전 질문은 ${note.questions.slice(0,3).join(' ')} 대표가 ${branch.expression}라고 답하면 1차로 ${branch.response}라고 설명하고 ${branch.followUp}라고 재질문합니다. 2차로는 ${branch.secondResponse} 최종 행동은 ${branch.agreement}입니다.${obj?` 반론 “${obj.title}”에는 ${(obj.dialogue||[]).filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
- if(activeIssues.length>3){const rest=activeIssues.slice(3);chapters.push({title:'추가 활성 이슈 빠른 적용',minutes:2,sourceIssueIds:rest.map(x=>x.id),script:rest.map(issue=>{const lib=SpeechEngine.get(issue.id),note=SpeechEngine.notes({id:'audio-short-'+issue.id,issueId:issue.id,title:lib.title,summary:issue.meaning},model,model);return `${lib.title}: ${note.speech30} 확인질문은 ${note.questions[0]} 다음 행동은 ${note.transition}`;}).join(' ')});}
+ top.forEach((issue,idx)=>{const id=issue.id,lib=SpeechEngine.get(id,model),displayTitle=issue.title||lib.title||id,note=SpeechEngine.notes({id:'audio-'+id,issueId:id,title:displayTitle,summary:issue.meaning},model,model),branch=note.branches[idx%7],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${displayTitle}`,minutes:per,sourceIssueIds:[id],script:`학습목표는 ${displayTitle}의 확인된 사실과 경영적 의미를 설명하고 다음 행동에 합의하는 것입니다. ${note.speech3m} 실전 질문은 ${note.questions.slice(0,3).join(' ')} 대표가 ${branch.expression}라고 답하면 1차로 ${branch.response}라고 설명하고 ${branch.followUp}라고 재질문합니다. 2차로는 ${branch.secondResponse} 최종 행동은 ${branch.agreement}입니다.${obj?` 반론 “${obj.title}”에는 ${(obj.dialogue||[]).filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
+ if(activeIssues.length>3){const rest=activeIssues.slice(3);chapters.push({title:'추가 활성 이슈 빠른 적용',minutes:2,sourceIssueIds:rest.map(x=>x.id),script:rest.map(issue=>{const lib=SpeechEngine.get(issue.id,model),displayTitle=issue.title||lib.title||issue.id,note=SpeechEngine.notes({id:'audio-short-'+issue.id,issueId:issue.id,title:displayTitle,summary:issue.meaning},model,model);return `${displayTitle}: ${note.speech30} 확인질문은 ${note.questions[0]} 다음 행동은 ${note.transition}`;}).join(' ')});}
  if(lectureType==='INSURANCE_OPPORTUNITY')chapters.push({title:'보험을 꺼내는 시점과 8단계',minutes:3,sourceIssueIds:active.filter(id=>['KEY_PERSON','SUCCESSION','EXECUTIVE_RETIREMENT','EXPORT_CREDIT','PROPERTY_BI','INSURANCE_OPTIMIZATION'].includes(id)),script:`잘못된 접근은 상품과 세금부터 말하는 것입니다. 올바른 순서는 위험사건, 재무충격, 필요재원, 현재재원, 부족재원, 보험 외 대안, 보험 역할입니다. ${INSURANCE_SPEECH_STAGES.map(x=>`${x.stage}. ${x.speech} 완료조건은 ${x.gate}.`).join(' ')} 부족재원이 없으면 보험을 확대하지 않습니다.`});
  else if(lectureType==='INSURANCE_OPTIMIZATION')chapters.push({title:'기존 증권 최적화 원칙',minutes:3,sourceIssueIds:active.includes('INSURANCE_OPTIMIZATION')?['INSURANCE_OPTIMIZATION']:active.slice(),script:'모든 법인·개인 증권을 목적별로 분류하고 계약자·피보험자·수익자, 보장금액·기간, 현금가치, 해지손실, 면책, 신규심사를 필요재원과 비교합니다. 목적과 기간이 맞으면 유지가 결론이며 실제 부족분에만 추가설계를 검토합니다.'});
- else chapters.push({title:'보험을 배제하고 유료진단을 제안하는 법',minutes:3,sourceIssueIds:active.slice(),script:'보험의 직접 당위성이 낮다면 운전자금, 대여금, 자본거래, 규정과 절차의 정밀진단을 우선합니다. 산출물·담당자·기한·KPI·중단조건을 합의하고 별도의 우연한 위험과 부족재원이 발견될 때만 보험 게이트를 엽니다.'});
+ else chapters.push({title:'보험을 배제하고 유료진단을 제안하는 법',minutes:3,sourceIssueIds:active.slice(),script:`보험의 직접 당위성이 낮다면 ${activeIssues.length?activeIssues.map(x=>x.title).join(', '):'현재 확인된 재무사실과 추가 확인사항'}을 중심으로 정밀진단을 우선합니다. 확인되지 않은 대여금·자본거래·승계·대표 유고를 임의로 가정하지 않습니다. 산출물·담당자·기한·KPI·중단조건을 합의하고, 별도의 우연한 위험과 부족재원이 확인될 때만 보험 게이트를 엽니다.`});
  const objection=speechV16ObjectionsFor({id:'audio-objection',issueId:active[0]||'',title:'반론'},model)[0];
  chapters.push({title:'대표 반론 역할극과 다음 미팅',minutes:2,sourceIssueIds:active.slice(),script:`반론은 거절이 아니라 추가 확인 요청입니다. ${objection?(objection.dialogue||[]).map(x=>`${x.speaker}: ${x.text}`).join(' '):'대표의 우려를 인정하고 진짜 이유를 확인한 뒤 범위를 한 단계로 줄입니다.'} 모든 반론의 끝에는 자료·담당자·기한·재검토일이 남아야 합니다.`});
- chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에는 ${active.slice(0,5).flatMap(documentList).filter((v,i,a)=>a.indexOf(v)===i).slice(0,10).join(', ')||'원본 자료와 담당자 목록'}를 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.`});
+ chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에는 ${active.slice(0,5).flatMap(documentList).filter((v,i,a)=>a.indexOf(v)===i).slice(0,10).join(', ')||'원본 자료와 담당자 목록'}을 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.`});
  let total=chapters.reduce((s,x)=>s+x.minutes,0);while(total<18){chapters[chapters.length-2].minutes++;total++;}while(total>25){const c=chapters.find(x=>x.minutes>2&&x.title.startsWith('핵심 이슈'));if(!c)break;c.minutes--;total--;}
  return chapters;
 };
@@ -848,6 +2275,827 @@ SpeechEngine.auditGolden=function(){
 };
 
 // Public API used by HTML and JARVIA integration.
-global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY};
+
+/* ==========================================================================
+ * PRODUCTION HARDENING v1.7.0
+ * 데이터 무결성·회계기간·계산기·승인·품질게이트 강화
+ * ========================================================================== */
+const CR_FIN_KEYS=['assets','liabilities','equity','revenue','cogs','operatingProfit','netIncome','operatingCashFlow','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','currentBorrowings','nonCurrentBorrowings','shortTermLoanReceivable','retainedEarnings','interestExpense','capitalStock'];
+function crEmptyFinancialYear(){return Object.fromEntries(CR_FIN_KEYS.map(k=>[k,null]));}
+function crEmptyCase({sourceType='직접입력',sourcePages=0,confirmed=false}={}){
+ const years={'2023':crEmptyFinancialYear(),'2024':crEmptyFinancialYear(),'2025':crEmptyFinancialYear()};
+ return {meta:{schemaVersion:'CR-1.9.0',caseId:'CR-'+uid().toUpperCase(),sourceType,sourcePages,sourceFileName:'',unit:'백만원',confirmed,createdAt:new Date().toISOString().slice(0,10),statementType:'확인 필요',extractionQualityPassed:false},profile:{companyName:'',displayName:'',businessNumber:'',representative:'',employees:null,established:null,companyType:'',industry:'',industryCode:'',products:'',address:'',website:'',groupName:'',mainBank:'',creditGrade:'',foreignSubsidiaries:[],relatedCompanies:[],shareholders:[],reportDate:null,fiscalDate:null,latestQuarterDate:null},financials:years,latestQuarterly:null,capitalEvents:[],answers:{ceoStyle:'신중보수형',meetingStage:'1차 진단',successorStatus:'미확인',existingInsurance:'미확인',keyPersonMonthlyFixedCost:null,keyPersonEmergencyMonths:12,immediateDebtRepayment:null,availableEmergencyCash:null,existingKeyPersonCoverage:null,topCustomerConcentration:'미확인'},sourceMap:{},warnings:[],speechPlan:null,speechOverrides:{},dynamicQuestions:[],derivedSignals:[],confirmationQueue:[],extractionResult:null};
+}
+function crCleanText(v){if(v===null||v===undefined)return '';const t=String(v).replace(/\s+/g,' ').trim();return (!t||t==='-'||t==='—'||/^미확인$/i.test(t)||/^해당\s*없음$/i.test(t))?'':t;}
+function crNormalizeCase(d){
+ const base=crEmptyCase({sourceType:d?.meta?.sourceType||'미확인',sourcePages:d?.meta?.sourcePages||0,confirmed:!!d?.meta?.confirmed});
+ const out=Object.assign(base,clone(d||{}));out.meta=Object.assign(base.meta,clone(d?.meta||{}));out.profile=Object.assign(base.profile,clone(d?.profile||{}));out.profile.companyName=crCleanText(out.profile.companyName);out.profile.displayName=crCleanText(out.profile.displayName)||out.profile.companyName;['businessNumber','representative','companyType','industry','industryCode','products','address','website','groupName','mainBank','creditGrade'].forEach(k=>out.profile[k]=crCleanText(out.profile[k]));['foreignSubsidiaries','relatedCompanies','shareholders'].forEach(k=>{if(!Array.isArray(out.profile[k]))out.profile[k]=[];});
+ out.financials={};for(const y of ['2023','2024','2025']){out.financials[y]=Object.assign(crEmptyFinancialYear(),clone(d?.financials?.[y]||{}));for(const k of CR_FIN_KEYS)out.financials[y][k]=n(out.financials[y][k]);}
+ if(out.latestQuarterly){const q=Object.assign({periodEnd:null,date:null,assets:null,liabilities:null,equity:null,cash:null,currentAssets:null,currentLiabilities:null,currentBorrowings:null,nonCurrentBorrowings:null,revenue:null,operatingProfit:null,netIncome:null,financeCost:null,sourcePage:null,confirmed:false},out.latestQuarterly);q.periodEnd=crCleanText(q.periodEnd||q.date)||null;delete q.date;for(const k of Object.keys(q))if(!['periodEnd','sourcePage','confirmed'].includes(k))q[k]=n(q[k]);if(q.periodEnd&&(/-12-31$/.test(q.periodEnd)||q.periodEnd===out.profile.fiscalDate)){out.warnings=[...(out.warnings||[]),'연말 결산자료와 동일한 최근분기 자료를 제외했습니다.'];out.latestQuarterly=null;}else out.latestQuarterly=q;}
+ out.capitalEvents=Array.isArray(out.capitalEvents)?out.capitalEvents.filter(x=>x&&x.type&&Number.isFinite(n(x.amount))).map(x=>({...x,amount:n(x.amount)})):[];out.answers=Object.assign(base.answers,clone(d?.answers||{}));out.warnings=[...new Set((out.warnings||[]).filter(Boolean))];out.dynamicQuestions=Array.isArray(out.dynamicQuestions)?out.dynamicQuestions:[];out.confirmationQueue=Array.isArray(out.confirmationQueue)?out.confirmationQueue:[];return out;
+}
+function crValidateFacts(d,{requireThreeYears=true}={}){
+ const errors=[],warnings=[];if(!crCleanText(d?.profile?.companyName))errors.push('기업명 누락');
+ const years=requireThreeYears?['2023','2024','2025']:['2025'];const core=['assets','liabilities','equity','revenue','operatingProfit','netIncome'];
+ for(const y of years){const f=d?.financials?.[y]||{};for(const k of core)if(!Number.isFinite(f[k]))errors.push(`${y} ${FIELD_META[k]?.[0]||k} 누락`);if([f.assets,f.liabilities,f.equity].every(Number.isFinite)){const tol=Math.max(2,Math.abs(f.assets)*0.001);if(Math.abs(f.assets-f.liabilities-f.equity)>tol)errors.push(`${y} 회계등식 불일치: 자산≠부채+자본`);}for(const k of ['assets','liabilities','equity','revenue','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','currentBorrowings','nonCurrentBorrowings','capitalStock'])if(Number.isFinite(f[k])&&f[k]<0)errors.push(`${y} ${FIELD_META[k]?.[0]||k} 음수 입력`);if(Number.isFinite(f.borrowings)&&Number.isFinite(f.currentBorrowings)&&Number.isFinite(f.nonCurrentBorrowings)){const split=f.currentBorrowings+f.nonCurrentBorrowings,gap=f.borrowings-split,tol=Math.max(2,Math.abs(f.borrowings)*0.02);if(Math.abs(gap)>tol)warnings.push(gap>0?`${y} 총차입금에는 유동·비유동 차입금 외 기타금융부채 ${mm(gap)}이 포함될 수 있습니다.`:`${y} 유동·비유동 차입금 합계가 총차입금보다 ${mm(Math.abs(gap))} 큽니다. 원문 범위를 확인해 주세요.`);}}
+ if(d?.latestQuarterly?.periodEnd&&(/-12-31$/.test(d.latestQuarterly.periodEnd)||d.latestQuarterly.periodEnd===d?.profile?.fiscalDate))errors.push('연말 결산값이 최근분기로 분류됨');
+ if(d?.meta?.sourceType?.includes('NICE')&&d?.meta?.extractionQualityPassed===false)errors.push('NICE 자동추출 검증 미통과');
+ return {passed:errors.length===0,errors:[...new Set(errors)],warnings:[...new Set(warnings)]};
+}
+function crFinancialFieldMeta(d,y,k){
+ const std=d?.meta?.statementType||'회계기준 확인 필요';const page=['assets','liabilities','equity','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','currentBorrowings','nonCurrentBorrowings','retainedEarnings','capitalStock'].includes(k)?18:19;
+ return d?.meta?.sourceType?.includes('NICE')?`원문 ${page}p · ${y} 개별 결산 · ${std}`:'사용자 확인 필요';
+}
+PDFParser.generic=function(text,pages){
+ const grab=(re,d='')=>{const m=String(text||'').match(re);return m?crCleanText(m[1]):d;};const d=crEmptyCase({sourceType:'일반 텍스트형 PDF(기본정보만)',sourcePages:pages,confirmed:false});
+ d.profile.companyName=grab(/기업명\s*[:：]?\s*(.{2,60}?)(?=\s+(?:대표자(?:명)?|사업자(?:등록)?번호|설립일|종업원|업종|주요\s*제품)|$)/m,'');d.profile.displayName=d.profile.companyName;d.profile.representative=grab(/대표자(?:명)?\s*[:：]?\s*([가-힣A-Za-z ]{2,30}?)(?=\s+(?:사업자(?:등록)?번호|설립일|종업원|업종|주요\s*제품)|$)/m,'');d.profile.businessNumber=grab(/사업자(?:등록)?번호\s*[:：]?\s*([0-9-]{10,12})/,'');d.warnings=['NICE BizLINE·KODATA/KCR2·CRETOP 외 미지원 형식은 기본정보만 읽으며 재무값은 직접 확인해야 합니다.'];return d;
+};
+ServerAdapter.extractFinancial=async function(text){const t=String(text||'').trim();return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:t.slice(0,120000)});};
+enrichWithExistingFinancialExtractor=async function(data,text){
+ if(!memberInfo().loginId||!String(text||'').trim()||data?.meta?.sourceType?.includes('NICE'))return data;
+ try{setStartStatus('기존 JARVIA 재무추출 API로 보조 교차확인하고 있습니다…');const out=await ServerAdapter.extractFinancial(text);const p=out?.pendingFinancialData||out?.financialData||out;const ex=p?.extracted||{};const y=String(p?.baseYear||'2025');if(!data.financials[y])data.financials[y]=crEmptyFinancialYear();const unit=String(p?.unit||'').toUpperCase();const factor=unit.includes('만원')||unit.includes('KRW_10K')?0.01:unit.includes('원')||unit==='KRW'?0.000001:unit.includes('백만원')||unit.includes('MILLION')?1:null;if(factor===null){data.warnings.push('보조 API 단위를 확정할 수 없어 재무값을 반영하지 않았습니다.');return data;}const map={revenue:'revenue',operatingProfit:'operatingProfit',netProfit:'netIncome',netIncome:'netIncome',totalAssets:'assets',totalLiabilities:'liabilities',totalEquity:'equity',retainedEarnings:'retainedEarnings',cashAndCashEquivalents:'cash',borrowings:'borrowings'};for(const [src,dst] of Object.entries(map)){const v=n(ex[src]);if(v!==null)data.financials[y][dst]=v*factor;}data.meta.statementType=p?.statementType||data.meta.statementType;data.meta.originalUnit=p?.unit||'';data.warnings.push('보조 API 값은 교차참고이며 사용자 승인 전 확정되지 않습니다.');state.live.ai=true;}catch(error){data.warnings.push('보조 재무추출 API를 사용하지 못했습니다: '+error.message);}return data;
+};
+function crInternalRatios(c,p){return {salesGrowth:div(c.revenue-p.revenue,p.revenue)*100,operatingMargin:div(c.operatingProfit,c.revenue)*100,netMargin:div(c.netIncome,c.revenue)*100,roe:div(c.netIncome,avg(c.equity,p.equity))*100,debtRatio:div(c.liabilities,c.equity)*100,currentRatio:div(c.currentAssets,c.currentLiabilities)*100,quickRatio:div((Number.isFinite(c.currentAssets)&&Number.isFinite(c.inventory))?c.currentAssets-c.inventory:null,c.currentLiabilities)*100,cashRatio:div(c.cash,c.currentLiabilities)*100,borrowingDependency:div(c.borrowings,c.assets)*100,interestCoverage:div(c.operatingProfit,c.interestExpense),dso:div(avg(c.receivables,p.receivables),c.revenue)*365,inventoryDaysReported:div(avg(c.inventory,p.inventory),c.cogs)*365,ocfConversion:div(c.operatingCashFlow,c.netIncome)*100,receivableIncrease:Number.isFinite(c.receivables)&&Number.isFinite(p.receivables)?c.receivables-p.receivables:null,inventoryIncrease:Number.isFinite(c.inventory)&&Number.isFinite(p.inventory)?c.inventory-p.inventory:null};}
+computeAnalysis=function(data){
+ const f=data.financials||{},c=f['2025']||{},p=f['2024']||{},r=crInternalRatios(c,p);r.cashAbsorption=Number.isFinite(r.receivableIncrease)&&Number.isFinite(r.inventoryIncrease)?r.receivableIncrease+r.inventoryIncrease:null;r.dso10Potential=div(c.revenue,365)*10;r.inventory5Potential=div(c.cogs,365)*5;r.basePotential=Number.isFinite(r.dso10Potential)&&Number.isFinite(r.inventory5Potential)?r.dso10Potential+r.inventory5Potential:null;r.conservativePotential=Number.isFinite(r.basePotential)?r.basePotential*0.5:null;r.stretchPotential=Number.isFinite(r.basePotential)?r.basePotential*1.5:null;r.totalCapitalOutflow=(data.capitalEvents||[]).filter(x=>x.status==='confirmed'&&['자기주식 취득','현금배당 지급','자본금 감소'].includes(x.type)).reduce((sum,x)=>sum+x.amount,0);
+ const actualCurrentBorrow=Number.isFinite(c.currentBorrowings)?c.currentBorrowings:null;
+ const ratioCurrentBorrow=Number.isFinite(actualCurrentBorrow)?actualCurrentBorrow:0;
+ const ratioLongBorrow=Number.isFinite(c.borrowings)?Math.max(0,c.borrowings-ratioCurrentBorrow):(Number.isFinite(c.nonCurrentBorrowings)?c.nonCurrentBorrowings:null);
+ const calcInputs={current:{revenue:c.revenue,cogs:c.cogs,grossProfit:(Number.isFinite(c.revenue)&&Number.isFinite(c.cogs))?c.revenue-c.cogs:null,operatingProfit:c.operatingProfit,netIncome:c.netIncome,totalAssets:c.assets,totalLiabilities:c.liabilities,totalEquity:c.equity,currentAssets:c.currentAssets,currentLiab:c.currentLiabilities,cash:c.cash,inventory:c.inventory,receivables:c.receivables,payables:c.payables,shortTermBorrow:ratioCurrentBorrow,longTermBorrow:ratioLongBorrow,interestExpense:c.interestExpense,retainedEarnings:c.retainedEarnings,capitalStock:c.capitalStock},previous:{revenue:p.revenue,operatingProfit:p.operatingProfit,netIncome:p.netIncome,totalAssets:p.assets},employees:data.profile?.employees};
+ const calcRatios=tryCalculator('calcFinancialRatios',calcInputs);const calcCash=[c.cash,c.currentAssets,c.currentLiabilities,c.inventory,c.receivables,c.payables,c.revenue,c.cogs,actualCurrentBorrow].every(Number.isFinite)?tryCalculator('calcCashFlowRisk',{cash:c.cash,currentAssets:c.currentAssets,currentLiab:c.currentLiabilities,inventory:c.inventory,receivables:c.receivables,payables:c.payables,revenue:c.revenue,cogs:c.cogs,monthlyFixedCost:0,operatingProfit:c.operatingProfit,shortTermBorrow:actualCurrentBorrow}):{ok:false,error:'단기차입금 등 필수 입력 미확인'};
+ const answers=data.answers||{};let keyman=null;const keyInputs=[n(answers.keyPersonMonthlyFixedCost),n(answers.keyPersonEmergencyMonths),n(answers.immediateDebtRepayment),n(answers.availableEmergencyCash),n(answers.existingKeyPersonCoverage)];if(keyInputs.every(Number.isFinite))keyman=tryCalculator('calcCorpKeymanNeed',{monthlyOperatingShortfall:keyInputs[0]*1000000,impactMonths:keyInputs[1],replacementCost:0,guaranteedDebt:keyInputs[2]*1000000,liquidAssets:keyInputs[3]*1000000,existingKeymanCoverage:keyInputs[4]*1000000});
+ const cross=[];const cr=calcRatios?.result||calcRatios?.envelope?.result||{};const pairs=[[r.operatingMargin,cr?.profitability?.operatingMargin,'영업이익률'],[r.netMargin,cr?.profitability?.netMargin,'순이익률'],[r.debtRatio,cr?.stability?.debtRatio,'부채비율'],[r.currentRatio,cr?.stability?.currentRatio,'유동비율'],[r.borrowingDependency,cr?.stability?.borrowingDep,'차입금의존도']];for(const [a,b,label] of pairs)if(Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)>0.2)cross.push(`${label} 내부계산 ${a.toFixed(2)} / 계산기 ${b}`);
+ return {ratios:r,calculator:{ratios:calcRatios,cashFlow:calcCash,keyman},crossValidation:{passed:cross.length===0,errors:cross},calculatorVersion:global.JarviaCalculators?.version||'browser-bundle',computedAt:nowIso()};
+};
+buildIssues=function(data,calc){
+ if(data?.speechPlan?.activeIssueIds?.length)return buildSpeechPlanIssues(data,calc);
+ const c=data.financials?.['2025']||{},p=data.financials?.['2024']||{},r=calc.ratios||{},out=[];const add=(id,title,score,confidence,facts,meaning,risks,solutions,extras={})=>out.push({id,title,score,severity:severity(score),confidence,facts:facts.filter(Boolean),meaning,risks,solutions,...extras});
+ const hasWC=[c.revenue,p.revenue,c.receivables,p.receivables,c.inventory,p.inventory].every(Number.isFinite)&&(r.cashAbsorption>0||Number.isFinite(r.currentRatio)&&r.currentRatio<120);if(hasWC)add('WORKING_CAPITAL','성장과 현금전환',4.2,'B',[Number.isFinite(c.revenue)?`매출 ${wonEok(c.revenue)}`:'',Number.isFinite(r.cashAbsorption)?`채권·재고 증감 ${wonEok(r.cashAbsorption)}`:'',Number.isFinite(r.currentRatio)?`유동비율 ${pct(r.currentRatio)}`:''],'확인된 채권·재고·유동성 자료를 기준으로 현금전환 속도를 점검해야 합니다.',['운전자금 증가','차입 선행 가능성'],['채권·재고 세부진단','13주 현금수지'],{consulting:'운전자금 정밀진단',insurance:'거래처 신용위험 확인 후 조건부'});
+ if(Number.isFinite(c.shortTermLoanReceivable)&&c.shortTermLoanReceivable>0)add('LOAN_RECEIVABLE','단기대여금의 실질과 정상화',4.0,'B',[`단기대여금 ${wonEok(c.shortTermLoanReceivable)}`],'상대방·목적·계약·상환계획 확인이 우선입니다.',['회수·세무 위험'],['원장·계약·상환계획 복원'],{consulting:'대여금 정밀진단',insurance:'직접 연계 낮음'});
+ if(Number.isFinite(c.retainedEarnings)&&c.retainedEarnings<0)add('CAPITAL_POLICY','누적결손·자본회복 정책',4.1,'B',[`이익잉여금 ${wonEok(c.retainedEarnings)}`],'누적결손의 원인과 손실회복·현금·차입·주주정책을 구분해야 합니다.',['결손 지속·자본정책 부재'],['원인 브리지·3년 자본회복 계획'],{consulting:'자본회복 정책 진단',insurance:'직접 연계 낮음'});
+ if((data.capitalEvents||[]).length)add('CAPITAL_TRANSACTIONS','자본거래 재구성',3.8,'A',data.capitalEvents.map(x=>`${x.year} ${x.type} ${wonEok(x.amount)}`),'확인된 거래만 타임라인으로 복원합니다.',['절차·가치평가 단절'],['자본거래 타임라인'],{consulting:'자본거래 정밀진단',insurance:'직접 연계 아님'});
+ if(data.answers?.successorStatus&&data.answers.successorStatus!=='미확인')add('SUCCESSION','경영승계·가족·주주 유동성',3.5,'C',['후계자 관련 사용자 답변 확인'],'경영권과 가족 현금수요를 별도로 설계해야 합니다.',['경영권·공평성 충돌'],['승계 A/B/C안'],{consulting:'승계 진단',insurance:'부족재원 계산 후 조건부'});
+ if(Number.isFinite(n(data.answers?.keyPersonMonthlyFixedCost)))add('KEY_PERSON','대표자·핵심인 유고와 비상재원',3.6,'B',[`월 고정비 ${data.answers.keyPersonMonthlyFixedCost}백만원`],'확인된 운영비를 기준으로 부족재원을 계산합니다.',['운영현금 공백'],['필요재원 계산'],{consulting:'필요재원·증권분석',insurance:'부족재원 있을 때 조건부'});
+ if(Array.isArray(data.profile?.foreignSubsidiaries)&&data.profile.foreignSubsidiaries.length)add('EXPORT_CREDIT','수출채권·해외법인 위험',3.4,'C',[`확인된 해외법인 ${data.profile.foreignSubsidiaries.length}개`],'해외 거래의 채권·재산·휴업 위험을 확인합니다.',['국가·거래처 위험'],['해외리스크 진단'],{consulting:'해외리스크 진단',insurance:'신용·재산·휴업 조건부'});
+ if(['일부 확보','전체 확보'].includes(data.answers?.existingInsurance))add('INSURANCE_OPTIMIZATION','기존 보험증권 최적화',3.2,'C',['기존 보험 보유 사용자 확인'],'신규가입보다 기존 계약의 목적·공백·중복을 먼저 확인합니다.',['목적 불일치·중복'],['증권 분석'],{consulting:'증권분석',insurance:'보장분석 우선'});
+ return out.sort((a,b)=>b.score-a.score);
+};
+buildInsuranceOpportunities=function(data,issues,calc){
+ const out=[],has=id=>issues.some(x=>x.id===id),a=data.answers||{},c=data.financials?.['2025']||{};const push=(id,title,grade,basis,role,limits,next,gap=null,need=null,current=null)=>out.push({id,code:id,title,grade,basis,need,current,gap,role,limits,next,status:grade==='D'?'TO_CONFIRM':'REVIEW'});
+ if(has('KEY_PERSON')){const k=calc.calculator?.keyman;const kr=k?.result||k?.envelope?.result||null;const rawGap=kr?.requiredCoverageGap??kr?.fundingGap??null,rawNeed=kr?.totalNeed??null,rawCurrent=kr?.offset??null;const gap=Number.isFinite(rawGap)?Math.round(rawGap/1000000):null,need=Number.isFinite(rawNeed)?Math.round(rawNeed/1000000):null,current=Number.isFinite(rawCurrent)?Math.round(rawCurrent/1000000):null;push('INS-KEYPERSON','대표자·핵심인 유고',Number.isFinite(gap)&&gap>0?'B':'C','사용자 확인 운영비·가용재원 기준','예고 없는 유고 시 부족재원 일부 전가','대체경영·권한체계 병행','기존증권·심사조건 확인',gap,need,current);}else push('INS-KEYPERSON','대표자·핵심인 유고','D','대표 역할·운영비·기존보장 미확인','추가정보 확인 전 판단 불가','현재 자료만으로 제안 금지','대표 역할표·운영비·증권 확인');
+ if(has('SUCCESSION'))push('INS-SUCCESSION','승계·지분정리 유동성','C','후계자 관련 답변은 있으나 기업가치·가족현금수요 미확인','부족재원 확인 시 일부 전가','주식이동·가족합의·회사법 절차 대체 불가','가족·주주·가치평가 자료 확인');else push('INS-SUCCESSION','승계·지분정리 유동성','D','후계자·가족·기업가치 미확인','판단 보류','근거 없는 승계 제안 금지','승계의사 확인');
+ if(has('EXPORT_CREDIT'))push('INS-CREDIT','수출채권·거래처 신용','C',Number.isFinite(c.receivables)?`매출채권 ${wonEok(c.receivables)}·확인된 해외구조`:'확인된 해외구조','특정 거래처 부도·국가위험 일부 전가','채권관리 선행','거래처별 채권·국가·연체 확인');
+ if(has('INSURANCE_OPTIMIZATION'))push('INS-OPT','기존 증권 최적화','C','기존 보험 보유 사용자 확인','목적·중복·공백 조정','해지손실·신규심사 비교','전체 증권 수집');
+ return out;
+};
+function crApplyConfirmationAnswers(data){
+ const answers=data.answers||{};for(const q of data.dynamicQuestions||[]){const v=crCleanText(answers[q.id]);if(!v)continue;q.userAnswer=v;q.confirmed=true;const target=(data.confirmationQueue||[]).find(x=>String(x.question||x.text||'')===String(q.label||''));if(target){target.userAnswer=v;target.status='userConfirmed';target.confirmed=true;}}
+}
+collectQuestions=function(){state.caseData.answers=state.caseData.answers||{};qsa('[data-question]',$('questionsBody')).forEach(el=>{state.caseData.answers[el.dataset.question]=el.type==='number'?(n(el.value)??null):el.value.trim();});crApplyConfirmationAnswers(state.caseData);state.questionsConfirmed=true;};
+const crBuildConfirmedModelBase=buildConfirmedModel;
+buildConfirmedModel=function(data){const normalized=crNormalizeCase(data);crApplyConfirmationAnswers(normalized);const model=crBuildConfirmedModelBase(normalized);for(const q of normalized.dynamicQuestions||[]){if(!q.userAnswer||!q.issueId)continue;const issue=model.issues.find(x=>x.id===q.issueId);if(issue)issue.facts=[...issue.facts,`사용자 확인: ${q.userAnswer}`];}model.factValidation=crValidateFacts(normalized);return model;};
+renderFactsForm=function(){
+ const d=state.caseData;if(!d)return;const html=[];const extraction=d.meta?.coordinateEngine?`<div class="form-group-title">${esc(d.meta.sourceType||'기업보고서')} · ${esc(d.meta.coordinateEngine)}</div><div class="support-note"><strong>${d.meta.extractionQualityPassed?'좌표추출·회계검산 통과':'추출값 추가확인 필요'}</strong> · ${esc(d.meta.statementType||'')} · 원문 ${safeNum(d.meta.sourcePages)}페이지 · 원문단위 ${esc(d.meta.originalUnit||'미확인')} → 화면단위 백만원<br>${esc((d.warnings||[]).slice(0,4).join(' / '))}</div>`:`<div class="support-note"><strong>지원 범위 안내</strong> NICE BizLINE·KODATA/KCR2·CRETOP 텍스트형 보고서는 좌표기반 추출을 사용합니다. 미지원 형식은 직접입력이 필요합니다.</div>`;html.push(extraction,'<div id="factsValidationBox"></div>','<div class="form-group-title">기업 기본정보</div>');
+ ['companyName','representative','businessNumber','employees','established','industry','products','creditGrade'].forEach(k=>{const [label,type]=FIELD_META[k];html.push(`<div class="form-row"><label>${esc(label)}</label><input data-profile="${k}" type="${type}" value="${attr(d.profile[k]??'')}"><small>${d.meta?.coordinateEngine?'좌표기반 기업개요 · 자동추출':'사용자 확인'}</small></div>`);});
+ for(const y of ['2023','2024','2025']){html.push(`<div class="form-group-title">${y}년 재무 · 단위 백만원 · 개별 결산</div>`);for(const k of ['assets','liabilities','equity','revenue','cogs','operatingProfit','netIncome','operatingCashFlow','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','currentBorrowings','nonCurrentBorrowings','shortTermLoanReceivable','retainedEarnings','interestExpense','capitalStock']){const label=FIELD_META[k]?.[0]||({currentBorrowings:'유동·단기차입금',nonCurrentBorrowings:'비유동·장기차입금'}[k]||k);html.push(`<div class="form-row"><label>${esc(label)}</label><input data-financial="${y}.${k}" type="number" step="0.01" value="${attr(d.financials[y]?.[k]??'')}"><small>${esc(crFinancialFieldMeta(d,y,k))}</small></div>`);}}
+ if(d.latestQuarterly){html.push(`<div class="form-group-title">최근 분기 ${esc(d.latestQuarterly.periodEnd||'')} · 개별 분기 참고</div>`);for(const [k,label] of [['assets','자산총계'],['liabilities','부채총계'],['equity','자본총계'],['currentLiabilities','유동부채'],['currentBorrowings','유동차입부채'],['nonCurrentBorrowings','비유동차입부채'],['cash','현금'],['revenue','분기 매출'],['operatingProfit','분기 영업이익'],['netIncome','분기 순이익'],['financeCost','분기 금융비용']])html.push(`<div class="form-row"><label>${label}</label><input data-quarterly="${k}" type="number" step="0.01" value="${attr(d.latestQuarterly[k]??'')}"><small>원문 20p · 분기</small></div>`);} $('factsForm').innerHTML=html.join('');
+};
+collectFactsForm=function(){
+ const d=state.caseData;qsa('[data-profile]',$('factsForm')).forEach(el=>{d.profile[el.dataset.profile]=el.type==='number'?(n(el.value)??null):el.value.trim();});qsa('[data-financial]',$('factsForm')).forEach(el=>{const [y,k]=el.dataset.financial.split('.');d.financials[y]=d.financials[y]||crEmptyFinancialYear();d.financials[y][k]=n(el.value);});qsa('[data-quarterly]',$('factsForm')).forEach(el=>{if(d.latestQuarterly)d.latestQuarterly[el.dataset.quarterly]=n(el.value);});const normalized=crNormalizeCase(d);const v=crValidateFacts(normalized);const box=$('factsValidationBox');if(!v.passed){if(box)box.innerHTML=`<div class="notice red"><b>승인할 수 없습니다.</b>${list(v.errors)}${v.warnings.length?list(v.warnings):''}</div>`;state.factsConfirmed=false;normalized.meta.confirmed=false;state.caseData=normalized;toast('필수값과 회계등식을 확인해 주세요.','err');return false;}normalized.speechOverrides=buildSpeechOverrides(normalized);normalized.meta.confirmed=true;normalized.meta.extractionQualityPassed=true;normalized.factValidation=v;state.caseData=normalized;state.factsConfirmed=true;if(box&&v.warnings.length)box.innerHTML=`<div class="notice amber"><b>확인 경고</b>${list(v.warnings)}</div>`;return true;
+};
+renderManualForm=function(){const base=[['companyName','기업명','text'],['representative','대표자','text'],['businessNumber','사업자번호','text'],['industry','업종','text'],['employees','종업원 수','number']];const fields=[...base];for(const y of ['2023','2024','2025'])for(const [k,label] of [['revenue','매출액'],['operatingProfit','영업이익'],['netIncome','순이익'],['assets','자산'],['liabilities','부채'],['equity','자본'],['cash','현금'],['currentAssets','유동자산'],['currentLiabilities','유동부채'],['receivables','매출채권'],['inventory','재고'],['payables','매입채무'],['borrowings','총차입금'],['currentBorrowings','유동·단기차입금'],['nonCurrentBorrowings','비유동·장기차입금'],['cogs','매출원가'],['operatingCashFlow','영업현금흐름'],['interestExpense','이자비용'],['retainedEarnings','이익잉여금'],['capitalStock','자본금']])fields.push([`${y}.${k}`,`${y} ${label}(백만원)`,'number']);$('manualForm').innerHTML=fields.map(x=>`<div class="form-row"><label>${x[1]}</label><input data-manual="${x[0]}" type="${x[2]}"></div>`).join('');};
+applyManual=function(){const d=crEmptyCase({sourceType:'직접입력',sourcePages:0,confirmed:false});qsa('[data-manual]',$('manualForm')).forEach(e=>{const key=e.dataset.manual,val=e.type==='number'?n(e.value):e.value.trim();if(key.includes('.')){const [y,k]=key.split('.');d.financials[y][k]=val;}else d.profile[key]=val;});d.profile.displayName=d.profile.companyName;d.meta.extractionQualityPassed=true;const v=crValidateFacts(d);if(!v.passed){toast('직접입력 필수값을 확인해 주세요: '+v.errors.slice(0,3).join(', '),'err');return;}d.meta.confirmed=true;d.factValidation=v;prepareCase(d,{confirmed:true,autoGenerate:false});closeModal('manualModal');renderQuestions();openModal('questionsModal');};
+runQuality=function(){
+ const m=state.analysis||state.caseData,hard=[],fact=crValidateFacts(m||{}),stats=speechCompletionStats(),staticCoverage=speechV16StaticCoverage();
+ if(!state.factsConfirmed)hard.push('추출값 사용자 승인 미완료');
+ hard.push(...fact.errors);
+ if(m?.calculations?.crossValidation&&!m.calculations.crossValidation.passed)hard.push(...m.calculations.crossValidation.errors.map(x=>'계산기 교차검산: '+x));
+ if(m?.meta?.sourceType?.includes('NICE')&&m?.meta?.extractionQualityPassed===false)hard.push('NICE 추출 품질 미통과');
+ for(const issue of m?.issues||[]){if(!issue.facts?.length)hard.push(`${issue.title}: 근거 팩트 없음`);if(issue.facts?.some(x=>/0\.0억원/.test(x)&&/미확인|대여금/.test(x)))hard.push(`${issue.title}: 미확인값을 0으로 표현`);}
+ const badA=(m?.insurance||[]).filter(x=>['A','A_CORE'].includes(x.grade)&&!Number.isFinite(x.gap));if(badA.length)hard.push('A등급 보험기회에 부족재원 금액 없음');
+ if(stats.completeIssueScripts!==stats.issues)hard.push(`이슈별 장단 화법 누락 ${stats.issues-stats.completeIssueScripts}건`);
+ if(stats.branchIssues!==stats.issues)hard.push(`이슈별 CEO 7분기 누락 ${stats.issues-stats.branchIssues}건`);
+ if(staticCoverage.branchesWithoutSecond.length)hard.push('2차 대응 누락: '+staticCoverage.branchesWithoutSecond.join(', '));
+ if(staticCoverage.objectionCount!==25||staticCoverage.objectionUnrouted.length)hard.push(`반론 실행경로 불완전: ${staticCoverage.objectionCount}/25 · 미라우팅 ${staticCoverage.objectionUnrouted.join(', ')}`);
+ if(staticCoverage.scenarioCount!==20||staticCoverage.scenarioUnrouted.length)hard.push(`상담 시나리오 실행경로 불완전: ${staticCoverage.scenarioCount}/20 · 미라우팅 ${staticCoverage.scenarioUnrouted.join(', ')}`);
+ if(staticCoverage.styleCount<7||staticCoverage.styleOutputUnique<7||staticCoverage.companyTypeCount<10)hard.push(`맞춤화 실질변환 불완전: CEO ${staticCoverage.styleOutputUnique}/7 · 기업 ${staticCoverage.companyTypeCount}/10`);
+ if(stats.insuranceStages!==8)hard.push(`보험계약 단계 ${stats.insuranceStages}/8`);
+ const pages=state.pages.filter(x=>x.visibility!=='audio'),generatedText=[],usedScenarios=new Set(),usedObjections=new Set();let noteComplete=0,branchComplete=0,secondComplete=0,objComplete=0,scenarioComplete=0;
+ for(const p of pages){
+  const x=p.notes||{};const ok=x.purpose&&x.diagnosis&&x.speech30&&x.speech90&&x.speech3m&&x.speech5m&&x.questions?.length>=3&&x.branches?.length===7&&x.objections?.length>=2&&x.advanced?.length&&x.connection&&x.transition&&x.documents?.length&&(x.scenarios?.length||x.scenario);
+  if(ok)noteComplete++;else hard.push(`${p.title}: 10단 상담노트 불완전`);
+  if(x.branches?.length===7&&new Set(x.branches.map(v=>v.type)).size===7)branchComplete++;else hard.push(`${p.title}: 답변 7분기 불완전`);
+  if((x.branches||[]).every(v=>String(v.secondResponse||'').trim()))secondComplete++;else hard.push(`${p.title}: 2차 대응 누락`);
+  if(x.objections?.length>=2)objComplete++;else hard.push(`${p.title}: 반론 2종 미만`);
+  if((x.scenarios?.length||0)>=1||x.scenario)scenarioComplete++;else hard.push(`${p.title}: 완전 상담 시나리오 누락`);
+  (x.scenarios||[x.scenario]).filter(Boolean).forEach(v=>usedScenarios.add(v.title));(x.objections||[]).forEach(v=>usedObjections.add(v.title));
+  generatedText.push(x.speech30,x.speech90,x.speech3m,x.speech5m,x.transition,...(x.objections||[]).flatMap(o=>(o.dialogue||[]).map(d=>d.text)),...(x.branches||[]).flatMap(b=>[b.response,b.followUp,b.secondResponse,b.agreement]));
+ }
+ const text=generatedText.filter(Boolean).join('\n');SPEECH_FORBIDDEN_PATTERNS.forEach(re=>{re.lastIndex=0;if(re.test(text))hard.push(`금지·보장 표현 검출: ${re}`);});
+ const longScripts=pages.map(p=>String(p.notes?.speech90||'').replace(/\s+/g,' ').trim()).filter(x=>x.length>80),duplicates=longScripts.filter((x,i)=>longScripts.indexOf(x)!==i);if(duplicates.length)hard.push(`페이지 화법 완전중복 ${new Set(duplicates).size}건`);
+ const activeIds=new Set((m?.issues||[]).map(x=>x.id)),audio=m?.audioChapters||[],audioRefs=new Set(audio.flatMap(x=>x.sourceIssueIds||[])),inactiveRefs=[...audioRefs].filter(id=>id&&!activeIds.has(id)&&id!=='INSURANCE_OPTIMIZATION'),missingAudio=[...activeIds].filter(id=>ISSUE_SPEECH_LIBRARY[id]&&!audioRefs.has(id));if(inactiveRefs.length)hard.push('음성강의 비활성 이슈 포함: '+inactiveRefs.join(', '));if(missingAudio.length)hard.push('음성강의 활성 이슈 누락: '+missingAudio.join(', '));
+ const audioMinutes=audio.reduce((sum,x)=>sum+(x.minutes||0),0);if(audio.length<5||audioMinutes<18||audioMinutes>25)hard.push(`음성강의 ${audio.length}챕터·${audioMinutes}분`);
+ const scores={accuracy:fact.passed?98:0,calculation:m?.calculations?.crossValidation?.passed!==false?97:0,management:noteComplete===pages.length?96:80,ceo:95,speech:noteComplete===pages.length?97:80,branches:branchComplete===pages.length&&secondComplete===pages.length?96:80,objections:objComplete===pages.length&&!staticCoverage.objectionUnrouted.length?96:80,scenarios:scenarioComplete===pages.length&&!staticCoverage.scenarioUnrouted.length?96:80,insurance:badA.length?0:95,customization:staticCoverage.styleOutputUnique>=7&&staticCoverage.companyTypeCount>=10?94:80,audio:(audioMinutes>=18&&audioMinutes<=25&&!inactiveRefs.length&&!missingAudio.length)?95:80,mode:97,evidence:94,render:94};
+ const weights={accuracy:18,calculation:10,management:8,ceo:7,speech:12,branches:8,objections:6,scenarios:5,insurance:10,customization:4,audio:4,mode:3,evidence:3,render:2};const average=Object.entries(scores).reduce((sum,[k,v])=>sum+v*weights[k],0)/100,min=Math.min(...Object.values(scores));
+ return {scores,weights,average,min,hardFails:[...new Set(hard)],passed:hard.length===0&&average>=95&&min>=90,checkedAt:nowIso(),audioMinutes,factValidation:fact,coverage:{allPages:pages.length,noteComplete,branchComplete,secondComplete,objComplete,scenarioComplete,usedScenarios:[...usedScenarios],usedObjections:[...usedObjections],static:staticCoverage,audioActive:[...activeIds],audioCovered:[...audioRefs]}};
+};
+function qualityPageCompactHtml(q){
+ const labels={accuracy:'팩트 정확성',calculation:'계산 일치',management:'경영해석',ceo:'CEO 본문',speech:'전 페이지 화법',branches:'CEO 7분기·2차대응',objections:'반론 25종',scenarios:'상담 시나리오 20선',insurance:'보험 판단',customization:'맞춤화',audio:'음성강의',mode:'모드 분리',evidence:'근거 연결',render:'A4·모바일'};
+ const rows=Object.entries(q.scores).map(([k,v])=>`<tr><td>${esc(labels[k]||k)}</td><td>${v.toFixed(1)}</td><td>${v>=92.3?'통과':v>=90?'주의':'실패'}</td></tr>`).join('');
+ return `<div class="lead"><b>${q.passed?'코드·데이터 검증 통과':'보완 필요'} · ${q.average.toFixed(2)}점</b><p>최저 ${q.min.toFixed(1)}점 · 중대오류 ${q.hardFails.length}건 · 비오디오 페이지 10단 노트 ${q.coverage?.noteComplete||0}/${q.coverage?.allPages||0}</p></div><table class="matrix"><thead><tr><th>검수영역</th><th>점수</th><th>판정</th></tr></thead><tbody>${rows}</tbody></table><div class="notice ${q.hardFails.length?'red':'green'}"><b>중대오류</b><p>${q.hardFails.length?esc(q.hardFails.join(' · ')):'탐지된 중대오류가 없습니다.'}</p></div><div class="notice amber"><b>판정 범위</b><p>코드·추출·계산·화법·모드·A4 출력의 내부 검증 결과입니다. 실제 기업 반복시험과 컨설턴트 현장평가는 별도 완료해야 합니다.</p></div>`;
+}
+renderQualityPage=function(){if(!state.quality)return;const el=$('qualityPageBody');if(el)el.innerHTML=qualityPageCompactHtml(state.quality);$('qualityBody').innerHTML=qualityHtml(state.quality);};
+const crGenerateReportBase=generateReport;
+generateReport=async function(reason='generate'){
+ if(!state.caseData){toast('먼저 기업자료를 불러오십시오.');return;}if(!state.factsConfirmed){renderFactsForm();openModal('factsModal');toast('추출값 승인이 필요합니다.','err');return;}const pre=crValidateFacts(state.caseData);if(!pre.passed){state.factsConfirmed=false;renderFactsForm();openModal('factsModal');const box=$('factsValidationBox');if(box)box.innerHTML=`<div class="notice red"><b>리포트 생성을 차단했습니다.</b>${list(pre.errors)}</div>`;toast('팩트 검증 오류로 생성을 중단했습니다.','err');return;}
+ window.jvTrack?.('corporate_report_generate');progress(true,'확정된 팩트를 분석하고 있습니다.');const stages=[['P1 사실·출처·단위·기간 검증',10],['P2 근거 있는 이슈만 선별',23],['P3 확인질문 반영·미확인 분리',35],['P4 계산기 교차검산',48],['P5 보험기회 근거·부족재원 게이트',62],['P6 CEO 본문·실행대안 구성',74],['P7 페이지별 10단 상담화법',84],['P8 활성 이슈 음성강의',92],['P9 사실·계산·모드·표현 최종검수',98]];
+ try{for(const [msg,pc] of stages){logProgress(msg,'now',pc);await sleep(70);}const model=buildConfirmedModel(state.caseData);state.analysis=model;generatePages(model);renderPages();state.quality=runQuality();model.quality=state.quality;renderQualityPage();if(!state.quality.passed){logProgress(`품질게이트 실패 · 중대오류 ${state.quality.hardFails.length}건`,'err',100);await sleep(250);progress(false);showWorkspace();toast('품질게이트를 통과하지 못해 내보내기를 차단했습니다.','err');return;}logProgress(`완료 · ${state.pages.length}페이지 · 품질 ${state.quality.average.toFixed(2)}점`,'ok',100);await sleep(250);progress(false);showWorkspace();window.jvDone?.('corporate_report_generate');toast('검증을 통과한 3모드 종합리포트를 생성했습니다.','ok');}catch(error){progress(false);window.jvDone?.('corporate_report_generate');console.error(error);toast('생성 중 오류: '+error.message,'err');}
+};
+prepareCase=function(data,{confirmed=false,autoGenerate=false}={}){state.caseData=crNormalizeCase(data);state.caseData.speechOverrides=state.caseData.speechOverrides||buildSpeechOverrides(state.caseData);state.analysis=null;state.pages=[];const v=crValidateFacts(state.caseData,{requireThreeYears:true});state.factsConfirmed=!!confirmed&&v.passed;state.caseData.meta.confirmed=state.factsConfirmed;state.questionsConfirmed=false;state.sourceName=state.caseData.meta.sourceType||'';renderFactsForm();showWorkspace();updateStatus();if(autoGenerate&&state.factsConfirmed)generateReport('auto');else openModal('factsModal');};
+handlePdf=async function(file){if(!file)return;if(file.size>30*1024*1024){setStartStatus('PDF는 30MB 이하를 사용해 주세요.','err');return;}window.jvTrack?.('corporate_pdf_analysis');setStartStatus('PDF 텍스트와 페이지를 분석하고 있습니다…');try{const out=await PDFParser.extract(file);state.sourceText=out.text;state.sourceName=file.name;state.pdfMeta=out;let data;if(out.format==='NICE BizLINE'){setStartStatus('NICE BizLINE 전용엔진으로 재무·주주·관계사·신용정보를 구조화하고 있습니다…');data=extractNiceBizlineCase(out,file);}else{data=PDFParser.generic(out.text,out.pages);data.meta.sourceFileName=file.name;data=await enrichWithExistingFinancialExtractor(data,out.text);}data=crNormalizeCase(data);const v=crValidateFacts(data);const extractorPassed=data.meta.extractionQualityPassed!==false;data.factValidation=v;data.meta.extractionQualityPassed=data.meta.sourceType.includes('NICE')?(extractorPassed&&v.passed):false;setStartStatus(`${out.format} · ${out.pages}페이지 · ${v.passed?'자동검증 통과':'수정 필요 '+v.errors.length+'건'}.` ,v.passed?'ok':'err');window.jvDone?.('corporate_pdf_analysis');prepareCase(data,{confirmed:false,autoGenerate:false});}catch(error){window.jvDone?.('corporate_pdf_analysis');console.error(error);setStartStatus('분석 실패: '+error.message,'err');}};
+if($('confirmFactsBtn'))$('confirmFactsBtn').onclick=()=>{if(!collectFactsForm())return;closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};
+const crExportCEOBase=exportCEO;exportCEO=function(){if(!state.quality?.passed){toast('품질게이트 통과 전에는 CEO 전달본을 내보낼 수 없습니다.','err');return;}return crExportCEOBase();};
+const crSaveCaseBase=saveCase;saveCase=function(){if(state.analysis&&!state.quality?.passed){toast('품질게이트 실패 상태는 배포용 케이스로 저장할 수 없습니다.','err');return;}return crSaveCaseBase();};
+// 안전한 PDF.js 이중 CDN 로더 및 저장 케이스 스키마 검증
+ensurePdfJs=async function(){
+ if(global.pdfjsLib)return global.pdfjsLib;
+ const candidates=[
+  {script:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',worker:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'},
+  {script:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',worker:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'}
+ ];
+ let lastError=null;
+ for(const c of candidates){
+  try{await loadScript(c.script);if(global.pdfjsLib){global.pdfjsLib.GlobalWorkerOptions.workerSrc=c.worker;return global.pdfjsLib;}}
+  catch(e){lastError=e;}
+ }
+ throw new Error('PDF 분석 모듈을 불러오지 못했습니다. 네트워크 또는 보안정책을 확인해 주세요.'+(lastError?.message?' ('+lastError.message+')':''));
+};
+function crValidateSavedPayload(p){
+ const errors=[];
+ if(!p||typeof p!=='object'||Array.isArray(p))errors.push('JSON 루트가 객체가 아닙니다.');
+ const candidate=p?.caseData||p?.analysis;
+ if(!candidate||typeof candidate!=='object'||Array.isArray(candidate))errors.push('caseData 또는 analysis 객체가 없습니다.');
+ const schema=candidate?.meta?.schemaVersion||p?.schemaVersion||'';
+ if(schema&&!/^CR-1\.[6789]/.test(schema))errors.push(`지원하지 않는 스키마 버전: ${schema}`);
+ if(candidate?.financials&&typeof candidate.financials!=='object')errors.push('financials 구조가 올바르지 않습니다.');
+ return {passed:errors.length===0,errors,candidate};
+}
+loadCaseFile=function(file){
+ if(!file)return;
+ if(file.size>20*1024*1024){toast('케이스 파일은 20MB 이하만 불러올 수 있습니다.','err');return;}
+ const r=new FileReader();
+ r.onload=()=>{try{
+  const p=JSON.parse(r.result);const schema=crValidateSavedPayload(p);
+  if(!schema.passed)throw new Error(schema.errors.join(' · '));
+  const normalized=crNormalizeCase(schema.candidate);const facts=crValidateFacts(normalized,{requireThreeYears:true});
+  normalized.factValidation=facts;normalized.meta.confirmed=!!p.factsConfirmed&&facts.passed;
+  state.caseData=normalized;state.analysis=null;state.pages=[];state.quality=null;state.factsConfirmed=normalized.meta.confirmed;state.questionsConfirmed=!!p.questionsConfirmed;
+  if(!facts.passed){renderFactsForm();showWorkspace();openModal('factsModal');const box=$('factsValidationBox');if(box)box.innerHTML=`<div class="notice red"><b>불러온 케이스를 승인할 수 없습니다.</b>${list(facts.errors)}</div>`;toast('케이스 값 검증에 실패했습니다. 수정 후 승인해 주세요.','err');return;}
+  prepareCase(normalized,{confirmed:true,autoGenerate:false});toast('검증된 케이스를 불러왔습니다.','ok');
+ }catch(e){console.error(e);toast('케이스 파일 형식이 올바르지 않습니다: '+e.message,'err');}};
+ r.onerror=()=>toast('케이스 파일을 읽지 못했습니다.','err');
+ r.readAsText(file);
+};
+function crDebugAllowed(){return location.protocol==='file:'||['localhost','127.0.0.1'].includes(location.hostname)||new URLSearchParams(location.search).get('debug')==='1';}
+
+
+/* ==========================================================================
+ * V1.9.0 COORDINATE FINANCIAL ENGINE
+ * Source: the proven coordinate parser from jebanseo_program(2).html.
+ * The parser preserves PDF x/y positions through extraction and is authoritative
+ * for NICE BizLINE, KODATA/KCR2 and CRETOP web-export reports.
+ * ========================================================================== */
+;const JebFinancialEngine=(()=>{
+ const ENGINE_VERSION='1.9.0-coordinate-20260731';
+ const FIN={src:'',scaleFix:1};
+ const FIN_FMT_UNIT={NICE:'백만원',KODATA:'백만원',KODATA_WEB:'천원',MANUAL:'원'};
+ const FIN_UNIT_SCALE={'원':{man:0.0001,won:1},'천원':{man:0.1,won:1e3},'만원':{man:1,won:1e4},'백만원':{man:100,won:1e6},'억원':{man:10000,won:1e8}};
+ function finUnit(){return FIN_FMT_UNIT[FIN.src]||'백만원';}
+ function finUnitScale(){const b=FIN_UNIT_SCALE[finUnit()]||FIN_UNIT_SCALE['백만원'];const f=Number.isFinite(FIN.scaleFix)&&FIN.scaleFix>0?FIN.scaleFix:1;return f===1?b:{man:b.man*f,won:b.won*f};}
+ const FIN_ROW_TOL=4;
+ const FIN_INFO_LABELS=['업체명','기업명','기 업 명','영문기업명','설립일자','설 립 일 자','설립년월','사업자번호','법인번호','법인(주민)번호',
+  '대표자','대 표 자','대표자명','홈페이지','홈 페 이 지','종업원수','상시종업원','상 시 종 업 원','기업규모',
+  '기업형태','기 업 형 태','상장일자','본사주소','본 사 주 소','공장주소','영업소주소','전화번호','팩스번호',
+  '표준산업분류','업종분류','업 종 분 류','업종','주요제품명','주요상품','주 요 제 품 명','계열명','주력업체',
+  '소속계열','주거래은행','주 거 래 은 행','당좌거래은행','결산월','경영규모','신용등급','평가일'];
+
+function finMerge(items){
+  const isNum=s=>/^\(?-?[\d,]+(\.\d+)?\)?\s*%?$/.test(String(s).trim())||String(s).trim()==='-';
+  const out=[];
+  for(const it of items){
+    const p=out[out.length-1];
+    const gap=p?(it.x-(p.x+p.w)):999;
+    if(p && it.s.length===1 && (p._m||p.s.length===1)
+       && Math.abs(p.y-it.y)<=2 && !isNum(p.s) && !isNum(it.s)
+       && gap<=20 && gap>=-3){
+      p.s+=it.s; p.w=(it.x+it.w)-p.x; p._m=true;
+      continue;
+    }
+    out.push({...it});
+  }
+  return out;
+}
+
+function finGlue(items){
+  const out=[];
+  for(const raw of items){
+    let s=String(raw.s).replace(/\uE093/g,',').replace(/\uE094/g,'.')          /* 신형 폰트: 콤마·소수점 PUA 매핑 */
+                       .replace(/[\u0000-\u001F\uE000-\uF8FF]/g,'').trim();   /* 그 외 제어문자·PUA 제거 */
+    const p=out[out.length-1];
+    if(s===','||s==='.'){                                   /* 글루 확정형 — 코드포인트가 종류를 말해줌 */
+      if(p&&/\d$/.test(p.s)&&Math.abs(p.y-raw.y)<=2){p._glue=raw.x+raw.w;p._gc=s;}
+      else if(s===','&&p&&/^\(/.test(p.s)&&!p.s.includes(')')&&/[가-힣]/.test(p.s)&&Math.abs(p.y-raw.y)<=2){p.s+=',';p.w=(raw.x+raw.w)-p.x;}   /* ★ 구형 K-GAAP 분할 라벨 콤마 복원 — '(매출채권'+','  (2026-07-21) */
+      continue;
+    }
+    if(!s){                                                 /* 미지 PUA — 폭·밀착 휴리스틱 글루 */
+      if(p&&/\d$/.test(p.s)&&raw.w<=6&&Math.abs(p.y-raw.y)<=2){p._glue=raw.x+raw.w;p._gc=null;}
+      continue;
+    }
+    if(p&&p._glue!=null&&/^\d+$/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-p._glue)<=4){
+      p.s+=(p._gc||(s.length===3?',':'.'))+s;               /* 확정 글루 우선, 없으면 3자리=콤마 휴리스틱 */
+      p.w=(raw.x+raw.w)-p.x; p._glue=null;
+      continue;
+    }
+    if(p)p._glue=null;
+    if(p&&p.s==='-'&&/^\d/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-(p.x+p.w))<=3){
+      p.s='-'+s; p.w=(raw.x+raw.w)-p.x;                     /* 음수 부호 결합 — 단독 '-'(값 없음 표기)는 gap이 커서 보존 */
+      continue;
+    }
+    if(p&&/^\(/.test(p.s)&&!p.s.includes(')')&&/[가-힣]/.test(p.s)&&/[가-힣]/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-(p.x+p.w))<=8){
+      p.s+=s; p.w=(raw.x+raw.w)-p.x;                        /* ★ 미완 괄호 라벨 뒷조각 병합 — '(매출채권,'+'공사/영업미수금)'. 한글 조각만, 숫자 병합 금지 원칙 유지 (2026-07-21) */
+      continue;
+    }
+    out.push({...raw,s});
+  }
+  if(out.length)out[out.length-1]._glue=null;
+  return out;
+}
+
+function finNormalizeRows(items){
+  const ROW_TOL=3;
+  const rows=[];
+  const src=(items||[]).map(i=>({...i,s:String(i.s??'').replace(/\u0000/g,'').trim()})).filter(i=>i.s);
+  for(const it of src){
+    let best=null,bestDy=Infinity;
+    for(const r of rows){const dy=Math.abs(r.y-it.y);if(dy<=ROW_TOL&&dy<bestDy){best=r;bestDy=dy;}}
+    if(!best){best={y:it.y,items:[]};rows.push(best);}
+    best.items.push(it);
+    best.y=best.items.reduce((a,x)=>a+x.y,0)/best.items.length;
+  }
+  const isPiece=t=>/^[\d,.:;%\-()]+$/.test(String(t).replace(/\s/g,''));
+  const cleanJoined=t=>{let v=String(t).replace(/\s/g,'').replace(/,{2,}/g,',');const dm=v.match(/^(20\d{2})\.{2}(\d{2})(\d{2})$/);if(dm)v=`${dm[1]}.${dm[2]}.${dm[3]}`;return v;};
+  const out=[];
+  for(const row of rows){
+    const a=row.items.sort((x,y)=>x.x-y.x);
+    for(let i=0;i<a.length;){
+      const cur=a[i];
+      if(!isPiece(cur.s)){out.push({...cur,y:Math.round(row.y)});i++;continue;}
+      let j=i+1,last=cur.x+Math.max(cur.w||0,1),parts=[cur.s],end=last;
+      while(j<a.length&&isPiece(a[j].s)){
+        const gap=a[j].x-last;
+        if(gap>6)break;
+        parts.push(a[j].s);end=a[j].x+Math.max(a[j].w||0,1);last=end;j++;
+      }
+      const joined=cleanJoined(parts.join(''));
+      out.push({s:joined,x:cur.x,y:Math.round(row.y),w:Math.max(1,Math.round(end-cur.x))});
+      i=j;
+    }
+  }
+  out.sort((a,b)=>b.y-a.y||a.x-b.x);
+  out.text=out.map(i=>i.s).join(' ');
+  return out;
+}
+
+function finPreparePage(items){let p=finNormalizeRows(items||[]);p=finMerge(p);p=finGlue(p);p=finNormalizeRows(p);p.text=p.map(i=>i.s).join(' ');return p;}
+
+function finGlueChars(items){
+  const NUM=/^[\d,.\-%]+$/;   /* 1글자 조각뿐 아니라 finGlue가 먼저 만든 '6,4' 같은 다글자 조각도 대상 */
+  const out=[];
+  for(const it of items){
+    const p=out[out.length-1];
+    const gap=p?(it.x-(p.x+p.w)):999;
+    if(p&&NUM.test(it.s)&&NUM.test(p.s)
+       &&Math.abs(p.y-it.y)<=2&&gap<=3&&gap>=-2){
+      p.s+=it.s; p.w=(it.x+it.w)-p.x;
+      continue;
+    }
+    out.push({...it});
+  }
+  return out;
+}
+
+function finConcatPages(pages,from,to){
+  const out=[];
+  for(let k=from;k<to;k++){const off=(k-from)*5000;pages[k].forEach(i=>out.push({...i,y:i.y-off}));}
+  out.sort((a,b)=>b.y-a.y||a.x-b.x);
+  out.text=out.map(i=>i.s).join(' ');
+  return out;
+}
+
+function finDetect(pages){
+  const all=pages.map(p=>p.text).join('\n');
+  if(/nicebizline|NICE평가정보/i.test(all))return 'NICE';
+  /* KODATA(한국평가데이터, 구 한국기업데이터) — KCR2·CRETOP·REALTOP 등 동일사 제품군 */
+  if(/KODATA|한국평가데이터|한국기업데이터|KCR2|CRETOP|크레탑/i.test(all))return 'KODATA';
+  if(/기업신용평가서/.test(all))return 'KODATA';
+  /* KODATA 웹출력 '기업 종합 보고서'(CRETOP 조회화면 저장본) — 사명·CRETOP 로고가 전부 이미지라 텍스트에 없다.
+     병합 후 텍스트에 실존하는 제목 '기업종합보고서'와 저작권 문구 'KOREARATING&DATA'로 식별 (2026-07-14 실측) */
+  if(/기업\s*종합\s*보고서|KOREA\s*RATING\s*&\s*DATA/i.test(all))return 'KODATA_WEB';
+  return null;
+}
+
+function finFind(items,label){
+  const key=String(label).replace(/\s+/g,'');
+  let hit=items.find(i=>i.s.replace(/\s+/g,'')===key);
+  if(hit)return hit;
+  return items.find(i=>i.s.replace(/\s+/g,'').startsWith(key))||null;
+}
+
+function finRowAfter(items,L){
+  if(!L)return [];
+  return items.filter(i=>i!==L&&Math.abs(i.y-L.y)<=FIN_ROW_TOL&&i.x>=L.x+Math.max(L.w,6)-2)
+              .sort((a,b)=>a.x-b.x);
+}
+
+function finIsLabelLike(s){
+  const t=String(s).trim();
+  if(/^-$/.test(t))return false;                        // '-' 는 0 을 뜻하는 값
+  if(/^\(?-?[\d,]+(\.\d+)?\)?\s*%?$/.test(t))return false;
+  if(/^\d{4}[.\-]\d{2}[.\-]\d{2}$/.test(t))return false;
+  return /[가-힣A-Za-zⅠ-Ⅹ]/.test(t);
+}
+
+function finCells(items,labels,n,below){
+  const arr=Array.isArray(labels)?labels:[labels];
+  const pool=below?items.filter(i=>i.y<below.y):items;   /* below: 이 라벨(앵커)보다 아래 구간에서만 라벨 탐색 — 미지정 시 기존과 동일 (2026-07-21) */
+  for(const lb of arr){
+    const L=finFind(pool,lb); if(!L)continue;
+    const vals=[];
+    for(const it of finRowAfter(items,L)){
+      const t=it.s.replace(/\s/g,'');
+      if(/%$/.test(t))continue;                          // 구성비
+      if(/^-?[\d,]+\.\d+$/.test(t))continue;             // 소수 = 구성비
+      if(t==='-'){vals.push(0);continue;}                // '-' = 0
+      if(/^-?[\d,]+$/.test(t)){vals.push(parseFloat(t.replace(/,/g,'')));continue;}
+      break;                                             // 다음 라벨 → 종료 (좌우 2열 침범 차단)
+    }
+    if(vals.length>=(n||3))return vals.slice(0,n||3);
+  }
+  return null;
+}
+
+function finText(items,labels,stop){
+  const arr=Array.isArray(labels)?labels:[labels];
+  const norm=t=>String(t).replace(/\s+/g,'');
+  const stops=(stop||[]).map(norm);
+  for(const lb of arr){
+    const L=finFind(items,lb); if(!L)continue;
+    const out=[];
+    for(const it of finRowAfter(items,L)){
+      if(stops.some(sp=>norm(it.s)===sp||norm(it.s).startsWith(sp)))break;
+      out.push(it.s);
+    }
+    const v=out.join(' ').trim();
+    if(v)return v;
+  }
+  return '';
+}
+
+function finYears(items){
+  const m=(items.text||'').match(/(20\d{2})[.\-]\s?\d{2}[.\-]\s?\d{2}/g);
+  if(!m||m.length<3)return null;
+  const ys=m.slice(0,3).map(x=>parseInt(x.slice(0,4)));
+  return {years:ys,desc:ys[0]>ys[2]};
+}
+
+function finParse(pages,fmt){
+  pages=(pages||[]).map(pg=>finPreparePage(pg));
+  /* KODATA_WEB: 숫자가 1글자씩 분해되어 나온다 — 파싱 전에 페이지별 재조립 (다른 포맷 무영향) */
+  if(fmt==='KODATA_WEB')pages=pages.map(pg=>{const m=finGlueChars(pg);m.text=m.map(i=>i.s).join(' ');return m;});
+  /* 표 제목만으로 페이지를 고르면 오탐한다(연구개발비 표에도 '손익계산서'라는 행이 있다).
+     그 표에만 있는 항목을 함께 만족하는 페이지를 고른다. */
+  const pick=(...rxs)=>pages.find(p=>rxs.every(r=>r.test(p.text)))||null;
+  let BS,IS;
+  if(fmt==='KODATA_WEB'){
+    /* 상세 재무상태표(천원)가 여러 쪽에 걸쳐 있다 — '계정명' 헤더가 있는 상세 구간을 찾아 한 장으로 병합.
+       (요약표는 '구분' 헤더·백만원이라 단위가 섞이므로 쓰지 않는다) */
+    const bi=pages.findIndex(p=>/재무상태표/.test(p.text)&&/계정명/.test(p.text));
+    const ii=pages.findIndex(p=>/손익계산서/.test(p.text)&&/계정명/.test(p.text));
+    let ci=pages.findIndex((p,i)=>i>ii&&/현금흐름표/.test(p.text)&&/계정명/.test(p.text));
+    if(ci<0)ci=Math.min(ii+2,pages.length);
+    BS=(bi>=0&&ii>bi)?finConcatPages(pages,bi,ii):null;
+    IS=(ii>=0)?finConcatPages(pages,ii,ci):null;
+  }else{
+    BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
+    IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
+  }
+  const SH=fmt==='NICE'?pick(/주요주주/,/지분율/):pick(/주주현황/,/소유주식수|지분율/);
+  /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이다.
+       10p '08.기업현황'(주요주주와 같은 페이지)은 단일 컬럼이므로 그쪽을 쓴다. */
+  const IN=fmt==='NICE'?(pick(/주요주주/,/종업원수/,/표준산업분류/)||pick(/기업개요/,/종업원수/))
+                       :fmt==='KODATA_WEB'?pick(/기업개요/,/설립년월/,/종업원수/)
+                       :pick(/기 업 명|기업명/,/설 립 일 자|설립일자/);
+  if(!BS)throw new Error('재무상태표를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
+  if(!IS)throw new Error('손익계산서를 찾지 못했습니다. 전체 보고서 PDF인지 확인해 주세요.');
+
+  const yr=finYears(BS)||{years:[0,0,0],desc:true};
+  if(fmt==='KODATA_WEB'){
+    /* 페이지 상단 '조회일시:2025-…'가 첫 매치로 잡혀 연도 순서가 깨진다 —
+       표 헤더의 완전 날짜(YYYY-MM-DD 단독 아이템)만으로 재판정. 헤더는 좌→우 = 과거→최신(오름차순). */
+    const hd=BS.filter(i=>/^20\d{2}-\d{2}-\d{2}$/.test(i.s)).slice(0,3);
+    if(hd.length===3){yr.years=hd.map(i=>parseInt(i.s.slice(0,4)));yr.desc=yr.years[0]>yr.years[2];}
+  }
+  const ord=a=>a?(yr.desc?a:[...a].reverse()):null;      // 항상 [최신,직전,전전]
+  if(!yr.desc)yr.years=[...yr.years].reverse();
+
+  const P=fmt==='NICE'?{
+    자본금:['자본금','(자본금)'],이익잉여금:'이익잉여금',미처분잉여:['미처분이익잉여금(결손금)','미처분이익잉여금'],단기차입금:['(단기차입금)','단기차입금'],장기차입금:['(장기차입금)','장기차입금'],
+    사채:['(장기사채)','단기사채'],매출채권:['(매출채권, 공사/영업미수금)','매출채권및기타채권','(매출채권)'],현금:['(현금 및 현금등가물)','현금및현금성자산'],
+    유동자산:'유동자산',유동부채:'유동부채',재고자산:'재고자산',매입채무:['(매입채무 및 기타채무)','(매입채무)'],
+    매출액:'매출액',매출원가:'매출원가',영업이익:'영업이익(손실)',순이익:['당기순이익(손실)','당기순이익'],   /* 2026 신형 상세보고서: 괄호 없는 '당기순이익' 폴백 */
+    이자비용:['(이자비용)','(금융비용)'],인건비:'(인건비)',영업현금:'영업활동조달현금',   /* ★ 2026 신형 상세보고서: 손익계산서가 '(금융비용)' 표기 — NICE 자체 이자보상 산식도 영업이익/금융비용 (2026-07-21) */
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금'
+  }:fmt==='KODATA_WEB'?{
+    /* 웹출력 '기업 종합 보고서' — KCR2와 계정명은 같지만 로마숫자 접두가 없고 총계가 '자산(*)' 표기 */
+    자산총계:'자산(*)',부채총계:'부채(*)',자본총계:'자본(*)',
+    자본금:'자본금(*)',이익잉여금:'이익잉여금(*)',미처분잉여:['미처분이익잉여금(결손금)','미처분이익잉여금'],
+    단기차입금:'단기차입금(*)',장기차입금:'장기차입금(*)',사채:'사채(*)',
+    매출채권:'매출채권(*)',현금:'현금 및 현금성자산(*)',
+    유동자산:'유동자산(*)',유동부채:'유동부채(*)',재고자산:'재고자산(*)',매입채무:'매입채무(*)',
+    매출액:'매출액(*)',매출원가:'매출원가(*)',영업이익:'영업이익(손실)',순이익:'당기순이익(순손실)',
+    이자비용:'이자비용',인건비:'급여(*)',영업현금:'4.영업활동후의 현금흐름액',
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금(*)'
+  }:{
+    자본금:['Ⅰ. 자본금(*)','자본금(*)'],이익잉여금:['Ⅴ. 이익잉여금(*)','이익잉여금(*)'],미처분잉여:['미처분이익잉여금(결손금)','미처분이익잉여금'],
+    단기차입금:'단기차입금(*)',장기차입금:'장기차입금(*)',사채:'사채(*)',
+    매출채권:'매출채권(*)',현금:'현금 및 현금성자산(*)',
+    유동자산:'Ⅰ. 유동자산(*)',유동부채:'Ⅰ. 유동부채(*)',재고자산:'2. 재고자산(*)',
+    매입채무:'매입채무(*)',매출액:'Ⅰ. 매출액(*)',매출원가:'Ⅱ. 매출원가(*)',
+    영업이익:'Ⅴ. 영업이익(손실)',순이익:['ⅩⅡ. 당기순이익(순손실)','당기순이익(순손실)'],
+    이자비용:'이자비용',인건비:'급여(*)',영업현금:'4.영업활동후의 현금흐름액',
+    퇴직충당:'퇴직급여충당부채',가지급금:'단기대여금(*)'
+  };
+  const CF=pick(/영업활동후의 현금흐름액|영업활동조달현금/)||IS;
+
+  const D={fmt,years:yr.years,
+    자산총계:ord(finCells(BS,P.자산총계||'자산총계')), 부채총계:ord(finCells(BS,P.부채총계||'부채총계')), 자본총계:ord(finCells(BS,P.자본총계||'자본총계')),
+    자본금:ord(finCells(BS,P.자본금)), 이익잉여금:ord(finCells(BS,P.이익잉여금)),
+    미처분잉여:ord(finCells(BS,P.미처분잉여)),   /* ★ A1 (2026-07-30): 이익잉여금 총계와 미처분을 분리 — 프롬프트 라벨-값 불일치(총계를 '미처분'으로 표기) 수정. 미검출 시 null → 프롬프트에서 총계 폴백 */
+    단기차입금:ord(finCells(BS,P.단기차입금)), 장기차입금:ord(finCells(BS,P.장기차입금)),
+    유동차입:ord(finCells(BS,['(유동차입부채)','유동차입부채'])), 비유동차입:ord(finCells(BS,['(비유동차입부채)','비유동차입부채'])),   /* ★ NICE-IFRS: 유동성장기부채 포함 차입 구분 — KODATA엔 없어 null→기존 폴백 (2026-07-21) */
+    사채:ord(finCells(BS,P.사채))||[0,0,0],
+    매출채권:ord(finCells(BS,P.매출채권,3,fmt==='NICE'?finFind(BS,'유동자산'):null)), 현금:ord(finCells(BS,P.현금)),   /* ★ 신형 NICE: 비유동자산에도 '매출채권 및 기타채권'이 있어 유동자산 아래에서만 탐색 (2026-07-21) */
+    유동자산:ord(finCells(BS,P.유동자산)), 유동부채:ord(finCells(BS,P.유동부채)),
+    재고자산:ord(finCells(BS,P.재고자산)), 매입채무:ord(finCells(BS,P.매입채무)),
+    퇴직충당:ord(finCells(BS,P.퇴직충당)), 가지급금:ord(finCells(BS,P.가지급금)),
+    매출액:ord(finCells(IS,P.매출액)), 매출원가:ord(finCells(IS,P.매출원가)),
+    영업이익:ord(finCells(IS,P.영업이익)), 순이익:ord(finCells(IS,P.순이익)),
+    이자비용:ord(finCells(IS,P.이자비용)), 인건비:ord(finCells(IS,P.인건비)),
+    영업현금:ord(finCells(CF,P.영업현금))
+  };
+  for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
+    if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
+
+  /* ── 기업개요 (좌표 기반 셀 + 명시적 stop 라벨) ── */
+  const S=FIN_INFO_LABELS;
+  D.회사명 = IN?finText(IN,['업체명','기 업 명','기업명'],S):'';
+  D.대표자 = (IN?finText(IN,['대표자명','대표자','대 표 자'],S):'').split(/\s+/)[0]||'';
+  const est = (IN?finText(IN,['설립일자','설 립 일 자','설립년월'],S):'').match(/(\d{4})/);
+  D.설립년 = est?parseInt(est[1]):0;
+  const emp = (IN?finText(IN,['종업원수','상 시 종 업 원','상시종업원'],S):'').match(/([\d,]+)/);
+  D.종업원 = emp?parseInt(emp[1].replace(/,/g,'')):0;
+  const ind = IN?finText(IN,['표준산업분류','업 종 분 류','업종분류'],S):'';
+  D.업종 = ind.replace(/^\d+\s*차\)\s*/,'').replace(/\(\s*[A-Z]\s*\d+\s*\)/g,'').replace(/\s+/g,' ').trim();
+
+  /* ── 대표 생년·대표이사 취임년 (2026-07-30) — 질문지 진술값 교차검증용.
+     KODATA_WEB 인적사항 페이지: 생년월일 YYYY-MM-DD, 주요경력사항의 재직중(종료일 없는) 대표이사 행.
+     "김기성(1955년생)"을 55세로 오인하는 사고를 원천 차단하는 근거값. NICE 등 타 포맷은 미적용. */
+  D.대표생년=0; D.대표취임년=0;
+  if(fmt==='KODATA_WEB'){
+    const PI=pages.find(p=>/인적사항/.test(p.text)&&/생년월일/.test(p.text));
+    if(PI){
+      const _bm=PI.text.match(/생년월일[^0-9]{0,20}((?:19|20)\d{2})-\d{2}-\d{2}/);
+      if(_bm)D.대표생년=parseInt(_bm[1]);
+      const _T=PI.text,_hits=[];let _am;const _are=/((?:19|20)\d{2})-\d{2}\s*~/g;
+      while((_am=_are.exec(_T))!==null)_hits.push({y:parseInt(_am[1]),i:_am.index});
+      for(let _h=0;_h<_hits.length;_h++){
+        const _seg=_T.slice(_hits[_h].i,_hits[_h+1]?_hits[_h+1].i:_hits[_h].i+140);
+        /* 재직중 경력(~ 뒤에 종료 연도가 없음) + 대표이사 직위 → 취임년 */
+        if(/대표이사/.test(_seg)&&!/~\s*(?:19|20)\d{2}/.test(_seg.slice(0,20))){D.대표취임년=_hits[_h].y;break;}
+      }
+    }
+  }
+
+  /* ── 주주 (행 단위 좌표 스캔) ── */
+  D.주주=[]; D.총주식=0; D.액면=0;
+  if(SH){
+    /* ★ 행 클러스터링 (2026-07-30): 고정 버킷 round(y/2)*2는 셀 간 1pt 어긋남이 버킷 경계에 걸리면 행이 갈라진다.
+       실증 — 모락스트레이딩 CRETOP: '기타' 이름 y=601(→버킷 602) vs 숫자 y=600(→버킷 600)으로 분리되어
+       기타 79.28% 행 전체 탈락 → '지분율 합계 20.72%' 검산 경고의 실제 원인. 김기성 행은 전부 y=629라 우연히 생존.
+       finRowAfter와 동일한 FIN_ROW_TOL(±4pt) 근접 클러스터로 교체 — 표 행 간격은 28pt라 행 병합 위험 없음 */
+    const rows=new Map(); const _rowYs=[];
+    [...SH].sort((a,b)=>b.y-a.y).forEach(i=>{
+      let k=_rowYs.find(v=>Math.abs(v-i.y)<=FIN_ROW_TOL);
+      if(k==null){k=i.y;_rowYs.push(k);}
+      if(!rows.has(k))rows.set(k,[]); rows.get(k).push(i);
+    });
+    /* ★ NICE 신형(2026): 한 페이지에 기업개요·주요주주·관계사현황이 함께 있다 —
+       '주요주주' 섹션 제목(동일 문구의 상단 이동경로는 y가 크므로 최소 y 채택)과 '관계사' 제목
+       사이 y 구간의 행만 주주로 인정. 관계사 표의 총자산·매출이 주주로 흡수되는 것 차단 (2026-07-21) */
+    let _top=null,_bot=null;
+    if(fmt==='NICE'){
+      const _h=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('주요주주'));
+      if(_h.length)_top=Math.min(..._h.map(i=>i.y));
+      const _b=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('관계사')&&(_top==null||i.y<_top));
+      if(_b.length)_bot=Math.max(..._b.map(i=>i.y));
+    }
+    rows.forEach(r=>{
+      r.sort((a,b)=>a.x-b.x);
+      const _ry=r[0]&&r[0].y;
+      if(_top!=null&&_ry>=_top)return;
+      if(_bot!=null&&_ry<=_bot)return;
+      const nm=r[0]&&r[0].s;
+      if(!nm||nm==='합계'||finIsLabelLike(nm)===false)return;
+      /* KODATA_WEB: 숫자 재조립 탓에 머리글·푸터 행(조회일시·COPYRIGHT 등)이 숫자 2개 이상을 갖게 된다 — 제외 */
+      if(fmt==='KODATA_WEB'&&r.some(i=>/조회일시|기준일자|COPYRIGHT|RESERVED/i.test(i.s)))return;
+      const nums=r.slice(1).map(i=>i.s.replace(/\s|%/g,'')).filter(t=>/^[\d,]+(\.\d+)?$/.test(t));
+      if(nums.length<2)return;
+      let shares,rate;
+      if(fmt==='KODATA_WEB'&&nums.length>=4){
+        /* ★ 웹출력 주요주주현황은 [보통주·우선주·합계]×[소유주식수·지분율] 다열 구조 —
+           nums[0]=보통주 주식수, nums[1]=우선주 주식수(대개 0)라서 기존 [주식수,율] 가정이 깨져
+           rate<=0으로 행이 통째로 버려졌다(지분 20.72%가 0%로 판정된 원인).
+           합계 지분율 = 마지막 숫자, 합계 주식수 = 행 내 최대 정수로 결정적 채택 (2026-07-21) */
+        rate=parseFloat(nums[nums.length-1]);
+        shares=Math.max(...nums.map(t=>parseInt(t.replace(/,/g,''))||0));
+      }else{
+        shares=parseInt(nums[0].replace(/,/g,''));
+        rate=parseFloat(nums[1]);
+      }
+      if(!Number.isFinite(shares)||!Number.isFinite(rate)||rate<=0||rate>100)return;
+      if(shares<1)return;
+      D.주주.push({명:nm,주식:shares,율:rate});
+    });
+    if(fmt==='KODATA_WEB'&&!D.주주.length){
+      /* 웹출력형 주요주주현황은 소유주식수 칸이 비고 지분율만 있는 경우가 있다 — 지분율 단독 행 수용 (주식수 0).
+         같은 페이지의 다른 표(관계회사현황 등) 혼입을 막기 위해 표 제목 y 구간 안쪽 행만 본다. */
+      const _hy=(SH.find(i=>i.s.replace(/\s+/g,'').startsWith('주요주주현황'))||{}).y;
+      const _ey=(SH.find(i=>i.s.replace(/\s+/g,'').startsWith('관계회사현황'))||{}).y;
+      rows.forEach(r=>{
+        r.sort((a,b)=>a.x-b.x);
+        const _ry=r[0]&&r[0].y;
+        if(_hy!=null&&_ry>=_hy)return;
+        if(_ey!=null&&_ry<=_ey)return;
+        const nm=r[0]&&r[0].s;
+        if(!nm||nm==='합계'||nm==='주주명'||finIsLabelLike(nm)===false)return;
+        const nums=r.slice(1).map(i=>i.s.replace(/\s|%/g,'')).filter(t=>/^[\d,]+(\.\d+)?$/.test(t));
+        if(nums.length!==1)return;
+        const rate=parseFloat(nums[0]);
+        if(!Number.isFinite(rate)||rate<=0||rate>100)return;
+        D.주주.push({명:nm,주식:0,율:rate});
+      });
+    }
+    const tot=(SH.text||'').match(/합계\s*([\d,]+)/);
+    const par=(SH.text||'').match(/주당액면가\s*([\d,]+)\s*원/);
+    const cnt=(SH.text||'').match(/주식수\s*([\d,]+)\s*주/);
+    D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
+    if(!D.총주식 && D.주주.length){
+      const _rs=D.주주.reduce((a,b)=>a+b.율,0);
+      if(_rs>=95) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);   /* ★ 부분 명부(상장사 상위주주만 표시)로 총주식·액면 역산 오류 차단 — 95% 미만이면 총주식 미확정, 액면·주식가치 계산 안 함 (2026-07-21) */
+    }
+    D.액면 = par?parseInt(par[1].replace(/,/g,''))
+                : ((D.총주식&&D.자본금)?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
+    /* ★ KODATA_WEB: 재무상태표에 '발행주식수'·'(1주당금액)'이 최신 결산 기준으로 명기된다.
+       주주현황 표는 기준일자가 과거(감자·자기주식 변동 전)일 수 있어 재무상태표 값을 우선 채택하고,
+       주주현황 합산 주식수와 2% 이상 어긋나면 지분상충으로 표시한다. '[단위:주]' 등 비숫자 토큰은 건너뛴다 (2026-07-21) */
+    if(fmt==='KODATA_WEB'&&BS){
+      const _near=(a,b,t)=>Math.abs(a-b)<=Math.max(Math.abs(a),Math.abs(b))*(t||0.01)+1;
+      const _num3=lb=>{const L=finFind(BS,lb);if(!L)return null;
+        let v=finRowAfter(BS,L).map(i=>i.s.replace(/\s/g,'')).filter(t=>/^[\d,]+$/.test(t)).map(t=>parseInt(t.replace(/,/g,'')));
+        if(v.length<3)v=(L.s.match(/[\d,]{3,}/g)||[]).map(t=>parseInt(t.replace(/,/g,'')));   /* 라벨과 값이 한 아이템으로 붙은 경우 */
+        return v.length>=3?ord(v.slice(0,3)):null;};
+      const _iss=_num3('발행주식수'), _parv=_num3('(1주당금액)')||_num3('주당금액)');   /* ★ 2026-07-30: 이 라벨은 '('+'1'+'주당금액)[단위:원]' 세 조각으로 분해되어 나온다 — '('는 한글 없음·'1'은 숫자라 어떤 병합 규칙에도 안 붙어 원 라벨 탐색이 항상 실패했다(모락스트레이딩 실증). 뒷조각 startsWith 폴백 추가 */
+      D.주주합산주식=D.주주.reduce((a,b)=>a+b.주식,0);
+      if(_iss&&_iss[0]>0){
+        if((D.총주식>0&&!_near(D.총주식,_iss[0],0.02))||(D.주주합산주식>0&&!_near(D.주주합산주식,_iss[0],0.02)))D.지분상충=true;
+        D.총주식=_iss[0];
+        /* ★ 2026-07-30: 총주식을 재무상태표 값으로 교체했으면 액면도 함께 갱신해야 한다.
+           기존엔 _parv 실패 시 주주현황 구기준 주식수로 역산한 stale 액면이 남아
+           '자본금 739,449,000원 ≠ 주식수×액면가 2,681,245,700원' 같은 거짓 검산 경고를 만들었다(실증).
+           _parv 우선, 없으면 새 총주식 기준 재역산으로 정합 유지 */
+        if(_parv&&_parv[0]>0)D.액면=_parv[0];
+        else if(D.자본금&&Number.isFinite(D.자본금[0])&&D.자본금[0]>0)D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);
+      }
+      else if(_parv&&_parv[0]>0)D.액면=_parv[0];
+    }
+  }
+  const me=D.주주.find(s=>s.명===D.대표자);
+  D.대표지분=me?me.율:0; D.대표주식=me?me.주식:0;
+  if(D.지분상충){D.지분참고주식=D.대표주식;D.대표주식=0;}   /* ★ 주주현황(구기준) 주식수로 주식평가·상속세가 계산되는 것을 차단 — 지분율은 대화 논점용으로 유지, 수치 확정은 CEO 확인 후 (2026-07-21) */
+  const _bwTot=BS?finCells(BS,['총차입금(기타금융부채포함)','총차입금(금융리스부채포함)','총차입금','차입금총계']):null;
+  D.차입금=_bwTot?ord(_bwTot)
+                :[0,1,2].map(i=>((D.단기차입금&&D.단기차입금[i])||0)+((D.장기차입금&&D.장기차입금[i])||0)+((D.사채&&D.사채[i])||0));
+  /* ★ B1 (2026-07-30): AI 검증(verifyFinancial)용 — 원문 텍스트(대조)·좌표 아이템(정정 시 결정적 재추출)·연도 방향 보존.
+     값 정정은 반드시 finCells 좌표 재추출로만 — AI가 낸 숫자를 직접 쓰지 않는다(비결정성 차단) */
+  D._srcText={bs:(BS&&BS.text)||'',is:(IS&&IS.text)||'',sh:(SH&&SH.text)||''};
+  D._srcItems={bs:BS,is:IS};
+  D._ordDesc=yr.desc;
+  return D;
+}
+
+function finVerify(D){
+  const near=(a,b,t)=>Math.abs(a-b)<=Math.max(Math.abs(a),Math.abs(b))*(t||0.01)+1;
+  const C=[];
+  D.years.forEach((y,i)=>{
+    if(!(Number.isFinite(D.자산총계[i])&&Number.isFinite(D.부채총계[i])&&Number.isFinite(D.자본총계[i])))return;   /* 연도 수 > 값 수 방어 (2026-07-15) */
+    C.push({n:`자산 = 부채 + 자본 (${y})`,
+    ok:near(D.자산총계[i],D.부채총계[i]+D.자본총계[i]),
+    d:`${D.자산총계[i].toLocaleString()} vs ${(D.부채총계[i]+D.자본총계[i]).toLocaleString()}`,
+    w:`자산총계 ${D.자산총계[i].toLocaleString()} ≠ 부채+자본 ${(D.부채총계[i]+D.자본총계[i]).toLocaleString()} (${y}년) — 추출값 확인 필요`});});   /* ★ A3 (2026-07-30): 실패 시 전용 문구(w) — 'n — d' 조합의 비문 방지 */
+  if(D.총주식&&D.액면)C.push({n:'자본금 = 주식수 × 액면가',
+    ok:near(D.자본금[0]*finUnitScale().won,D.총주식*D.액면,0.02),
+    d:`${(D.자본금[0]*finUnitScale().won).toLocaleString()} vs ${(D.총주식*D.액면).toLocaleString()}`,
+    w:`자본금 ${(D.자본금[0]*finUnitScale().won).toLocaleString()}원 ≠ 주식수×액면가 ${(D.총주식*D.액면).toLocaleString()}원 — 액면가·주식수 추출값 확인 필요`});
+  if(D.주주.length){const s=D.주주.reduce((a,b)=>a+b.율,0);
+    C.push({n:'지분율 합계 = 100%',ok:near(s,100,0.02),d:s.toFixed(2)+'%',
+    w:`지분율 합계 ${s.toFixed(2)}% (기대 100%) — 상위주주만 공시된 부분 명부 또는 일부 행 미파싱 가능성, 지분 구조 CEO 확인 필요`});}
+  if(D.지분상충)C.push({n:'주주현황 기준일 = 최신 결산',ok:false,
+    d:`주주현황 주식수 합계 ${(D.주주합산주식||0).toLocaleString()}주 vs 재무상태표 발행주식수 ${D.총주식.toLocaleString()}주 — 감자·자기주식 변동 후 지분 미반영 가능. 대표 실제 지분·주식수는 CEO 확인 필요`,
+    w:`주주현황 주식수 합계 ${(D.주주합산주식||0).toLocaleString()}주 vs 재무상태표 발행주식수 ${D.총주식.toLocaleString()}주 — 주주현황이 감자·자기주식 변동 전 구기준 가능성. 대표 실제 지분·주식수는 CEO 확인 필요`});   /* ★ 2026-07-21 */
+  C.push({n:'대표자 지분 보유',ok:D.대표지분>0,
+    d:D.대표지분>0?`${D.대표자} ${D.대표지분}%`:`${D.대표자||'대표'} 지분 0% — 전문경영인으로 보입니다`});
+  return C;
+}
+
+ function finLatestQuarter(coordPages,fmt,annualYear){
+  if(fmt!=='NICE')return null;
+  const pages=(coordPages||[]).map(pg=>finPreparePage(pg));
+  const candidates=pages.filter(pg=>/개별\s*,?\s*분기|개별분기/.test(pg.text||'')&&/재무상태표/.test(pg.text||'')&&/매출액/.test(pg.text||''));
+  const iso=t=>String(t||'').replace(/\./g,'-');
+  const first=(pg,labels)=>{const v=finCells(pg,labels,3);return v&&Number.isFinite(v[0])?v[0]:null;};
+  for(const pg of candidates){
+    const dates=[];
+    for(const it of pg){if(/^20\d{2}[.\-]\d{2}[.\-]\d{2}$/.test(it.s)){const d=iso(it.s);if(!dates.includes(d))dates.push(d);}}
+    const periodEnd=dates[0]||'';
+    if(!periodEnd||/-12-31$/.test(periodEnd))continue;
+    if(annualYear&&Number(periodEnd.slice(0,4))<Number(annualYear))continue;
+    const q={periodEnd,
+      assets:first(pg,'자산총계'),liabilities:first(pg,'부채총계'),equity:first(pg,'자본총계'),
+      cash:first(pg,['현금 및 현금성자산','(현금 및 현금등가물)','현금및현금성자산']),
+      currentAssets:first(pg,'유동자산'),currentLiabilities:first(pg,'유동부채'),
+      currentBorrowings:first(pg,['(유동차입부채)','유동차입부채','(단기차입금)','단기차입금']),
+      nonCurrentBorrowings:first(pg,['(비유동차입부채)','비유동차입부채','(장기차입금)','장기차입금']),
+      revenue:first(pg,'매출액'),operatingProfit:first(pg,['영업이익(손실)','영업이익']),
+      netIncome:first(pg,['당기순이익(손실)','당기순이익']),financeCost:first(pg,['(금융비용)','금융비용','(이자비용)','이자비용']),
+      confirmed:false};
+    if([q.assets,q.liabilities,q.equity].every(Number.isFinite)){
+      const tol=Math.max(2,Math.abs(q.assets)*0.001);if(Math.abs(q.assets-q.liabilities-q.equity)>tol)continue;
+    }
+    if(Number.isFinite(q.assets)&&Number.isFinite(q.revenue))return q;
+  }
+  return null;
+ }
+
+ function layoutText(items){
+  const rows=[];
+  for(const it of items){let row=rows.find(r=>Math.abs(r.y-it.y)<=2.6);if(!row){row={y:it.y,items:[]};rows.push(row);}row.items.push(it);}
+  rows.sort((a,b)=>b.y-a.y);
+  return rows.map(r=>{r.items.sort((a,b)=>a.x-b.x);let line='',last=null;for(const it of r.items){if(last!==null){const gap=it.x-last;line+=gap>12?'   ':gap>3?' ':'';}line+=it.s;last=it.x+it.w;}return line.trim();}).filter(Boolean).join('\n');
+ }
+ async function extract(file){
+  const pdfjs=await ensurePdfJs();
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer(),cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'}).promise;
+  const pages=[],pageObjects=[],pageTexts=[];
+  for(let p=1;p<=pdf.numPages;p++){
+   const tc=await (await pdf.getPage(p)).getTextContent();
+   let items=(tc.items||[]).filter(i=>i.str&&i.str.trim()).map(i=>({s:String(i.str).trim(),x:Math.round((i.transform||[])[4]||0),y:Math.round((i.transform||[])[5]||0),w:Math.round(i.width||0)})).sort((a,b)=>b.y-a.y||a.x-b.x);
+   items=finPreparePage(items);
+   pages.push(items);const text=layoutText(items);pageTexts.push(text);pageObjects.push({pageNumber:p,text});
+  }
+  if(pages.reduce((n,p)=>n+p.length,0)<30)throw new Error('이 PDF는 텍스트 레이어가 없는 스캔·이미지 PDF입니다. 텍스트형 보고서 또는 직접입력을 사용해 주세요.');
+  const finFormat=finDetect(pages);const label=finFormat==='NICE'?'NICE BizLINE':finFormat==='KODATA'?'KODATA/KCR2':finFormat==='KODATA_WEB'?'CRETOP':'GENERIC';
+  return {text:pageTexts.join('\n\n--- PAGE ---\n\n'),pageTexts,pageObjects,coordPages:pages,pages:pdf.numPages,finFormat,format:label,engineVersion:ENGINE_VERSION};
+ }
+ function parse(coordPages,fmt){FIN.src=fmt;FIN.scaleFix=1;const data=finParse(coordPages,fmt);const checks=finVerify(data);return {data,checks,unit:finUnit(),unitScale:finUnitScale(),format:fmt,engineVersion:ENGINE_VERSION};}
+ function readText(coordPages,labels,stops,fmt){
+  const pages=(fmt==='KODATA_WEB'?coordPages.map(pg=>{const m=finGlueChars(pg);m.text=m.map(i=>i.s).join(' ');return m;}):coordPages)||[];
+  const stopList=Array.isArray(stops)?stops:FIN_INFO_LABELS;
+  for(const pg of pages){const v=finText(pg,labels,stopList);if(v)return v;}
+  return '';
+ }
+ return {VERSION:ENGINE_VERSION,extract,parse,latestQuarter:finLatestQuarter,detect:finDetect,readText,INFO_LABELS:[...FIN_INFO_LABELS],prepare:{finMerge,finGlue,finGlueChars,finNormalizeRows,finPreparePage,finCells,finFind,finYears},unitFor:fmt=>{FIN.src=fmt;return finUnit();}};
+})();
+
+function crPdfSanitize(v){return crCleanText(String(v??'').replace(/[\u0000-\u001F\uE000-\uF8FF\u25A1\uFFFD]+/g,'·').replace(/[·]{2,}/g,'·').replace(/\s*·\s*/g,'·'));}
+function crPageText(out,n){return out?.pageObjects?.find(p=>p.pageNumber===n)?.text||'';}
+function crRegex(text,re){const m=String(text||'').match(re);return m?crPdfSanitize(m[1]):'';}
+function crDateISO(v){const m=String(v||'').match(/((?:19|20)\d{2})\D{0,8}(\d{1,2})\D{0,8}(\d{1,2})/);if(!m)return crCleanText(v);const mon=Number(m[2]),day=Number(m[3]);return mon>=1&&mon<=12&&day>=1&&day<=31?`${m[1]}-${String(mon).padStart(2,'0')}-${String(day).padStart(2,'0')}`:crCleanText(v);}
+function crCoordinateCredit(out){
+ const grade=/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/i;
+ for(const pg of out?.coordPages||[]){
+  if(!/기업평가등급\s*이력/.test(pg.text||''))continue;
+  const header=(pg||[]).filter(i=>String(i.s).replace(/\s+/g,'')==='등급').sort((a,b)=>b.y-a.y)[0];
+  if(!header)continue;
+  const candidates=(pg||[]).filter(i=>i.y<header.y-2&&Math.abs(i.x-header.x)<=35&&grade.test(String(i.s).trim())).sort((a,b)=>b.y-a.y);
+  if(candidates.length)return String(candidates[0].s).trim().toUpperCase();
+ }
+ return '';
+}
+function crProfileFallback(out,parsed,supplement){
+ const all=out.text||'',p3=crPageText(out,3),p11=crPageText(out,11),sp=supplement?.profile||{};
+ const infoPages=out.finFormat==='NICE'?((out.coordPages||[]).filter(pg=>/주요주주/.test(pg.text||'')&&/종업원수/.test(pg.text||'')&&/표준산업분류/.test(pg.text||''))):(out.finFormat==='KODATA_WEB'?((out.coordPages||[]).filter(pg=>/기업개요/.test(pg.text||'')&&/설립년월/.test(pg.text||''))):(out.coordPages||[]));
+ const coord=(labels,stops,pages=infoPages.length?infoPages:(out.coordPages||[]))=>crPdfSanitize(JebFinancialEngine.readText(pages,labels,stops,out.finFormat));
+ const cleanDash=v=>{const x=crPdfSanitize(v);return !x||/^(?:-|―|–|해당없음|없음|미제공|N\/?A)$/i.test(x)?'':x;};
+ const cleanCredit=v=>cleanDash(v).replace(/\s*등급.*$/,'').trim().match(/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/i)?.[1]?.toUpperCase()||'';
+ const company=cleanDash(sp.companyName)||cleanDash(parsed.회사명)||cleanDash(coord(['업체명','기업명','기 업 명']))||crRegex(all,/(?:기업명|업체명)\s*[:：]?\s*(.{2,60}?)(?=\s+(?:대표자(?:명)?|사업자(?:등록)?번호|설립일|종업원|업종)|$)/m);
+ const rep=cleanDash(sp.representative)||cleanDash(parsed.대표자)||cleanDash(coord(['대표자명','대표자','대 표 자']))||crRegex(all,/대표자(?:명)?\s*[:：]?\s*([가-힣A-Za-z ]{2,30}?)(?=\s+(?:사업자(?:등록)?번호|설립일|종업원|업종)|$)/m);
+ const business=(cleanDash(sp.businessNumber)||cleanDash(coord(['사업자번호','사업자등록번호'],undefined,out.coordPages||[]))||crRegex(all,/(?:사업자(?:등록)?번호\s*[:：]?\s*)?([0-9]{3}\s*-\s*[0-9]{2}\s*-\s*[0-9]{5})/)).replace(/\s*-\s*/g,'-');
+ const establishedRaw=cleanDash(sp.established)||cleanDash(coord(['설립일자','설 립 일 자','설립년월']))||crRegex(p3,/설립(?:일자|년월)\s+((?:19|20)\d{2}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2})/i)||crRegex(all,/설립(?:일자|년월)\s*[:：]?\s*((?:19|20)\d{2}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2})/i);
+ const credit=cleanCredit(sp.creditGrade)||cleanCredit(crCoordinateCredit(out))||cleanCredit(coord(['기업평가등급','기업신용등급','신용등급']))||cleanCredit(crRegex(p3,/(?:기업평가등급|기업신용등급|신용등급)\s*(?:현재)?\s*(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)\s*(?:등급)?/i))||cleanCredit(crRegex(all,/(?:기업신용등급|신용등급)\s*(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)\s*등급/i))||cleanCredit(crRegex(crPageText(out,15),/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)\s+/m));
+ const clipInfo=v=>{const x=cleanDash(v).split(/\s+(?=표준산업분류|업종분류|업종|기업형태|본사주소|주소|주거래은행|주채권기관|무역업허가번호|소속그룹|주요 손익현황|주요 재무)/)[0].trim();return x.length>160?'':x;};
+ const products=(clipInfo(sp.products)||clipInfo(coord(['주요제품(상품)','주요제품명','주 요 제 품 명','주요상품']))||clipInfo(crRegex(p3,/(?:주요상품|주요제품명|주요제품(?:\(상품\))?)\s+(.+?)(?=\s+(?:무역업허가번호|소속그룹|주채권기관|표준산업분류|업종|기업형태|본사주소)|$)/m))||clipInfo(crRegex(all,/(?:주요상품|주요제품명|주요제품(?:\(상품\))?)\s+(.+?)(?=\s+(?:무역업허가번호|소속그룹|주채권기관|표준산업분류|업종|기업형태|본사주소)|$)/m))).replace(/\s+\d{5,6}$/,'').trim();
+ const address=clipInfo(sp.address)||clipInfo(coord(['본사주소','본 사 주 소','주소']));
+ const website=(cleanDash(sp.website)||cleanDash(coord(['홈페이지','홈 페 이 지']))).split(/\s+(?=이메일|E-?mail)/i)[0].trim();
+ const groupName=cleanDash(sp.groupName)||cleanDash(coord(['소속계열','계열명','주력업체']));
+ const mainBank=cleanDash(sp.mainBank)||cleanDash(coord(['주거래은행','주 거 래 은 행','주채권기관','당좌거래은행']))||crRegex(p11,/(?:주거래은행|주채권기관)\s+([^\s]+)/)||crRegex(all,/(?:주거래은행|주채권기관)\s+([^\s]+)/);
+ const companyType=cleanDash(sp.companyType)||cleanDash(coord(['기업형태','기 업 형 태','기업규모']));
+ const industry=cleanDash(parsed.업종)||clipInfo(sp.industry)||clipInfo(coord(['표준산업분류','업종분류','업 종 분 류','업종']));
+ const industryCode=cleanDash(sp.industryCode);
+ const employees=Number.isFinite(sp.employees)?sp.employees:(Number.isFinite(parsed.종업원)?parsed.종업원:(()=>{const v=cleanDash(coord(['종업원수','상시종업원','상 시 종 업 원']));const m=v.match(/[\d,]+/);return m?Number(m[0].replace(/,/g,'')):null;})());
+ return {companyName:company,displayName:company,businessNumber:business,representative:rep,employees,established:crDateISO(establishedRaw)||null,companyType,industry,industryCode,products,address,website,groupName,mainBank,creditGrade:credit,foreignSubsidiaries:Array.isArray(sp.foreignSubsidiaries)?sp.foreignSubsidiaries.map(cleanDash).filter(Boolean):[],relatedCompanies:Array.isArray(sp.relatedCompanies)?sp.relatedCompanies.map(cleanDash).filter(Boolean):[],shareholders:Array.isArray(sp.shareholders)?sp.shareholders:[],reportDate:sp.reportDate||null,fiscalDate:sp.fiscalDate||null,latestQuarterDate:sp.latestQuarterDate||null};
+}
+function crCoordinateAffiliates(out){
+ const result=[];const pages=out?.coordPages||[];
+ for(let pi=0;pi<pages.length;pi++){
+  const pg=pages[pi];if(!/관계사\s*현황/.test(pg.text||'')||!/업체명/.test(pg.text||''))continue;
+  const header=(pg||[]).filter(i=>String(i.s).replace(/\s/g,'')==='업체명').sort((a,b)=>b.y-a.y)[0];if(!header)continue;
+  const foot=(pg||[]).filter(i=>/최대/.test(i.s)&&i.y<header.y).sort((a,b)=>b.y-a.y)[0];const rows=[];
+  for(const it of pg){if(it.y>=header.y-2)continue;if(foot&&it.y<=foot.y+2)continue;let r=rows.find(x=>Math.abs(x.y-it.y)<=4);if(!r){r={y:it.y,items:[]};rows.push(r);}r.items.push(it);}
+  for(const r of rows.sort((a,b)=>b.y-a.y)){
+   const a=r.items.sort((x,y)=>x.x-y.x);const name=a.filter(i=>i.x<150).map(i=>i.s).join(' ').trim();
+   if(!name||name==='-'||!/\(주\)|주식회사|유한회사|㈜/.test(name))continue;
+   const representative=a.filter(i=>i.x>=145&&i.x<230).map(i=>i.s).join(' ').trim();
+   const industry=a.filter(i=>i.x>=225&&i.x<365).map(i=>i.s).join(' ').trim();
+   const nums=a.filter(i=>i.x>=365).map(i=>String(i.s).replace(/\s/g,'')).filter(t=>/^-?[\d,]+$/.test(t)).map(t=>Number(t.replace(/,/g,'')));
+   result.push({name:crPdfSanitize(name),representative:crPdfSanitize(representative),industry:crPdfSanitize(industry),assets:nums[0]??null,revenue:nums[1]??null,netIncome:nums[2]??null,sourcePage:pi+1});
+  }
+ }
+ return result;
+}
+function crCoordinateShareholderDate(out){const m=String(out?.text||'').match(/주요주주[\s\S]{0,200}?기준\s*일자\s*[:：]?\s*(20\d{2}[.\-]\d{2}[.\-]\d{2})/);return m?m[1].replace(/\./g,'-'):null;}
+function crArrayAt(a,i){return Array.isArray(a)&&Number.isFinite(a[i])?a[i]:null;}
+function crCoordinateToCase(out,file){
+ if(!out.finFormat)throw new Error('지원 보고서 형식을 식별하지 못했습니다. NICE BizLINE·KODATA/KCR2·CRETOP 텍스트형 보고서인지 확인해 주세요.');
+ const parsedPack=JebFinancialEngine.parse(out.coordPages,out.finFormat),P=parsedPack.data,checks=parsedPack.checks;
+ let standard=null,supplement=null,standardCase=null;
+ if(out.finFormat==='NICE'&&global.NiceBizlineExtractor){
+  try{standard=global.NiceBizlineExtractor.extractNiceBizline(out.pageObjects,{force:true});standardCase=global.NiceBizlineExtractor.toCorporateReportCase(standard,{sourceFileName:file?.name||''});supplement=standardCase;}catch(e){console.warn('[CorporateReport] NICE 부가정보 보조추출 실패:',e.message);}
+ }
+ const d=crEmptyCase({sourceType:(out.finFormat==='NICE'?'NICE BizLINE':out.finFormat==='KODATA_WEB'?'CRETOP':'KODATA/KCR2')+' 좌표기반 자동추출',sourcePages:out.pages,confirmed:false});
+ d.meta.schemaVersion='CR-1.9.0';d.meta.sourceFileName=file?.name||'';d.meta.extractorVersion=parsedPack.engineVersion;d.meta.originalUnit=parsedPack.unit;d.meta.unit='백만원';d.meta.coordinateEngine=parsedPack.engineVersion;d.meta.parserFormat=out.finFormat;d.meta.statementType=standard?.document?.statementStandard?`${standard.document.statementStandard} 개별 결산`:(/K-?GAAP/i.test((P._srcText?.bs||''))?'K-GAAP 개별 결산':/IFRS/i.test((P._srcText?.bs||''))?'IFRS 개별 결산':'개별 결산');
+ d.profile=Object.assign(d.profile,crProfileFallback(out,P,supplement));
+ const toMillion=v=>!Number.isFinite(v)?null:Math.round(v*(parsedPack.unit==='천원'?0.001:parsedPack.unit==='원'?0.000001:parsedPack.unit==='만원'?0.01:parsedPack.unit==='억원'?100:1)*1000)/1000;
+ const map={assets:'자산총계',liabilities:'부채총계',equity:'자본총계',revenue:'매출액',cogs:'매출원가',operatingProfit:'영업이익',netIncome:'순이익',operatingCashFlow:'영업현금',cash:'현금',currentAssets:'유동자산',currentLiabilities:'유동부채',receivables:'매출채권',inventory:'재고자산',payables:'매입채무',borrowings:'차입금',currentBorrowings:'유동차입',nonCurrentBorrowings:'비유동차입',shortTermLoanReceivable:'가지급금',retainedEarnings:'이익잉여금',interestExpense:'이자비용',capitalStock:'자본금'};
+ (P.years||[]).forEach((year,i)=>{const y=String(year);if(!d.financials[y])d.financials[y]=crEmptyFinancialYear();for(const [target,src] of Object.entries(map)){let v=crArrayAt(P[src],i);if(v===null&&target==='currentBorrowings')v=crArrayAt(P.단기차입금,i);if(v===null&&target==='nonCurrentBorrowings'){const a=crArrayAt(P.장기차입금,i),b=crArrayAt(P.사채,i);v=(a!==null||b!==null)?safeNum(a)+safeNum(b):null;}d.financials[y][target]=toMillion(v);}});
+ const coordinateQuarter=JebFinancialEngine.latestQuarter(out.coordPages,out.finFormat,P.years?.[0]);
+ if(coordinateQuarter){const qi=(out.coordPages||[]).findIndex(pg=>(/개별\s*,?\s*분기|개별분기/.test(pg.text||''))&&/재무상태표/.test(pg.text||'')&&/매출액/.test(pg.text||''));d.latestQuarterly=Object.assign(coordinateQuarter,{sourcePage:qi>=0?qi+1:null});d.profile.latestQuarterDate=coordinateQuarter.periodEnd;}
+ else if(standardCase?.latestQuarterly&&!/-12-31$/.test(standardCase.latestQuarterly.periodEnd||''))d.latestQuarterly=clone(standardCase.latestQuarterly);
+ const shDate=crCoordinateShareholderDate(out);
+ if(Array.isArray(P.주주)&&P.주주.length)d.profile.shareholders=P.주주.map(x=>({name:x.명,sharesOwned:x.주식,ownershipPercent:x.율,relationship:'',asOfDate:shDate,sourcePage:11}));
+ const coordAff=crCoordinateAffiliates(out);if(coordAff.length){d.profile.relatedCompanies=coordAff.map(x=>x.name);d.affiliates=coordAff;}
+ if(standard){d.profile.creditGrade=d.profile.creditGrade||standard.credit?.companyRatingCurrent?.grade||'';d.profile.reportDate=d.profile.reportDate||standard.document?.reportDate||null;d.confirmationQueue=standard.confirmationQueue||[];d.dynamicQuestions=standardCase?.dynamicQuestions||[];d.derivedSignals=standard.derivedSignals||[];d.extractionResult={document:standard.document,company:standard.company,credit:standard.credit,shareholders:d.profile.shareholders,affiliates:coordAff,quality:standard.quality};}
+ d.profile.fiscalDate=P.years?.[0]?`${P.years[0]}-12-31`:d.profile.fiscalDate;
+ const failedChecks=checks.filter(x=>x.ok===false&&/^자산 = 부채 \+ 자본/.test(x.n));const advisoryChecks=checks.filter(x=>x.ok===false&&!/^자산 = 부채 \+ 자본/.test(x.n));
+ const requiredYears=['2023','2024','2025'],required=['assets','liabilities','equity','revenue','operatingProfit','netIncome'];
+ const missing=[];for(const y of requiredYears)for(const k of required)if(!Number.isFinite(d.financials?.[y]?.[k]))missing.push(`${y} ${FIELD_META[k]?.[0]||k}`);
+ d.meta.extractionQualityPassed=failedChecks.length===0&&missing.length===0;d.meta.confirmed=false;
+ d.sourceMap={profile:'좌표기반 기업개요 표',financials:'좌표기반 재무상태표·손익계산서',shareholders:'원문 주주현황',coordinateEngine:parsedPack.engineVersion};
+ d.warnings=[...new Set([...(standardCase?.warnings||[]),...failedChecks.map(x=>x.w||x.d||x.n),...advisoryChecks.map(x=>x.w||x.d||x.n),...missing.map(x=>x+' 미검출'),...(P.지분상충?['주주현황 기준일과 최신 결산 발행주식수가 다릅니다. 대표 실제 지분을 확인해 주세요.']:[])])];
+ d.coordinateValidation={engineVersion:parsedPack.engineVersion,format:out.finFormat,unit:parsedPack.unit,years:P.years,checks,failedChecks:failedChecks.map(x=>x.n),advisoryChecks:advisoryChecks.map(x=>x.n),missing};
+ return d;
+}
+
+crFinancialFieldMeta=function(d,y,k){
+ if(d?.meta?.coordinateEngine){const group=['assets','liabilities','equity','cash','currentAssets','currentLiabilities','receivables','inventory','payables','borrowings','currentBorrowings','nonCurrentBorrowings','retainedEarnings','capitalStock'].includes(k)?'재무상태표':'손익·현금흐름표';return `좌표행 ${group} · ${y} 개별 결산 · ${d.meta.statementType||''}`;}
+ return '사용자 확인 필요';
+};
+
+// Replace the lossy row-string parser with the proven coordinate engine.
+PDFParser.extract=async function(file){return JebFinancialEngine.extract(file);};
+PDFParser.detect=function(_text,_pageObjects,coordPages){const f=coordPages?JebFinancialEngine.detect(coordPages):null;return f==='NICE'?'NICE BizLINE':f==='KODATA'?'KODATA/KCR2':f==='KODATA_WEB'?'CRETOP':'GENERIC';};
+const crValidateFactsV17=crValidateFacts;
+crValidateFacts=function(d,opts={}){const v=crValidateFactsV17(d,opts);const errors=[...v.errors],warnings=[...v.warnings];if(d?.meta?.parserFormat&&d?.meta?.extractionQualityPassed===false)errors.push('좌표기반 재무추출 검증 미통과');for(const x of d?.coordinateValidation?.failedChecks||[])errors.push(x);return {passed:errors.length===0,errors:[...new Set(errors)],warnings:[...new Set(warnings)]};};
+handlePdf=async function(file){
+ if(!file)return;if(file.size>30*1024*1024){setStartStatus('PDF는 30MB 이하를 사용해 주세요.','err');return;}
+ window.jvTrack?.('corporate_pdf_analysis');setStartStatus('PDF 표의 좌표와 계정행을 분석하고 있습니다…');
+ try{
+  const out=await JebFinancialEngine.extract(file);state.sourceText=out.text;state.sourceName=file.name;state.pdfMeta=out;
+  let data;if(out.finFormat){setStartStatus(`${out.format} 좌표기반 엔진으로 연도·행·열을 복원하고 있습니다…`);data=crCoordinateToCase(out,file);}else{data=PDFParser.generic(out.text,out.pages);data.meta.sourceFileName=file.name;data.warnings.unshift('지원 보고서 형식을 식별하지 못해 기본정보만 표시합니다. 재무값은 직접 입력해야 합니다.');}
+  data=crNormalizeCase(data);const v=crValidateFacts(data);data.factValidation=v;data.meta.extractionQualityPassed=!!out.finFormat&&v.passed;
+  setStartStatus(`${out.format} · ${out.pages}페이지 · ${v.passed?'좌표추출·회계검산 통과':'수정 필요 '+v.errors.length+'건'}.`,v.passed?'ok':'err');window.jvDone?.('corporate_pdf_analysis');prepareCase(data,{confirmed:false,autoGenerate:false});
+ }catch(error){window.jvDone?.('corporate_pdf_analysis');console.error(error);setStartStatus('분석 실패: '+error.message,'err');toast('PDF 분석 오류: '+error.message,'err');}
+};
+
+global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText}}:{})};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })(window);
