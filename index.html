@@ -1043,7 +1043,8 @@
   <div class="mdl-box" style="max-width:560px;padding:26px 24px">
     <button class="mdl-x" onclick="closeM('mdl-fcc-quick')">×</button>
     <h2 style="font-size:17px;font-weight:800;color:var(--primary);margin:0 0 4px">🎂 고객 생일·상령일</h2>
-    <p style="font-size:12px;color:#6B7280;margin:0 0 14px">이번 달·다음 달 예정 이벤트입니다. 행을 누르면 💬 안부 멘트를 바로 보낼 수 있습니다.</p>
+    <p style="font-size:12px;color:#6B7280;margin:0 0 10px">오늘부터 다음 달까지 예정 이벤트입니다. 행을 누르면 💬 안부 멘트를 바로 보낼 수 있습니다.</p>
+    <div id="fcq-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div><!-- ★ [2026-07-31] 전체·생일·상령일·만기 필터 탭 -->
     <div id="fcq-cur-label" style="font-size:11px;font-weight:700;color:#9CA3AF;margin-bottom:5px"></div>
     <div id="fcq-cur" onclick="fccMsgClick(event)" style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px"></div>
     <div id="fcq-next-label" style="font-size:11px;font-weight:700;color:#9CA3AF;margin-bottom:5px"></div>
@@ -6637,12 +6638,15 @@ function fccMonthEvents(Y,M){
   ev.sort((a,b)=>a.d-b.d);
   return ev;
 }
-function fccRenderMonthInto(elId,Y,M){
+function fccRenderMonthInto(elId,Y,M,opts){   /* ★ [2026-07-31] opts 선택 인자: {kinds:['생일'|'상령일'|'만기'], fromD:일} — 미지정 시 기존 동작 동일 */
   const el=$(elId);if(!el)return 0;
-  const t=fccToday();const ev=fccMonthEvents(Y,M);
-  if(!ev.length){el.innerHTML='<div style="font-size:12px;color:#C5CAD6;padding:2px 0">'+M+'월 예정 이벤트 없음</div>';return 0;}
+  const t=fccToday();let ev=fccMonthEvents(Y,M);
+  if(opts&&opts.kinds&&opts.kinds.length)ev=ev.filter(e=>opts.kinds.some(k=>e.k===k||e.k.indexOf(k+'_')===0));   /* ★ 종류 필터 (만기_silson 등 접두 매칭) */
+  let past=[];
+  if(opts&&opts.fromD&&Y===t.y&&M===t.m){past=ev.filter(e=>e.d<opts.fromD);ev=ev.filter(e=>e.d>=opts.fromD);}   /* ★ 오늘 이전 일정 분리(접기) */
+  if(!ev.length&&!past.length){el.innerHTML='<div style="font-size:12px;color:#C5CAD6;padding:2px 0">'+M+'월 예정 이벤트 없음</div>';return 0;}
   const isThisM=(Y===t.y&&M===t.m);
-  el.innerHTML=ev.map(e=>{
+  const _row=e=>{
     const isToday=isThisM&&e.d===t.d;
     const _isMat=e.k.indexOf('만기')===0;
     const _matLabel={'만기':'만기','만기_silson':'실손 만기','만기_auto':'자동차 만기','만기_protect':'보장성 만기','만기_saving':'저축성 만기','만기_pension':'연금 만기','만기_etc':'기타 만기'}[e.k]||e.k;
@@ -6654,7 +6658,15 @@ function fccRenderMonthInto(elId,Y,M){
       +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fccEsc(e.sub)+'</span>'
       +'<span style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬 멘트</span>'
       +'</div>';
-  }).join('');
+  };
+  let html='';
+  if(past.length){   /* ★ [2026-07-31] 지난 일정은 접어두고 원하면 펼치기 */
+    html+='<div id="'+elId+'-pastbtn" style="padding:2px 0"><span onclick="document.getElementById(\''+elId+'-pastbtn\').style.display=\'none\';document.getElementById(\''+elId+'-past\').style.display=\'flex\'" style="font-size:11px;color:#9CA3AF;cursor:pointer;text-decoration:underline">지난 일정 '+past.length+'건 보기 ▾</span></div>'
+        +'<div id="'+elId+'-past" style="display:none;flex-direction:column;gap:5px;opacity:.55">'+past.map(_row).join('')+'</div>';
+  }
+  html+=ev.map(_row).join('');
+  if(!ev.length)html+='<div style="font-size:12px;color:#C5CAD6;padding:2px 0">'+M+'월 남은 예정 이벤트 없음</div>';
+  el.innerHTML=html;
   return ev.length;
 }
 /* ── 💬 알림 행 멘트 (수정·복사·카톡 공유) — 2026-06-11 ── */
@@ -7002,14 +7014,33 @@ window.fccQuickList=async function(){
   if(nxt)nxt.innerHTML='';
   try{await fccFetch();}
   catch(e){console.error('fccQuickList error:',e);if(cur)cur.innerHTML='<div style="font-size:12px;color:#DC2626;padding:2px 0">고객 정보를 불러오지 못했습니다.</div>';return;}
+  fcqKind='';   /* ★ [2026-07-31] 모달 열 때마다 '전체' 탭으로 초기화 */
+  fcqRender();
+};
+/* ★ [2026-07-31] 퀵 모달 탭 필터 — 전체·생일·상령일·만기 / 오늘 이후만 표시(지난 일정 접기) */
+let fcqKind='';   /* '' | '생일' | '상령일' | '만기' */
+function fcqRender(){
   const t=fccToday();
   let y2=t.y,m2=t.m+1;if(m2>12){m2=1;y2++;}
   const l1=$('fcq-cur-label'),l2=$('fcq-next-label');
   if(l1)l1.textContent=t.m+'월 (이번 달)';
   if(l2)l2.textContent=m2+'월 (다음 달)';
-  fccRenderMonthInto('fcq-cur',t.y,t.m);
-  fccRenderMonthInto('fcq-next',y2,m2);
-};
+  const kinds=fcqKind?[fcqKind]:null;
+  fccRenderMonthInto('fcq-cur',t.y,t.m,{fromD:t.d,kinds:kinds});
+  fccRenderMonthInto('fcq-next',y2,m2,{kinds:kinds});
+  /* 탭 건수: 이번 달(오늘 이후) + 다음 달 합산 */
+  const _cnt=k=>{
+    const f=e=>!k||e.k===k||e.k.indexOf(k+'_')===0;
+    return fccMonthEvents(t.y,t.m).filter(e=>e.d>=t.d).filter(f).length+fccMonthEvents(y2,m2).filter(f).length;
+  };
+  const tabs=[['','전체'],['생일','🎂 생일'],['상령일','📅 상령일'],['만기','⏰ 만기']];
+  const tb=$('fcq-tabs');
+  if(tb)tb.innerHTML=tabs.map(([k,lb])=>{
+    const on=(fcqKind===k);
+    return '<button type="button" onclick="fcqSetKind(\''+k+'\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:16px;cursor:pointer;border:1px solid '+(on?'#1B3A5C':'#D1D5DB')+';background:'+(on?'#1B3A5C':'#fff')+';color:'+(on?'#fff':'#475569')+'">'+lb+' <span style="font-weight:800;opacity:'+(on?'1':'.6')+'">'+_cnt(k)+'</span></button>';
+  }).join('');
+}
+window.fcqSetKind=function(k){fcqKind=k;fcqRender();};   /* ★ module 스코프 → onclick용 window 등록 */
 /* ═══ ★ [2026-07-24] FC 채널 고객 상세 읽기 전용 리더 ═══
    정본은 FC 채널(내 고객 관리)의 기기 저장소 + 본인 구글드라이브.
    마이페이지는 같은 도메인의 IndexedDB(mycustomers_db)를 '읽기만' 한다 — 쓰기·삭제 일절 없음.
