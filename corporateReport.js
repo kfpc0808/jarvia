@@ -1272,7 +1272,7 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 (function(global){
 'use strict';
 
-const VERSION='1.9.2-question-engine-production';
+const VERSION='2.1.0-purpose-credit-export-audio-final';
 const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
@@ -1345,7 +1345,7 @@ const ServerAdapter={
   async extractFinancial(text){const t=String(text||'').trim();return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:t.slice(0,120000)});},
   async legalSearch(issue){try{const out=await serverCall(ENDPOINTS.corporate,{action:'legalSearch',issueId:issue.id,queries:issue.evidenceQueries||[]},120000);state.live.taxnavi=true;return out;}catch(e){return {ok:false,pending:true,error:e.message,results:[]};}},
   async tts(script){try{const out=await serverCall(ENDPOINTS.corporate,{action:'tts',script,caseId:state.caseData?.meta?.caseId},240000);state.live.tts=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}},
-  async runAI(action,payload){try{const out=await serverCall(ENDPOINTS.corporate,{action,payload},360000);state.live.ai=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}}
+  async runAI(action,payload,timeout=360000){try{const out=await serverCall(ENDPOINTS.corporate,{action,payload},timeout);state.live.ai=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}}
 };
 
 function loadScript(src){return new Promise((resolve,reject)=>{if(qs('script[data-src="'+src+'"]')){resolve();return;}const s=document.createElement('script');s.src=src;s.dataset.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('외부 라이브러리를 불러오지 못했습니다.'));document.head.appendChild(s);});}
@@ -1461,7 +1461,7 @@ function buildIssueSpecificObjections(id,data){
 }
 
 const FIELD_META={
- companyName:['기업명','text'],representative:['대표자','text'],businessNumber:['사업자번호','text'],employees:['종업원 수','number'],established:['설립일','date'],industry:['업종','text'],products:['주요 제품','text'],creditGrade:['신용등급','text'],
+ companyName:['기업명','text'],representative:['대표자','text'],businessNumber:['사업자번호','text'],employees:['종업원 수','number'],established:['설립일','date'],industry:['업종','text'],products:['주요 제품','text'],creditGrade:['기업평가등급','text'],watchGrade:['WATCH등급','text'],cashFlowGrade:['현금흐름등급','text'],
  assets:['자산총계','number'],liabilities:['부채총계','number'],equity:['자본총계','number'],revenue:['매출액','number'],cogs:['매출원가','number'],operatingProfit:['영업이익','number'],netIncome:['당기순이익','number'],cash:['현금성자산','number'],currentAssets:['유동자산','number'],currentLiabilities:['유동부채','number'],receivables:['매출채권','number'],inventory:['재고자산','number'],payables:['매입채무','number'],borrowings:['총차입금(기타금융부채 포함)','number'],shortTermLoanReceivable:['단기대여금','number'],retainedEarnings:['이익잉여금(결손금)','number'],operatingCashFlow:['영업활동조달현금','number'],interestExpense:['이자비용','number'],capitalStock:['자본금','number']
 };
 
@@ -1750,7 +1750,7 @@ function generatePages(model){
  const cashComment=!Number.isFinite(r.cashRatio)?'확인 필요':r.cashRatio>=20?'20% 이상':r.cashRatio>=10?'10~20%':'10% 미만';
  const confirmedStrengths=[];if(Number.isFinite(c.operatingProfit))confirmedStrengths.push(c.operatingProfit>0?`2025년 영업이익 ${wonEok(c.operatingProfit)}`:`2025년 영업손실 ${wonEok(c.operatingProfit)}`);if(Number.isFinite(c.equity))confirmedStrengths.push(c.equity>0?`자본총계 ${wonEok(c.equity)}`:`자본총계 ${wonEok(c.equity)} · 자본잠식 검토`);if(p.creditGrade)confirmedStrengths.push(`기업평가등급 ${p.creditGrade}`);
  addPage({id:'executive-summary',title:'CEO가 먼저 볼 핵심 결정',subtitle:'확인된 숫자와 활성 이슈의 다음 행동을 한 장에 압축했습니다.',section:'EXECUTIVE SUMMARY',visibility:'common',summary:'CEO 핵심 결정',body:`<div class="kpis">${kpi('매출 성장률',pct(r.salesGrowth),'2024→2025',Number.isFinite(r.salesGrowth)&&r.salesGrowth>=0?'good':'warn')}${kpi('영업이익률',pct(r.operatingMargin),'2025',Number.isFinite(r.operatingMargin)&&r.operatingMargin>0?'good':'warn')}${kpi('유동비율',pct(r.currentRatio),currentComment,ratioClass(r.currentRatio,150,100))}${kpi('차입금의존도',pct(r.borrowingDependency),'총차입금÷자산',Number.isFinite(r.borrowingDependency)&&r.borrowingDependency<30?'good':Number.isFinite(r.borrowingDependency)&&r.borrowingDependency<50?'warn':'bad')}</div><div class="cols2"><div class="card mint"><h3>확인된 현황</h3>${list(confirmedStrengths.length?confirmedStrengths:['추가 확인 필요'])}</div><div class="card red"><h3>우선 확인</h3>${list(model.issues.length?model.issues.map(x=>x.title+' — '+x.solutions[0]):['현재 자동 활성화된 핵심 이슈 없음 · 확인질문과 원자료 검토'])}</div></div><div class="decision-bar"><b>권장 우선순위</b>${model.issues.length?model.issues.map((x,i)=>`<span>${i+1}. ${esc(x.title)}</span>`).join(''):'<span>원자료 확인 후 우선순위 확정</span>'}</div>`});
- addPage({id:'company-facts',title:'기업 팩트 대시보드',subtitle:'원문에서 확인된 정보와 최신 확인이 필요한 정보를 분리합니다.',section:'CONFIRMED FACTS',visibility:'common',summary:'기업 기본정보와 출처',body:`<div class="cols2"><div class="card"><h3>기업 개요</h3><table><tbody>${[['기업명',p.companyName],['대표자',p.representative],['설립일',p.established],['종업원',Number.isFinite(p.employees)?p.employees+'명':'미확인'],['업종',p.industry],['주요제품',p.products],['신용등급',p.creditGrade]].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('')}</tbody></table></div><div class="card"><h3>주주·관계사</h3>${list((p.shareholders||[]).map(x=>`${x.name} ${x.ownershipPercent}%`).concat(p.relatedCompanies||[]))}<div class="notice amber"><b>확인 필요</b>관계사 거래조건·보증·지분변동은 추가자료로 확인합니다.</div></div></div><div class="source-box"><b>Source Map</b> ${Object.entries(model.sourceMap||{}).map(([k,v])=>esc(k+': '+v)).join(' · ')}</div>`});
+ addPage({id:'company-facts',title:'기업 팩트 대시보드',subtitle:'원문에서 확인된 정보와 최신 확인이 필요한 정보를 분리합니다.',section:'CONFIRMED FACTS',visibility:'common',summary:'기업 기본정보와 출처',body:`<div class="cols2"><div class="card"><h3>기업 개요</h3><table><tbody>${[['기업명',p.companyName],['대표자',p.representative],['설립일',p.established],['종업원',Number.isFinite(p.employees)?p.employees+'명':'미확인'],['업종',p.industry],['주요제품',p.products],['기업평가등급',p.creditGrade],['WATCH등급',p.watchGrade||'미확인'],['현금흐름등급',p.cashFlowGrade||'미확인']].map(x=>`<tr><th>${esc(x[0])}</th><td>${esc(x[1])}</td></tr>`).join('')}</tbody></table></div><div class="card"><h3>주주·관계사</h3>${list((p.shareholders||[]).map(x=>`${x.name} ${x.ownershipPercent}%`).concat(p.relatedCompanies||[]))}<div class="notice amber"><b>확인 필요</b>관계사 거래조건·보증·지분변동은 추가자료로 확인합니다.</div></div></div><div class="source-box"><b>Source Map</b> ${Object.entries(model.sourceMap||{}).map(([k,v])=>esc(k+': '+v)).join(' · ')}</div>`});
  const trendRows=[['매출액','revenue','매출 규모'],['영업이익','operatingProfit','본업 수익력'],['당기순이익','netIncome','최종 손익'],['영업활동조달현금','operatingCashFlow','영업 현금창출'],['현금성자산','cash','가용성 별도 확인'],['매출채권','receivables','회수조건 확인'],['재고자산','inventory','재고구성 확인'],['총차입금','borrowings','만기·금리·담보 확인'],['이익잉여금','retainedEarnings','누적결손 여부']];
  addPage({id:'financial-trend',title:'3개년 재무 추세',subtitle:'개별 결산 기준으로 단위·연도·주체를 통일했습니다.',section:'FINANCIAL TREND',visibility:'common',summary:'3개년 재무표',body:`<table><thead><tr><th>항목(백만원)</th><th class="num">2023</th><th class="num">2024</th><th class="num">2025</th><th>확인 포인트</th></tr></thead><tbody>${trendRows.map(([l,k,note])=>`<tr><td>${l}</td>${['2023','2024','2025'].map(y=>`<td class="num ${Number(model.financials[y][k])<0?'neg':''}">${Number.isFinite(model.financials[y][k])?model.financials[y][k].toLocaleString('ko-KR'):'—'}</td>`).join('')}<td>${note}</td></tr>`).join('')}</tbody></table><div class="notice"><b>핵심</b>실적·현금·차입·자본을 같은 방향으로 단정하지 않고 각 변동의 원인을 추가자료로 확인합니다.</div>`});
  addPage({id:'financial-ratios',title:'핵심 재무비율과 경영적 의미',subtitle:'비율은 판정이 아니라 질문과 의사결정의 출발점입니다.',section:'RATIO ANALYSIS',visibility:'common',summary:'주요 재무비율',body:`<div class="kpis">${kpi('부채비율',pct(r.debtRatio),debtComment,Number.isFinite(r.debtRatio)&&r.debtRatio<100?'good':Number.isFinite(r.debtRatio)&&r.debtRatio<200?'warn':'bad')}${kpi('유동비율',pct(r.currentRatio),currentComment,ratioClass(r.currentRatio,150,100))}${kpi('당좌비율',pct(r.quickRatio),quickComment,ratioClass(r.quickRatio,100,70))}${kpi('현금비율',pct(r.cashRatio),cashComment,ratioClass(r.cashRatio,20,10))}</div><div class="stat-strip"><div><span>차입금의존도</span><b>${pct(r.borrowingDependency)}</b></div><div><span>이자보상배수</span><b>${Number.isFinite(r.interestCoverage)?r.interestCoverage.toFixed(2)+'배':'—'}</b></div><div><span>매출채권회수일</span><b>${Number.isFinite(r.dso)?r.dso.toFixed(1)+'일':'—'}</b></div></div><div class="notice amber"><b>해석 경계</b>동일 업종·규모 비교와 월별 원자료를 확인하기 전 정상·위험을 확정하지 않습니다.</div>`});
@@ -1781,7 +1781,7 @@ function generatePages(model){
  if(signalIds.has('CASH_DROP'))addCalc('현금 증감','2025 현금−2024 현금',Number.isFinite(model.financials['2025'].cash)&&Number.isFinite(model.financials['2024'].cash)?wonEok(model.financials['2025'].cash-model.financials['2024'].cash):'—','원문 차이');if(signalIds.has('BORROWING_SURGE'))addCalc('차입금 증감','2025 총차입금−2024 총차입금',Number.isFinite(model.financials['2025'].borrowings)&&Number.isFinite(model.financials['2024'].borrowings)?wonEok(model.financials['2025'].borrowings-model.financials['2024'].borrowings):'—','원문 차이');if(activeIssueIds.has('CAPITAL_POLICY'))addCalc('이익잉여금','2025 개별 결산',wonEok(model.financials['2025'].retainedEarnings),'원문값');if(activeIssueIds.has('CAPITAL_TRANSACTIONS'))addCalc('기타자본구성요소','2025 개별 결산',wonEok(metricValueAt(model.extractionResult,'financialStatements.separateAnnual.2025-12-31.balanceSheet.otherCapitalComponents')),'원문값');
  addPage({id:'calculation-appendix',title:'계산 근거 부록',subtitle:'모든 계산은 동일 ConfirmedAnalysisModel의 원문값만 참조합니다.',section:'CALCULATION APPENDIX',visibility:'common',summary:'산식과 계산근거',body:`<table><thead><tr><th>산출</th><th>산식</th><th>결과</th><th>성격</th></tr></thead><tbody>${calcRows.map(x=>`<tr><td>${esc(x[0])}</td><td>${esc(x[1])}</td><td>${esc(x[2])}</td><td>${esc(x[3])}</td></tr>`).join('')}</tbody></table><div class="source-box"><b>계산기 연결</b> ${model.calculations.calculator.ratios.ok?'JarviaCalculators 호출 성공':'브라우저 직접 검산·계산기 입력계약 추가 확인'} · ${esc(model.calculations.calculatorVersion||'version 미표시')}</div>`});
  model.audioChapters=buildAudioChapters(model);
- addPage({id:'audio-course',title:'실전 컨설팅 해설강의',subtitle:'리포트 낭독이 아니라 숫자·질문·반론·보험시점을 교육합니다.',section:'AUDIO LEARNING',visibility:'audio',summary:'18~25분 맞춤형 강의',body:`<div class="audio-hero"><div class="course-cover"><div class="ic">🎧</div><div class="eyebrow">CONSULTANT LEARNING</div><h2>${esc(p.displayName||p.companyName)} 기업경영<br>의사결정 해설강의</h2><p>복잡한 숫자의 경영적 의미와 CEO에게 물어볼 질문, 유료컨설팅과 보험검토의 조건을 쉽게 설명합니다.</p><button type="button" data-audio-action="play">▶ 브라우저 강의 시작</button><div style="margin-top:6mm;font-size:9px;color:#99f6e4">권장 학습시간 ${model.audioChapters.reduce((s,x)=>s+x.minutes,0)}분 · ${model.audioChapters.length}개 챕터</div></div><div><div class="chapter-list" id="audioChapterList">${model.audioChapters.map((x,i)=>`<button type="button" data-chapter="${i}" class="${i===0?'on':''}"><span>CHAPTER ${String(i+1).padStart(2,'0')} · ${x.minutes}분</span><b>${esc(x.title)}</b><p>${esc(sentence(x.script,100))}</p></button>`).join('')}</div><div class="audio-controls"><button data-audio-action="play">▶ 재생</button><button data-audio-action="pause">⏸ 일시정지</button><button data-audio-action="stop">■ 정지</button><select id="audioRate"><option value="0.9">0.9×</option><option value="1" selected>1.0×</option><option value="1.15">1.15×</option><option value="1.3">1.3×</option></select><button data-audio-action="mp3">고급 MP3 생성</button></div><div class="audio-transcript" id="audioTranscript">${esc(model.audioChapters[0].script)}</div></div></div>`});
+ addPage({id:'audio-course',title:'실전 컨설팅 해설강의',subtitle:'리포트 낭독이 아니라 숫자·질문·반론·보험시점을 교육합니다.',section:'AUDIO LEARNING',visibility:'audio',summary:'18~25분 맞춤형 강의',body:`<div class="audio-hero"><div class="course-cover"><div class="ic">🎧</div><div class="eyebrow">CONSULTANT LEARNING</div><h2>${esc(p.displayName||p.companyName)} 기업경영<br>의사결정 해설강의</h2><p>복잡한 숫자의 경영적 의미와 CEO에게 물어볼 질문, 유료컨설팅과 보험검토의 조건을 쉽게 설명합니다.</p><div class="course-actions"><button type="button" data-audio-action="play">▶ 브라우저 강의 시작</button><button type="button" class="settings" data-audio-settings>⚙ 강의 조절</button></div><div style="margin-top:6mm;font-size:9px;color:#99f6e4">권장 학습시간 ${model.audioChapters.reduce((s,x)=>s+x.minutes,0)}분 · ${model.audioChapters.length}개 챕터</div></div><div><div class="chapter-list" id="audioChapterList">${model.audioChapters.map((x,i)=>`<button type="button" data-chapter="${i}" class="${i===0?'on':''}"><span>CHAPTER ${String(i+1).padStart(2,'0')} · ${x.minutes}분</span><b>${esc(x.title)}</b><p>${esc(sentence(x.script,100))}</p></button>`).join('')}</div><div class="audio-controls"><button data-audio-action="play">▶ 재생</button><button data-audio-action="pause">⏸ 일시정지</button><button data-audio-action="stop">■ 정지</button><select id="audioRate"><option value="0.9">0.9×</option><option value="1" selected>1.0×</option><option value="1.15">1.15×</option><option value="1.3">1.3×</option></select><button data-audio-action="mp3">고급 MP3 생성</button></div><div class="audio-transcript" id="audioTranscript">${esc(model.audioChapters[0].script)}</div></div></div>`});
  addPage({id:'closing',title:'최종 제안과 다음 행동',subtitle:'리포트 생성이 아니라 CEO의 실행결정으로 마무리합니다.',section:'FINAL PROPOSAL',visibility:'common',summary:'최종 제안',body:`<div class="lead"><b>활성 이슈에 대한 1차 사실확정·정밀진단을 우선 제안합니다.</b><p>${esc(model.issues.map(x=>x.title).join(' · '))}의 자료와 원인을 확정한 뒤 전문가 실행과 보험 적합성을 순서대로 검토합니다.</p></div><div class="options"><div class="option"><em>STEP 1</em><h3>팩트·자료 확정</h3><p>${esc(activeDocs.slice(0,4).join(' · '))}</p></div><div class="option recommended"><em>STEP 2 · 권장</em><h3>정밀진단 프로젝트</h3><p>계산·시나리오·의사결정·실행계획</p></div><div class="option"><em>STEP 3</em><h3>전문가·보험 실행</h3><p>확인된 법률·세무·자본·보장공백만 실행</p></div></div><div class="decision-bar"><b>다음 미팅</b><span>날짜 ______</span><span>담당자 ______</span><span>제출자료 ______</span><span>결정사항 ______</span></div>`});
  state.caseData=model;state.pages.forEach(p=>p.notes=SpeechEngine.notes(p,model,model));return state.pages;
 }
@@ -2284,12 +2284,12 @@ const CR_FIN_KEYS=['assets','liabilities','equity','revenue','cogs','operatingPr
 function crEmptyFinancialYear(){return Object.fromEntries(CR_FIN_KEYS.map(k=>[k,null]));}
 function crEmptyCase({sourceType='직접입력',sourcePages=0,confirmed=false}={}){
  const years={'2023':crEmptyFinancialYear(),'2024':crEmptyFinancialYear(),'2025':crEmptyFinancialYear()};
- return {meta:{schemaVersion:'CR-1.9.2',caseId:'CR-'+uid().toUpperCase(),sourceType,sourcePages,sourceFileName:'',unit:'백만원',confirmed,createdAt:new Date().toISOString().slice(0,10),statementType:'확인 필요',extractionQualityPassed:false},profile:{companyName:'',displayName:'',businessNumber:'',representative:'',employees:null,established:null,companyType:'',industry:'',industryCode:'',products:'',address:'',website:'',groupName:'',mainBank:'',creditGrade:'',foreignSubsidiaries:[],relatedCompanies:[],shareholders:[],reportDate:null,fiscalDate:null,latestQuarterDate:null},financials:years,latestQuarterly:null,capitalEvents:[],answers:{ceoStyle:'신중보수형',meetingStage:'1차 진단',successorStatus:'미확인',existingInsurance:'미확인',keyPersonMonthlyFixedCost:null,keyPersonEmergencyMonths:12,immediateDebtRepayment:null,availableEmergencyCash:null,existingKeyPersonCoverage:null,topCustomerConcentration:'미확인'},sourceMap:{},warnings:[],speechPlan:null,speechOverrides:{},dynamicQuestions:[],derivedSignals:[],confirmationQueue:[],extractionResult:null};
+ return {meta:{schemaVersion:'CR-1.9.2',caseId:'CR-'+uid().toUpperCase(),sourceType,sourcePages,sourceFileName:'',unit:'백만원',confirmed,createdAt:new Date().toISOString().slice(0,10),statementType:'확인 필요',extractionQualityPassed:false},profile:{companyName:'',displayName:'',businessNumber:'',representative:'',employees:null,established:null,companyType:'',industry:'',industryCode:'',products:'',address:'',website:'',groupName:'',mainBank:'',creditGrade:'',watchGrade:'',cashFlowGrade:'',foreignSubsidiaries:[],relatedCompanies:[],shareholders:[],reportDate:null,fiscalDate:null,latestQuarterDate:null},financials:years,latestQuarterly:null,capitalEvents:[],answers:{ceoStyle:'신중보수형',meetingStage:'1차 진단',successorStatus:'미확인',existingInsurance:'미확인',keyPersonMonthlyFixedCost:null,keyPersonEmergencyMonths:12,immediateDebtRepayment:null,availableEmergencyCash:null,existingKeyPersonCoverage:null,topCustomerConcentration:'미확인'},sourceMap:{},warnings:[],speechPlan:null,speechOverrides:{},dynamicQuestions:[],derivedSignals:[],confirmationQueue:[],extractionResult:null};
 }
 function crCleanText(v){if(v===null||v===undefined)return '';const t=String(v).replace(/\s+/g,' ').trim();return (!t||t==='-'||t==='—'||/^미확인$/i.test(t)||/^해당\s*없음$/i.test(t))?'':t;}
 function crNormalizeCase(d){
  const base=crEmptyCase({sourceType:d?.meta?.sourceType||'미확인',sourcePages:d?.meta?.sourcePages||0,confirmed:!!d?.meta?.confirmed});
- const out=Object.assign(base,clone(d||{}));out.meta=Object.assign(base.meta,clone(d?.meta||{}));out.profile=Object.assign(base.profile,clone(d?.profile||{}));out.profile.companyName=crCleanText(out.profile.companyName);out.profile.displayName=crCleanText(out.profile.displayName)||out.profile.companyName;['businessNumber','representative','companyType','industry','industryCode','products','address','website','groupName','mainBank','creditGrade'].forEach(k=>out.profile[k]=crCleanText(out.profile[k]));['foreignSubsidiaries','relatedCompanies','shareholders'].forEach(k=>{if(!Array.isArray(out.profile[k]))out.profile[k]=[];});
+ const out=Object.assign(base,clone(d||{}));out.meta=Object.assign(base.meta,clone(d?.meta||{}));out.profile=Object.assign(base.profile,clone(d?.profile||{}));out.profile.companyName=crCleanText(out.profile.companyName);out.profile.displayName=crCleanText(out.profile.displayName)||out.profile.companyName;['businessNumber','representative','companyType','industry','industryCode','products','address','website','groupName','mainBank','creditGrade','watchGrade','cashFlowGrade'].forEach(k=>out.profile[k]=crCleanText(out.profile[k]));['foreignSubsidiaries','relatedCompanies','shareholders'].forEach(k=>{if(!Array.isArray(out.profile[k]))out.profile[k]=[];});
  out.financials={};for(const y of ['2023','2024','2025']){out.financials[y]=Object.assign(crEmptyFinancialYear(),clone(d?.financials?.[y]||{}));for(const k of CR_FIN_KEYS)out.financials[y][k]=n(out.financials[y][k]);}
  if(out.latestQuarterly){const q=Object.assign({periodEnd:null,date:null,assets:null,liabilities:null,equity:null,cash:null,currentAssets:null,currentLiabilities:null,currentBorrowings:null,nonCurrentBorrowings:null,revenue:null,operatingProfit:null,netIncome:null,financeCost:null,sourcePage:null,confirmed:false},out.latestQuarterly);q.periodEnd=crCleanText(q.periodEnd||q.date)||null;delete q.date;for(const k of Object.keys(q))if(!['periodEnd','sourcePage','confirmed'].includes(k))q[k]=n(q[k]);if(q.periodEnd&&(/-12-31$/.test(q.periodEnd)||q.periodEnd===out.profile.fiscalDate)){out.warnings=[...(out.warnings||[]),'연말 결산자료와 동일한 최근분기 자료를 제외했습니다.'];out.latestQuarterly=null;}else out.latestQuarterly=q;}
  out.capitalEvents=Array.isArray(out.capitalEvents)?out.capitalEvents.filter(x=>x&&x.type&&Number.isFinite(n(x.amount))).map(x=>({...x,amount:n(x.amount)})):[];out.answers=Object.assign(base.answers,clone(d?.answers||{}));out.warnings=[...new Set((out.warnings||[]).filter(Boolean))];out.dynamicQuestions=Array.isArray(out.dynamicQuestions)?out.dynamicQuestions:[];out.confirmationQueue=Array.isArray(out.confirmationQueue)?out.confirmationQueue:[];return out;
@@ -2415,7 +2415,7 @@ renderFactsForm=function(){
 
  const profileFields=[
   ['companyName','기업명'],['representative','대표자'],['businessNumber','사업자번호'],['employees','종업원 수'],
-  ['established','설립일'],['industry','업종'],['products','주요 제품'],['creditGrade','기업평가등급']
+  ['established','설립일'],['industry','업종'],['products','주요 제품'],['creditGrade','기업평가등급'],['watchGrade','WATCH등급'],['cashFlowGrade','현금흐름등급']
  ];
  html.push(`<section class="fact-section"><div class="fact-section-head"><b>기업 기본정보</b><span>기업요약 3p · 신용등급 이력 15p</span></div><div class="fact-basic-grid">`);
  for(const [k,label] of profileFields){
@@ -3476,7 +3476,7 @@ function crLocalInterpretPurpose(answers,analysis){
 }
 async function crInterpretPurposeWithAI(){
  const a=state.caseData.answers||{},fallback=crLocalInterpretPurpose(a,state.analysis);
- try{const out=await ServerAdapter.runAI('interpretReportPurpose',{purpose:{primary:a.reportPurposePriority,selected:a.reportPurpose,other:a.reportPurposeOther,detail:a.purposeDetail,desiredActions:a.desiredCustomerAction,salesIntent:a.salesIntent,salesIntentOther:a.salesIntentOther,restrictions:a.purposeRestrictions},company:{name:state.caseData.profile?.companyName,industry:state.caseData.profile?.industry},detectedIssues:crActiveQuestionIssueIds(state.analysis),instruction:'선택형과 주관식 목적을 통합해 primaryPurpose, issueIds, desiredActions, salesIntent, insuranceEmphasis, restrictions, summary를 JSON으로 반환'});
+ try{const out=await ServerAdapter.runAI('interpretReportPurpose',{purpose:{primary:a.reportPurposePriority,selected:a.reportPurpose,other:a.reportPurposeOther,detail:a.purposeDetail,desiredActions:a.desiredCustomerAction,salesIntent:a.salesIntent,salesIntentOther:a.salesIntentOther,restrictions:a.purposeRestrictions},company:{name:state.caseData.profile?.companyName,industry:state.caseData.profile?.industry},detectedIssues:crActiveQuestionIssueIds(state.analysis),instruction:'선택형과 주관식 목적을 통합해 primaryPurpose, issueIds, desiredActions, salesIntent, insuranceEmphasis, restrictions, summary를 JSON으로 반환'},8000);
   const p=out?.purposeProfile||out?.result||out?.data;if(p&&typeof p==='object'){const ids=crQArray(p.issueIds).filter(id=>CR_ISSUE_QUESTION_BANK[id]);return {...fallback,...p,issueIds:ids.length?ids:fallback.issueIds,source:'SERVER_AI'};}
  }catch(_e){}return fallback;
 }
@@ -3516,8 +3516,226 @@ function crWirePurposeFlow(){const btn=$('confirmQuestionsBtn');if(!btn)return;b
   if(!a.reportPurposeProfile){if(!crPurposeComplete(a)){toast('리포트 제작목적을 먼저 선택하거나 직접 입력해 주세요.','err');return;}btn.disabled=true;btn.textContent='AI가 목적을 해석하는 중…';a.reportPurposeProfile=await crInterpretPurposeWithAI();a.questionnaireMeta={...(a.questionnaireMeta||{}),purposeVersion:CR_PURPOSE_ENGINE_VERSION,purposeInterpretedAt:nowIso()};state.analysis=buildConfirmedModel(state.caseData);state.questionsConfirmed=false;btn.disabled=false;renderQuestions();toast('제작목적에 맞는 질문만 다시 구성했습니다.','ok');return;}
   closeModal('questionsModal');generateReport('purpose-aligned-answers');
  };}
-setTimeout(crWirePurposeFlow,0);
 
-global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText,crCoordinateCredit,crClassifyFactWarnings,crBuildQuestionSections,renderQuestions,collectQuestions}}:{})};
+
+
+/* ============================================================================
+ * v2.1.0 FINAL INTEGRITY PATCH
+ * - NICE 신용등급 +/- 원문 보존 및 CF등급 시각영역 보조인식
+ * - 제작목적 → 목적별 2차 질문 → 답변반영 → 생성 순서 강제
+ * - 목적지정 이슈가 재무보고서에 없더라도 사전진단 페이지로 반영
+ * - 컨설턴트용 독립 HTML 저장
+ * - 음성강의 조절 모달·챕터 이어듣기
+ * - 목적·질문·원문 일치 품질게이트
+ * ========================================================================== */
+const CR_FINAL_ENGINE_VERSION='2.1.0-final-20260801';
+
+function crNormalizeGradeToken(value){
+ const compact=String(value||'').toUpperCase().replace(/\s+/g,'').replace(/[‐‑‒–—−]/g,'-');
+ const m=compact.match(/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/);
+ return m?m[1]:'';
+}
+function crNormalizeCashFlowGrade(value){const m=String(value||'').toUpperCase().replace(/\s+/g,'').match(/^CF[1-6]$/);return m?m[0]:'';}
+function crCreditCoordinateRows(out){
+ const history=[];
+ for(const [pageIndex,pg] of (out?.coordPages||[]).entries()){
+  const pageText=out?.pageObjects?.[pageIndex]?.text||pg.text||'';
+  if(!/기업평가등급\s*이력/.test(pageText))continue;
+  const rows=[];
+  for(const item of pg){let row=rows.find(r=>Math.abs(r.y-item.y)<=4.5);if(!row){row={y:item.y,items:[]};rows.push(row);}row.items.push(item);}
+  for(const row of rows.sort((a,b)=>b.y-a.y)){
+   const items=row.items.sort((a,b)=>a.x-b.x),dates=items.filter(x=>/^20\d{2}[.\-/]\d{2}[.\-/]\d{2}$/.test(String(x.s).trim()));
+   if(dates.length<2)continue;
+   const firstDate=dates[0],secondDate=dates[1];
+   const gradeRaw=items.filter(x=>x.x<firstDate.x-2).map(x=>String(x.s).trim()).join('');
+   const grade=crNormalizeGradeToken(gradeRaw);if(!grade)continue;
+   const ratingType=items.filter(x=>x.x>secondDate.x+secondDate.w+2).map(x=>String(x.s).trim()).join(' ').trim()||'모형등급';
+   history.push({grade,evaluationDate:String(firstDate.s).replace(/\./g,'-'),financialDate:String(secondDate.s).replace(/\./g,'-'),ratingType,sourcePage:pageIndex+1,status:'coordinateExact'});
+  }
+ }
+ const uniq=[];for(const x of history){if(!uniq.some(y=>y.grade===x.grade&&y.evaluationDate===x.evaluationDate&&y.financialDate===x.financialDate))uniq.push(x);}
+ return uniq.sort((a,b)=>String(b.evaluationDate).localeCompare(String(a.evaluationDate)));
+}
+function crCreditBundle(out,baseCredit){
+ const base=clone(baseCredit||{}),history=crCreditCoordinateRows(out);
+ const visual=out?.visualCredit||{};
+ const currentGrade=history[0]?.grade||crNormalizeGradeToken(visual.companyGrade)||crNormalizeGradeToken(base.companyRatingCurrent?.grade);
+ const cfGrade=crNormalizeCashFlowGrade(visual.cashFlowGrade)||crNormalizeCashFlowGrade(base.cashFlowGradeCurrent?.grade);
+ const watchCurrent=base.watchCurrent||base.watchHistory?.[0]||null;
+ return {
+  ...base,
+  companyRatingCurrent:currentGrade?{...(base.companyRatingCurrent||{}),...(history[0]||{}),grade:currentGrade,sourcePage:history[0]?.sourcePage||15,status:history[0]?'coordinateExact':'visualOrText'}:null,
+  companyRatingHistory:history.length?history:(base.companyRatingHistory||[]).map(x=>({...x,grade:crNormalizeGradeToken(x.grade)||x.grade})),
+  watchCurrent,
+  cashFlowGradeCurrent:{...(base.cashFlowGradeCurrent||{}),grade:cfGrade||null,label:cfGrade||null,financialDate:base.cashFlowGradeCurrent?.financialDate||history[0]?.financialDate||null,sourcePage:3,status:cfGrade?'visualExact':'needsConfirmation'},
+  visualValidation:{companyGrade:crNormalizeGradeToken(visual.companyGrade)||null,cashFlowGrade:cfGrade||null,confidence:visual.confidence||null,source:'NICE 3p gauge image'}
+ };
+}
+
+function crMaskFromCanvas(canvas,threshold=145){
+ const ctx=canvas.getContext('2d',{willReadFrequently:true}),img=ctx.getImageData(0,0,canvas.width,canvas.height),pts=[];
+ for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){const i=(y*canvas.width+x)*4,lum=(img.data[i]+img.data[i+1]+img.data[i+2])/3;if(img.data[i+3]>20&&lum<threshold)pts.push([x,y]);}
+ if(!pts.length)return null;let minX=canvas.width,minY=canvas.height,maxX=0,maxY=0;for(const [x,y] of pts){if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+ const W=160,H=56,mask=new Uint8Array(W*H),bw=Math.max(1,maxX-minX+1),bh=Math.max(1,maxY-minY+1),scale=Math.min((W-8)/bw,(H-8)/bh),ox=(W-bw*scale)/2,oy=(H-bh*scale)/2;
+ for(const [x,y] of pts){const nx=Math.max(0,Math.min(W-1,Math.round(ox+(x-minX)*scale))),ny=Math.max(0,Math.min(H-1,Math.round(oy+(y-minY)*scale)));mask[ny*W+nx]=1;}
+ return {mask,W,H};
+}
+function crDilateMask(m){const out=new Uint8Array(m.mask.length);for(let y=0;y<m.H;y++)for(let x=0;x<m.W;x++)if(m.mask[y*m.W+x])for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=x+dx,ny=y+dy;if(nx>=0&&ny>=0&&nx<m.W&&ny<m.H)out[ny*m.W+nx]=1;}return {...m,mask:out};}
+function crMaskSimilarity(a,b){if(!a||!b)return 0;const ad=crDilateMask(a).mask,bd=crDilateMask(b).mask;let inter=0,aa=0,bb=0;for(let i=0;i<ad.length;i++){if(ad[i])aa++;if(bd[i])bb++;if(ad[i]&&bd[i])inter++;}return aa&&bb?2*inter/(aa+bb):0;}
+function crTemplateMask(text,fontSize,fontFamily){const c=document.createElement('canvas');c.width=320;c.height=120;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.fillStyle='#000';x.font=`900 ${fontSize}px ${fontFamily}`;x.textAlign='center';x.textBaseline='middle';x.fillText(text,c.width/2,c.height/2+2);return crMaskFromCanvas(c,180);}
+function crRecognizeGradeCrop(pageCanvas,rect,candidates){
+ const c=document.createElement('canvas'),scale=pageCanvas.width/595;c.width=Math.max(20,Math.round(rect[2]*scale));c.height=Math.max(20,Math.round(rect[3]*scale));c.getContext('2d').drawImage(pageCanvas,Math.round(rect[0]*scale),Math.round(rect[1]*scale),c.width,c.height,0,0,c.width,c.height);
+ const target=crMaskFromCanvas(c,135);if(!target)return {value:'',score:0};let best={value:'',score:0};
+ for(const value of candidates)for(const size of [34,38,42,46,50])for(const font of ['Arial','Helvetica','sans-serif']){const score=crMaskSimilarity(target,crTemplateMask(value,size,font));if(score>best.score)best={value,score};}
+ return best.score>=0.53?best:{value:'',score:best.score};
+}
+async function crExtractVisualCredit(file){
+ try{
+  const pdfjs=await ensurePdfJs(),pdf=await pdfjs.getDocument({data:await file.arrayBuffer(),cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'}).promise;
+  if(pdf.numPages<3)return {};
+  const page=await pdf.getPage(3),viewport=page.getViewport({scale:2.2}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+  const company=crRecognizeGradeCrop(canvas,[75,642,105,30],['AAA','AA+','AA','AA-','A+','A','A-','BBB+','BBB','BBB-','BB+','BB','BB-','B+','B','B-','CCC+','CCC','CCC-','CC+','CC','CC-','C','D']);
+  const cash=crRecognizeGradeCrop(canvas,[425,642,105,30],['CF1','CF2','CF3','CF4','CF5','CF6']);
+  return {companyGrade:company.value,cashFlowGrade:cash.value,confidence:{company:company.score,cashFlow:cash.score}};
+ }catch(error){console.warn('[CorporateReport] NICE 시각등급 보조인식 실패:',error.message);return {};}
+}
+const crJebExtractV210Base=JebFinancialEngine.extract;
+JebFinancialEngine.extract=async function(file){const out=await crJebExtractV210Base(file);if(out.finFormat==='NICE')out.visualCredit=await crExtractVisualCredit(file);return out;};
+
+const crCoordinateToCaseV210Base=crCoordinateToCase;
+crCoordinateToCase=function(out,file){
+ const d=crCoordinateToCaseV210Base(out,file),bundle=crCreditBundle(out,d.extractionResult?.credit);
+ if(bundle.companyRatingCurrent?.grade)d.profile.creditGrade=bundle.companyRatingCurrent.grade;
+ d.profile.watchGrade=bundle.watchCurrent?.grade||d.profile.watchGrade||'';
+ d.profile.cashFlowGrade=bundle.cashFlowGradeCurrent?.grade||d.profile.cashFlowGrade||'';
+ d.extractionResult=d.extractionResult||{};d.extractionResult.credit=bundle;
+ d.sourceMap={...(d.sourceMap||{}),credit:'NICE 15p 등급이력 좌표 + 3p 시각등급 교차검증'};
+ d.meta.creditValidation={companyGrade:d.profile.creditGrade||null,cashFlowGrade:d.profile.cashFlowGrade||null,companyExact:!!bundle.companyRatingCurrent?.grade,cashFlowExact:!!bundle.cashFlowGradeCurrent?.grade,engine:CR_FINAL_ENGINE_VERSION};
+ if(!d.profile.creditGrade)d.warnings=[...(d.warnings||[]),'기업평가등급을 원문에서 확정하지 못했습니다. 15페이지 등급이력을 확인해 직접 입력해 주세요.'];
+ if(!d.profile.cashFlowGrade)d.warnings=[...(d.warnings||[]),'현금흐름등급은 3페이지 그래프 이미지 항목입니다. 자동 인식 실패 시 원문을 확인해 직접 입력해 주세요.'];
+ return d;
+};
+
+const crValidateFactsV210Base=crValidateFacts;
+crValidateFacts=function(d,opts={}){
+ const v=crValidateFactsV210Base(d,opts),errors=[...v.errors],warnings=[...v.warnings];
+ if(d?.meta?.sourceType?.includes('NICE')){
+  const grade=crNormalizeGradeToken(d?.profile?.creditGrade);if(!grade)errors.push('NICE 기업평가등급 누락 또는 형식 오류');
+  const sourceGrade=crNormalizeGradeToken(d?.extractionResult?.credit?.companyRatingCurrent?.grade);if(sourceGrade&&grade!==sourceGrade)errors.push(`기업평가등급 원문 불일치: 원문 ${sourceGrade} / 입력 ${grade}`);
+  const cf=crNormalizeCashFlowGrade(d?.profile?.cashFlowGrade);if(!cf)errors.push('NICE 현금흐름등급(CF1~CF6) 확인 필요');
+ }
+ return {passed:errors.length===0,errors:[...new Set(errors)],warnings:[...new Set(warnings)]};
+};
+
+const CR_PURPOSE_ISSUE_META={
+ EXECUTIVE_RETIREMENT:{title:'임원퇴직금과 지급재원 사전진단',risks:['퇴직금 규정·실제 퇴직·지급능력 불일치','퇴직시점의 운영현금 부족'],solutions:['정관·규정·보수·근속 확인','예상퇴직금과 지급가능재원 시뮬레이션'],consulting:'임원퇴직재원 정밀진단',insurance:'부족재원과 준비기간 확인 후 조건부'},
+ SUCCESSION:{title:'경영승계·상속·증여 사전진단',risks:['후계자·가족·공동주주 합의 지연','경영권과 현금배분 충돌'],solutions:['승계 일정·가족합의·주주구조 확인','기업가치·필요재원 A/B/C안'],consulting:'승계·가족·주주 진단',insurance:'가족정산·세금·지분유동성 부족분 확인 후 조건부'},
+ KEY_PERSON:{title:'대표자·핵심인 유고 필요재원 사전진단',risks:['대표 부재 시 경영·신용·현금 공백'],solutions:['대표 역할표와 6·12개월 필요재원','기존증권·가용현금·신용한도 비교'],consulting:'핵심인 필요재원·증권분석',insurance:'부족재원 확인 시 검토'},
+ INSURANCE_OPTIMIZATION:{title:'기존 법인·대표 보험증권 최적화',risks:['계약목적·수익자·기간 불일치'],solutions:['전체 증권 목적분류','유지·감액·전환·추가 비교'],consulting:'독립 증권분석',insurance:'신규가입보다 기존계약 검증 우선'},
+ WORKING_CAPITAL:{title:'유동성·운전자금 정밀진단',risks:['단기상환과 현금유입 시점 불일치'],solutions:['13주 현금수지','차입만기·투자회수 일정표'],consulting:'운전자금 정밀진단',insurance:'우연한 위험의 보장공백만 조건부'},
+ CAPITAL_POLICY:{title:'자본정책·누적결손 진단',risks:['손실회복·차입·주주정책 분리 미흡'],solutions:['3년 자본회복·자금배분 계획'],consulting:'자본정책 정밀진단',insurance:'직접 연계 낮음'}
+};
+function crQuestionAnswerText(data,q){
+ const a=data?.answers||{},v=a[q.id],other=a[q.id+'Other'];const arr=[];
+ if(Array.isArray(v))arr.push(...v);else if(v!==null&&v!==undefined&&String(v).trim())arr.push(String(v));if(other)arr.push(String(other));
+ return arr.filter(Boolean).join(' · ');
+}
+function crPurposeIssueStub(id,data,profile){
+ const meta=CR_PURPOSE_ISSUE_META[id]||{},bank=CR_ISSUE_QUESTION_BANK[id],answers=(bank?.questions||[]).map(q=>{const value=crQuestionAnswerText(data,q);return value?`${q.label}: ${value}`:'';}).filter(Boolean);
+ const primary=id===crQArray(profile?.issueIds)[0],facts=[`컨설턴트 제작목적: ${profile?.primaryPurpose||'목적지정 사전진단'}`,...answers];
+ if(!answers.length)facts.push('재무보고서에 없는 핵심정보는 추가질문에서 미확인으로 남아 있음');
+ return {id,title:meta.title||ISSUE_SPEECH_LIBRARY[id]?.title||id,score:primary?4.25:3.65,severity:primary?'HIGH':'MEDIUM',confidence:answers.length?'C':'D',facts,meaning:'재무보고서만으로 확정할 수 없는 영역이지만 이번 리포트 제작목적상 반드시 검토해야 하므로, 컨설턴트 답변과 추가자료를 기준으로 사전진단합니다.',risks:meta.risks||['목적에 필요한 정보 미확인'],solutions:meta.solutions||['목적별 정밀진단'],consulting:meta.consulting||'목적별 정밀진단',insurance:meta.insurance||'부족재원 확인 후 조건부',purposeRequested:true,purposeAligned:true,userPriority:[profile?.primaryPurpose].filter(Boolean)};
+}
+const crBuildConfirmedModelV210Base=buildConfirmedModel;
+buildConfirmedModel=function(data){
+ const model=crBuildConfirmedModelV210Base(data),profile=model.reportPurposeProfile||model.answers?.reportPurposeProfile||data?.answers?.reportPurposeProfile,ids=crQArray(profile?.issueIds);
+ if(profile){
+  for(const id of ids)if(!model.issues.some(x=>x.id===id))model.issues.push(crPurposeIssueStub(id,model,profile));
+  for(const issue of model.issues){if(!ids.includes(issue.id))continue;const bank=CR_ISSUE_QUESTION_BANK[issue.id];for(const q of bank?.questions||[]){const value=crQuestionAnswerText(model,q);if(value)issue.facts=[...new Set([...(issue.facts||[]),`추가답변 · ${q.label}: ${value}`])];}}
+  model.issues.sort((a,b)=>Number(!!b.purposeAligned)-Number(!!a.purposeAligned)||Number(!!b.purposeRequested)-Number(!!a.purposeRequested)||(b.score||0)-(a.score||0));
+  model.questionAnswerDigest=crBuildQuestionSections(model).flatMap(s=>s.questions.map(q=>({section:s.title,issueId:q.issueId||'',question:q.label,answer:crQuestionAnswerText(model,q)||'미확인'}))).filter(x=>x.answer&&x.answer!=='미확인');
+  model.purposeCoverage={requestedIssueIds:ids,renderedIssueIds:model.issues.map(x=>x.id),missingIssueIds:ids.filter(id=>!model.issues.some(x=>x.id===id)),primaryPurpose:profile.primaryPurpose||'',desiredActions:crQArray(profile.desiredActions),source:profile.source||'LOCAL_SEMANTIC_FALLBACK'};
+  model.insurance=buildInsuranceOpportunities(model,model.issues,model.calculations);
+  if(ids.includes('EXECUTIVE_RETIREMENT')&&!model.insurance.some(x=>x.id==='INS-RETIREMENT')){const hasAnswer=['retirementRuleStatus','retirementTiming','retirementFunding'].some(k=>crQArray(model.answers?.[k]).length||model.answers?.[k+'Other']);model.insurance.push({id:'INS-RETIREMENT',code:'INS-RETIREMENT',title:'임원퇴직재원 준비',grade:hasAnswer?'C':'D',basis:hasAnswer?'퇴직규정·시점·재원 관련 사용자 답변 확인':'퇴직규정·시점·예상금액 미확인',need:null,current:null,gap:null,role:'예상퇴직금과 지급가능현금의 부족분을 장기적으로 준비',limits:'퇴직금 자체·손금인정·수익을 보장하지 않음',next:'정관·규정·보수·근속·기존증권 확인',status:hasAnswer?'REVIEW':'TO_CONFIRM'});}
+ }
+ return model;
+};
+
+const crGeneratePagesV210Base=generatePages;
+generatePages=function(model){
+ const pages=crGeneratePagesV210Base(model),profile=model.reportPurposeProfile;
+ if(profile){
+  const summary=state.pages.find(x=>x.id==='executive-summary');if(summary){const lead=`<div class="lead"><b>이번 리포트의 1순위 목적: ${esc(profile.primaryPurpose||'종합진단')}</b><p>${esc(profile.summary||'컨설턴트가 지정한 제작목적과 고객의 다음 행동을 기준으로 분석 우선순위를 구성했습니다.')}</p></div>`;summary.html=summary.html.replace('<div class="page-main">','<div class="page-main">'+lead);}
+  const rows=(model.questionAnswerDigest||[]).map(x=>`<tr><td>${esc(x.section)}</td><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.issueId||'공통')}</td></tr>`).join('');
+  const p=addPage({id:'purpose-answer-audit',title:'제작목적·질문답변 반영표',subtitle:'선택형·주관식 목적과 맞춤질문이 어떤 분석에 사용됐는지 확인합니다.',section:'CONSULTANT ONLY · PURPOSE AUDIT',visibility:'consultant',summary:'목적 및 질문 반영 검증',body:`<div class="lead"><b>${esc(profile.primaryPurpose||'제작목적')}</b><p>${esc(profile.summary||'')}</p></div><div class="decision-bar"><b>고객의 다음 행동</b>${crQArray(profile.desiredActions).map(x=>`<span>${esc(x)}</span>`).join('')||'<span>미확인</span>'}</div><table><thead><tr><th>구분</th><th>질문</th><th>컨설턴트 답변</th><th>연결 이슈</th></tr></thead><tbody>${rows||'<tr><td colspan="4">목적별 질문 답변이 아직 없습니다.</td></tr>'}</tbody></table><div class="notice ${model.purposeCoverage?.missingIssueIds?.length?'red':''}"><b>반영검사</b>요청 이슈 ${esc(model.purposeCoverage?.requestedIssueIds?.join(' · ')||'없음')} · 리포트 반영 ${esc(model.purposeCoverage?.renderedIssueIds?.filter(id=>model.purposeCoverage.requestedIssueIds.includes(id)).join(' · ')||'없음')}</div>`});
+  p.notes=SpeechEngine.notes(p,model,model);
+ }
+ return state.pages;
+};
+
+function crPurposeReady(){const a=state.caseData?.answers||{};return !!a.reportPurposeProfile;}
+const crGenerateReportV210Base=generateReport;
+generateReport=async function(reason='generate'){
+ if(!state.caseData)return crGenerateReportV210Base(reason);
+ if(!crPurposeReady()){if(!state.analysis)state.analysis=buildConfirmedModel(state.caseData);renderQuestions();openModal('questionsModal');toast('리포트 제작목적을 먼저 확정해야 합니다.','err');return;}
+ if(!state.questionsConfirmed){renderQuestions();openModal('questionsModal');toast('목적별 맞춤질문을 확인한 뒤 생성해 주세요.','err');return;}
+ const started=performance.now();state.lastGeneration={startedAt:new Date().toISOString(),mode:state.caseData.answers?.reportPurposeProfile?.source||'LOCAL_SEMANTIC_FALLBACK'};
+ const result=await crGenerateReportV210Base(reason);state.lastGeneration.completedAt=new Date().toISOString();state.lastGeneration.elapsedMs=Math.round(performance.now()-started);updateStatus();return result;
+};
+
+const crRunQualityV210Base=runQuality;
+runQuality=function(){
+ const q=crRunQualityV210Base(),m=state.analysis||state.caseData,hard=[...(q.hardFails||[])],profile=m?.reportPurposeProfile||m?.answers?.reportPurposeProfile,requested=crQArray(profile?.issueIds),rendered=(m?.issues||[]).map(x=>x.id);
+ if(!profile)hard.push('리포트 제작목적 AI 해석 미완료');
+ if(!state.questionsConfirmed)hard.push('목적별 맞춤질문 답변 확인 미완료');
+ for(const id of requested)if(!rendered.includes(id))hard.push(`제작목적 이슈 미반영: ${id}`);
+ if(m?.meta?.sourceType?.includes('NICE')){const source=crNormalizeGradeToken(m?.extractionResult?.credit?.companyRatingCurrent?.grade),shown=crNormalizeGradeToken(m?.profile?.creditGrade);if(!shown)hard.push('기업평가등급 미확인');if(source&&source!==shown)hard.push(`기업평가등급 원문 불일치 ${source}/${shown}`);if(!crNormalizeCashFlowGrade(m?.profile?.cashFlowGrade))hard.push('현금흐름등급 미확인');}
+ const purposeScore=!profile?0:requested.every(id=>rendered.includes(id))&&state.questionsConfirmed?98:80;q.scores={...(q.scores||{}),purpose:purposeScore};q.weights={...(q.weights||{}),purpose:8};const total=Object.values(q.weights).reduce((a,b)=>a+b,0);q.average=Object.entries(q.scores).reduce((sum,[k,v])=>sum+v*(q.weights[k]||0),0)/total;q.min=Math.min(...Object.values(q.scores));q.hardFails=[...new Set(hard)];q.passed=q.hardFails.length===0&&q.average>=92.3&&q.min>=90;q.purposeCoverage=m?.purposeCoverage||null;q.creditValidation=m?.meta?.creditValidation||{companyGrade:crNormalizeGradeToken(m?.profile?.creditGrade)||null,cashFlowGrade:crNormalizeCashFlowGrade(m?.profile?.cashFlowGrade)||null,companyExact:!!crNormalizeGradeToken(m?.extractionResult?.credit?.companyRatingCurrent?.grade),cashFlowExact:!!crNormalizeCashFlowGrade(m?.extractionResult?.credit?.cashFlowGradeCurrent?.grade),engine:CR_FINAL_ENGINE_VERSION};return q;
+};
+
+const crQualityHtmlV210Base=qualityHtml;
+qualityHtml=function(q){let html=crQualityHtmlV210Base(q);html=html.replace('render:93','render:93');const extra=`<div class="quality-list"><h3>목적·질문 반영검사</h3><p>${q.purposeCoverage?`1순위 목적 ${esc(q.purposeCoverage.primaryPurpose||'')} · 요청이슈 ${esc((q.purposeCoverage.requestedIssueIds||[]).join(' · '))} · 누락 ${esc((q.purposeCoverage.missingIssueIds||[]).join(' · ')||'없음')}`:'제작목적 해석 미완료'}</p><h3>신용정보 원문검사</h3><p>${q.creditValidation?`기업평가등급 ${esc(q.creditValidation.companyGrade||'미확인')} · 현금흐름등급 ${esc(q.creditValidation.cashFlowGrade||'미확인')}`:'검사정보 없음'}</p></div>`;return html+extra;};
+
+function crStandaloneNotesHtml(notes,title){
+ const x=notes||{},branches=(x.branches||[]).map(b=>`<div class="branch-card"><b>${esc(b.type)} · ${esc(b.expression)}</b><p>${esc(b.response)}</p><p><strong>재질문:</strong> ${esc(b.followUp)}</p><small>행동합의: ${esc(b.agreement)}</small></div>`).join(''),objections=(x.objections||[]).map(o=>`<div class="branch-card"><b>${esc(o.title)}</b>${(o.dialogue||[]).map(d=>`<p><strong>${esc(d.speaker)}:</strong> ${esc(d.text)}</p>`).join('')}</div>`).join('');
+ return `<section class="note-sec"><div class="lab">PAGE PURPOSE</div><h3>${esc(title||'상담노트')}</h3><p>${esc(x.purpose||'')}</p></section><section class="note-sec"><div class="lab">KEY DIAGNOSIS</div><h3>핵심 진단</h3><p>${esc(x.diagnosis||'')}</p></section><section class="note-sec"><div class="lab">SPEECH</div><h3>30초</h3><p>${esc(x.speech30||'')}</p><h3>90초</h3><p>${esc(x.speech90||'')}</p><details><summary>3분·5분 심화</summary><p>${esc(x.speech3m||'')}</p><p>${esc(x.speech5m||'')}</p></details></section><section class="note-sec"><div class="lab">QUESTIONS</div>${list(x.questions||[])}</section><section class="note-sec"><div class="lab">RESPONSE BRANCHES</div>${branches}</section><section class="note-sec"><div class="lab">OBJECTIONS</div>${objections}</section><section class="note-sec"><div class="lab">NEXT ACTION</div><p>${esc(x.connection||'')}</p><p>${esc(x.transition||'')}</p>${list(x.documents||[])}</section>`;
+}
+function buildConsultantExportHtml(){
+ const css=qs('style')?.textContent||'',pages=state.pages.filter(p=>p.visibility!=='audio'),raw=pages.map(p=>$(p.id)?.outerHTML||p.html).join(''),holder=document.createElement('div');holder.innerHTML=raw;holder.querySelectorAll('.report-page').forEach(el=>{el.classList.remove('hidden-mode');});
+ const sections=[...holder.querySelectorAll('.report-page')];sections.forEach((el,i)=>{const n=el.querySelector('.page-footer b');if(n)n.textContent=String(i+1).padStart(2,'0');});const toc=holder.querySelector('#tocInside');if(toc)toc.innerHTML=sections.map((el,i)=>`<button type="button" data-jump="${esc(el.id)}"><b>${String(i+1).padStart(2,'0')}</b><span>${esc(el.querySelector('.page-header h1')?.textContent||'')}</span></button>`).join('');
+ const notes={};for(const p of pages)notes[p.id]={title:p.title,html:crStandaloneNotesHtml(p.notes,p.title)};const safeNotes=JSON.stringify(notes).replace(/</g,'\\u003c');
+ return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(state.caseData.profile?.displayName||'기업')} 컨설턴트 종합리포트</title><style>${css}body{padding:12mm 0}.consultant-toolbar{position:fixed;z-index:9999;right:14px;top:14px;display:flex;gap:7px}.consultant-toolbar button{border:0;border-radius:10px;background:#102642;color:#fff;padding:10px 14px;font-weight:800}@media print{body{padding:0}.consultant-toolbar{display:none}}</style></head><body class="mode-consultant"><div class="consultant-toolbar"><button onclick="window.print()">인쇄·PDF</button></div><main>${holder.innerHTML}</main><div class="drawer-backdrop" id="exportBackdrop"></div><aside class="drawer" id="exportDrawer"><div class="drawer-head"><div><b id="exportNotesTitle">컨설턴트 상담노트</b><span>페이지별 내부전용 화법</span></div><button id="exportNotesClose">✕</button></div><div class="drawer-body" id="exportNotesBody"></div></aside><script>var NOTES=${safeNotes};document.querySelectorAll('[data-jump]').forEach(function(b){b.onclick=function(){var e=document.getElementById(b.dataset.jump);if(e)e.scrollIntoView({behavior:'smooth'});};});document.querySelectorAll('[data-note-page]').forEach(function(b){b.onclick=function(){var n=NOTES[b.dataset.notePage];if(!n)return;document.getElementById('exportNotesTitle').textContent=n.title+' · 상담노트';document.getElementById('exportNotesBody').innerHTML=n.html;document.getElementById('exportBackdrop').classList.add('on');document.getElementById('exportDrawer').classList.add('on');};});function closeN(){document.getElementById('exportBackdrop').classList.remove('on');document.getElementById('exportDrawer').classList.remove('on');}document.getElementById('exportBackdrop').onclick=closeN;document.getElementById('exportNotesClose').onclick=closeN;<\/script></body></html>`;
+}
+function exportConsultant(){if(!state.pages.length)return;if(!state.quality?.passed){toast('품질게이트 통과 전에는 컨설턴트용 HTML을 저장할 수 없습니다.','err');return;}downloadBlob(new Blob([buildConsultantExportHtml()],{type:'text/html;charset=utf-8'}),`${state.caseData.profile?.displayName||'기업'}_컨설턴트_종합리포트.html`);toast('상담노트가 포함된 컨설턴트용 HTML을 저장했습니다.','ok');}
+
+state.audioSettings=Object.assign({voiceURI:'',rate:1,pitch:1,volume:1,autoNext:true},state.audioSettings||{});
+function crReadAudioSettings(){try{const x=JSON.parse(localStorage.getItem('crAudioSettings')||'{}');state.audioSettings=Object.assign(state.audioSettings,x);}catch(_e){}return state.audioSettings;}
+function crWriteAudioSettings(){try{localStorage.setItem('crAudioSettings',JSON.stringify(state.audioSettings));}catch(_e){}}
+function crPopulateAudioVoices(){const sel=$('audioVoice');if(!sel||!('speechSynthesis' in global))return;const current=state.audioSettings.voiceURI,voices=speechSynthesis.getVoices().filter(v=>/^ko/i.test(v.lang)||/Korean|한국/i.test(v.name));sel.innerHTML='<option value="">브라우저 기본 한국어 음성</option>'+voices.map(v=>`<option value="${attr(v.voiceURI)}" ${v.voiceURI===current?'selected':''}>${esc(v.name)} · ${esc(v.lang)}</option>`).join('');}
+function crSyncAudioSettingsUi(){const a=crReadAudioSettings();if($('audioSettingsRate'))$('audioSettingsRate').value=a.rate;if($('audioPitch'))$('audioPitch').value=a.pitch;if($('audioVolume'))$('audioVolume').value=a.volume;if($('audioAutoNext'))$('audioAutoNext').value=a.autoNext?'1':'0';if($('audioRateValue'))$('audioRateValue').textContent=Number(a.rate).toFixed(2).replace(/0$/,'')+'×';if($('audioPitchValue'))$('audioPitchValue').textContent=Number(a.pitch).toFixed(2).replace(/0$/,'');if($('audioVolumeValue'))$('audioVolumeValue').textContent=Math.round(a.volume*100)+'%';if($('audioRate'))$('audioRate').value=[...$('audioRate').options].some(o=>Number(o.value)===Number(a.rate))?String(a.rate):'1';crPopulateAudioVoices();}
+function openAudioSettings(){crSyncAudioSettingsUi();openModal('audioSettingsModal');}
+function crApplyAudioSettings(){state.audioSettings.voiceURI=$('audioVoice')?.value||'';state.audioSettings.rate=safeNum($('audioSettingsRate')?.value,1);state.audioSettings.pitch=safeNum($('audioPitch')?.value,1);state.audioSettings.volume=safeNum($('audioVolume')?.value,1);state.audioSettings.autoNext=$('audioAutoNext')?.value!=='0';crWriteAudioSettings();crSyncAudioSettingsUi();closeModal('audioSettingsModal');toast('음성강의 설정을 적용했습니다.','ok');}
+function crSpeakText(text,{preview=false}={}){if(!('speechSynthesis' in global)){toast('이 브라우저는 음성재생을 지원하지 않습니다.','err');return;}speechSynthesis.cancel();const a=crReadAudioSettings(),u=new SpeechSynthesisUtterance(preview?String(text).slice(0,110):text);u.lang='ko-KR';u.rate=a.rate;u.pitch=a.pitch;u.volume=a.volume;const voice=speechSynthesis.getVoices().find(v=>v.voiceURI===a.voiceURI);if(voice)u.voice=voice;state.speechUtterance=u;if(!preview)u.onend=()=>{if(a.autoNext){const chapters=state.analysis?.audioChapters||[];if(state.audioIndex<chapters.length-1){selectChapter(state.audioIndex+1);setTimeout(()=>audioAction('play'),180);}}};speechSynthesis.speak(u);}
+audioAction=function(action){const chapters=state.analysis?.audioChapters||state.caseData?.audioChapters||[],ch=chapters[state.audioIndex];if(!ch){toast('음성대본이 없습니다.');return;}if(action==='play'){const quick=safeNum($('audioRate')?.value,state.audioSettings.rate);if(quick!==state.audioSettings.rate){state.audioSettings.rate=quick;crWriteAudioSettings();}crSpeakText(ch.script);toast(`챕터 ${state.audioIndex+1} 음성강의를 재생합니다.`);}else if(action==='pause'){if(speechSynthesis.paused)speechSynthesis.resume();else speechSynthesis.pause();}else if(action==='stop'){speechSynthesis.cancel();}else if(action==='mp3'){generateMp3(ch.script);}};
+const crBindDynamicV210Base=bindDynamic;
+bindDynamic=function(){crBindDynamicV210Base();qsa('[data-audio-settings]').forEach(b=>b.onclick=openAudioSettings);};
+
+const crUpdateStatusV210Base=updateStatus;
+updateStatus=function(){crUpdateStatusV210Base();if(!state.caseData)return;const p=state.caseData.answers?.reportPurposeProfile||state.analysis?.reportPurposeProfile,elapsed=state.lastGeneration?.elapsedMs;const mode=p?.source==='SERVER_AI'?'서버 AI 목적해석':p?'로컬 의미엔진+사용자 확인':'목적 미확정';if(state.quality?.passed){$('statusTitle').textContent=p?.source==='SERVER_AI'?'AI 목적연계·원문검증 완료본':'로컬 목적연계·원문검증 완료본';$('statusText').textContent=`${state.pages.length}개 페이지 · ${state.analysis?.issues?.length||0}개 이슈 · ${mode}${elapsed?` · 브라우저 조립·교차검증 ${(elapsed/1000).toFixed(1)}초`:''} · 품질 ${state.quality.average.toFixed(1)}점`;}}
+
+loadCaseFile=function(file){if(!file)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result),data=p.caseData||p.analysis;if(!data)throw new Error('caseData 누락');const normalized=crNormalizeCase(data);state.caseData=normalized;state.analysis=null;state.pages=[];state.factsConfirmed=p.factsConfirmed!==false&&crValidateFacts(normalized).passed;state.questionsConfirmed=!!p.questionsConfirmed&&!!normalized.answers?.reportPurposeProfile;showWorkspace();renderFactsForm();if(!state.factsConfirmed){openModal('factsModal');toast('원문 팩트 재확인이 필요합니다.','err');return;}state.analysis=buildConfirmedModel(normalized);if(!state.questionsConfirmed){renderQuestions();openModal('questionsModal');toast('제작목적과 맞춤질문을 다시 확인해 주세요.','err');return;}generateReport('loaded-case');toast('케이스를 불러와 최신 엔진으로 재검증합니다.','ok');}catch(e){toast('케이스 파일 형식이 올바르지 않습니다: '+e.message,'err');}};r.readAsText(file);};
+
+function crWireFinalEvents(){
+ crWirePurposeFlow();
+ if($('consultantExportBtn'))$('consultantExportBtn').onclick=exportConsultant;if($('consultantExportSideBtn'))$('consultantExportSideBtn').onclick=exportConsultant;
+ if($('audioSettingsApplyBtn'))$('audioSettingsApplyBtn').onclick=crApplyAudioSettings;if($('audioTestBtn'))$('audioTestBtn').onclick=()=>crSpeakText('자비아 기업경영 의사결정 해설강의입니다. 현재 설정된 목소리와 속도를 확인해 주세요.',{preview:true});
+ for(const id of ['audioSettingsRate','audioPitch','audioVolume'])if($(id))$(id).oninput=()=>{if(id==='audioSettingsRate')$('audioRateValue').textContent=Number($(id).value).toFixed(2).replace(/0$/,'')+'×';if(id==='audioPitch')$('audioPitchValue').textContent=Number($(id).value).toFixed(2).replace(/0$/,'');if(id==='audioVolume')$('audioVolumeValue').textContent=Math.round(Number($(id).value)*100)+'%';};
+ if('speechSynthesis' in global){speechSynthesis.onvoiceschanged=crPopulateAudioVoices;crPopulateAudioVoices();}
+ if($('loadCaseBtn'))$('loadCaseBtn').onclick=()=>$('caseFileInput').click();if($('caseFileInput'))$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
+}
+const crInitV210Base=init;
+init=function(){crInitV210Base();crWireFinalEvents();crReadAudioSettings();};
+
+global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,exportConsultant,buildConsultantExportHtml,openAudioSettings,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,diagnostics:{creditRows:crCreditCoordinateRows,normalizeGrade:crNormalizeGradeToken,validateFacts:crValidateFacts},...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText,crCoordinateCredit,crClassifyFactWarnings,crBuildQuestionSections,renderQuestions,collectQuestions,crExtractVisualCredit,crRecognizeGradeCrop}}:{})};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })(window);
