@@ -3409,6 +3409,115 @@ crCoordinateCredit=function(out){
  const base=crCoordinateCreditV192Base(out);if(base&&!/[+-]$/.test(base)){const all=(out?.coordPages||[]).filter(pg=>/기업평가등급\s*이력/.test(pg.text||'')).map(pg=>pg.text||'').join(' ');const m=all.match(new RegExp(`\\b(${base.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}[+-])\\b`,'i'));if(m)return m[1].toUpperCase();}return base;
 };
 
+
+/* ============================================================================
+ * v2.0.0 — 제작목적 우선형 AI 질문 오케스트레이터
+ * - 목적 확정 전에는 목적·영업의도만 입력한다.
+ * - 선택형 + 주관식 목적을 AI 서버가 우선 해석하고, 실패 시 로컬 의미해석기로 안전하게 대체한다.
+ * - 목적과 첨부 보고서의 활성 이슈가 만나는 질문만 생성한다.
+ * ========================================================================== */
+const CR_PURPOSE_ENGINE_VERSION='2.0.0-purpose-first-20260801';
+const CR_PURPOSE_OPTIONS=[
+ {value:'CEO에게 기업의 전반적인 재무상태를 설명',issueIds:['WORKING_CAPITAL','CAPITAL_POLICY']},
+ {value:'재무위험과 잠재 문제를 인식시키고 후속상담 연결',issueIds:['WORKING_CAPITAL','CAPITAL_POLICY','CAPITAL_TRANSACTIONS']},
+ {value:'현금흐름·운전자금 개선 정밀진단 제안',issueIds:['WORKING_CAPITAL']},
+ {value:'차입금·부채구조 및 상환위험 점검',issueIds:['WORKING_CAPITAL','KEY_PERSON']},
+ {value:'가지급금·단기대여금 정리 컨설팅',issueIds:['LOAN_RECEIVABLE']},
+ {value:'가수금·대표자 투입자금 정리 검토',issueIds:['CAPITAL_POLICY']},
+ {value:'이익잉여금·배당·주주환원 정책 검토',issueIds:['CAPITAL_POLICY']},
+ {value:'자기주식·감자·지분거래 검토',issueIds:['CAPITAL_TRANSACTIONS']},
+ {value:'대표이사·임원 퇴직금과 지급재원 제안',issueIds:['EXECUTIVE_RETIREMENT']},
+ {value:'대표자·핵심인 유고 시 비상재원 진단',issueIds:['KEY_PERSON']},
+ {value:'법인보험 신규계약 필요성 검토',issueIds:['KEY_PERSON','EXECUTIVE_RETIREMENT','SUCCESSION']},
+ {value:'기존 법인·대표 보험증권 분석 및 리모델링',issueIds:['INSURANCE_OPTIMIZATION']},
+ {value:'대출상환·긴급운영자금 목적의 보장 검토',issueIds:['KEY_PERSON','WORKING_CAPITAL']},
+ {value:'가업승계·상속·증여 사전진단',issueIds:['SUCCESSION']},
+ {value:'비상장주식 가치·주주구조·경영권 점검',issueIds:['SUCCESSION','CAPITAL_TRANSACTIONS']},
+ {value:'가족·공동주주 공동상담으로 확장',issueIds:['SUCCESSION']},
+ {value:'사내근로복지기금·임직원 복지 제안',issueIds:[]},
+ {value:'핵심인재 유지·성과보상·단체보장 검토',issueIds:['KEY_PERSON']},
+ {value:'재산·휴업·배상·해외사업장 위험 점검',issueIds:['PROPERTY_BI']},
+ {value:'수출채권·거래처 부도위험 및 무역보험 검토',issueIds:['EXPORT_CREDIT']},
+ {value:'정책자금·기업인증·연구소 등 외부지원 검토',issueIds:[]},
+ {value:'유료 법인컨설팅 계약 제안',issueIds:[]},
+ {value:'첫 미팅에서 신뢰 형성과 관심 유도',issueIds:[]},
+ {value:'보험증권·추가자료를 확보하고 2차 미팅 확정',issueIds:['INSURANCE_OPTIMIZATION']},
+ {value:'기존 고객 사후관리 및 추가계약 기회 발굴',issueIds:['INSURANCE_OPTIMIZATION']},
+ {value:'경쟁 제안과 차별화된 종합 솔루션 제시',issueIds:[]},
+ {value:'CEO 의사결정용 종합 법인컨설팅 리포트',issueIds:['WORKING_CAPITAL','CAPITAL_POLICY','KEY_PERSON','SUCCESSION']}
+];
+const CR_PURPOSE_QUESTIONS=[
+ {id:'reportPurpose',section:'리포트 제작목적',label:'이번 리포트를 만드는 가장 중요한 목적은 무엇입니까?',reason:'복수선택 후 반드시 1순위를 지정합니다. 이후 질문·분석순서·솔루션·화법·클로징의 최상위 기준이 됩니다.',type:'priority-multi',options:CR_PURPOSE_OPTIONS,required:true,wide:true,otherPlaceholder:'선택지에 없는 목적, 고객 상황, 이번 상담에서 이루고 싶은 결과를 구체적으로 입력해 주세요.'},
+ {id:'purposeDetail',section:'리포트 제작목적',label:'선택한 목적을 더 구체적으로 설명해 주세요.',reason:'AI가 고객의 현재 상황, 문제인식 수준, 제안순서와 피해야 할 접근을 함께 해석합니다.',type:'text',wide:true,otherPlaceholder:'예: 보험을 먼저 제안하지 말고 퇴직재원 부족을 숫자로 인식시킨 뒤 증권 제출과 2차 미팅으로 연결하고 싶다.'},
+ {id:'desiredCustomerAction',section:'리포트 제작목적',label:'이 리포트를 본 고객이 다음에 어떤 행동을 하기를 원합니까?',reason:'리포트 결론과 클로징을 실제 다음 행동에 맞춥니다.',type:'multi',required:true,options:['추가 상담 동의','정밀진단 자료 제출','보험증권 제출','전문가 공동미팅 참석','A·B·C 해결안 검토','유료 컨설팅 계약 검토','보험설계안 검토','가족·주주 공동설명 참석','실행 일정·담당자 확정','신뢰 형성만 하고 다음 기회 확보'],otherPlaceholder:'원하는 행동, 목표일, 참석자 또는 확보해야 할 자료를 입력해 주세요.'},
+ {id:'salesIntent',section:'리포트 제작목적',label:'이번 상담의 영업적 우선순위를 선택해 주세요.',reason:'CEO 전달내용과 컨설턴트 내부전략을 분리하면서 제안 강도를 조정합니다.',type:'single',required:true,options:['문제 인식과 신뢰 형성 우선','후속 정밀상담 연결 우선','유료 컨설팅 수임 우선','법인보험 기회 확인 우선','보험설계·계약 검토 우선','기존 계약 사후관리 우선','복합 목적·직접입력'],otherPlaceholder:'보험과 컨설팅의 우선순위, 이번에는 언급하지 말아야 할 내용 등을 입력해 주세요.'},
+ {id:'purposeRestrictions',section:'리포트 제작목적',label:'이번 리포트에서 피하거나 약하게 다뤄야 할 내용이 있습니까?',reason:'고객의 거부감·기존 전문가 관계·상담단계를 고려해 부적절한 제안을 차단합니다.',type:'text',wide:true,otherPlaceholder:'예: 보험료 직접 제시 금지, 기존 세무사 판단 비판 금지, 승계는 아직 언급하지 않기'}
+];
+function crPurposeKeywordIssueIds(text){
+ const t=String(text||'').replace(/\s+/g,' '),rules=[
+  [/가지급|대여금|임시지급|대표.*인출/,['LOAN_RECEIVABLE']],
+  [/운전자금|현금흐름|매출채권|재고|차입|유동성|자금압박/,['WORKING_CAPITAL']],
+  [/이익잉여|배당|가수금|자본정책|결손|유보/,['CAPITAL_POLICY']],
+  [/자기주식|감자|지분거래|명의신탁|주주정리/,['CAPITAL_TRANSACTIONS']],
+  [/퇴직금|퇴직재원|은퇴/,['EXECUTIVE_RETIREMENT']],
+  [/승계|상속|증여|후계|경영권|가족주주/,['SUCCESSION']],
+  [/유고|핵심인|대표.*부재|비상경영|대출상환재원/,['KEY_PERSON']],
+  [/기존.*보험|증권.*분석|보험.*리모델링|중복보험/,['INSURANCE_OPTIMIZATION']],
+  [/수출채권|무역보험|해외거래처|국가위험/,['EXPORT_CREDIT']],
+  [/화재|휴업|재산보험|공장|설비.*사고|배상/,['PROPERTY_BI']]
+ ];const out=[];for(const [re,ids] of rules)if(re.test(t))for(const id of ids)if(!out.includes(id))out.push(id);return out;
+}
+function crLocalInterpretPurpose(answers,analysis){
+ const selected=crQArray(answers.reportPurpose),primary=String(answers.reportPurposePriority||selected[0]||answers.reportPurposeOther||''),free=[answers.reportPurposeOther,answers.purposeDetail,answers.salesIntentOther,answers.purposeRestrictions].filter(Boolean).join(' ');
+ const map=new Map(CR_PURPOSE_OPTIONS.map(x=>[x.value,x.issueIds]));const purposeIds=[];for(const v of selected)for(const id of map.get(v)||[])if(!purposeIds.includes(id))purposeIds.push(id);for(const id of crPurposeKeywordIssueIds(free))if(!purposeIds.includes(id))purposeIds.push(id);
+ const reportIds=crActiveQuestionIssueIds(analysis);const matched=purposeIds.filter(id=>reportIds.includes(id));const relevant=[...matched,...purposeIds.filter(id=>!matched.includes(id))].slice(0,5);
+ const sales=String(answers.salesIntent||'');let insuranceEmphasis='CONDITIONAL';if(/보험설계|계약/.test(sales))insuranceEmphasis='HIGH';else if(/문제 인식|신뢰|정밀상담|유료/.test(sales)||/보험.*먼저|보험료.*금지|보험.*약하게/.test(free))insuranceEmphasis='LOW_AT_BEGINNING';
+ return {source:'LOCAL_SEMANTIC_FALLBACK',primaryPurpose:primary,selectedPurposes:selected,customPurpose:free,desiredActions:crQArray(answers.desiredCustomerAction),salesIntent:sales,issueIds:relevant,reportDetectedIssueIds:reportIds,matchedReportIssueIds:matched,insuranceEmphasis,restrictions:[answers.purposeRestrictions,answers.salesIntentOther].filter(Boolean),summary:`1순위 목적은 ‘${primary||'직접입력 목적'}’이며, ${crQArray(answers.desiredCustomerAction).join('·')||'후속 행동'}으로 연결하는 리포트입니다. ${insuranceEmphasis==='LOW_AT_BEGINNING'?'초기에는 보험을 전면에 두지 않고 문제와 필요재원을 먼저 설명합니다.':''}`};
+}
+async function crInterpretPurposeWithAI(){
+ const a=state.caseData.answers||{},fallback=crLocalInterpretPurpose(a,state.analysis);
+ try{const out=await ServerAdapter.runAI('interpretReportPurpose',{purpose:{primary:a.reportPurposePriority,selected:a.reportPurpose,other:a.reportPurposeOther,detail:a.purposeDetail,desiredActions:a.desiredCustomerAction,salesIntent:a.salesIntent,salesIntentOther:a.salesIntentOther,restrictions:a.purposeRestrictions},company:{name:state.caseData.profile?.companyName,industry:state.caseData.profile?.industry},detectedIssues:crActiveQuestionIssueIds(state.analysis),instruction:'선택형과 주관식 목적을 통합해 primaryPurpose, issueIds, desiredActions, salesIntent, insuranceEmphasis, restrictions, summary를 JSON으로 반환'});
+  const p=out?.purposeProfile||out?.result||out?.data;if(p&&typeof p==='object'){const ids=crQArray(p.issueIds).filter(id=>CR_ISSUE_QUESTION_BANK[id]);return {...fallback,...p,issueIds:ids.length?ids:fallback.issueIds,source:'SERVER_AI'};}
+ }catch(_e){}return fallback;
+}
+function crPurposeComplete(a){return crQArray(a?.reportPurpose).length>0||String(a?.reportPurposeOther||'').trim();}
+const crBuildQuestionSectionsV192=crBuildQuestionSections;
+crBuildQuestionSections=function(analysis){
+ const a=state.caseData?.answers||{},profile=a.reportPurposeProfile;
+ if(!profile)return [{id:'purpose',title:'리포트 제작목적과 영업의도',kind:'purpose',questions:CR_PURPOSE_QUESTIONS.map(q=>({...q,source:'필수'}))}];
+ const sections=[];const selectedIds=crQArray(profile.issueIds);const reportIds=crActiveQuestionIssueIds(analysis);const candidate=[...new Set([...selectedIds.filter(id=>reportIds.includes(id)),...selectedIds])].slice(0,4);
+ sections.push({id:'purpose-summary',title:'AI가 이해한 제작방향',kind:'summary',questions:[]});
+ const essentials=CR_COMMON_QUESTIONS.filter(q=>['ceoStyle','meetingStage','nextMeetingTarget','advisorTeam','existingInsurance'].includes(q.id));
+ sections.push({id:'execution',title:'목적 달성을 위한 핵심 확인',kind:'common',questions:essentials.map(q=>({...q,source:'목적연계'}))});
+ for(const id of candidate){const bank=CR_ISSUE_QUESTION_BANK[id];if(bank)sections.push({id:'issue-'+id,title:bank.title,kind:'issue',issueId:id,questions:bank.questions.map(q=>({...q,issueId:id,source:reportIds.includes(id)?'목적+보고서':'목적지정'}))});}
+ const used=new Set(sections.flatMap(s=>s.questions.map(q=>q.id)));const dynamic=(analysis?.dynamicQuestions||[]).filter(q=>q&&q.id&&!used.has(q.id)&&(!q.issueId||candidate.includes(q.issueId))).slice(0,4).map(q=>({id:q.id,label:q.label||q.question||'추가 확인',reason:q.reason||'첨부 보고서에서 확인되지 않아 목적 달성을 위해 추가 확인합니다.',type:q.type==='number'?'number':'text',issueId:q.issueId||'',source:'보고서 누락',otherPlaceholder:'알고 있는 범위만 입력하고 모르면 미확인으로 남겨 주세요.'}));
+ if(dynamic.length)sections.push({id:'source-confirmation',title:'첨부 보고서에 없는 핵심정보',kind:'source',questions:dynamic});return sections;
+};
+const crRenderQuestionsV192=renderQuestions;
+renderQuestions=function(){
+ if(!state.analysis)state.analysis=buildConfirmedModel(state.caseData);const a=state.caseData.answers||{},profile=a.reportPurposeProfile;
+ crRenderQuestionsV192();const root=$('questionsBody');if(!root)return;
+ const summary=root.querySelector('.question-engine-summary');if(summary){summary.querySelector('b').textContent=profile?'목적연계 맞춤질문':'리포트 제작목적 우선 설정';summary.querySelector('span').textContent=CR_PURPOSE_ENGINE_VERSION;const p=summary.querySelector('p');if(p)p.innerHTML=profile?`<strong>AI 해석:</strong> ${esc(profile.summary||profile.primaryPurpose||'제작방향 분석 완료')}<br><small>목적 연계 이슈: ${esc(crQArray(profile.issueIds).join(' · ')||'종합진단')} · 해석방식 ${esc(profile.source||'AI')}</small>`:'첨부 보고서 분석보다 먼저 컨설턴트의 제작목적과 영업의도를 확정합니다. 목적을 분석한 뒤 그 목적에 필요한 질문만 다시 구성합니다.';}
+ qsa('.question-section.summary',root).forEach(sec=>{sec.innerHTML=`<header><div><b>AI가 이해한 제작방향</b><span>질문과 리포트 생성의 최상위 기준</span></div></header><div class="purpose-direction-card"><b>${esc(profile?.primaryPurpose||'')}</b><p>${esc(profile?.summary||'')}</p><div>${crQArray(profile?.desiredActions).map(x=>`<span>${esc(x)}</span>`).join('')}</div>${profile?.restrictions?.length?`<small>제외·주의: ${esc(profile.restrictions.join(' · '))}</small>`:''}</div>`;});
+ const btn=$('confirmQuestionsBtn');if(btn)btn.textContent=profile?'답변 확인·리포트 생성':'목적 분석·맞춤질문 구성';
+};
+const crBuildConfirmedModelPurposeBase=buildConfirmedModel;
+buildConfirmedModel=function(data){
+ const model=crBuildConfirmedModelPurposeBase(data),profile=model.answers?.reportPurposeProfile||data?.answers?.reportPurposeProfile;
+ if(!profile)return model;const ids=crQArray(profile.issueIds),primary=String(profile.primaryPurpose||'');
+ model.reportPurposeProfile=profile;model.decisionPriorities={...(model.decisionPriorities||{}),primary,selected:crQArray(profile.selectedPurposes),summary:profile.summary||primary,desiredActions:crQArray(profile.desiredActions),salesIntent:profile.salesIntent||'',restrictions:profile.restrictions||[]};
+ for(const issue of model.issues||[]){if(ids.includes(issue.id)){issue.purposeAligned=true;issue.userPriority=[...new Set([...(issue.userPriority||[]),primary].filter(Boolean))];issue.facts=[...new Set([...(issue.facts||[]),`리포트 제작목적 연계: ${primary}`])];issue.score=Math.min(5,(issue.score||0)+(issue.id===ids[0]?0.35:0.15));}}
+ model.issues=(model.issues||[]).sort((a,b)=>Number(!!b.purposeAligned)-Number(!!a.purposeAligned)||((b.score||0)-(a.score||0)));
+ return model;
+};
+function crCollectVisibleQuestions(){return collectQuestions();}
+function crWirePurposeFlow(){const btn=$('confirmQuestionsBtn');if(!btn)return;btn.onclick=async()=>{
+  if(!crCollectVisibleQuestions())return;const a=state.caseData.answers||{};
+  if(!a.reportPurposeProfile){if(!crPurposeComplete(a)){toast('리포트 제작목적을 먼저 선택하거나 직접 입력해 주세요.','err');return;}btn.disabled=true;btn.textContent='AI가 목적을 해석하는 중…';a.reportPurposeProfile=await crInterpretPurposeWithAI();a.questionnaireMeta={...(a.questionnaireMeta||{}),purposeVersion:CR_PURPOSE_ENGINE_VERSION,purposeInterpretedAt:nowIso()};state.analysis=buildConfirmedModel(state.caseData);state.questionsConfirmed=false;btn.disabled=false;renderQuestions();toast('제작목적에 맞는 질문만 다시 구성했습니다.','ok');return;}
+  closeModal('questionsModal');generateReport('purpose-aligned-answers');
+ };}
+setTimeout(crWirePurposeFlow,0);
+
 global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText,crCoordinateCredit,crClassifyFactWarnings,crBuildQuestionSections,renderQuestions,collectQuestions}}:{})};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })(window);
