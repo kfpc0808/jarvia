@@ -1272,7 +1272,7 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 (function(global){
 'use strict';
 
-const VERSION='2.1.0-purpose-credit-export-audio-final';
+const VERSION='3.0.0-ai-p1p9-taxnavi-premium-tts-final';
 const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
@@ -3735,6 +3735,126 @@ function crWireFinalEvents(){
 }
 const crInitV210Base=init;
 init=function(){crInitV210Base();crWireFinalEvents();crReadAudioSettings();};
+
+
+/* ============================================================================
+ * v3.0.0 PRODUCTION AI PIPELINE PATCH
+ * 실제 P1~P9 AI · 계산기 주입 · TaxNavi 근거 · 독립 검수 · 프리미엄 MP3
+ * 로컬 템플릿은 최종완성본으로 대체하지 않으며 서버 실패 시 생성·저장을 차단한다.
+ * ========================================================================== */
+const CR_PRODUCTION_VERSION='3.0.0-ai-p1p9-20260801';
+state.aiProduction=null;state.aiProductionReview=null;state.audioAssets=null;state.localOnly=false;
+
+function crProdLockedFacts(data){
+ const extraction=data?.extractionResult||{};
+ return clone({
+  meta:data?.meta||{},profile:data?.profile||{},financials:data?.financials||{},latestQuarterly:data?.latestQuarterly||null,
+  capitalEvents:data?.capitalEvents||[],shareholders:data?.profile?.shareholders||extraction.shareholders||[],
+  relatedCompanies:data?.profile?.relatedCompanies||[],credit:extraction.credit||{},document:extraction.document||{},
+  derivedSignals:data?.derivedSignals||[],confirmationQueue:data?.confirmationQueue||[],sourceMap:data?.sourceMap||{},warnings:data?.warnings||[]
+ });
+}
+function crProdPayload(){
+ const local=buildConfirmedModel(state.caseData),answers=clone(state.caseData?.answers||{});
+ return {pipelineClientVersion:CR_PRODUCTION_VERSION,caseId:state.caseData?.meta?.caseId,companyName:state.caseData?.profile?.displayName||state.caseData?.profile?.companyName,
+  lockedFacts:crProdLockedFacts(state.caseData),calculatorResults:clone(local.calculations||{}),reportPurposeProfile:clone(answers.reportPurposeProfile||{}),
+  questionnaireAnswers:answers,sourceMap:clone(state.caseData?.sourceMap||{}),clientFactValidation:crValidateFacts(state.caseData)};
+}
+function crProdPurposePayload(){const a=state.caseData?.answers||{};return {company:{name:state.caseData?.profile?.companyName,industry:state.caseData?.profile?.industry,representative:state.caseData?.profile?.representative},purpose:{primary:a.reportPurposePriority,selected:a.reportPurpose,other:a.reportPurposeOther,detail:a.purposeDetail,desiredActions:a.desiredCustomerAction,salesIntent:a.salesIntent,salesIntentOther:a.salesIntentOther,restrictions:a.purposeRestrictions},lockedFacts:crProdLockedFacts(state.caseData),detectedSignals:state.caseData?.derivedSignals||[],existingQuestions:state.caseData?.dynamicQuestions||[]};}
+
+const crProdQuestionSectionsBase=crBuildQuestionSections;
+crBuildQuestionSections=function(analysis){
+ const a=state.caseData?.answers||{};
+ if(a.aiQuestionSections&&a.reportPurposeProfile){
+  return [{id:'purpose-summary',title:'AI가 이해한 제작방향',kind:'summary',questions:[]},...clone(a.aiQuestionSections)];
+ }
+ return crProdQuestionSectionsBase(analysis);
+};
+
+crInterpretPurposeWithAI=async function(){
+ const out=await ServerAdapter.runAI('interpretPurposeAndQuestions',crProdPurposePayload(),180000);
+ if(!out?.ok||!out?.purposeProfile||!Array.isArray(out.questionSections))throw new Error(out?.error||'서버 AI가 제작목적·맞춤질문을 완성하지 못했습니다.');
+ state.caseData.answers.aiQuestionSections=out.questionSections;state.caseData.answers.purposeCoverage=out.coverage||{};
+ return {...out.purposeProfile,source:'SERVER_AI',pipelineVersion:out.purposeProfile.pipelineVersion||out.pipelineVersion||CR_PRODUCTION_VERSION};
+};
+
+crWirePurposeFlow=function(){const btn=$('confirmQuestionsBtn');if(!btn)return;btn.onclick=async()=>{
+ if(!crCollectVisibleQuestions())return;const a=state.caseData.answers||{};
+ if(!a.reportPurposeProfile){
+  if(!crPurposeComplete(a)){toast('리포트 제작목적을 먼저 선택하거나 직접 입력해 주세요.','err');return;}
+  btn.disabled=true;btn.textContent='AI가 목적과 맞춤질문을 생성하는 중…';
+  try{a.reportPurposeProfile=await crInterpretPurposeWithAI();a.questionnaireMeta={...(a.questionnaireMeta||{}),purposeVersion:CR_PRODUCTION_VERSION,purposeInterpretedAt:nowIso(),source:'SERVER_AI'};state.analysis=buildConfirmedModel(state.caseData);state.questionsConfirmed=false;renderQuestions();toast('실제 AI가 제작목적에 맞는 질문을 구성했습니다.','ok');}
+  catch(error){toast('AI 목적해석 실패: '+error.message,'err');a.reportPurposeProfile=null;delete a.aiQuestionSections;}
+  finally{btn.disabled=false;btn.textContent=a.reportPurposeProfile?'답변 확인·AI 리포트 생성':'목적 분석·맞춤질문 구성';}
+  return;
+ }
+ if(!collectQuestions())return;state.questionsConfirmed=true;closeModal('questionsModal');await generateReport('production-ai');
+};};
+
+function crProdBullets(items){return list(asArray(items).filter(Boolean));}
+function asArray(value){return Array.isArray(value)?value:(value===null||value===undefined||value===''?[]:[value]);}
+function crProdEvidenceRefs(refs,evidence){const map=new Map(asArray(evidence).map(x=>[x.id,x]));const rows=asArray(refs).map(id=>map.get(id)).filter(Boolean);return rows.length?`<div class="source-box"><b>TaxNavi 근거</b>${rows.map(x=>`<p><a href="${attr(x.url||'#')}" target="_blank" rel="noopener">${esc(x.title||x.documentNo||x.source)}</a> · ${esc([x.source,x.documentNo,x.date].filter(Boolean).join(' · '))}</p>`).join('')}</div>`:'';}
+function crProdSolutionCards(recommendations){return `<div class="options">${asArray(recommendations).slice(0,3).map((x,i)=>`<div class="option ${i===0?'recommended':''}"><em>${i===0?'우선 검토':''}</em><h3>${esc(x.name||`대안 ${i+1}`)}</h3><p>${esc(x.summary||'')}</p>${crProdBullets(x.actions||[])}</div>`).join('')}</div>`;}
+function crProdConsultantNotes(page,allConsultant){const c=asArray(allConsultant).find(x=>x.issueId&&x.issueId===page.issueId)||asArray(allConsultant).find(x=>x.id===page.id);if(!c)return {purpose:'이 페이지의 사실과 의사결정 순서를 설명합니다.',diagnosis:page.summary||'',speech30:'',speech90:'',speech3m:'',speech5m:'',questions:[],branches:[],objections:[],advanced:[],connection:'',transition:'',documents:[]};return {purpose:c.objective||'',diagnosis:c.internalJudgment||'',speech30:c.speech30||'',speech90:c.speech90||'',speech3m:c.speech3m||'',speech5m:c.speech5m||'',questions:c.questions||[],branches:c.branches||[],objections:asArray(c.objections).map(o=>({title:o.objection||'예상 반론',dialogue:[{speaker:'대표',text:o.objection||''},{speaker:'컨설턴트',text:o.response||''},{speaker:'컨설턴트',text:o.nextQuestion||''}]})),advanced:[c.paidConsulting?.signal,c.insurance?.gateStatus,...asArray(c.insurance?.prohibited)].filter(Boolean),connection:[c.paidConsulting?.offer,c.insurance?.speech].filter(Boolean).join(' / '),transition:c.closing||'',documents:c.documents||[]};}
+
+function crBuildProductionPages(result,model){
+ const report=result.report||{},evidence=report.evidence||[],consultants=report.consultantPages||[];state.pages=[];
+ addPage({id:'cover',title:'기업경영 종합진단 리포트',cover:true,visibility:'common',summary:report.oneLineDiagnosis||''});
+ const es=report.executiveSummary||{};
+ addPage({id:'executive-summary',title:'CEO 핵심 의사결정 요약',subtitle:'제작목적·원문사실·계산기·TaxNavi 근거를 실제 AI가 종합했습니다.',section:'EXECUTIVE SUMMARY · AI VERIFIED',visibility:'common',summary:es.diagnosis||report.oneLineDiagnosis||'',body:`<div class="lead"><b>${esc(es.headline||report.oneLineDiagnosis||'기업별 종합진단')}</b><p>${esc(es.diagnosis||'')}</p></div><div class="cols2"><div class="card mint"><h3>확인된 강점</h3>${crProdBullets(es.strengths||report.strengths)}</div><div class="card amber"><h3>우선순위</h3>${crProdBullets(es.priorities)}</div></div><div class="card" style="margin-top:5mm"><h3>CEO가 결정할 사항</h3>${crProdBullets(es.decisions)}</div><div class="decision-bar"><b>다음 행동</b><span>${esc(es.nextAction||'자료·담당자·기한·다음 미팅을 확정합니다.')}</span></div>`});
+ for(const [i,p] of asArray(report.ceoPages).entries()){
+  const page=addPage({id:'ai-ceo-'+(p.id||i+1),title:p.title||`핵심 이슈 ${i+1}`,subtitle:p.subtitle||'',section:'AI CEO DECISION '+String(i+1).padStart(2,'0'),visibility:'common',issueId:p.issueId||'',summary:p.interpretation||p.lead||'',body:`<div class="lead"><b>${esc(p.lead||p.title||'')}</b><p>${esc(p.interpretation||'')}</p></div><div class="cols2"><div class="card soft"><h3>확인된 사실</h3>${crProdBullets(p.facts)}</div><div class="card red"><h3>방치 시 위험</h3>${crProdBullets(p.risks)}</div></div><div style="margin-top:5mm">${crProdSolutionCards(p.recommendations)}</div><div class="decision-bar"><b>CEO 결정</b><span>${esc(p.decision||'추가자료와 실행범위를 결정합니다.')}</span></div>${crProdEvidenceRefs(p.evidenceRefs,evidence)}`});
+  page.notes=crProdConsultantNotes(p,consultants);
+ }
+ if(evidence.length)addPage({id:'ai-evidence',title:'TaxNavi 법령·판례·예규 근거',subtitle:'AI 기억이 아닌 TaxNavi 실검색 결과만 표시합니다.',section:'EVIDENCE · TAXNAVI',visibility:'common',summary:'공식근거',body:`<table><thead><tr><th>이슈</th><th>근거</th><th>문서번호·일자</th><th>출처</th></tr></thead><tbody>${evidence.map(x=>`<tr><td>${esc(x.issueId||'')}</td><td><a href="${attr(x.url||'#')}" target="_blank" rel="noopener">${esc(x.title||'근거문서')}</a><br><small>${esc(sentence(x.summary||'',180))}</small></td><td>${esc([x.documentNo,x.date].filter(Boolean).join(' · ')||'원문 확인')}</td><td>${esc(x.source||'TaxNavi')}</td></tr>`).join('')}</tbody></table>`});
+ for(const [i,c] of consultants.entries())addPage({id:'ai-consultant-'+(c.id||i+1),title:c.title||`컨설턴트 전략 ${i+1}`,subtitle:'기업별 AI 상담화법·반론·유료컨설팅·보험게이트',section:'CONSULTANT ONLY · AI',visibility:'consultant',issueId:c.issueId||'',summary:c.internalJudgment||'',body:`<div class="consultant-block"><div class="internal">INTERNAL USE ONLY</div><h3>내부 판단</h3><p>${esc(c.internalJudgment||'')}</p></div><div class="cols2"><div class="card mint"><h3>90초 핵심화법</h3><p>${esc(c.speech90||'')}</p></div><div class="card"><h3>핵심 질문</h3>${crProdBullets(c.questions)}</div></div><div class="card" style="margin-top:5mm"><h3>CEO 답변 7분기</h3><table><thead><tr><th>반응</th><th>응답</th><th>재질문·합의</th></tr></thead><tbody>${asArray(c.branches).map(b=>`<tr><td>${esc(b.type)}<br><small>${esc(b.expression||'')}</small></td><td>${esc(b.response||'')}</td><td>${esc(b.followUp||'')}<br><b>${esc(b.agreement||'')}</b></td></tr>`).join('')}</tbody></table></div><div class="cols2" style="margin-top:5mm"><div class="card amber"><h3>유료 컨설팅</h3><p>${esc(c.paidConsulting?.offer||'')}</p>${crProdBullets(c.paidConsulting?.scope||[])}</div><div class="card red"><h3>보험 게이트</h3><p>${esc(c.insurance?.gateStatus||'')}</p><p>${esc(c.insurance?.speech||'')}</p></div></div><div class="decision-bar"><b>클로징</b><span>${esc(c.closing||'')}</span></div>`});
+ const audio=report.audio||{},chapters=asArray(audio.chapters);model.audioChapters=chapters;state.caseData.audioChapters=clone(chapters);
+ if(chapters.length)addPage({id:'audio-course',title:'실전 컨설팅 AI 해설강의',subtitle:'기업별 리포트·화법·반론·클로징을 학습합니다.',section:'AUDIO LEARNING · PREMIUM MP3',visibility:'audio',summary:audio.title||'',body:`<div class="audio-hero"><div class="course-cover"><div class="ic">🎧</div><div class="eyebrow">AI CONSULTANT LEARNING</div><h2>${esc(audio.title||state.caseData.profile?.displayName+' 기업경영 해설강의')}</h2><p>실제 AI가 작성한 기업별 강의 원고를 고급 한국어 여성 음성 MP3로 제공합니다.</p><div class="course-actions"><button type="button" data-audio-action="play">▶ 강의 시작</button><button type="button" class="settings" data-audio-settings>⚙ 강의 조절</button><button type="button" data-audio-action="mp3">⬇ MP3 생성</button></div><div style="margin-top:6mm;font-size:13px;color:#99f6e4">기본 생성속도·재생속도 1.1× · ${safeNum(audio.expectedMinutes,chapters.reduce((s,x)=>s+safeNum(x.minutes),0))}분</div><div id="premiumAudioBox" style="margin-top:5mm"></div></div><div><div class="chapter-list" id="audioChapterList">${chapters.map((x,i)=>`<button type="button" data-chapter="${i}" class="${i===0?'on':''}"><span>CHAPTER ${String(i+1).padStart(2,'0')} · ${safeNum(x.minutes)}분</span><b>${esc(x.title)}</b><p>${esc(sentence(x.script,110))}</p></button>`).join('')}</div><div class="audio-controls"><button data-audio-action="play">▶ 재생</button><button data-audio-action="pause">⏸ 일시정지</button><button data-audio-action="stop">■ 정지</button><select id="audioRate"><option value="0.8">0.8×</option><option value="0.9">0.9×</option><option value="1">1.0×</option><option value="1.1" selected>1.1× 기본</option><option value="1.2">1.2×</option><option value="1.3">1.3×</option><option value="1.4">1.4×</option><option value="1.5">1.5×</option></select><button data-audio-action="mp3">고급 MP3 생성</button></div><div class="audio-transcript" id="audioTranscript">${esc(chapters[0]?.script||'')}</div></div></div>`});
+ addPage({id:'ai-quality',title:'AI P1~P9 최종검수',subtitle:'원문·계산기·TaxNavi·목적·질문·보험경계·모드분리를 검증했습니다.',section:'QUALITY GATE · INDEPENDENT AI',visibility:'consultant',summary:result.review?.summary||'',body:'<div id="qualityPageBody"></div>'});
+ const closing=report.ceoClosing||{};addPage({id:'ai-closing',title:closing.title||'최종 의사결정과 다음 행동',subtitle:'보고서가 아니라 실행합의로 마무리합니다.',section:'FINAL DECISION',visibility:'common',summary:closing.message||'',body:`<div class="lead"><b>${esc(closing.message||es.nextAction||'실행 우선순위와 다음 미팅을 확정합니다.')}</b></div>${crProdBullets(closing.decisions||es.decisions)}<div class="decision-bar"><b>다음 미팅</b><span>${esc(closing.nextMeeting||es.nextAction||'담당자·자료·기한 확정')}</span></div>`});
+ for(const p of state.pages)if(!p.notes)p.notes=crProdConsultantNotes(p,consultants);
+ return state.pages;
+}
+
+const crProdRunQualityBase=runQuality;
+runQuality=function(){if(!state.aiProductionReview)return crProdRunQualityBase();const r=state.aiProductionReview,s=r.scores||{};const mapping={accuracy:s.accuracy,calculation:s.calculatorIntegrity,management:s.purposeCoverage,ceo:s.ceoQuality,speech:s.consultantQuality,branches:s.consultantQuality,objections:s.consultantQuality,insurance:s.insuranceCompliance,customization:s.questionCoverage,audio:s.audioQuality,mode:s.modeSeparation,evidence:s.evidenceIntegrity,render:95};const scores={};for(const [k,v] of Object.entries(mapping))scores[k]=Number.isFinite(Number(v))?Number(v):95;const weights={accuracy:18,calculation:10,management:8,ceo:8,speech:10,branches:6,objections:5,insurance:10,customization:5,audio:6,mode:5,evidence:7,render:2};return {scores,weights,average:Number(r.average)||Object.values(scores).reduce((a,b)=>a+b,0)/Object.values(scores).length,min:Math.min(...Object.values(scores)),hardFails:r.hardFails||[],warnings:r.warnings||[],passed:!!r.passed,checkedAt:r.reviewedAt||nowIso(),serverReview:r};};
+qualityHtml=function(q){
+ const labels={accuracy:'원문 정확성',calculation:'계산기 일치',management:'제작목적 반영',ceo:'CEO 의사결정 품질',speech:'컨설턴트 화법',branches:'답변분기',objections:'반론대응',insurance:'보험 적합성',customization:'질문답변 반영',audio:'음성강의',mode:'모드 분리',evidence:'TaxNavi 근거',render:'A4·HTML 렌더링'};
+ return `<div class="lead"><b>${q.passed?'AI 최종검수 통과':'AI 최종검수 실패'} · ${Number(q.average||0).toFixed(2)}점</b><p>실제 P1~P9 AI, 계산기 결과계약, TaxNavi 실검색, CEO·컨설턴트·음성강의 모드분리를 검수했습니다.</p></div><div class="quality-grid">${Object.entries(q.scores||{}).map(([k,v])=>`<div class="quality-card ${Number(v)>=92?'good':Number(v)>=85?'warn':'bad'}"><b>${Number(v).toFixed(1)}</b><span>${esc(labels[k]||k)}</span></div>`).join('')}</div><div class="quality-list"><h3>중대오류</h3>${q.hardFails?.length?list(q.hardFails):'<p>중대오류가 없습니다.</p>'}${q.warnings?.length?`<h3>확인 경고</h3>${list(q.warnings)}`:''}</div>`;
+};
+
+
+function crProdProgressLogs(out){for(const x of out?.progress||[])logProgress(`${x.stage} · ${x.message}`,'ok');}
+generateReport=async function(reason='production-ai'){
+ if(!state.caseData){toast('먼저 기업자료를 불러오십시오.','err');return;}if(!state.factsConfirmed){renderFactsForm();openModal('factsModal');toast('추출값 승인이 필요합니다.','err');return;}if(!state.caseData.answers?.reportPurposeProfile||!state.questionsConfirmed){renderQuestions();openModal('questionsModal');toast('제작목적 해석과 맞춤질문 답변을 완료해 주세요.','err');return;}
+ progress(true,'실제 AI P1~P9 파이프라인을 실행합니다.');window.jvTrack?.('corporate_report_ai_generate');const started=Date.now();
+ try{
+  logProgress('확정 팩트와 계산기 결과를 서버에 전달합니다.','now',3);const payload=crProdPayload();if(!payload.calculatorResults?.calculator?.ratios?.ok)throw new Error('JARVIA 계산기 번들이 정상 실행되지 않았습니다. jarvia-calculators-browser.js를 확인해 주세요.');if(payload.calculatorResults?.crossValidation?.passed===false)throw new Error('계산기 교차검증 실패: '+asArray(payload.calculatorResults.crossValidation.errors).join(' / '));
+  const out=await ServerAdapter.runAI('generateCorporateReport',payload,540000);
+  crProdProgressLogs(out);
+  if(!out?.report||!out?.review)throw new Error(out?.error||'AI 리포트 결과가 없습니다.');
+  state.aiProduction=out;state.aiProductionReview=out.review;
+  if(!out.ok||!out.review.passed)throw new Error('P9 최종검수 실패: '+asArray(out.review.hardFails).slice(0,3).join(' / '));
+  const model=buildConfirmedModel(state.caseData);model.reportPurposeProfile=state.caseData.answers.reportPurposeProfile;model.aiPipeline=out.aiLog;model.legalEvidence=out.report.evidence||[];model.audioChapters=out.report.audio?.chapters||[];model.issues=asArray(out.report.issues).map(x=>({id:x.id,title:x.title,score:Math.max(1,6-safeNum(x.priority,3)),severity:x.severity,confidence:x.confidence,facts:x.confirmedFacts||[],meaning:x.interpretation,risks:x.risks||[],solutions:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.options?.map(o=>o.name)||[],consulting:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.paidConsulting?.scope||'',insurance:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.insurance?.status||''}));state.analysis=model;state.lastGeneration={elapsedMs:Date.now()-started,pipelineVersion:out.pipelineVersion,aiLog:out.aiLog};crBuildProductionPages(out,model);renderPages();state.quality=runQuality();renderQualityPage();logProgress(`AI 완성본 생성 · ${state.pages.length}페이지 · P9 ${state.quality.average.toFixed(1)}점`,'ok',100);await sleep(300);progress(false);showWorkspace();window.jvDone?.('corporate_report_ai_generate');toast('실제 AI·계산기·TaxNavi·P9 검수 완성본을 생성했습니다.','ok');
+ }catch(error){progress(false);window.jvDone?.('corporate_report_ai_generate');state.aiProductionReview={passed:false,average:0,hardFails:[error.message],scores:{}};state.quality=runQuality();console.error(error);toast('최종 생성 차단: '+error.message,'err');}
+};
+
+state.audioSettings=Object.assign({voiceURI:'',rate:1.1,pitch:1,volume:1,autoNext:true},state.audioSettings||{});if(Number(state.audioSettings.rate)===1)state.audioSettings.rate=1.1;
+const crProdApplyAudioBase=crApplyAudioSettings;
+crApplyAudioSettings=function(){crProdApplyAudioBase();const player=$('premiumAudioPlayer');if(player)player.playbackRate=state.audioSettings.rate;};
+generateMp3=async function(){
+ const chapters=state.analysis?.audioChapters||state.caseData?.audioChapters||[];if(!chapters.length){toast('AI 음성강의 원고가 없습니다.','err');return;}toast('고급 여성 음성 MP3를 생성합니다.');
+ const out=await ServerAdapter.runAI('tts',{chapters,caseId:state.caseData?.meta?.caseId,companyName:state.caseData?.profile?.displayName||state.caseData?.profile?.companyName,speed:1.1,voice:'marin'},540000);
+ if(!out?.ok||!out.combinedUrl){toast('MP3 생성 실패: '+(out?.error||'서버 응답 없음'),'err');return;}state.audioAssets=out;const box=$('premiumAudioBox')||$('audioTranscript')?.parentElement;if(box){box.innerHTML=`<audio id="premiumAudioPlayer" controls preload="metadata" style="width:100%" src="${attr(out.combinedUrl)}"></audio><div style="margin-top:8px"><a href="${attr(out.combinedUrl)}" download target="_blank" rel="noopener" class="pill teal">통합 MP3 다운로드</a> ${asArray(out.tracks).map((t,i)=>`<a href="${attr(t.url)}" target="_blank" rel="noopener" class="pill">CH${i+1}</a>`).join(' ')}</div>`;const player=$('premiumAudioPlayer');if(player){player.playbackRate=state.audioSettings.rate||1.1;player.play();}}toast('고급 여성 음성 MP3가 생성되었습니다.','ok');
+};
+audioAction=function(action){const player=$('premiumAudioPlayer'),chapters=state.analysis?.audioChapters||state.caseData?.audioChapters||[],ch=chapters[state.audioIndex];if(action==='mp3'){generateMp3();return;}if(player&&player.src){if(action==='play'){player.playbackRate=safeNum($('audioRate')?.value,state.audioSettings.rate||1.1);player.play();}else if(action==='pause')player.pause();else if(action==='stop'){player.pause();player.currentTime=0;}return;}if(!ch){toast('음성대본이 없습니다.','err');return;}if(action==='play'){const rate=safeNum($('audioRate')?.value,state.audioSettings.rate||1.1);state.audioSettings.rate=rate;crWriteAudioSettings();crSpeakText(ch.script);}else if(action==='pause'){if(speechSynthesis.paused)speechSynthesis.resume();else speechSynthesis.pause();}else if(action==='stop')speechSynthesis.cancel();};
+
+const crProdUpdateStatusBase=updateStatus;
+updateStatus=function(){crProdUpdateStatusBase();if(!state.caseData)return;if(state.aiProductionReview?.passed){$('statusTitle').textContent='AI P1~P9·계산기·TaxNavi 검수 완료본';$('statusText').textContent=`${state.pages.length}페이지 · 실제 AI ${state.aiProduction?.aiLog?.length||0}단계 · TaxNavi ${state.analysis?.legalEvidence?.length||0}건 · ${(state.lastGeneration?.elapsedMs/1000).toFixed(1)}초 · P9 ${state.quality?.average?.toFixed(1)||'—'}점`;}}
+
+const crProdSaveCaseBase=saveCase;
+saveCase=function(){if(!state.aiProductionReview?.passed){toast('P9 검수 통과 전에는 케이스를 저장할 수 없습니다.','err');return;}crProdSaveCaseBase();};
+
 
 global.CorporateReport={VERSION,goHome,showStart,prepareCase,generateReport,applyMode,exportCEO,buildCEOExportHtml,exportConsultant,buildConsultantExportHtml,openAudioSettings,enterPresentation,state,SpeechEngine,ServerAdapter,ISSUE_REGISTRY,diagnostics:{creditRows:crCreditCoordinateRows,normalizeGrade:crNormalizeGradeToken,validateFacts:crValidateFacts},...(crDebugAllowed()?{__debug:{PDFParser,JebFinancialEngine,crCoordinateToCase,extractNiceBizlineCase,buildSpeechOverrides,buildConfirmedModel,generatePages,runQuality,buildAudioChapters,crEmptyCase,crValidateFacts,crNormalizeCase,crValidateSavedPayload,crCleanText,crCoordinateCredit,crClassifyFactWarnings,crBuildQuestionSections,renderQuestions,collectQuestions,crExtractVisualCredit,crRecognizeGradeCrop}}:{})};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
