@@ -26,6 +26,22 @@
  * Browser:
  *   window.NiceBizlineExtractor.extractNiceBizline(pages)
  */
+/* ★ [2026-08-01] NICE BizLINE 폰트 CMap 결함 보정
+   '+'와 '-'가 모두 U+0000(널문자)으로 추출된다. 글리프 '폭'으로 구분한다.
+   실측: '+' width 6.58 / '-' width 4.54  → 임계 5.5
+   폭 정보가 없으면 부호를 만들지 않고 제거한다(추정 금지). */
+const CR_NULL_PLUS_MIN_WIDTH=5.5;
+function crNullGlyphSign(width){
+ const w=Number(width);
+ if(!Number.isFinite(w)||w<=0)return '';
+ return w>=CR_NULL_PLUS_MIN_WIDTH?'+':'-';
+}
+function crFixNullGlyph(str,width){
+ let v=String(str||'');
+ if(v.indexOf('\u0000')<0)return v;
+ const sign=crNullGlyphSign(width);
+ return sign?v.replace(/\u0000/g,sign):v.replace(/\u0000/g,'');
+}
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -2028,6 +2044,57 @@ function exitPresentation(){
  try{qsa('[data-cr-hidden="1"]').forEach(el=>{el.style.display='';delete el.dataset.crHidden;});}catch(_e){}
 state.present=false;document.body.classList.remove('present');qsa('.report-page').forEach(x=>x.classList.remove('present-active'));}
 
+
+/* ════ [2026-08-01] 컨설턴트 정보 · 등기부등본 첨부 ════ */
+const CR_CON_KEYS=[['conCompany','company'],['conName','name'],['conTitle','title'],['conPhone','phone'],['conEmail','email']];
+function crFillConsultantForm(){
+  const m=memberInfo(), c=(state.caseData&&state.caseData.consultant)||{};
+  const def={company:c.company||m.company||'',name:c.name||m.name||'',title:c.title||m.title||'',phone:c.phone||'',email:c.email||''};
+  for(const [id,k] of CR_CON_KEYS){const el=$(id);if(el)el.value=def[k]||'';}
+}
+function crSaveConsultant(){
+  const o={};
+  for(const [id,k] of CR_CON_KEYS){const el=$(id);o[k]=el?String(el.value||'').trim():'';}
+  if(state.caseData)state.caseData.consultant=o;
+  state.consultant=o;
+  closeModal('consultantModal');
+  toast('컨설턴트 정보를 저장했습니다. 리포트 재생성 시 표지·마지막 장에 반영됩니다.','ok');
+}
+async function crHandleRegistry(file){
+  const box=$('registryStatus'); if(!file)return;
+  const setMsg=(html,color)=>{if(box){box.innerHTML=html;box.style.color=color||'#475569';}};
+  setMsg('등기부등본을 분석하고 있습니다…');
+  try{
+    const pdfjs=await ensurePdfJs();
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjs.getDocument({data:buf}).promise;
+    const pageTexts=[];
+    for(let i=1;i<=pdf.numPages;i++){
+      const tc=await (await pdf.getPage(i)).getTextContent();
+      pageTexts.push((tc.items||[]).map(x=>crFixNullGlyph(String(x.str||''),Number(x.width||0))).join(' '));
+    }
+    const all=pageTexts.join('\n');
+    if(all.replace(/\s/g,'').length<200)throw new Error('텍스트를 추출할 수 없습니다. 스캔·이미지 PDF는 지원하지 않습니다.');
+    if(!/등기사항|등기번호/.test(all))throw new Error('등기사항증명서가 아닙니다. 파일을 다시 확인해 주세요.');
+    /* 말소사항 포함 여부 — 취소선 문구 또는 변경/말소 이력 존재로 판정 */
+    const hasHistory=/말소사항\s*포함/.test(all)||/(변경|말소|퇴임|사임|중임|임기만료)/.test(all);
+    if(!hasHistory)throw new Error('현재사항만 발급되었습니다. 「말소사항 포함」으로 다시 열람해 주세요.');
+    /* 동일 법인 대조 */
+    const cur=(state.caseData&&state.caseData.profile)||{};
+    const nm=String(cur.companyName||cur.displayName||'').replace(/[()주식회사\s]/g,'');
+    if(nm && all.replace(/\s/g,'').indexOf(nm)<0){
+      setMsg('⚠️ 재무보고서와 <b>다른 법인</b>의 등기부일 수 있습니다. 상호를 확인해 주세요.','#B91C1C');
+    }
+    state.registry={fileName:file.name,pages:pdf.numPages,text:all,pageTexts,attachedAt:new Date().toISOString()};
+    if(state.caseData)state.caseData.registry={fileName:file.name,pages:pdf.numPages,attachedAt:state.registry.attachedAt};
+    setMsg('✅ 등기부 첨부 완료 — '+esc(file.name)+' ('+pdf.numPages+'p). 리포트 생성 시 임원·자본금 이력이 반영됩니다.','#0F6E56');
+    toast('등기부등본을 첨부했습니다.','ok');
+  }catch(e){
+    console.error('등기부 분석 실패:',e);
+    setMsg('❌ '+esc(e.message||'분석에 실패했습니다.'),'#B91C1C');
+    toast('등기부 첨부 실패: '+(e.message||''),'err');
+  }
+}
 function initEvents(){
  $('sampleBtn').onclick=()=>prepareCase(clone(GOLDEN_SAMPLE),{confirmed:true,autoGenerate:true});$('manualBtn').onclick=()=>{renderManualForm();openModal('manualModal');};$('manualApplyBtn').onclick=applyManual;
  $('pdfInput').onchange=e=>handlePdf(e.target.files?.[0]);const zone=$('uploadZone');['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('drag');}));['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('drag');}));zone.addEventListener('drop',e=>handlePdf(e.dataTransfer.files?.[0]));
@@ -2035,6 +2102,17 @@ function initEvents(){
  $('factsBtn').onclick=()=>{renderFactsForm();openModal('factsModal');};$('questionsBtn').onclick=()=>{renderQuestions();openModal('questionsModal');};$('regenBtn').onclick=()=>generateReport('regen');
  $('confirmFactsBtn').onclick=()=>{if(!collectFactsForm())return;closeModal('factsModal');renderQuestions();openModal('questionsModal');updateStatus();};$('confirmQuestionsBtn').onclick=()=>{if(!collectQuestions())return;closeModal('questionsModal');generateReport('answers');};
  $('qualityBtn').onclick=()=>{state.quality=runQuality();renderQualityPage();openModal('qualityModal');};$('searchBtn').onclick=()=>openModal('searchModal');$('searchGoBtn').onclick=searchAll;$('searchInput').onkeydown=e=>{if(e.key==='Enter')searchAll();};
+ /* ★ [2026-08-01] 시작화면 복귀 */
+ if($('backStartBtn'))$('backStartBtn').onclick=()=>{
+  if(state.pages&&state.pages.length&&!confirm('시작화면으로 돌아갑니다. 저장하지 않은 리포트는 사라집니다.\n계속할까요?'))return;
+  try{if(state.present)exitPresentation();}catch(_e){}
+  showStart();
+ };
+/* ★ [2026-08-01] 컨설턴트 정보 */
+ if($('consultantInfoBtn'))$('consultantInfoBtn').onclick=()=>{crFillConsultantForm();openModal('consultantModal');};
+ if($('consultantSaveBtn'))$('consultantSaveBtn').onclick=crSaveConsultant;
+/* ★ [2026-08-01] 등기부등본 선택 첨부 */
+ if($('registryInput'))$('registryInput').onchange=e=>crHandleRegistry(e.target.files?.[0]);
  $('printBtn').onclick=()=>window.print();$('exportBtn').onclick=exportCEO;$('saveCaseBtn').onclick=saveCase;$('loadCaseBtn').onclick=()=>$('caseFileInput').click();$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
  $('drawerBackdrop').onclick=closeNotes;$('notesClose').onclick=closeNotes;qsa('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
  $('presPrev').onclick=()=>movePresentation(-1);$('presNext').onclick=()=>movePresentation(1);$('presExit').onclick=exitPresentation;
@@ -3129,7 +3207,7 @@ function finVerify(D){
   const pages=[],pageObjects=[],pageTexts=[];
   for(let p=1;p<=pdf.numPages;p++){
    const tc=await (await pdf.getPage(p)).getTextContent();
-   let items=(tc.items||[]).filter(i=>i.str&&i.str.trim()).map(i=>({s:String(i.str).trim(),x:Math.round((i.transform||[])[4]||0),y:Math.round((i.transform||[])[5]||0),w:Math.round(i.width||0)})).sort((a,b)=>b.y-a.y||a.x-b.x);
+   let items=(tc.items||[]).map(i=>({s:crFixNullGlyph(String(i.str||''),Number(i.width||0)).trim(),x:Math.round((i.transform||[])[4]||0),y:Math.round((i.transform||[])[5]||0),w:Math.round(i.width||0)})).filter(i=>i.s).sort((a,b)=>b.y-a.y||a.x-b.x);   /* ★ [2026-08-01] 널글리프(+,-) 복원 후 필터 */
    items=finPreparePage(items);
    pages.push(items);const text=layoutText(items);pageTexts.push(text);pageObjects.push({pageNumber:p,text});
   }
@@ -3589,22 +3667,6 @@ function crWirePurposeFlow(){const btn=$('confirmQuestionsBtn');if(!btn)return;b
  * ========================================================================== */
 const CR_FINAL_ENGINE_VERSION='2.1.0-final-20260801';
 
-/* ★ [2026-08-01] NICE BizLINE 폰트 CMap 결함 보정
-   '+'와 '-'가 모두 U+0000(널문자)으로 추출된다. 글리프 '폭'으로 구분한다.
-   실측: '+' width 6.58 / '-' width 4.54  → 임계 5.5
-   폭 정보가 없으면 부호를 만들지 않고 제거한다(추정 금지). */
-const CR_NULL_PLUS_MIN_WIDTH=5.5;
-function crNullGlyphSign(width){
- const w=Number(width);
- if(!Number.isFinite(w)||w<=0)return '';
- return w>=CR_NULL_PLUS_MIN_WIDTH?'+':'-';
-}
-function crFixNullGlyph(str,width){
- let v=String(str||'');
- if(v.indexOf('\u0000')<0)return v;
- const sign=crNullGlyphSign(width);
- return sign?v.replace(/\u0000/g,sign):v.replace(/\u0000/g,'');
-}
 function crNormalizeGradeToken(value){
  const compact=String(value||'').toUpperCase().replace(/\s+/g,'').replace(/[‐‑‒–—−]/g,'-');
  const m=compact.match(/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/);
