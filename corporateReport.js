@@ -1272,12 +1272,17 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 (function(global){
 'use strict';
 
-const VERSION='3.0.0-ai-p1p9-taxnavi-premium-tts-final';
+const VERSION='3.0.1-credit-ai-endpoint-errorfix-final';
 const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
   corporate:global.CORPORATE_REPORT_API_URL||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/corporateReportApi'
 };
+const CORPORATE_ENDPOINTS=[...new Set([
+  global.CORPORATE_REPORT_API_URL,
+  (location.origin&&location.origin!=='null')?location.origin.replace(/\/$/,'')+'/api/corporate-report':null,
+  ENDPOINTS.corporate
+].filter(Boolean))];
 const TRUSTED_ORIGINS=new Set([location.origin,'https://jarvia.co.kr','https://www.jarvia.co.kr','https://kfpc0808.github.io']);
 const $=id=>document.getElementById(id);
 const qs=(s,r=document)=>r.querySelector(s);
@@ -1331,21 +1336,61 @@ function requestTokenFromOpener(){return new Promise(resolve=>{
   addEventListener('message',onMsg);try{window.opener.postMessage({type:'jbAuthToken',reqId},parentOrigin());}catch(_e){removeEventListener('message',onMsg);resolve(null);return;}
   setTimeout(()=>{if(!done){removeEventListener('message',onMsg);resolve(null);}},4000);
 });}
-async function getIdToken(force=false){if(!force&&state.idToken&&Date.now()<state.idTokenExp)return state.idToken;const t=await requestTokenFromOpener();if(t){state.idToken=t;state.idTokenExp=Date.now()+45*60*1000;}return t||null;}
+async function tokenFromCurrentPage(force=false){
+  const users=[];
+  try{if(global.firebase&&typeof global.firebase.auth==='function')users.push(global.firebase.auth()?.currentUser);}catch(_e){}
+  try{users.push(global.auth?.currentUser);}catch(_e){}
+  try{users.push(global.firebaseAuth?.currentUser);}catch(_e){}
+  try{users.push(global.jbAuth?.currentUser);}catch(_e){}
+  for(const user of users.filter(Boolean)){
+    try{if(typeof user.getIdToken==='function'){const token=await user.getIdToken(!!force);if(token)return String(token);}}catch(_e){}
+  }
+  try{if(typeof global.getJarviaIdToken==='function'){const token=await global.getJarviaIdToken(!!force);if(token)return String(token);}}catch(_e){}
+  return null;
+}
+async function getIdToken(force=false){
+  if(!force&&state.idToken&&Date.now()<state.idTokenExp)return state.idToken;
+  let t=await tokenFromCurrentPage(force);
+  if(!t)t=await requestTokenFromOpener();
+  if(t){state.idToken=t;state.idTokenExp=Date.now()+45*60*1000;}
+  return t||null;
+}
 async function serverCall(endpoint,payload,timeout=180000){
   const token=await getIdToken(false);const headers={'content-type':'application/json'};if(token)headers.authorization='Bearer '+token;
   const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),timeout);
   try{
     let r=await fetch(endpoint,{method:'POST',headers,body:JSON.stringify(payload),signal:ac.signal});
     if(r.status===401&&token){const t2=await getIdToken(true);if(t2){headers.authorization='Bearer '+t2;r=await fetch(endpoint,{method:'POST',headers,body:JSON.stringify(payload),signal:ac.signal});}}
-    const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.message||data.error||('HTTP '+r.status));return data;
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(r.status===401&&!headers.authorization)throw new Error('AI 서버 인증토큰을 가져오지 못했습니다. JARVIA 로그인 상태에서 다시 열거나 현재 페이지 Firebase 인증 연결을 확인해 주세요.');
+      throw new Error(data.message||data.error||('HTTP '+r.status));
+    }
+    return data;
   }finally{clearTimeout(timer);}
+}
+async function corporateCall(payload,timeout=180000){
+  const errors=[];
+  for(const endpoint of CORPORATE_ENDPOINTS){
+    try{
+      const out=await serverCall(endpoint,payload,timeout);
+      if(out&&out.ok===false&&out.error)throw new Error(out.error);
+      ENDPOINTS.corporate=endpoint;
+      return out;
+    }catch(error){
+      errors.push(`${endpoint} → ${error?.message||error}`);
+    }
+  }
+  const err=new Error('corporateReportApi 연결 실패. 서버 함수가 배포되지 않았거나 CORS·Firebase Hosting rewrite가 설정되지 않았습니다. '+errors.join(' / '));
+  err.code='CORPORATE_API_UNAVAILABLE';
+  throw err;
 }
 const ServerAdapter={
   async extractFinancial(text){const t=String(text||'').trim();return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:t.slice(0,120000)});},
-  async legalSearch(issue){try{const out=await serverCall(ENDPOINTS.corporate,{action:'legalSearch',issueId:issue.id,queries:issue.evidenceQueries||[]},120000);state.live.taxnavi=true;return out;}catch(e){return {ok:false,pending:true,error:e.message,results:[]};}},
-  async tts(script){try{const out=await serverCall(ENDPOINTS.corporate,{action:'tts',script,caseId:state.caseData?.meta?.caseId},240000);state.live.tts=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}},
-  async runAI(action,payload,timeout=360000){try{const out=await serverCall(ENDPOINTS.corporate,{action,payload},timeout);state.live.ai=true;return out;}catch(e){return {ok:false,pending:true,error:e.message};}}
+  async health(){return corporateCall({action:'health',payload:{}},30000);},
+  async legalSearch(issue){try{const out=await corporateCall({action:'legalSearch',payload:{issueId:issue.id,queries:issue.evidenceQueries||[]}},120000);state.live.taxnavi=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message,results:[]};}},
+  async tts(script){try{const out=await corporateCall({action:'tts',payload:{script,caseId:state.caseData?.meta?.caseId}},240000);state.live.tts=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message};}},
+  async runAI(action,payload,timeout=360000){try{const out=await corporateCall({action,payload},timeout);state.live.ai=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message,code:e.code||'AI_API_ERROR'};}}
 };
 
 function loadScript(src){return new Promise((resolve,reject)=>{if(qs('script[data-src="'+src+'"]')){resolve();return;}const s=document.createElement('script');s.src=src;s.dataset.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('외부 라이브러리를 불러오지 못했습니다.'));document.head.appendChild(s);});}
@@ -2623,6 +2668,13 @@ function finGlue(items){
       p.s='-'+s; p.w=(raw.x+raw.w)-p.x;                     /* 음수 부호 결합 — 단독 '-'(값 없음 표기)는 gap이 커서 보존 */
       continue;
     }
+    /* 신용등급 부호 결합 — NICE PDF는 BB와 +를 별도 글자로 내보내는 경우가 있다.
+       이 결합이 없으면 BB+가 BB로 축약되어 원문 등급이 훼손된다. */
+    if(p&&/^(?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D|R|NR|EW)$/i.test(String(p.s).trim())
+       &&/^[+-]$/.test(s)&&Math.abs(p.y-raw.y)<=5&&(raw.x-(p.x+p.w))<=12){
+      p.s=String(p.s).trim()+s; p.w=(raw.x+raw.w)-p.x;
+      continue;
+    }
     if(p&&/^\(/.test(p.s)&&!p.s.includes(')')&&/[가-힣]/.test(p.s)&&/[가-힣]/.test(s)&&Math.abs(p.y-raw.y)<=2&&(raw.x-(p.x+p.w))<=8){
       p.s+=s; p.w=(raw.x+raw.w)-p.x;                        /* ★ 미완 괄호 라벨 뒷조각 병합 — '(매출채권,'+'공사/영업미수금)'. 한글 조각만, 숫자 병합 금지 원칙 유지 (2026-07-21) */
       continue;
@@ -3095,7 +3147,7 @@ function crDateISO(v){const m=String(v||'').match(/((?:19|20)\d{2})\D{0,8}(\d{1,
 function crCoordinateCredit(out){
  const gradeRe=/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/i;
  for(const pg of out?.coordPages||[]){
-  if(!/기업평가등급\s*이력/.test(pg.text||''))continue;
+  if(!/기업\s*평가\s*등급(?:\s*이력)?/.test(pg.text||''))continue;
   const header=(pg||[]).filter(i=>String(i.s).replace(/\s+/g,'')==='등급').sort((a,b)=>b.y-a.y)[0];
   if(!header)continue;
   const below=(pg||[]).filter(i=>i.y<header.y-2&&i.x<header.x+90);
@@ -3399,9 +3451,9 @@ const crCoordinateCreditV192Base=crCoordinateCredit;
 crCoordinateCredit=function(out){
  const gradePattern='AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW';
  for(const pg of out?.coordPages||[]){
-  if(!/기업평가등급\s*이력/.test(pg.text||''))continue;
+  if(!/기업\s*평가\s*등급(?:\s*이력)?/.test(pg.text||''))continue;
   const compact=String(pg.text||'').replace(/\s+/g,' ');
-  const textMatch=compact.match(new RegExp(`\\b(${gradePattern})\\s+(?=20\\d{2}[.\\-/])`,'i'));if(textMatch)return textMatch[1].replace(/\s+/g,'').toUpperCase();
+  const textMatch=compact.match(new RegExp(`\\b(${gradePattern})\\s+(?=20\\d{2}[.\\/-])`,'i'));if(textMatch)return textMatch[1].replace(/\s+/g,'').toUpperCase();
   const header=(pg||[]).filter(i=>String(i.s).replace(/\s+/g,'')==='등급').sort((a,b)=>b.y-a.y)[0];if(!header)continue;
   const candidates=(pg||[]).filter(i=>i.y<header.y-1&&i.x>=header.x-15&&i.x<header.x+95).sort((a,b)=>b.y-a.y||a.x-b.x);
   for(const item of candidates){const raw=String(item.s).trim().replace(/\s+/g,'');if(!new RegExp(`^(${gradePattern})$`,'i').test(raw))continue;if(/[+-]$/.test(raw))return raw.toUpperCase();const sign=(pg||[]).filter(s=>/^[+-]$/.test(String(s.s).trim())&&Math.abs(s.y-item.y)<=7&&s.x>=item.x&&s.x-item.x<45).sort((a,b)=>Math.abs(a.y-item.y)-Math.abs(b.y-item.y)||a.x-b.x)[0];if(sign)return (raw+String(sign.s).trim()).toUpperCase();return raw.toUpperCase();}
@@ -3537,23 +3589,46 @@ function crNormalizeGradeToken(value){
 }
 function crNormalizeCashFlowGrade(value){const m=String(value||'').toUpperCase().replace(/\s+/g,'').match(/^CF[1-6]$/);return m?m[0]:'';}
 function crCreditCoordinateRows(out){
- const history=[];
- for(const [pageIndex,pg] of (out?.coordPages||[]).entries()){
+ const history=[],gradePattern='AAA|AA|A|BBB|BB|B|CCC|CC|C|D|R|NR|EW';
+ const pages=out?.coordPages||[];
+ for(const [pageIndex,pg] of pages.entries()){
+  const sourcePage=out?.pageObjects?.[pageIndex]?.pageNumber||pageIndex+1;
   const pageText=out?.pageObjects?.[pageIndex]?.text||pg.text||'';
-  if(!/기업평가등급\s*이력/.test(pageText))continue;
+  if(!/기업\s*평가\s*등급(?:\s*이력)?/.test(pageText))continue;
+
+  /* 1차: 레이아웃 문자열에서 부호를 포함해 직접 복원한다.
+     BB + 2026.03.18처럼 부호가 별도 토큰이어도 허용한다. */
+  const directRe=new RegExp(`\\b(${gradePattern})\\s*([+-]?)\\s+(20\\d{2}[.\\/-]\\d{2}[.\\/-]\\d{2})\\s+(20\\d{2}[.\\/-]\\d{2}[.\\/-]\\d{2})\\s+([^\\n]+)`,'gi');
+  let dm;
+  while((dm=directRe.exec(pageText))){
+   const grade=crNormalizeGradeToken(dm[1]+(dm[2]||''));if(!grade)continue;
+   history.push({grade,evaluationDate:String(dm[3]).replace(/[.\\/]/g,'-'),financialDate:String(dm[4]).replace(/[.\\/]/g,'-'),ratingType:String(dm[5]||'모형등급').trim(),sourcePage,status:'textExact'});
+  }
+
+  /* 2차: 좌표 행 복원. 글자별 y 기준선 차이를 고려해 8pt 허용하고,
+     첫 평가일자 왼쪽의 모든 토큰을 붙여 등급을 만든다. */
   const rows=[];
-  for(const item of pg){let row=rows.find(r=>Math.abs(r.y-item.y)<=4.5);if(!row){row={y:item.y,items:[]};rows.push(row);}row.items.push(item);}
-  for(const row of rows.sort((a,b)=>b.y-a.y)){
-   const items=row.items.sort((a,b)=>a.x-b.x),dates=items.filter(x=>/^20\d{2}[.\-/]\d{2}[.\-/]\d{2}$/.test(String(x.s).trim()));
+  for(const item of pg||[]){
+   const y=Number(item.y);if(!Number.isFinite(y))continue;
+   let row=rows.find(r=>Math.abs(r.y-y)<=8);
+   if(!row){row={y,items:[]};rows.push(row);}
+   row.items.push(item);row.y=row.items.reduce((sum,x)=>sum+Number(x.y||0),0)/row.items.length;
+  }
+  for(const row of rows){
+   const items=row.items.slice().sort((a,b)=>Number(a.x||0)-Number(b.x||0));
+   const dates=items.filter(x=>/^20\d{2}[.\\/-]\d{2}[.\\/-]\d{2}$/.test(String(x.s||'').trim()));
    if(dates.length<2)continue;
    const firstDate=dates[0],secondDate=dates[1];
-   const gradeRaw=items.filter(x=>x.x<firstDate.x-2).map(x=>String(x.s).trim()).join('');
+   const gradeRaw=items.filter(x=>Number(x.x||0)<Number(firstDate.x||0)-1).map(x=>String(x.s||'').trim()).join('');
    const grade=crNormalizeGradeToken(gradeRaw);if(!grade)continue;
-   const ratingType=items.filter(x=>x.x>secondDate.x+secondDate.w+2).map(x=>String(x.s).trim()).join(' ').trim()||'모형등급';
-   history.push({grade,evaluationDate:String(firstDate.s).replace(/\./g,'-'),financialDate:String(secondDate.s).replace(/\./g,'-'),ratingType,sourcePage:pageIndex+1,status:'coordinateExact'});
+   const ratingType=items.filter(x=>Number(x.x||0)>Number(secondDate.x||0)+Number(secondDate.w||0)+1).map(x=>String(x.s||'').trim()).join(' ').trim()||'모형등급';
+   history.push({grade,evaluationDate:String(firstDate.s).replace(/[.\\/]/g,'-'),financialDate:String(secondDate.s).replace(/[.\\/]/g,'-'),ratingType,sourcePage,status:'coordinateExact'});
   }
  }
- const uniq=[];for(const x of history){if(!uniq.some(y=>y.grade===x.grade&&y.evaluationDate===x.evaluationDate&&y.financialDate===x.financialDate))uniq.push(x);}
+ const uniq=[];
+ for(const x of history){
+  if(!uniq.some(y=>y.grade===x.grade&&y.evaluationDate===x.evaluationDate&&y.financialDate===x.financialDate))uniq.push(x);
+ }
  return uniq.sort((a,b)=>String(b.evaluationDate).localeCompare(String(a.evaluationDate)));
 }
 function crCreditBundle(out,baseCredit){
@@ -3738,11 +3813,11 @@ init=function(){crInitV210Base();crWireFinalEvents();crReadAudioSettings();};
 
 
 /* ============================================================================
- * v3.0.0 PRODUCTION AI PIPELINE PATCH
+ * v3.0.1 PRODUCTION AI PIPELINE + CREDIT/API ERRORFIX
  * 실제 P1~P9 AI · 계산기 주입 · TaxNavi 근거 · 독립 검수 · 프리미엄 MP3
  * 로컬 템플릿은 최종완성본으로 대체하지 않으며 서버 실패 시 생성·저장을 차단한다.
  * ========================================================================== */
-const CR_PRODUCTION_VERSION='3.0.0-ai-p1p9-20260801';
+const CR_PRODUCTION_VERSION='3.0.1-credit-ai-endpoint-fix-20260801';
 state.aiProduction=null;state.aiProductionReview=null;state.audioAssets=null;state.localOnly=false;
 
 function crProdLockedFacts(data){
@@ -3784,7 +3859,18 @@ crWirePurposeFlow=function(){const btn=$('confirmQuestionsBtn');if(!btn)return;b
   if(!crPurposeComplete(a)){toast('리포트 제작목적을 먼저 선택하거나 직접 입력해 주세요.','err');return;}
   btn.disabled=true;btn.textContent='AI가 목적과 맞춤질문을 생성하는 중…';
   try{a.reportPurposeProfile=await crInterpretPurposeWithAI();a.questionnaireMeta={...(a.questionnaireMeta||{}),purposeVersion:CR_PRODUCTION_VERSION,purposeInterpretedAt:nowIso(),source:'SERVER_AI'};state.analysis=buildConfirmedModel(state.caseData);state.questionsConfirmed=false;renderQuestions();toast('실제 AI가 제작목적에 맞는 질문을 구성했습니다.','ok');}
-  catch(error){toast('AI 목적해석 실패: '+error.message,'err');a.reportPurposeProfile=null;delete a.aiQuestionSections;}
+  catch(error){
+    const message=error?.message||String(error);
+    toast('AI 목적해석 실패: '+message,'err');
+    a.reportPurposeProfile=null;delete a.aiQuestionSections;
+    a.questionnaireMeta={...(a.questionnaireMeta||{}),lastPurposeError:message,lastPurposeErrorAt:nowIso()};
+    const root=$('questionsBody');
+    if(root){
+      let box=root.querySelector('.purpose-api-error');
+      if(!box){box=document.createElement('div');box.className='purpose-api-error notice red';root.prepend(box);}
+      box.innerHTML=`<b>AI 서버 연결 오류</b><p>${esc(message)}</p><p>입력한 제작목적은 보존되었습니다. corporateReportApi 배포와 CORS·Hosting rewrite를 확인한 뒤 같은 버튼을 다시 누르십시오.</p>`;
+    }
+  }
   finally{btn.disabled=false;btn.textContent=a.reportPurposeProfile?'답변 확인·AI 리포트 생성':'목적 분석·맞춤질문 구성';}
   return;
  }
