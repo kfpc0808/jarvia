@@ -1859,7 +1859,7 @@ function crRegIssueBlock(issueId){
   const par=R.par||[], rows=[];
   if(issueId==='EXECUTIVE_RETIREMENT'||issueId==='KEY_PERSON'){
     if(ceo)rows.push(['대표이사 근속',`${esc(ceo.name)} · <b>${crRegTenure(ceo.since)}</b> (${esc(ceo.since)} ${esc(ceo.type)})`]);
-    if(R.current.length)rows.push(['현직 임원',R.current.map(o=>`${esc(o.role)} ${esc(o.name)}(${crRegTenure(o.since)})`).join(' · ')]);
+    if(R.current.length){const _bn={};R.current.forEach(o=>{(_bn[o.name]=_bn[o.name]||[]).push(o);});rows.push(['현직 임원',Object.entries(_bn).map(([n,os])=>`${esc(n)}(${os.map(x=>esc(x.role)).join('·')} · ${crRegTenure(os[0].since)})`).join(' · ')]);}
     if(R.overdueOfficers.length)rows.push(['임기 경과',`<b>${R.overdueOfficers.map(o=>esc(o.role)+' '+esc(o.name)).join(' · ')}</b> — 중임등기 확인 필요(상법 3년 기준 추정)`]);
   }
   if(issueId==='SUCCESSION'||issueId==='KEY_PERSON'){
@@ -3020,7 +3020,11 @@ function crRegistrySummaryHtml(R){
   const cap0=R.capital.length?R.capital[0]:null;
   const par=R.par.length?R.par:[];
   const rows=[];
-  rows.push(['현직 임원', R.current.length?R.current.map(o=>`${o.role} <b>${esc(o.name)}</b>`).join(' · '):'확인 필요']);
+  /* ★ 겸직(대표이사+사내이사 등)은 이름이 두 번 나오지 않도록 묶는다 */
+  const _byName={}; R.current.forEach(o=>{(_byName[o.name]=_byName[o.name]||[]).push(o.role);});
+  rows.push(['현직 임원', Object.keys(_byName).length
+    ? Object.entries(_byName).map(([n,rs])=>`<b>${esc(n)}</b>(${rs.map(esc).join('·')})`).join(' · ')
+    : '확인 필요']);
   if(ceo)rows.push(['대표이사 근속', `<b>${crRegTenure(ceo.since)}</b> <span class="rg-dim">(${esc(ceo.since)} ${esc(ceo.type)})</span>`]);
   if(R.ceoTerms)rows.push(['대표이사 취임 이력', `<b>${R.ceoTerms}회</b>`]);
   if(cap0&&cap)rows.push(['자본금', `${cap0.capital.toLocaleString()}원 → <b>${cap.capital.toLocaleString()}원</b> <span class="rg-dim">(변동 ${R.capital.length}건)</span>`]);
@@ -3036,7 +3040,7 @@ function crRegistrySummaryHtml(R){
   if(auth&&cap)rows.push(['발행가능주식', `${auth.shares.toLocaleString()}주 <span class="rg-dim">(사용 ${(cap.shares/auth.shares*100).toFixed(1)}% · 증자 여력 ${(auth.shares-cap.shares).toLocaleString()}주)</span>`]);
   if(R.nameHistory.length>1)rows.push(['상호 변경', `${R.nameHistory.length-1}회 — ${R.nameHistory.map(x=>esc(x.name.replace(/\s*\(.*$/,''))).join(' → ')}`]);
   if(R.addressHistory.length>1)rows.push(['본점 이전', `<b>${R.addressHistory.length-1}회</b> <span class="rg-dim">현재 ${esc(String(R.addressHistory[R.addressHistory.length-1].addr).slice(0,34))}</span>`]);
-  if(R.purposes.length)rows.push(['목적사업', `<b>${R.purposes.length}개</b> <span class="rg-dim">${esc(R.purposes.slice(0,3).join(' · '))} 외</span>`]);
+  if(R.purposes.length)rows.push(['목적사업', `<b>${R.purposes.length}개</b> <span class="rg-dim">(현행 · 말소분 제외) ${esc(R.purposes.slice(0,3).join(' · '))} 외</span>`]);
   if(R.capitalDecrease.length)rows.push(['자본금 감소', `<b>${R.capitalDecrease.length}회</b> — 감자 이력 확인 필요`]);
   if(R.classShares.length)rows.push(['종류주식', R.classShares.map(x=>esc(x.type)+' '+x.shares.toLocaleString()+'주').join(' · ')]);
   if(R.bonds.length)rows.push(['사채 발행', R.bonds.map(x=>esc(x.type)+' '+x.amount.toLocaleString()+'원').join(' · ')]);
@@ -5188,7 +5192,9 @@ generateReport=async function(reason='production-ai'){
     progress(false);
     state.aiProduction=null;state.aiProductionReview=null;
     await crGenerateReportV210Base('rule-based');
-    toast('규칙 기반 리포트를 생성했습니다. (AI 보강 대기)','ok');
+    state.generationMode='rule';
+  try{ const _st=$('statusTitle'); if(_st)_st.textContent='규칙 기반 생성본 (AI 문맥보강 대기)'; }catch(_e){}
+  toast('규칙 기반으로 생성했습니다 — 확정 팩트·계산기·등기부 기준. AI 문맥보강은 준비 중입니다.','ok');
     return;
   }
   crProdProgressLogs(out);
