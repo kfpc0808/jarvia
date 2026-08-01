@@ -1794,8 +1794,48 @@ function pageShell({id,title,subtitle='',section='CORPORATE REPORT',visibility='
 }
 function addPage(spec){const p=pageShell(spec);state.pages.push(p);return p;}
 function issueFlow(issue){return `<div class="issue-flow"><article class="fact"><span>01</span><h3>확인된 팩트</h3>${list(issue.facts)}</article><article class="meaning"><span>02</span><h3>경영상 의미</h3><p>${esc(issue.meaning)}</p></article><article class="risk"><span>03</span><h3>방치 시 위험</h3>${list(issue.risks)}</article><article class="benefit"><span>04</span><h3>해결 방향</h3>${list(issue.solutions)}</article><article class="decision"><span>05</span><h3>결정·계약 연결</h3><p><b>유료컨설팅:</b> ${esc(issue.consulting||'정밀진단')}</p><p><b>보험 검토:</b> ${esc(issue.insurance||'추가 확인 후 판단')}</p></article></div>`;}
+/* ════ [2026-08-01] 등기부 → 리포트 본문 반영 ════ */
+const CR_REG_ISSUES={EXECUTIVE_RETIREMENT:1,SUCCESSION:1,KEY_PERSON:1,CAPITAL_TRANSACTIONS:1,CAPITAL_POLICY:1};
+function crRegData(){return (state.registry&&state.registry.parsed)||(state.caseData&&state.caseData.registryParsed)||null;}
+function crRegIssueBlock(issueId){
+  if(!CR_REG_ISSUES[issueId])return '';
+  const R=crRegData();
+  if(!R)return `<div class="notice"><b>등기부 확인 시 산출 가능</b>임원 근속·경영권 변동·자본금 이력은 법인 등기사항증명서(말소사항 포함)로 확정됩니다. 다음 미팅 자료요청에 포함했습니다.</div>`;
+  const ceo=R.current.find(o=>o.role==='대표이사');
+  const cap=R.capital.length?R.capital[R.capital.length-1]:null, cap0=R.capital.length?R.capital[0]:null;
+  const par=R.par||[], rows=[];
+  if(issueId==='EXECUTIVE_RETIREMENT'||issueId==='KEY_PERSON'){
+    if(ceo)rows.push(['대표이사 근속',`${esc(ceo.name)} · <b>${crRegTenure(ceo.since)}</b> (${esc(ceo.since)} ${esc(ceo.type)})`]);
+    if(R.current.length)rows.push(['현직 임원',R.current.map(o=>`${esc(o.role)} ${esc(o.name)}(${crRegTenure(o.since)})`).join(' · ')]);
+  }
+  if(issueId==='SUCCESSION'||issueId==='KEY_PERSON'){
+    if(R.ceoTerms)rows.push(['대표이사 취임 이력',`<b>${R.ceoTerms}회</b> — 경영권 안정성 확인 필요`]);
+  }
+  if(issueId==='CAPITAL_TRANSACTIONS'||issueId==='CAPITAL_POLICY'||issueId==='SUCCESSION'){
+    if(cap0&&cap)rows.push(['자본금 변동',`${cap0.capital.toLocaleString()}원 → <b>${cap.capital.toLocaleString()}원</b> (${R.capital.length}건)`]);
+    if(cap)rows.push(['발행주식총수',`<b>${cap.shares.toLocaleString()}주</b>`]);
+    if(par.length>1)rows.push(['액면가',`${par[0].amount.toLocaleString()}원 → <b>${par[par.length-1].amount.toLocaleString()}원</b> (${esc(par[par.length-1].date||'')})`]);
+    if(R.stockOption)rows.push(['주식매수선택권','<b>설정 있음</b> — 지분 희석 가능성 확인']);
+  }
+  if(!rows.length)return '';
+  return `<div class="source-box reg-src"><b>등기부 확인사항</b><div class="rs-grid">${rows.map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div><em>출처: 법인 등기사항증명서(말소사항 포함) · 개인정보는 저장하지 않습니다</em></div>`;
+}
+function crRegistryPage(){
+  const R=crRegData(); if(!R)return;
+  const ceo=R.current.find(o=>o.role==='대표이사');
+  const off=R.current.map(o=>`<tr><td>${esc(o.role)}</td><td><b>${esc(o.name)}</b></td><td>${esc(o.since)} ${esc(o.type)}</td><td>${crRegTenure(o.since)}</td><td>${esc(o.firstAppointed)}</td></tr>`).join('');
+  const cap=R.capital.map(c=>`<tr><td>${esc(c.date||'설립')}</td><td>${c.shares.toLocaleString()}주</td><td>${c.capital.toLocaleString()}원</td></tr>`).join('');
+  const par=(R.par||[]).map(x=>`${esc(x.date||'설립')} ${x.amount.toLocaleString()}원`).join(' → ');
+  addPage({id:'registry',title:'법인 등기 확인사항',subtitle:'임원 근속·경영권 변동·자본거래 이력을 등기부로 확정했습니다.',section:'REGISTRY',visibility:'common',summary:'등기부 확인사항',
+    body:`<div class="lead"><b>현직 임원 ${R.current.length}명 · 대표이사 취임 이력 ${R.ceoTerms}회 · 자본금 변동 ${R.capital.length}건</b>${ceo?`<p>현 대표이사 ${esc(ceo.name)}의 근속은 <b>${crRegTenure(ceo.since)}</b>이며, 임원퇴직금 예상액과 지급재원 계산의 기준이 됩니다.</p>`:''}</div>
+    <h3>현직 임원</h3><table><thead><tr><th>직위</th><th>성명</th><th>최근 등기</th><th>근속</th><th>최초 취임</th></tr></thead><tbody>${off||'<tr><td colspan="5">확인 필요</td></tr>'}</tbody></table>
+    <h3 style="margin-top:5mm">자본금·발행주식 이력</h3><table><thead><tr><th>변경일</th><th>발행주식총수</th><th>자본금</th></tr></thead><tbody>${cap||'<tr><td colspan="3">확인 필요</td></tr>'}</tbody></table>
+    ${par?`<div class="source-box"><b>액면가</b> ${par}</div>`:''}
+    ${R.stockOption?'<div class="notice amber"><b>주식매수선택권 설정 있음</b>행사 시 지분 희석과 주식가치 평가에 영향을 줄 수 있어 부여내역·행사조건 확인이 필요합니다.</div>':''}
+    <div class="notice"><b>표현 경계</b>등기부는 등기된 사실만 보여줍니다. 실제 재직·보수·퇴직금 규정은 정관·주총결의·보수자료로 별도 확인해야 합니다. 개인정보는 저장하지 않습니다.</div>`});
+}
 function issuePage(issue,index){
- const lib=SpeechEngine.get(issue.id,state.caseData);const body=`<div class="lead"><b>${esc(issue.title)} — ${esc(issue.severity)} / 근거 ${esc(issue.confidence)}</b><p>${esc(issue.meaning)}</p></div>${issueFlow(issue)}<div class="notice amber"><b>표현 경계</b>${esc(lib.guardrail||'미확인 사실은 단정하지 않습니다.')}</div><div class="source-box"><b>근거</b> ${esc(issue.facts.join(' · '))}</div>`;
+ const lib=SpeechEngine.get(issue.id,state.caseData);const body=`<div class="lead"><b>${esc(issue.title)} — ${esc(issue.severity)} / 근거 ${esc(issue.confidence)}</b><p>${esc(issue.meaning)}</p></div>${issueFlow(issue)}<div class="notice amber"><b>표현 경계</b>${esc(lib.guardrail||'미확인 사실은 단정하지 않습니다.')}</div><div class="source-box"><b>근거</b> ${esc(issue.facts.join(' · '))}</div>${crRegIssueBlock(issue.id)}`;
  return addPage({id:'issue-'+issue.id.toLowerCase(),title:issue.title,subtitle:'사실 → 의미 → 위험 → 해결 → 다음 행동의 순서로 판단합니다.',section:'CORE ISSUE '+String(index+1).padStart(2,'0'),visibility:'common',issueId:issue.id,summary:issue.meaning,body});
 }
 function solutionPage(issue,index){
@@ -1828,6 +1868,7 @@ function generatePages(model){
  state.pages=[];state.caseData=model; // page builder uses caseData profile/meta
  addPage({id:'cover',title:'표지',cover:true,visibility:'common'});
  addPage({id:'guide',title:'이 리포트는 무엇을 결정하게 하는가',subtitle:'팩트 → 계산 → 근거 → 대안 → 다음 행동의 순서로 읽습니다.',section:'REPORT GUIDE',visibility:'common',summary:'리포트의 사용 목적과 모드 구분',body:`<div class="lead"><b>재무설명이 아니라 CEO의 결정과 컨설턴트의 실행을 지원합니다.</b><p>확인된 팩트와 계산값에서 출발해 유료컨설팅·전문가 협업·보험의 역할을 구분합니다.</p></div><div class="cols3"><div class="card mint"><h3>CEO용</h3>${list(['확인된 사실과 경영적 의미','방치위험과 해결이익','A·B·C 대안','30·90·365일 결정'])}</div><div class="card consultant-only"><h3>컨설턴트용</h3>${list(['페이지별 10단 상담노트','질문·답변분기·반론','유료컨설팅과 보험기회','다음 미팅·계약전환'])}</div><div class="card amber consultant-only"><h3>음성강의용</h3>${list(['리포트 낭독 금지','숫자의 실무 의미','CEO 질문·역할극','보험을 꺼낼 시점'])}</div></div><div class="notice"><b>보험 원칙</b>위험 확인 → 필요재원 → 현재재원 → 부족재원 → 대안 비교 → 보험의 역할 순서로만 접근합니다.</div>`});
+  crRegistryPage();
  addPage({id:'toc',title:'통합 목차',subtitle:'현재 기업에 실제로 활성화된 페이지만 구성합니다.',section:'CONTENTS',visibility:'common',summary:'조건부 페이지 목차',body:`<div class="toc-grid" id="tocInside"></div><div class="notice amber"><b>조건부 생성</b>내용이 부족하면 페이지를 만들지 않으며, 미확인 사실로 페이지 수를 채우지 않습니다.</div>`});
  const r=model.calculations.ratios,c=model.financials['2025'],p=model.profile;
  const ratioClass=(v,good,warn)=>!Number.isFinite(v)?'warn':v>=good?'good':v>=warn?'warn':'bad';
@@ -1860,7 +1901,7 @@ function generatePages(model){
  const decisionRows=model.issues.map(x=>[x.title,x.severity==='CRITICAL'||x.severity==='HIGH'?'우선 권장':'조건부',documentList(x.id,model).slice(0,2).join(' · ')]).concat([['보험설계 검토','부족재원 확인 후','기존 증권·가용현금·필요재원']]);
  addPage({id:'decision-sheet',title:'CEO 의사결정 시트',subtitle:'오늘 확정할 것과 다음 확인일까지 보류할 것을 구분합니다.',section:'DECISION SHEET',visibility:'common',summary:'CEO 결재·합의 항목',body:`<table><thead><tr><th>결정항목</th><th>현재 판단</th><th>필요자료</th><th>담당자·기한</th></tr></thead><tbody>${decisionRows.map(x=>`<tr><td><b>${esc(x[0])}</b></td><td>${esc(x[1])}</td><td>${esc(x[2])}</td><td>□ 담당 ______ □ 기한 ______</td></tr>`).join('')}</tbody></table><div class="decision-bar"><b>오늘의 최소 합의</b><span>자료 담당자</span><span>제출기한</span><span>2차 미팅일</span></div>`});
  addPage({id:'next-meeting',title:'2차 미팅 운영 스크립트',subtitle:'보고서 설명을 실행합의와 계약검토로 연결합니다.',section:'CONSULTANT ONLY · NEXT MEETING',visibility:'consultant',summary:'다음 미팅 화법',body:`<div class="cols2"><div class="card mint"><h3>오프닝</h3><p>“대표님, 지난번에는 가능성을 말씀드렸고 오늘은 제출해 주신 자료로 금액과 선택지를 확인하겠습니다. 오늘 전체 실행이 아니라 우선순위와 다음 한 단계만 결정하시면 됩니다.”</p></div><div class="card"><h3>마무리</h3><p>“오늘 합의한 범위는 ○○입니다. 담당자는 ○○, 자료제출은 ○월 ○일, 다음 회의에서는 A·B·C안을 비교하겠습니다.”</p></div></div><div class="card" style="margin-top:5mm"><h3>미팅 체크</h3>${list(['확인된 숫자와 미확인 가정 분리','대표 답변을 재진술해 동의 확인','보험을 필요재원 계산보다 먼저 제시하지 않음','자료·담당자·기한·다음 미팅 중 최소 2개 확정'])}</div>`});
- addPage({id:'documents',title:'필요자료 통합 체크리스트',subtitle:'기업별 조건부 이슈에 필요한 서류만 요청합니다.',section:'DATA REQUEST',visibility:'common',summary:'필요자료',body:`<div class="cols2">${model.issues.slice(0,6).map(x=>`<div class="card"><h3>${esc(x.title)}</h3>${list(documentList(x.id))}</div>`).join('')}</div>`});
+ addPage({id:'documents',title:'필요자료 통합 체크리스트',subtitle:'기업별 조건부 이슈에 필요한 서류만 요청합니다.',section:'DATA REQUEST',visibility:'common',summary:'필요자료',body:`<div class="cols2">${model.issues.slice(0,6).map(x=>`<div class="card"><h3>${esc(x.title)}</h3>${list(documentList(x.id))}</div>`).join('')}</div>${crRegData()?'<div class="notice mint"><b>등기부 확인 완료</b>법인 등기사항증명서가 첨부되어 임원 근속·자본금 이력은 추가 요청이 불필요합니다.</div>':'<div class="notice amber"><b>추가 권장자료</b>법인 등기사항증명서(말소사항 포함) — 임원 근속·경영권 변동·자본금 이력 확정용</div>'}`});
  addPage({id:'evidence',title:'법령·예규·판례 근거 계획',subtitle:'TaxNavi는 이슈별 우선 출처를 검색하고 실무 의미만 요약합니다.',section:'EVIDENCE',visibility:'common',summary:'법률·세무 근거',body:`<table><thead><tr><th>이슈</th><th>우선 근거</th><th>검색목표</th><th>상태</th></tr></thead><tbody>${model.issues.filter(x=>['LOAN_RECEIVABLE','CAPITAL_POLICY','CAPITAL_TRANSACTIONS','SUCCESSION','KEY_PERSON'].includes(x.id)).map(x=>`<tr><td>${esc(x.title)}</td><td>${esc(x.id==='LOAN_RECEIVABLE'?'세법·예규·판례':x.id==='SUCCESSION'?'상속·증여·가업승계 법령':'상법·세법·예규')}</td><td>요건·절차·경계선·전문가 확인사항</td><td><span class="pill gold">서버 TaxNavi 연결 시 실시간</span></td></tr>`).join('')}</tbody></table><div class="notice amber"><b>베타 상태</b>현재 1차 파일에는 안전한 서버 어댑터가 포함돼 있습니다. 실제 근거검색 결과는 corporateReportApi가 index.js에 추가된 뒤 채워집니다.</div>`});
  addPage({id:'quality-page',title:'품질·한계·사용상 주의',subtitle:'정확성·모드분리·보험경계·수치일치를 최종 게이트로 검사합니다.',section:'QUALITY GATE',visibility:'consultant',summary:'품질 및 유의사항',body:`<div id="qualityPageBody"></div>`});
  const calcRows=[];const addCalc=(label,formula,value,type='계산값')=>{if(value!==null&&value!==undefined&&value!=='—'&&value!=='미확인')calcRows.push([label,formula,value,type]);};
@@ -2086,6 +2127,75 @@ function crSaveConsultant(){
   closeModal('consultantModal');
   toast('컨설턴트 정보를 저장했습니다. 리포트 재생성 시 표지·마지막 장에 반영됩니다.','ok');
 }
+/* ════ [2026-08-01] 등기부등본 파서 — 실 등기부 검증 완료 ════ */
+const CR_REG_ROLE='대표이사|사내이사|사외이사|기타비상무이사|감사위원|감사|지배인|청산인';
+const CR_REG_EV='취임|중임|사임|퇴임|임기만료|해임|사망|선임';
+function crRegPrevDate(L,i){for(let k=i;k>=Math.max(0,i-2);k--){const m=String(L[k]||'').match(/(\d{4}\.\d{2}\.\d{2})\s*변경/);if(m)return m[1];}return'';}
+function crRegNextDate(L,i){for(let k=i;k<=i+2&&k<L.length;k++){const m=String(L[k]||'').match(/(\d{4}\.\d{2}\.\d{2})\s*변경/);if(m)return m[1];}return'';}
+function crParseRegistry(lines){
+  const R={capital:[],par:[],company:{},stockOption:false,current:[],ceoTerms:0,_ev:{}};
+  let sec='',curKey='';
+  for(let i=0;i<lines.length;i++){
+    const L=String(lines[i]||'').replace(/열\s*람\s*용/g,'').replace(/열람일시[\s\S]*$/,'').trim();
+    if(!L)continue;
+    if(/임원에\s*관한\s*사항/.test(L)){sec='officer';continue;}
+    if(/지배인에\s*관한\s*사항|기\s*타\s*사\s*항|주식매수선택권/.test(L)){if(/주식매수선택권/.test(L))R.stockOption=true;sec='';}
+    if(/^등기번호/.test(L))R.company.regNo=R.company.regNo||(L.match(/(\d{4,})/)||[])[1]||'';
+    if(/^등록번호/.test(L))R.company.corpNo=R.company.corpNo||(L.match(/(\d{6}-\d{7})/)||[])[1]||'';
+    if(/회사성립연월일/.test(L)){const m=L.match(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/);if(m)R.company.established=`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;}
+    const pm=L.match(/^금\s*([\d,]+)\s*원$/)||L.match(/1주의\s*금액\s*금\s*([\d,]+)\s*원/);
+    if(pm)R.par.push({amount:+pm[1].replace(/,/g,''),date:crRegPrevDate(lines,i)||crRegNextDate(lines,i)});
+    const cm=L.match(/보통주식\s*([\d,]+)\s*주\s*금\s*([\d,]+)\s*원/);
+    if(cm)R.capital.push({shares:+cm[1].replace(/,/g,''),capital:+cm[2].replace(/,/g,''),date:crRegPrevDate(lines,i)});
+    if(sec!=='officer')continue;
+    const om=L.match(new RegExp(`^(${CR_REG_ROLE})\\s+([가-힣]{2,6})`));
+    if(om){curKey=om[1]+'|'+om[2];R._ev[curKey]=R._ev[curKey]||[];continue;}
+    const em=L.match(new RegExp(`(\\d{4})\\s*년\\s*(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일\\s*(${CR_REG_EV})`));
+    if(em&&curKey)R._ev[curKey].push({date:`${em[1]}-${String(em[2]).padStart(2,'0')}-${String(em[3]).padStart(2,'0')}`,type:em[4]});
+  }
+  for(const k of Object.keys(R._ev)){
+    const evs=R._ev[k].slice().sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+    if(!evs.length)continue;
+    const [role,name]=k.split('|');
+    if(role==='대표이사')R.ceoTerms+=evs.filter(e=>/취임/.test(e.type)).length;
+    const last=evs[evs.length-1];
+    if(/취임|중임|선임/.test(last.type)){
+      const app=evs.find(e=>/취임|선임/.test(e.type));
+      R.current.push({role,name,since:last.date,type:last.type,firstAppointed:app?app.date:last.date});
+    }
+  }
+  R.current.sort((a,b)=>b.since.localeCompare(a.since));
+  delete R._ev;
+  return R;
+}
+function crRegTenure(d){if(!d)return '—';const y=(Date.now()-new Date(d).getTime())/(365.25*864e5);if(!isFinite(y)||y<0)return '—';return `${Math.floor(y)}년 ${Math.round((y%1)*12)}개월`;}
+function crRegistrySummaryHtml(R){
+  const ceo=R.current.find(o=>o.role==='대표이사');
+  const cap=R.capital.length?R.capital[R.capital.length-1]:null;
+  const cap0=R.capital.length?R.capital[0]:null;
+  const par=R.par.length?R.par:[];
+  const rows=[];
+  rows.push(['현직 임원', R.current.length?R.current.map(o=>`${o.role} <b>${esc(o.name)}</b>`).join(' · '):'확인 필요']);
+  if(ceo)rows.push(['대표이사 근속', `<b>${crRegTenure(ceo.since)}</b> <span class="rg-dim">(${esc(ceo.since)} ${esc(ceo.type)})</span>`]);
+  if(R.ceoTerms)rows.push(['대표이사 취임 이력', `<b>${R.ceoTerms}회</b>`]);
+  if(cap0&&cap)rows.push(['자본금', `${cap0.capital.toLocaleString()}원 → <b>${cap.capital.toLocaleString()}원</b> <span class="rg-dim">(변동 ${R.capital.length}건)</span>`]);
+  if(cap)rows.push(['발행주식총수', `<b>${cap.shares.toLocaleString()}주</b>`]);
+  if(par.length>1)rows.push(['액면가', `${par[0].amount.toLocaleString()}원 → <b>${par[par.length-1].amount.toLocaleString()}원</b> <span class="rg-dim">(${esc(par[par.length-1].date||'')} 분할)</span>`]);
+  else if(par.length)rows.push(['액면가', `<b>${par[0].amount.toLocaleString()}원</b>`]);
+  rows.push(['주식매수선택권', R.stockOption?'<b>설정 있음</b>':'설정 없음']);
+  if(R.company.established)rows.push(['회사성립', esc(R.company.established)]);
+  const list=R.current.map(o=>`<tr><td>${esc(o.role)}</td><td><b>${esc(o.name)}</b></td><td>${esc(o.since)} ${esc(o.type)}</td><td>${crRegTenure(o.since)}</td></tr>`).join('');
+  const capRows=R.capital.map(c=>`<tr><td>${esc(c.date||'설립')}</td><td>${c.shares.toLocaleString()}주</td><td>${c.capital.toLocaleString()}원</td></tr>`).join('');
+  return `<div class="reg-result">
+    <div class="rg-hd">📋 등기부 분석 결과</div>
+    <div class="rg-kv">${rows.map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div>
+    <details class="rg-more"><summary>상세 보기 — 현직 임원 ${R.current.length}명 · 자본금 이력 ${R.capital.length}건</summary>
+      <table class="rg-tbl"><thead><tr><th>직위</th><th>성명</th><th>최근 등기</th><th>근속</th></tr></thead><tbody>${list||'<tr><td colspan="4">확인 필요</td></tr>'}</tbody></table>
+      <table class="rg-tbl"><thead><tr><th>변경일</th><th>발행주식</th><th>자본금</th></tr></thead><tbody>${capRows||'<tr><td colspan="3">확인 필요</td></tr>'}</tbody></table>
+    </details>
+    <div class="rg-note">🔒 임원 주민등록번호·주소는 저장하지 않습니다. 리포트 생성 시 임원 근속·자본금 이력이 반영됩니다.</div>
+  </div>`;
+}
 async function crHandleRegistry(file){
   const box=$('registryStatus'); if(!file)return;
   const setMsg=(html,color)=>{if(box){box.innerHTML=html;box.style.color=color||'#475569';}};
@@ -2111,9 +2221,13 @@ async function crHandleRegistry(file){
     if(nm && all.replace(/\s/g,'').indexOf(nm)<0){
       setMsg('⚠️ 재무보고서와 <b>다른 법인</b>의 등기부일 수 있습니다. 상호를 확인해 주세요.','#B91C1C');
     }
-    state.registry={fileName:file.name,pages:pdf.numPages,text:all,pageTexts,attachedAt:new Date().toISOString()};
+    const lines=all.split('\n');
+    const parsed=crParseRegistry(lines);
+    state.registry={fileName:file.name,pages:pdf.numPages,text:all,pageTexts,parsed,attachedAt:new Date().toISOString()};
+    if(state.caseData)state.caseData.registryParsed=parsed;
     if(state.caseData)state.caseData.registry={fileName:file.name,pages:pdf.numPages,attachedAt:state.registry.attachedAt};
-    setMsg('✅ 등기부 첨부 완료 — '+esc(file.name)+' ('+pdf.numPages+'p). 리포트 생성 시 임원·자본금 이력이 반영됩니다.','#0F6E56');
+    setMsg('✅ 등기부 첨부 완료 — '+esc(file.name)+' ('+pdf.numPages+'p)','#0F6E56');
+    if(box)box.insertAdjacentHTML('beforeend',crRegistrySummaryHtml(parsed));
     toast('등기부등본을 첨부했습니다.','ok');
   }catch(e){
     console.error('등기부 분석 실패:',e);
