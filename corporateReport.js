@@ -1398,7 +1398,7 @@ async function ensurePdfJs(){if(global.pdfjsLib)return global.pdfjsLib;await loa
 const PDFParser={
  async extract(file){
   const pdfjs=await ensurePdfJs();const buf=await file.arrayBuffer();const pdf=await pdfjs.getDocument({data:buf,cMapUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/'}).promise;
-  const pageTexts=[];const pageObjects=[];for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const tc=await pg.getTextContent();const rows=[];for(const item of tc.items||[]){const str=String(item.str||'').trim();if(!str)continue;const tr=item.transform||[];const x=Number(tr[4]||0),y=Number(tr[5]||0);let row=rows.find(r=>Math.abs(r.y-y)<=2.6);if(!row){row={y,items:[]};rows.push(row);}row.items.push({x,str,width:Number(item.width||0)});}rows.sort((a,b)=>b.y-a.y);const lines=rows.map(r=>{r.items.sort((a,b)=>a.x-b.x);let line='',lastEnd=null;for(const it of r.items){if(lastEnd!==null){const gap=it.x-lastEnd;line+=gap>12?'   ':gap>3?' ':'';}line+=it.str;lastEnd=it.x+it.width;}return line.trim();}).filter(Boolean);const layout=lines.join('\n');pageTexts.push(layout);pageObjects.push({pageNumber:i,text:layout});}
+  const pageTexts=[];const pageObjects=[];for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const tc=await pg.getTextContent();const rows=[];for(const item of tc.items||[]){const str=crFixNullGlyph(String(item.str||''),Number(item.width||0)).trim();if(!str)continue;const tr=item.transform||[];const x=Number(tr[4]||0),y=Number(tr[5]||0);let row=rows.find(r=>Math.abs(r.y-y)<=2.6);if(!row){row={y,items:[]};rows.push(row);}row.items.push({x,str,width:Number(item.width||0)});}rows.sort((a,b)=>b.y-a.y);const lines=rows.map(r=>{r.items.sort((a,b)=>a.x-b.x);let line='',lastEnd=null;for(const it of r.items){if(lastEnd!==null){const gap=it.x-lastEnd;line+=gap>12?'   ':gap>3?' ':'';}line+=it.str;lastEnd=it.x+it.width;}return line.trim();}).filter(Boolean);const layout=lines.join('\n');pageTexts.push(layout);pageObjects.push({pageNumber:i,text:layout});}
   const text=pageTexts.join('\n\n--- PAGE ---\n\n');return {text,pageTexts,pageObjects,pages:pdf.numPages,format:this.detect(text,pageObjects)};
  },
  detect(text,pageObjects){try{if(global.NiceBizlineExtractor?.detectNiceBizline(pageObjects||text)?.detected)return 'NICE BizLINE';}catch(_e){}if(/CRETOP|KODATA|기업종합보고서/i.test(text))return 'CRETOP/KODATA';if(/NICE|비즈라인|기업정보보고서/i.test(text))return 'NICE';return 'GENERIC';},
@@ -3589,6 +3589,22 @@ function crWirePurposeFlow(){const btn=$('confirmQuestionsBtn');if(!btn)return;b
  * ========================================================================== */
 const CR_FINAL_ENGINE_VERSION='2.1.0-final-20260801';
 
+/* ★ [2026-08-01] NICE BizLINE 폰트 CMap 결함 보정
+   '+'와 '-'가 모두 U+0000(널문자)으로 추출된다. 글리프 '폭'으로 구분한다.
+   실측: '+' width 6.58 / '-' width 4.54  → 임계 5.5
+   폭 정보가 없으면 부호를 만들지 않고 제거한다(추정 금지). */
+const CR_NULL_PLUS_MIN_WIDTH=5.5;
+function crNullGlyphSign(width){
+ const w=Number(width);
+ if(!Number.isFinite(w)||w<=0)return '';
+ return w>=CR_NULL_PLUS_MIN_WIDTH?'+':'-';
+}
+function crFixNullGlyph(str,width){
+ let v=String(str||'');
+ if(v.indexOf('\u0000')<0)return v;
+ const sign=crNullGlyphSign(width);
+ return sign?v.replace(/\u0000/g,sign):v.replace(/\u0000/g,'');
+}
 function crNormalizeGradeToken(value){
  const compact=String(value||'').toUpperCase().replace(/\s+/g,'').replace(/[‐‑‒–—−]/g,'-');
  const m=compact.match(/^(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC[+-]?|C|D|R|NR|EW)$/);
