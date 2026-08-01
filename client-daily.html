@@ -1123,6 +1123,21 @@ if(fcId){
   }catch(e){_jvCID='';}
 }
 
+/* ── 로그인 뷰어(컨설턴트 본인) 판별 — 고객 개인화 차단용 (2026-08-01) ──
+   고객은 JARVIA 로그인 세션이 없다(자료전송 시 익명 인증만 사용).
+   따라서 익명이 아닌 로그인 사용자 = 플랫폼 회원(컨설턴트/관리자) 뷰로 본다.
+   리스너는 해제하지 않는다 — 세션 복원이 늦어도 비콘 시점에 값이 정확해야 함. */
+let _jvOwner=false;
+const _jvOwnerP=new Promise(res=>{
+  let _first=true;
+  try{
+    onAuthStateChanged(auth,u=>{
+      _jvOwner=!!(u&&!u.isAnonymous);
+      if(_first){_first=false;res(_jvOwner);}
+    });
+  }catch(e){ res(false); }
+});
+
 // 날짜 없으면 오늘(KST)
 function getTodayKST(){
   const now=new Date();
@@ -1143,14 +1158,14 @@ window.jvTrack=function(t,id){if(!fcId)return;_jvQ.push(id?{t:t,id:id}:{t:t});};
 function jvFlush(){
   if(!fcId||!_jvQ.length)return;
   const ev=_jvQ.splice(0);
-  try{navigator.sendBeacon(JV_EP,new Blob([JSON.stringify({fcLoginId:fcId,viewerKey:_jvVK,isNew:_jvNew,clientId:_jvCID||undefined,page:'daily',events:ev})],{type:'text/plain'}));}catch(e){}
+  try{navigator.sendBeacon(JV_EP,new Blob([JSON.stringify({fcLoginId:fcId,viewerKey:_jvVK,isNew:_jvNew,clientId:(_jvOwner?undefined:(_jvCID||undefined)),page:'daily',events:ev})],{type:'text/plain'}));}catch(e){}
 }
 window.jvFlush=jvFlush; /* ★ 오늘의 선택 즉시 전송용 (2026-07-17) */
 window.addEventListener('pagehide',jvFlush);
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')jvFlush();});
 window.jvTrack('daily_visit',fileDate);
-// 고객 식별 토큰으로 추적 중일 때만 열람기록 고지 노출
-try{if(_jvCID){const _n=document.getElementById('jvNotice');if(_n)_n.style.display='block';}}catch(e){}
+// 고객 식별 토큰으로 추적 중일 때만 열람기록 고지 노출 (컨설턴트 본인 뷰 제외)
+_jvOwnerP.then(function(_o){try{if(_jvCID&&!_o){const _n=document.getElementById('jvNotice');if(_n)_n.style.display='block';}}catch(e){}});
 
 // ═══ Global State ═══
 let fcData=null;
@@ -1264,6 +1279,7 @@ async function loadMyDates(){
   try{
     const demo = (params.get('mydates')||'') === 'demo';
     if(!demo && (!fcId || !_jvCID)) return;   /* ★ c 토큰 없으면 렌더하지 않음 */
+    if(!demo && await _jvOwnerP) return;      /* ★ 로그인 컨설턴트 본인 뷰 → 고객 개인화 미노출 (2026-08-01) */
 
     if(demo){
       mdData = { name:'홍길동', items:[
