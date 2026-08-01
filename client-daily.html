@@ -1352,12 +1352,56 @@ function mdCloseSheet(){
   document.getElementById('mdSheet').classList.remove('on');
 }
 
-function mdRequest(){
-  const it = mdData.items[0];
+/* 자료 요청 — 재무진단·생활변화와 같은 fc_consultation_requests 에 저장한다.
+   열람 로그(jvTrack)만으로는 컨설턴트의 "처리할 요청" 목록에 뜨지 않는다.
+   c 토큰으로 고객이 이미 특정되므로 이름·연락처를 다시 묻지 않는다.        */
+let _mdSending = false;
+async function mdRequest(){
+  if(_mdSending) return;
+  _mdSending = true;
+
+  const it  = mdData.items[0];
+  const btn = document.querySelector('#mdSheetIn .mdBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '전달 중...'; }
+
+  const LABEL = { age:'보험나이 기준일', renew:'갱신', auto:'자동차보험 만기',
+                  expire:'보장 종료', maturity:'만기', paidup:'납입 완료' };
+  let saved = false;
+  try{
+    await cdRequireFcUid();                  // 담당자 uid 확보 (기존 함수 재사용)
+    const reqId = gid();
+    await setDoc(doc(db,'fc_consultation_requests',reqId),{
+      reqId,
+      fcAuthUid:_cdFcUid, fcLoginId:fcId,
+      clientId:_jvCID||null,                 /* fc_clients 문서 ID — 컨설턴트가 바로 조회 가능 */
+      name:(mdData.name||''), phone:null, email:null,
+      ageGroup:null, assetGroup:null,
+      fields:['other'], fieldOther:null,
+      message:(LABEL[it.type]||'일정') + ' · ' + it.name + ' ' + it.date +
+              ' (D-' + it.days + ') 자료 요청',
+      source:'my_dates',                     /* 내 날짜 카드에서 요청 */
+      requestType:'myDates', requestTypeLabel:'내 날짜 자료 요청',
+      dateType:it.type, dateName:it.name, dateOn:it.date, dateDday:it.days,
+      consentRequired:true, consentMarketing:false,
+      status:'new', memo:'', lastResponseAt:null,
+      createdAt:serverTimestamp(), updatedAt:serverTimestamp()
+    });
+    saved = true;
+  }catch(e){
+    console.warn('mdRequest:', e && e.message);
+  }
   try{
     jvTrack('mydates_request', it.type + '·' + it.date);
-    if(window.jvFlush) window.jvFlush();     /* 즉시 전송 — 오늘의 선택과 동일 방식 */
+    if(window.jvFlush) window.jvFlush();      /* 즉시 전송 — 오늘의 선택과 동일 방식 */
   }catch(e){}
+
+  if(!saved){
+    /* 저장 실패 — 성공했다고 안내하면 고객이 마냥 기다린다 */
+    _mdSending = false;
+    if(btn){ btn.disabled = false; btn.textContent = '담당 컨설턴트에게 자료 요청하기'; }
+    if(typeof toast==='function') toast('요청을 보내지 못했어요. 잠시 후 다시 시도해 주세요','error');
+    return;
+  }
   document.getElementById('mdSheetIn').innerHTML =
     '<div class="mdDone"><div class="mdDoneIc">✓</div>' +
     '<div class="mdShH">담당 컨설턴트에게 전달했습니다</div>' +
