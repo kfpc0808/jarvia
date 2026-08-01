@@ -1386,6 +1386,9 @@ async function serverCall(endpoint,payload,timeout=180000){
   }finally{clearTimeout(timer);}
 }
 async function corporateCall(payload,timeout=180000){
+  /* ★ [2026-08-01] 모든 서버 요청에 loginId를 자동 첨부한다.
+     액션마다 개별로 넣으면 누락이 생겨 서버 권한 검사에서 막힌다. */
+  try{ const _lid=memberInfo().loginId; if(_lid&&!payload.loginId)payload={...payload,loginId:_lid}; }catch(_e){}
   const errors=[];
   for(const endpoint of CORPORATE_ENDPOINTS){
     try{
