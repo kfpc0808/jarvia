@@ -3062,6 +3062,7 @@ async function refreshRequestList(filter){
     $('requestList').querySelectorAll('.requestItem').forEach(el=>{
       el.addEventListener('click',()=>openRequestDetail(el.dataset.id));
     });
+    mdFillPhones(filtered);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
   }catch(e){console.error('request list',e);$('requestList').innerHTML='<div class="requestEmpty">로드 실패</div>';}
 }
 function relativeTime(d){
@@ -3136,7 +3137,12 @@ async function openRequestDetail(reqId){
   const ageLabels={under_30:'30대 미만','30s':'30대','40s':'40대','50s':'50대','60s':'60대','70s':'70대+'};
   const assetLabels={under_5:'5억 미만','5_10':'5~10억','10_30':'10~30억','30_50':'30~50억',over_50:'50억+',private:'비공개'};
   const fieldLabels={inheritance:'상속·증여',succession:'가업승계',retirement:'노후·은퇴',corporate:'법인 절세',real_estate:'부동산',insurance:'보험·연금',professional:'전문직',salary:'직장인 재무',other:'기타'};
-  const phoneClean=(r.phone||'').replace(/\D/g,'');
+  /* ★ my_dates 요청은 서버에 전화번호가 없다 → 이 기기 로컬에서 보완 (2026-08-01) */
+if(!r.phone && r.source==='my_dates' && r.clientId){
+  const _lp = await mdLocalPhone(r.clientId);
+  if(_lp) r.phone = _lp;
+}
+const phoneClean=(r.phone||'').replace(/\D/g,'');
   const phoneFormatted=phoneClean.length===11?`${phoneClean.slice(0,3)}-${phoneClean.slice(3,7)}-${phoneClean.slice(7)}`:r.phone;
   $('requestDetailBox').innerHTML=`
     <div class="modalHeader">
@@ -3339,6 +3345,36 @@ function lcReqBadge(r){if(r.source!=='life_change')return '';return `<span class
 /* ★ 내 날짜 자료 요청 배지 (2026-08-01) — 고객 데일리 리포트「내 날짜」카드에서 온 요청.
    c 토큰으로 고객이 이미 식별되어 연락처를 받지 않으므로, 배지가 없으면
    "이름만 있고 번호 없는 요청"으로 보여 일반 신청과 구분되지 않는다. */
+/* ★ 내 날짜 요청 — 로컬 전화번호 보완 (2026-08-01)
+   전화번호는 설계상 서버(fc_clients)에 저장하지 않고 컨설턴트 기기의
+   IndexedDB(SmsCore)에만 둔다. 그래서 서버가 만든 my_dates 요청에는
+   phone 이 비어 있다. 요청 문서의 clientId(= fc_clients 문서 ID)로
+   이 기기의 로컬 번호를 찾아 화면에서만 채운다.
+   → 고객을 등록한 기기에서는 번호가 보이고, 다른 기기에서는 안내문이 남는다.
+   → 서버에는 여전히 전화번호가 저장되지 않는다. */
+async function mdLocalPhone(cid){
+  if(!cid) return '';
+  try{
+    if(!window.SmsCore || typeof SmsCore.getNumber!=='function') return '';
+    const p = await SmsCore.getNumber(cid);
+    return p ? String(p) : '';
+  }catch(e){ return ''; }
+}
+
+/* 목록이 그려진 뒤 my_dates 행의 연락처 칸만 비동기로 채운다.
+   목록 렌더 자체를 await 로 막지 않기 위해 분리했다. */
+async function mdFillPhones(list){
+  try{
+    const targets=(list||[]).filter(r=>r && r.source==='my_dates' && !r.phone && r.clientId);
+    for(const r of targets){
+      const ph = await mdLocalPhone(r.clientId);
+      if(!ph) continue;
+      const box = document.querySelector(`.requestItem[data-id="${r.id}"] .phone`);
+      if(box) box.innerHTML = `<a href="tel:${esc(ph.replace(/\D/g,''))}" onclick="event.stopPropagation()" style="color:var(--navy);font-weight:700">${esc(ph)}</a>`;
+    }
+  }catch(e){}
+}
+
 function mdReqBadge(r){
   if(r.source!=='my_dates')return '';
   const L={age:'보험나이 기준일',renew:'갱신',auto:'자동차보험 만기',expire:'보장 종료',maturity:'만기',paidup:'납입 완료'};
