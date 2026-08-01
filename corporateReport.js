@@ -1545,9 +1545,51 @@ function computeAnalysis(data){
  if(Number.isFinite(n(answers.keyPersonMonthlyFixedCost))){
   keyman=tryCalculator('calcCorpKeymanNeed',{monthlyOperatingShortfall:n(answers.keyPersonMonthlyFixedCost)*1000000,impactMonths:safeNum(n(answers.keyPersonEmergencyMonths),12),replacementCost:0,guaranteedDebt:safeNum(n(answers.immediateDebtRepayment),0)*1000000,liquidAssets:safeNum(n(answers.availableEmergencyCash),0)*1000000,existingKeymanCoverage:safeNum(n(answers.existingKeyPersonCoverage),0)*1000000});
  }
- return {ratios:r,calculator:{ratios:calcRatios,cashFlow:calcCash,keyman},calculatorVersion:global.JarviaCalculators?.version||'browser-bundle',computedAt:nowIso()};
+ return {ratios:r,valuation:crValuation({financials:data?.financials,profile:data?.profile}),calculator:{ratios:calcRatios,cashFlow:calcCash,keyman},calculatorVersion:global.JarviaCalculators?.version||'browser-bundle',computedAt:nowIso()};
 }
 
+/* ════ [2026-08-01] 비상장주식 가치평가 — 상증법 §63·상증령 §54 보충적 평가 ════
+   순자산가치 = 자본총계 ÷ 발행주식총수
+   순손익가치 = 최근3년 가중평균(3:2:1) 순손익 ÷ 발행주식총수 ÷ 10%(환원율)
+   가중치 순자산40:순손익60 (부동산과다법인 60:40) · 순자산가치 80% 하한
+   ※ 추정치이며 세무전문가 검토 전 확정 금액으로 사용하지 않는다.            */
+function crValuation(model){
+  try{
+    const f=model?.financials||{}, yrs=Object.keys(f).filter(y=>/^\d{4}$/.test(y)).sort();
+    if(!yrs.length)return null;
+    const last=yrs[yrs.length-1], L=f[last]||{};
+    const equity=Number(L.totalEquity??L.자본총계);
+    const totalAssets=Number(L.totalAssets??L.자산총계);
+    const reg=(state.registry&&state.registry.parsed)||(state.caseData&&state.caseData.registryParsed)||null;
+    const regCap=reg&&reg.capital&&reg.capital.length?reg.capital[reg.capital.length-1]:null;
+    const shares=Number(regCap?.shares)||Number(model?.profile?.totalShares)||null;
+    const parValue=(reg&&reg.par&&reg.par.length)?Number(reg.par[reg.par.length-1].amount):null;
+    if(!Number.isFinite(equity)||!shares)return null;
+    const ni=yrs.slice(-3).map(y=>{const v=f[y]||{};const x=Number(v.netIncome??v.당기순이익);return Number.isFinite(x)?x:null;});
+    const rev=[...ni].reverse(), w=[3,2,1]; let s=0,ws=0;
+    rev.forEach((v,i)=>{if(v!=null){s+=v*w[i];ws+=w[i];}});
+    const wAvg=ws?s/ws:null;
+    const navPer=equity*1e6/shares;
+    const incPer=(wAvg==null)?null:(wAvg*1e6/shares)/0.10;
+    const tangible=Number(L.tangibleAssets??L.유형자산)||0;
+    const heavyRE=totalAssets?(tangible/totalAssets)>=0.5:false;
+    const wNav=heavyRE?0.6:0.4, wInc=heavyRE?0.4:0.6;
+    let raw, method;
+    if(incPer==null||incPer<0){raw=navPer;method='순자산가치 단독(최근 3년 가중평균 순손익이 0 이하)';}
+    else {raw=navPer*wNav+incPer*wInc;method='가중평균';}
+    const floor=navPer*0.8;
+    const perShare=Math.max(raw,floor);
+    if(perShare>floor&&raw<floor)method='순자산가치 80% 하한 적용';
+    else if(raw<floor)method='순자산가치 80% 하한 적용';
+    return {baseYear:last,equity,shares,parValue,
+      navPer:Math.round(navPer),incPer:incPer==null?null:Math.round(incPer),
+      wAvgNi:wAvg,heavyRE,weight:`순자산 ${wNav*100}% : 순손익 ${wInc*100}%`,
+      raw:Math.round(raw),floor:Math.round(floor),perShare:Math.round(perShare),
+      totalValue:Math.round(perShare*shares),
+      parMultiple:parValue?Math.round(perShare/parValue):null,
+      sharesSource:regCap?'등기부':'직접입력',method};
+  }catch(e){console.warn('가치평가 계산 실패',e);return null;}
+}
 function severity(score){return score>=4.5?'CRITICAL':score>=3.7?'HIGH':score>=2.8?'MEDIUM':'LOW';}
 function buildSpeechPlanIssues(data,calc){
  const active=data.speechPlan?.activeIssueIds||[],signals=new Set((data.derivedSignals||[]).map(x=>x.signalId));const c=data.financials?.['2025']||{},p=data.financials?.['2024']||{},q=data.latestQuarterly||{},r=calc.ratios||{};const out=[];
@@ -1822,7 +1864,51 @@ function crRegIssueBlock(issueId){
     if(R.stockOption)rows.push(['주식매수선택권','<b>설정 있음</b> — 지분 희석 가능성 확인']);
   }
   if(!rows.length)return '';
-  return `<div class="source-box reg-src"><b>등기부 확인사항</b><div class="rs-grid">${rows.map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div><em>출처: 법인 등기사항증명서(말소사항 포함) · 개인정보는 저장하지 않습니다</em></div>`;
+  return `<div class="source-box reg-src"><b>등기부 확인사항</b><div class="rs-grid">${rows.map(r=>`<div class="${/현직 임원|임기 경과/.test(r[0])?'wide':''}"><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div><em>출처: 법인 등기사항증명서(말소사항 포함) · 개인정보는 저장하지 않습니다</em></div>`;
+}
+function crCharterPage(model){
+  const c=crCharter(); if(!c||!Object.keys(c).filter(k=>c[k]&&k!=='savedAt').length)return;
+  const R=(state.registry&&state.registry.parsed)||null;
+  const ceo=R&&R.current?R.current.find(o=>o.role==='대표이사'):null;
+  const row=(k,v,note)=>`<tr><td>${esc(k)}</td><td><b>${esc(v||'확인 필요')}</b></td><td>${note||''}</td></tr>`;
+  const noRule=(c.retireRule==='없음');
+  const unknown=(c.retireRule==='');
+  addPage({id:'charter',title:'정관 확인사항',subtitle:'임원 보수·퇴직금·배당·지분 관련 정관 조항을 확인했습니다.',section:'CHARTER',visibility:'common',issueId:'GOV-06',summary:'정관 확인사항',
+   body:`${noRule?`<div class="notice amber"><b>임원 퇴직금 지급규정 없음</b>정관 또는 별도 규정에 임원퇴직금 지급기준이 없으면, 퇴직금을 지급하더라도 <b>손금으로 인정되지 않을 수 있습니다</b>(법인세법 시행령 §44④). ${ceo?`현 대표이사 ${esc(ceo.name)}의 근속은 ${crRegTenure(ceo.since)}이며, `:''}규정 정비가 지급·손금 인정의 전제입니다.</div>`:''}
+   ${unknown?`<div class="notice"><b>퇴직금 규정 확인 필요</b>정관 및 임원퇴직금지급규정 사본을 확인하면 예상 퇴직금과 손금 인정 가능 여부를 산출할 수 있습니다. 다음 미팅 자료요청에 포함했습니다.</div>`:''}
+   <table><thead><tr><th>항목</th><th>확인 결과</th><th>진단 연결</th></tr></thead><tbody>
+     ${row('임원 보수 지급규정',c.payRule,'보수 손금성 · 급여 vs 배당 세후비교')}
+     ${row('임원 퇴직금 지급규정',c.retireRule,'퇴직금 손금 인정 · 지급재원')}
+     ${row('퇴직금 지급배수',c.retireRate,'예상 퇴직금 산정 기준')}
+     ${row('중간배당',c.interimDividend,'배당정책 설계 가능 범위')}
+     ${row('주식양도 제한',c.shareTransfer,'지분 분산 · 경영권 방어')}
+     ${row('주식매수선택권',c.stockOption,'지분 희석 시나리오')}
+     ${row('이사 수 · 임기',c.directors,'중임등기 · 등기 정비')}
+   </tbody></table>
+   ${c.retireText?`<div class="source-box"><b>퇴직금 규정 원문</b> ${esc(c.retireText)}</div>`:''}
+   ${c.etc?`<div class="source-box"><b>특이 조항</b> ${esc(c.etc)}</div>`:''}
+   <div class="notice"><b>표현 경계</b>본 내용은 컨설턴트가 확인·입력한 사항이며 정관 원본 검토를 대체하지 않습니다. 실제 지급·손금 인정 여부는 정관, 주주총회 결의, 임원퇴직금지급규정 원본과 세무대리인 검토로 판단됩니다.</div>`});
+}
+function crValuationPage(model){
+  const V=model?.calculations?.valuation; if(!V)return;
+  const won=n=>Number(n).toLocaleString('ko-KR');
+  const eok=n=>(n/1e8).toFixed(n/1e8>=100?0:1);
+  addPage({id:'valuation',title:'비상장주식 가치 추정',subtitle:'상속·증여·자기주식·승계 재원의 출발점이 되는 1주당 가치입니다.',section:'VALUATION',visibility:'common',issueId:'VAL-01',summary:`1주당 약 ${won(V.perShare)}원`,
+   body:`<div class="lead"><b>1주당 약 ${won(V.perShare)}원 · 총 약 ${eok(V.totalValue)}억원</b>
+     <p>${V.baseYear}년 결산 기준 추정치입니다.${V.parMultiple?` 액면가 ${won(V.parValue)}원의 <b>약 ${V.parMultiple}배</b>입니다.`:''} 대표님이 보유한 지분의 상속·증여세, 자기주식 취득가액, 후계자 지분매입 자금이 모두 이 금액에서 출발합니다.</p></div>
+   <table><thead><tr><th>구분</th><th>1주당</th><th>산식</th></tr></thead><tbody>
+     <tr><td>순자산가치</td><td style="text-align:right"><b>${won(V.navPer)}원</b></td><td>자본총계 ${won(V.equity)}백만원 ÷ ${won(V.shares)}주</td></tr>
+     <tr><td>순손익가치</td><td style="text-align:right">${V.incPer==null?'—':won(V.incPer)+'원'}</td><td>${V.wAvgNi==null?'산출 불가':`최근 3년 가중평균(3:2:1) 순손익 ${won(Math.round(V.wAvgNi))}백만원 ÷ ${won(V.shares)}주 ÷ 10%`}</td></tr>
+     <tr><td>가중평균</td><td style="text-align:right">${won(V.raw)}원</td><td>${esc(V.weight)}${V.heavyRE?' (부동산과다법인)':''}</td></tr>
+     <tr><td>순자산가치 80% 하한</td><td style="text-align:right">${won(V.floor)}원</td><td>상증령 §54③</td></tr>
+     <tr style="background:#F3FAF7"><td><b>적용 평가액</b></td><td style="text-align:right"><b>${won(V.perShare)}원</b></td><td>${esc(V.method)}</td></tr>
+   </tbody></table>
+   <div class="cols2" style="margin-top:5mm">
+     <div class="card"><h3>지분 100%의 가치</h3><p><b>약 ${eok(V.totalValue)}억원</b> (${won(V.shares)}주 × ${won(V.perShare)}원)</p></div>
+     <div class="card"><h3>발행주식 출처</h3><p>${esc(V.sharesSource)}${V.sharesSource==='등기부'?' — 등기사항증명서에서 확인':' — 주주명부·등기부로 확정 필요'}</p></div>
+   </div>
+   <div class="notice amber"><b>표현 경계</b>본 금액은 상속세및증여세법 보충적 평가방법(§63, 상증령 §54)에 따른 <b>추정치</b>입니다. 실제 평가에는 영업권 가산, 부동산 개별 감정, 최대주주 할증(20%), 순자산 조정항목이 반영되어 달라질 수 있습니다. <b>세무전문가 검토 전 확정 금액으로 사용하지 않습니다.</b></div>
+   <div class="source-box"><b>다음 확인</b> 최신 주주명부 · 정관 · 부동산 보유 현황 · 특수관계인 지분율(최대주주 할증 판단) · 영업권 평가 대상 여부</div>`});
 }
 function crRegistryPage(){
   const R=crRegData(); if(!R)return;
@@ -1881,6 +1967,8 @@ function generatePages(model){
  addPage({id:'cover',title:'표지',cover:true,visibility:'common'});
  addPage({id:'guide',title:'이 리포트는 무엇을 결정하게 하는가',subtitle:'팩트 → 계산 → 근거 → 대안 → 다음 행동의 순서로 읽습니다.',section:'REPORT GUIDE',visibility:'common',summary:'리포트의 사용 목적과 모드 구분',body:`<div class="lead"><b>재무설명이 아니라 CEO의 결정과 컨설턴트의 실행을 지원합니다.</b><p>확인된 팩트와 계산값에서 출발해 유료컨설팅·전문가 협업·보험의 역할을 구분합니다.</p></div><div class="cols3"><div class="card mint"><h3>CEO용</h3>${list(['확인된 사실과 경영적 의미','방치위험과 해결이익','A·B·C 대안','30·90·365일 결정'])}</div><div class="card consultant-only"><h3>컨설턴트용</h3>${list(['페이지별 10단 상담노트','질문·답변분기·반론','유료컨설팅과 보험기회','다음 미팅·계약전환'])}</div><div class="card amber consultant-only"><h3>음성강의용</h3>${list(['리포트 낭독 금지','숫자의 실무 의미','CEO 질문·역할극','보험을 꺼낼 시점'])}</div></div><div class="notice"><b>보험 원칙</b>위험 확인 → 필요재원 → 현재재원 → 부족재원 → 대안 비교 → 보험의 역할 순서로만 접근합니다.</div>`});
   crRegistryPage();
+  crValuationPage(model);
+  crCharterPage(model);
  addPage({id:'toc',title:'통합 목차',subtitle:'현재 기업에 실제로 활성화된 페이지만 구성합니다.',section:'CONTENTS',visibility:'common',summary:'조건부 페이지 목차',body:`<div class="toc-grid" id="tocInside"></div><div class="notice amber"><b>조건부 생성</b>내용이 부족하면 페이지를 만들지 않으며, 미확인 사실로 페이지 수를 채우지 않습니다.</div>`});
  const r=model.calculations.ratios,c=model.financials['2025'],p=model.profile;
  const ratioClass=(v,good,warn)=>!Number.isFinite(v)?'warn':v>=good?'good':v>=warn?'warn':'bad';
@@ -2292,10 +2380,10 @@ function crRegistrySummaryHtml(R){
   const badge=`<span class="rg-badge">${esc(R.entityType||'—')}</span><span class="rg-badge">${esc(R.certType||'—')}</span>${R.hasCancelled?'<span class="rg-badge ok">말소사항 포함</span>':'<span class="rg-badge warn">말소사항 미포함 가능</span>'}`;
   return `<div class="reg-result">
     <div class="rg-hd">📋 등기부 분석 결과 ${badge}</div>${warn}
-    <div class="rg-kv">${rows.map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div>
-    <details class="rg-more"><summary>상세 보기 — 현직 임원 ${R.current.length}명 · 자본금 이력 ${R.capital.length}건</summary>
+    <div class="rg-kv">${rows.map(r=>`<div class="${/현직 임원|상호 변경|목적사업|본점 이전|임기만료 예상|⚠️/.test(r[0])?'wide':''}"><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div>
+    <details class="rg-more"><summary>상세 보기 — 현직 임원 ${R.current.length}명 · 자본금 이력 ${R.capital.length}건</summary><div class="rg-tbl-wrap">
       <table class="rg-tbl"><thead><tr><th>직위</th><th>성명</th><th>최근 등기</th><th>근속</th></tr></thead><tbody>${list||'<tr><td colspan="4">확인 필요</td></tr>'}</tbody></table>
-      <table class="rg-tbl"><thead><tr><th>변경일</th><th>발행주식</th><th>자본금</th></tr></thead><tbody>${capRows||'<tr><td colspan="3">확인 필요</td></tr>'}</tbody></table>
+      <table class="rg-tbl"><thead><tr><th>변경일</th><th>발행주식</th><th>자본금</th></tr></thead><tbody>${capRows||'<tr><td colspan="3">확인 필요</td></tr>'}</tbody></table></div>
     </details>
     <div class="rg-note">🔒 임원 주민등록번호·주소는 저장하지 않습니다. 리포트 생성 시 임원 근속·자본금 이력이 반영됩니다.</div>
   </div>`;
@@ -2319,6 +2407,59 @@ function crScanGuideHtml(fileName,kind){
     <div class="sg-act"><a href="https://www.iros.go.kr" target="_blank" rel="noopener">인터넷등기소 열기 →</a><button type="button" onclick="document.getElementById('registryInput').click()">다시 첨부</button></div>
     <div class="sg-note">※ 등기부 없이도 리포트는 완결됩니다. 미첨부 시 임원 근속·자본금 이력은 「등기부 확인 시 산출 가능」으로 표시되고 다음 미팅 자료요청에 자동 포함됩니다.</div>
   </div>`;
+}
+/* ════ [2026-08-01] 정관 확인사항 — 선택형 7 + 주관식 2 ════
+   state.charter를 단일 진실 소스로 두고 질문지와 양방향 동기화 */
+const CR_CHARTER_FIELDS=[['chPayRule','payRule'],['chRetireRule','retireRule'],['chRetireRate','retireRate'],
+  ['chInterimDiv','interimDividend'],['chShareTransfer','shareTransfer'],['chStockOption','stockOption'],
+  ['chDirectors','directors'],['chRetireText','retireText'],['chEtc','etc']];
+function crCharter(){return (state.charter)||(state.caseData&&state.caseData.charter)||{};}
+function crFillCharterForm(){
+  const c=crCharter(), R=(state.registry&&state.registry.parsed)||null;
+  /* ★ 등기부에서 확인되는 항목 자동 채움 (사용자가 이미 고른 값은 덮어쓰지 않음) */
+  if(R){
+    if(!c.stockOption&&R.stockOption!==undefined)c.stockOption=R.stockOption?'있음':'없음';
+    if(!c.directors&&R.current&&R.current.length){
+      const dirs=R.current.filter(o=>/이사/.test(o.role)&&!/대표/.test(o.role)).length
+                +R.current.filter(o=>o.role==='대표이사').length;
+      if(dirs>=3)c.directors='3명 이상 / 3년';
+      else if(dirs>0)c.directors='1~2명';
+    }
+  }
+  for(const [id,k] of CR_CHARTER_FIELDS){const el=$(id);if(el&&c[k]!=null&&c[k]!=='')el.value=c[k];}
+  crRenderCharterFromRegistry();
+}
+/* ★ [2026-08-01] 등기부 확인 요약 — 정관 입력 시 참고할 값을 여기 모아 보여준다
+   (등기부 아코디언이 닫혀도 필요한 정보가 눈앞에 남도록) */
+function crRenderCharterFromRegistry(){
+  const box=$('charterFromRegistry'); if(!box)return;
+  const R=(state.registry&&state.registry.parsed)||null;
+  if(!R){box.hidden=true;box.innerHTML='';return;}
+  const ceo=R.current&&R.current.find(o=>o.role==='대표이사');
+  const it=[];
+  it.push(`주식매수선택권 <b>${R.stockOption?'설정 있음':'설정 없음'}</b>`);
+  if(R.current&&R.current.length)it.push(`현직 임원 <b>${R.current.length}명</b>`);
+  if(ceo)it.push(`대표이사 ${esc(ceo.name)} 근속 <b>${crRegTenure(ceo.since)}</b>`);
+  if(R.capital&&R.capital.length){const c=R.capital[R.capital.length-1];it.push(`자본금 <b>${c.capital.toLocaleString()}원</b> · 발행주식 <b>${c.shares.toLocaleString()}주</b>`);}
+  if(R.par&&R.par.length)it.push(`액면가 <b>${R.par[R.par.length-1].amount.toLocaleString()}원</b>`);
+  box.innerHTML=`<span class="cf-hd">📋 등기부에서 확인된 값 — 아래 입력의 참고 자료입니다</span>${it.join(' · ')}`;
+  box.hidden=false;
+}
+function crSaveCharter(){
+  const c={};
+  for(const [id,k] of CR_CHARTER_FIELDS){const el=$(id);c[k]=el?String(el.value||'').trim():'';}
+  c.savedAt=new Date().toISOString();
+  state.charter=c; if(state.caseData)state.caseData.charter=c;
+  const filled=CR_CHARTER_FIELDS.filter(([id,k])=>c[k]).length;
+  const st=$('charterStatus');
+  if(st){st.innerHTML='✅ 정관 확인사항 저장 — '+filled+'/9 항목 입력'+(c.retireRule?'':' <b style="color:#B91C1C">· 퇴직금 규정 미확인</b>');st.style.color='#0F6E56';}
+  toast('정관 확인사항을 저장했습니다. 리포트 생성 시 반영됩니다.','ok');
+}
+/* 정관에서 명확히 답한 항목은 질문지에서 제외 (「모름」이면 질문 유지) */
+function crCharterAnsweredQuestionIds(){
+  const c=crCharter(), out=[];
+  if(c.retireRule)out.push('retirementRuleStatus');
+  return out;
 }
 async function crHandleRegistry(file){
   const box=$('registryStatus'); if(!file)return;
@@ -2376,6 +2517,7 @@ async function crHandleRegistry(file){
     if(state.caseData)state.caseData.registry={fileName:file.name,pages:pdf.numPages,attachedAt:state.registry.attachedAt};
     setMsg('✅ 등기부 첨부 완료 — '+esc(file.name)+' ('+pdf.numPages+'p)','#0F6E56');
     if(box)box.insertAdjacentHTML('beforeend',crRegistrySummaryHtml(parsed));
+    try{crRenderCharterFromRegistry();}catch(_e){}
     toast('등기부등본을 첨부했습니다.','ok');
   }catch(e){
     console.error('등기부 분석 실패:',e);
@@ -2383,7 +2525,34 @@ async function crHandleRegistry(file){
     toast('등기부 첨부 실패: '+(e.message||''),'err');
   }
 }
+/* ★ [2026-08-01] iOS Safari 클릭 보정
+   동적 생성된 div/span 클릭요소는 cursor:pointer가 없으면 iOS에서 click이 발화하지 않는다.
+   생성 시점을 알 수 없으므로 document 위임 + 주기적 보정으로 처리한다. */
+function crIosClickFix(root){
+  try{
+    const scope=root||document;
+    scope.querySelectorAll('[onclick],[data-close],[data-mode],.drawer-backdrop,.modal-bg,.mdl-bg').forEach(el=>{
+      const tag=el.tagName.toLowerCase();
+      if(tag==='button'||tag==='a'||tag==='input'||tag==='select'||tag==='textarea')return;
+      if(!el.style.cursor)el.style.cursor='pointer';
+    });
+  }catch(_e){}
+}
+function crInitIosSupport(){
+  const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  if(!isIOS)return;
+  document.documentElement.classList.add('is-ios');
+  crIosClickFix(document);
+  /* 리포트가 동적으로 다시 그려질 때마다 보정 */
+  try{
+    const deck=$('reportDeck');
+    if(deck&&window.MutationObserver){
+      new MutationObserver(()=>crIosClickFix(deck)).observe(deck,{childList:true,subtree:true});
+    }
+  }catch(_e){}
+}
 function initEvents(){
+ crInitIosSupport();
  $('sampleBtn').onclick=()=>prepareCase(clone(GOLDEN_SAMPLE),{confirmed:true,autoGenerate:true});$('manualBtn').onclick=()=>{renderManualForm();openModal('manualModal');};$('manualApplyBtn').onclick=applyManual;
  $('pdfInput').onchange=e=>handlePdf(e.target.files?.[0]);const zone=$('uploadZone');['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('drag');}));['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('drag');}));zone.addEventListener('drop',e=>handlePdf(e.dataTransfer.files?.[0]));
  qsa('[data-mode]').forEach(b=>b.onclick=()=>applyMode(b.dataset.mode));$('menuBtn').onclick=()=>$('sidePanel').classList.toggle('on');$('closeSide').onclick=()=>$('sidePanel').classList.remove('on');
@@ -2399,6 +2568,23 @@ function initEvents(){
 /* ★ [2026-08-01] 컨설턴트 정보 */
  if($('consultantInfoBtn'))$('consultantInfoBtn').onclick=()=>{crFillConsultantForm();openModal('consultantModal');};
  if($('consultantSaveBtn'))$('consultantSaveBtn').onclick=crSaveConsultant;
+/* ★ [2026-08-01] 정관 확인사항 */
+ if($('charterSaveBtn'))$('charterSaveBtn').onclick=crSaveCharter;
+ if($('charterZone')){const _cz=$('charterZone');
+   _cz.addEventListener('toggle',()=>{if(_cz.open)crFillCharterForm();});
+   const _sm=_cz.querySelector('summary'); if(_sm)_sm.addEventListener('click',()=>{setTimeout(()=>{if(_cz.open)crFillCharterForm();},60);});
+  }
+  /* ★ [2026-08-01] 첨부 아코디언 배타 열기 — details[name] 미지원 브라우저 폴백
+     iOS Safari 17 미만·구형 Android는 name 속성을 무시하므로 직접 닫아준다. */
+  try{
+    const _supportsName = 'name' in document.createElement('details');
+    if(!_supportsName){
+      const _grp=Array.from(document.querySelectorAll('details[name="startAttach"]'));
+      _grp.forEach(d=>d.addEventListener('toggle',()=>{
+        if(d.open)_grp.forEach(o=>{if(o!==d&&o.open)o.open=false;});
+      }));
+    }
+  }catch(_e){}
 /* ★ [2026-08-01] 등기부등본 선택 첨부 */
  if($('registryInput'))$('registryInput').onchange=e=>crHandleRegistry(e.target.files?.[0]);
  $('printBtn').onclick=()=>window.print();$('exportBtn').onclick=exportCEO;$('saveCaseBtn').onclick=saveCase;$('loadCaseBtn').onclick=()=>$('caseFileInput').click();$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
@@ -2743,7 +2929,7 @@ computeAnalysis=function(data){
  const calcRatios=tryCalculator('calcFinancialRatios',calcInputs);const calcCash=[c.cash,c.currentAssets,c.currentLiabilities,c.inventory,c.receivables,c.payables,c.revenue,c.cogs,actualCurrentBorrow].every(Number.isFinite)?tryCalculator('calcCashFlowRisk',{cash:c.cash,currentAssets:c.currentAssets,currentLiab:c.currentLiabilities,inventory:c.inventory,receivables:c.receivables,payables:c.payables,revenue:c.revenue,cogs:c.cogs,monthlyFixedCost:0,operatingProfit:c.operatingProfit,shortTermBorrow:actualCurrentBorrow}):{ok:false,error:'단기차입금 등 필수 입력 미확인'};
  const answers=data.answers||{};let keyman=null;const keyInputs=[n(answers.keyPersonMonthlyFixedCost),n(answers.keyPersonEmergencyMonths),n(answers.immediateDebtRepayment),n(answers.availableEmergencyCash),n(answers.existingKeyPersonCoverage)];if(keyInputs.every(Number.isFinite))keyman=tryCalculator('calcCorpKeymanNeed',{monthlyOperatingShortfall:keyInputs[0]*1000000,impactMonths:keyInputs[1],replacementCost:0,guaranteedDebt:keyInputs[2]*1000000,liquidAssets:keyInputs[3]*1000000,existingKeymanCoverage:keyInputs[4]*1000000});
  const cross=[];const cr=calcRatios?.result||calcRatios?.envelope?.result||{};const pairs=[[r.operatingMargin,cr?.profitability?.operatingMargin,'영업이익률'],[r.netMargin,cr?.profitability?.netMargin,'순이익률'],[r.debtRatio,cr?.stability?.debtRatio,'부채비율'],[r.currentRatio,cr?.stability?.currentRatio,'유동비율'],[r.borrowingDependency,cr?.stability?.borrowingDep,'차입금의존도']];for(const [a,b,label] of pairs)if(Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)>0.2)cross.push(`${label} 내부계산 ${a.toFixed(2)} / 계산기 ${b}`);
- return {ratios:r,calculator:{ratios:calcRatios,cashFlow:calcCash,keyman},crossValidation:{passed:cross.length===0,errors:cross},calculatorVersion:global.JarviaCalculators?.version||'browser-bundle',computedAt:nowIso()};
+ return {ratios:r,valuation:crValuation({financials:data?.financials,profile:data?.profile}),calculator:{ratios:calcRatios,cashFlow:calcCash,keyman},crossValidation:{passed:cross.length===0,errors:cross},calculatorVersion:global.JarviaCalculators?.version||'browser-bundle',computedAt:nowIso()};
 };
 buildIssues=function(data,calc){
  if(data?.speechPlan?.activeIssueIds?.length)return buildSpeechPlanIssues(data,calc);
@@ -3754,11 +3940,12 @@ function crActiveQuestionIssueIds(analysis){
  return ids;
 }
 function crBuildQuestionSections(analysis){
+  const _skipQ=new Set(crCharterAnsweredQuestionIds());
  const active=crActiveQuestionIssueIds(analysis),sections=[];
- const commonMap=new Map();for(const q of CR_COMMON_QUESTIONS){const s=q.section||'공통질문';if(!commonMap.has(s))commonMap.set(s,[]);commonMap.get(s).push({...q,source:'공통'});}
+ const commonMap=new Map();for(const q of CR_COMMON_QUESTIONS){if(_skipQ.has(q.id))continue;const s=q.section||'공통질문';if(!commonMap.has(s))commonMap.set(s,[]);commonMap.get(s).push({...q,source:'공통'});}
  for(const [title,questions] of commonMap)sections.push({id:'common-'+sections.length,title,kind:'common',questions});
  for(const id of active.slice(0,4)){
-  const bank=CR_ISSUE_QUESTION_BANK[id];if(bank)sections.push({id:'issue-'+id,title:bank.title,kind:'issue',issueId:id,questions:bank.questions.map(q=>({...q,issueId:id,source:'조건부'}))});
+  const bank=CR_ISSUE_QUESTION_BANK[id];if(bank){const _qs=bank.questions.filter(q=>!_skipQ.has(q.id));if(_qs.length)sections.push({id:'issue-'+id,title:bank.title,kind:'issue',issueId:id,questions:_qs.map(q=>({...q,issueId:id,source:'조건부'}))});}
  }
  const used=new Set(sections.flatMap(s=>s.questions.map(q=>q.id)));
  const dynamic=(analysis?.dynamicQuestions||[]).filter(q=>q&&q.id&&!used.has(q.id)).slice(0,6).map(q=>({id:q.id,label:q.label||q.question||'추가 확인',reason:q.reason||'PDF 자동추출에서 확인이 필요한 사항입니다.',type:q.type==='number'?'number':'text',example:q.example||'',issueId:q.issueId||'',source:'원문확인',otherPlaceholder:'원문 또는 담당자 확인 결과를 입력해 주세요.'}));
