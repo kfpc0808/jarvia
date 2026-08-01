@@ -13595,6 +13595,7 @@ async function _fcrFillPhones(arr){
       let ph = '';
       try{ ph = (await SmsCore.getNumber(r.clientId)) || ''; }catch(e){ continue; }
       if(!ph) continue;
+      r.phone = ph;   /* ★ 객체에도 저장 — 상세 모달이 r.phone 을 읽는다 (2026-08-01) */
       const box = document.querySelector('#fcr-list [data-fcr-id="' + r.id + '"] .fcrPhone');
       if(box) box.textContent = _fcrFmtPhone(ph);
     }
@@ -13653,11 +13654,21 @@ function _fcrAiHtml(ai1,ai2){
   }
   h+='</div>';return h;
 }
-window.openFcRequestDetail = function(reqId){
+window.openFcRequestDetail = async function(reqId){
   const r = _fcrAllRequests.find(x => x.id === reqId);
   if(!r){
     if(typeof toast === 'function') toast('신청 정보를 찾을 수 없습니다', 'error');
     return;
+  }
+  /* ★ 내 날짜 요청은 서버에 전화번호가 없다 → 이 기기 로컬(SmsCore)에서 보완 (2026-08-01)
+     목록에서 이미 채워졌으면 그대로 쓰고, 아니면 여기서 한 번 더 찾는다. */
+  if(!r.phone && r.source === 'my_dates' && r.clientId){
+    try{
+      if(window.SmsCore && typeof SmsCore.getNumber === 'function'){
+        const _lp = await SmsCore.getNumber(r.clientId);
+        if(_lp) r.phone = _lp;
+      }
+    }catch(e){}
   }
   const phoneClean = (r.phone || '').replace(/\D/g, '');
   const phoneFmt = _fcrFmtPhone(r.phone);
@@ -13682,8 +13693,11 @@ window.openFcRequestDetail = function(reqId){
     + '<div style="cursor:pointer;color:#8B93AE;font-size:22px;font-weight:300;line-height:1" onclick="closeM(\'mdl-fcr-detail\')">×</div>'
     + '</div>'
     + '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">'
-    + '<a href="tel:' + _fcrEsc(phoneClean) + '" style="padding:7px 12px;background:#1B3A6B;color:#fff;border-radius:7px;font-size:11px;font-weight:700;text-decoration:none">📞 ' + _fcrEsc(phoneFmt) + '</a>'
-    + '<a href="sms:' + _fcrEsc(phoneClean) + '" style="padding:7px 12px;background:#fff;color:#1B3A6B;border:1px solid #1B3A6B;border-radius:7px;font-size:11px;font-weight:700;text-decoration:none">📱 문자</a>'
+    /* ★ 번호가 없으면 죽은 tel:/sms: 버튼 대신 안내를 보여준다 (2026-08-01) */
+    + (phoneClean
+       ? '<a href="tel:' + _fcrEsc(phoneClean) + '" style="padding:7px 12px;background:#1B3A6B;color:#fff;border-radius:7px;font-size:11px;font-weight:700;text-decoration:none">📞 ' + _fcrEsc(phoneFmt) + '</a>'
+       + '<a href="sms:' + _fcrEsc(phoneClean) + '" style="padding:7px 12px;background:#fff;color:#1B3A6B;border:1px solid #1B3A6B;border-radius:7px;font-size:11px;font-weight:700;text-decoration:none">📱 문자</a>'
+       : '<span style="padding:7px 12px;background:#F4F5F8;color:#8B93AE;border-radius:7px;font-size:11px;font-weight:600">연락처 미등록 · 고객관리에서 확인</span>')
     + emailLink
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
