@@ -1324,7 +1324,7 @@ const state={
   mode:'consultant',caseData:null,analysis:null,pages:[],visiblePages:[],currentPage:0,
   factsConfirmed:false,questionsConfirmed:false,sourceText:'',sourceName:'',pdfMeta:null,
   present:false,presentIndex:0,audioIndex:0,speechUtterance:null,idToken:'',idTokenExp:0,
-  live:{taxnavi:false,ai:false,tts:false,storage:false},quality:null,localOnly:true
+  live:{taxnavi:false,ai:false,tts:false,storage:false,aiOpeners:null},quality:null,localOnly:true
 };
 
 function toast(msg,type=''){const el=$('toast');if(!el)return;el.textContent=msg;el.className='toast on '+type;clearTimeout(el._t);el._t=setTimeout(()=>el.className='toast',2600);}
@@ -1404,6 +1404,14 @@ async function corporateCall(payload,timeout=180000){
 const ServerAdapter={
   async extractFinancial(text){const t=String(text||'').trim();return serverCall(ENDPOINTS.jebanseo,{action:'extractFinancial',text:t.slice(0,120000)});},
   async health(){return corporateCall({action:'health',payload:{}},30000);},
+  async aiOpeners(payload){
+    /* ★ [2026-08-01] AI 도입 화법 — Gemini 3.1 Pro 생성 + Claude Sonnet 5 검수
+       서버 실패 시 코드 화법만으로 리포트가 완결되므로 조용히 폴백한다. */
+    try{
+      const out=await corporateCall({action:'openers',loginId:(memberInfo().loginId||''),payload},240000);
+      state.live.aiOpeners=!!(out&&out.ok); return out;
+    }catch(e){ state.live.aiOpeners=false; return {ok:false,openers:[],error:e.message}; }
+  },
   async legalSearch(issue){try{const out=await corporateCall({action:'legalSearch',payload:{issueId:issue.id,queries:issue.evidenceQueries||[]}},120000);state.live.taxnavi=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message,results:[]};}},
   async tts(script){try{const out=await corporateCall({action:'tts',payload:{script,caseId:state.caseData?.meta?.caseId}},240000);state.live.tts=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message};}},
   async runAI(action,payload,timeout=360000){try{const out=await corporateCall({action,payload},timeout);state.live.ai=!!out?.ok;return out;}catch(e){return {ok:false,pending:true,error:e.message,code:e.code||'AI_API_ERROR'};}}
@@ -1889,6 +1897,606 @@ function crCharterPage(model){
    ${c.etc?`<div class="source-box"><b>특이 조항</b> ${esc(c.etc)}</div>`:''}
    <div class="notice"><b>표현 경계</b>본 내용은 컨설턴트가 확인·입력한 사항이며 정관 원본 검토를 대체하지 않습니다. 실제 지급·손금 인정 여부는 정관, 주주총회 결의, 임원퇴직금지급규정 원본과 세무대리인 검토로 판단됩니다.</div>`});
 }
+/* ══════════════════════════════════════════════════════════════════
+   [2026-08-01] TAX-07 경정청구 검토 신호 · 초회면담 도입 화법
+   ⚖ 세무사법 준수 — 이 모듈은 다음을 절대 수행하지 않는다.
+      ① 환급액 산정  ② 요건 충족 판정  ③ 특정 세무대리인 알선
+   허용 범위: 재무·등기 자료에서 확인되는 사실 제시 / 제도 일반 설명 /
+             세무대리인 확인용 질문 생성 / 준비자료 목록 제시
+   ══════════════════════════════════════════════════════════════════ */
+
+/* 법제처 조문 딥링크 — search-engine.js _articleDeepLink 로직 이식 */
+function crLawLink(lawName,article){
+  const base='https://www.law.go.kr/법령/'+encodeURIComponent(lawName);
+  const m=String(article||'').match(/(\d+)\s*조\s*(?:의\s*(\d+))?/);
+  if(!m)return base;
+  return base+'/'+encodeURIComponent('제'+m[1]+'조'+(m[2]?'의'+m[2]:''));
+}
+function crLawTag(lawName,article){
+  const label=article?(lawName+' '+article):lawName;
+  return `<a class="law-link" href="${crLawLink(lawName,article)}" target="_blank" rel="noopener">${esc(label)}</a>`;
+}
+
+/* ── 경정청구 검토 신호 정의 ────────────────────────────────── */
+const CR_REFUND_SIGNALS=[
+ {id:'CARRYFWD',name:'결손금 공제',law:'법인세법',art:'제13조',law2:'국세기본법',art2:'제45조의2',
+  test:(F)=>{const y=Object.keys(F).sort();const loss=y.filter(k=>Number(F[k].netIncome)<0);
+    return loss.length?{fact:loss.map(k=>`${k}년 순손실 ${Math.abs(F[k].netIncome).toLocaleString()}백만원`).join(' · '),src:'손익계산서'}:null;},
+  q:['해당 연도 결손금이 신고서에 정확히 반영됐습니까?','이월결손금 공제 순서와 한도(중소기업 100%)가 맞게 적용됐습니까?','결손금 소급공제 환급을 신청하셨습니까?'],
+  docs:['법인세 과세표준신고서','세무조정계산서','이월결손금명세서']},
+
+ {id:'ZEROTAX',name:'공제·감면 적용 이력',law:'국세기본법',art:'제45조의2',
+  test:(F)=>{const y=Object.keys(F).sort();const hit=y.filter(k=>Number(F[k].netIncome)>0&&Number(F[k].incomeTaxExpense||0)===0);
+    return hit.length?{fact:hit.map(k=>`${k}년 순이익 ${Number(F[k].netIncome).toLocaleString()}백만원 · 법인세비용 0원`).join(' · '),src:'손익계산서'}:null;},
+  q:['이익이 발생한 연도에 법인세비용이 0원인 사유가 무엇입니까?','이월결손금 공제 외에 적용된 공제·감면이 있습니까?','최저한세 적용으로 배제된 공제가 있습니까?'],
+  docs:['법인세 과세표준신고서','세액공제·감면신청서','최저한세조정계산서']},
+
+ {id:'INVEST',name:'통합투자세액공제',law:'조세특례제한법',art:'제24조',
+  test:(F)=>{const y=Object.keys(F).sort(),out=[];
+    for(let i=1;i<y.length;i++){const a=Number(F[y[i-1]].tangibleAssets),b=Number(F[y[i]].tangibleAssets);
+      if(a>0&&b>a*1.5)out.push(`${y[i]}년 유형자산 ${a.toLocaleString()}→${b.toLocaleString()}백만원 (+${Math.round((b/a-1)*100)}%)`);}
+    return out.length?{fact:out.join(' · '),src:'재무상태표'}:null;},
+  q:['해당 연도 유형자산 증가는 어떤 경위입니까? (신규 취득·리스 인식·재분류 등)','설비투자였다면 통합투자세액공제를 신청하셨습니까?','신성장·원천기술 시설로 인정받을 수 있는 자산이 포함돼 있습니까?'],
+  docs:['세액공제신청서','유형자산 취득명세','감가상각비명세서']},
+
+ {id:'RND',name:'연구·인력개발비 세액공제',law:'조세특례제한법',art:'제10조',
+  test:(F,P)=>P.hasPatent?{fact:'기업신용보고서상 「특허보유기업」 표기',src:'기업요약'}:null,
+  q:['연구전담부서 또는 기업부설연구소 인정을 받으셨습니까?','연구개발비를 별도 계정으로 구분경리하고 계십니까?','R&D 세액공제를 신청하셨거나 국세청 사전심사를 받으셨습니까?'],
+  docs:['연구전담부서 인정서','연구개발계획서·보고서','연구및인력개발비명세서','연구원 급여대장']},
+
+ {id:'SMEDED',name:'중소기업 특별세액감면',law:'조세특례제한법',art:'제7조',
+  test:(F,P)=>P.isSME?{fact:`중소기업${P.industry?' · '+P.industry:''}${P.region?' · 본점 '+P.region:''}`,src:'기업요약'}:null,
+  q:['중소기업 특별세액감면을 신청하셨습니까?','업종이 감면대상 업종에 해당합니까?','소기업·중기업 구분과 수도권 여부가 정확히 적용됐습니까?'],
+  docs:['세액감면신청서','중소기업기준검토표','사업장 소재지 증빙']},
+
+ {id:'EMPLOY',name:'통합고용세액공제',law:'조세특례제한법',art:'제29조의8',
+  test:(F,P)=>(P.hire!=null||P.leave!=null)?{fact:`최근 1년 신규취득 ${P.hire??'—'}명 · 상실 ${P.leave??'—'}명 (국민연금 기준)${P.emp?' · 종업원 '+P.emp+'명':''}`,src:'종업원 현황'}:null,
+  q:['상시근로자 수가 증가한 연도에 통합고용세액공제를 신청하셨습니까?','청년·60세 이상·경력단절자 등 우대 대상이 반영됐습니까?','인원이 감소한 연도에 기공제분 추징 대상이 있습니까?'],
+  docs:['상시근로자명세서','급여대장','4대보험 가입자명부']},
+
+ {id:'WAGEUP',name:'임금 증가 세액공제',law:'조세특례제한법',art:'제29조의4',
+  test:(F,P)=>{
+    if(P.avgPay&&P.indAvgPay&&P.avgPay>P.indAvgPay*1.5)
+      return {fact:`국민연금 기준 평균보수 ${P.avgPay.toLocaleString()}만원 · 동종업계 평균 ${P.indAvgPay.toLocaleString()}만원 (${(P.avgPay/P.indAvgPay).toFixed(1)}배)`,src:'종업원 현황',
+        caveat:'국민연금 고지금액 역산 추정치이며 기준소득월액 상한과 임원·특수관계인이 포함되어 세법상 상시근로자 평균임금과 다릅니다.'};
+    const y=Object.keys(F).sort();
+    for(let i=1;i<y.length;i++){const a=Number(F[y[i-1]].laborCost),b=Number(F[y[i]].laborCost);
+      if(a>0&&b>a*1.12)return {fact:`${y[i]}년 인건비 ${a.toLocaleString()}→${b.toLocaleString()}백만원 (+${Math.round((b/a-1)*100)}%)`,src:'손익계산서'};}
+    return null;},
+  q:['근로소득 증대세제(임금증가 세액공제)를 신청하셨습니까?','임원·최대주주·특수관계인을 제외한 상시근로자 기준 평균임금 증가율은 얼마입니까?','정규직 전환 인원이 있었다면 별도 공제를 반영하셨습니까?'],
+  docs:['급여대장','상시근로자명세서','세액공제신청서','4대보험 가입자명부']},
+
+ {id:'SOCINS',name:'사회보험료 세액공제',law:'조세특례제한법',art:'제30조의4',
+  test:(F,P)=>(P.hire!=null&&Number(P.hire)>0)?{fact:`최근 1년 신규취득 ${P.hire}명 (국민연금 기준)${P.emp?' · 종업원 '+P.emp+'명':''}`,src:'종업원 현황'}:null,
+  q:['상시근로자 증가에 따른 사회보험료 세액공제를 신청하셨습니까?','통합고용세액공제와 중복적용 배제 규정을 검토하셨습니까?','청년·경력단절자 우대 대상이 포함돼 있습니까?'],
+  docs:['4대보험 납부내역','상시근로자명세서','세액공제신청서']},
+
+ {id:'STARTUP',name:'창업중소기업 세액감면',law:'조세특례제한법',art:'제6조',
+  test:(F,P)=>{
+    if(!P.established)return null;
+    const yrs=(Date.now()-new Date(P.established).getTime())/(365.25*864e5);
+    return (yrs<=6)?{fact:`회사성립 ${P.established} (설립 ${Math.floor(yrs)}년차)`,src:'등기부'}:null;},
+  q:['창업중소기업 세액감면(최초 소득발생 연도부터 5년)을 적용하셨습니까?','창업 요건(기존 사업 승계·법인전환 아님)을 충족합니까?','감면 대상 업종과 지역·청년창업 여부가 정확히 적용됐습니까?'],
+  docs:['법인세 과세표준신고서','세액감면신청서','창업 요건 증빙']},
+
+ {id:'BADDEBT',name:'대손금·대손충당금',law:'법인세법',art:'제19조의2',
+  test:(F)=>{const y=Object.keys(F).sort(),out=[];
+    for(const k of y){const v=Number(F[k].badDebtExpense);
+      if(Number.isFinite(v)&&v<0)out.push(`${k}년 대손상각비 ${v.toLocaleString()}백만원 (환입)`);}
+    return out.length?{fact:out.join(' · '),src:'손익계산서'}:null;},
+  q:['대손 환입이 발생한 사유는 무엇입니까? (회수·재평가·과거 과대계상 등)','과거 대손 인정 시점과 요건이 적정했습니까?','회수불능 채권 중 대손처리하지 않은 건이 있습니까?'],
+  docs:['계정별원장(대손상각비·대손충당금)','채권 연령분석표','회수 노력 증빙']},
+
+ {id:'ENTERTAIN',name:'기업업무추진비(접대비) 한도',law:'법인세법',art:'제25조',
+  test:(F)=>{const y=Object.keys(F).sort(),L=F[y[y.length-1]]||{};
+    const sga=Number(L.sgaExpenses),rev=Number(L.revenue);
+    return (sga>0&&rev>0)?{fact:`${y[y.length-1]}년 매출액 ${rev.toLocaleString()}백만원 · 판매관리비 ${sga.toLocaleString()}백만원`,src:'손익계산서'}:null;},
+  q:['기업업무추진비 한도 계산에 중소기업 기본한도와 수입금액 기준이 정확히 반영됐습니까?','손금불산입액이 과다 계산된 부분은 없습니까?','문화·전통시장 추가한도를 적용하셨습니까?'],
+  docs:['기업업무추진비 조정명세서','계정별원장','신용카드매출전표']},
+
+ {id:'RETIREPROV',name:'퇴직급여충당금·퇴직연금',law:'법인세법',art:'제33조',
+  test:(F,P)=>{const y=Object.keys(F).sort(),L=F[y[y.length-1]]||{};
+    const rp=Number(L.retirementProvision);
+    if(Number.isFinite(rp)&&rp>0)return {fact:`퇴직급여 관련 계상 ${rp.toLocaleString()}백만원`,src:'재무제표'};
+    return P.emp?{fact:`종업원 ${P.emp}명 · 퇴직급여충당금 계상 여부 확인 필요`,src:'종업원 현황'}:null;},
+  q:['확정급여형(DB) 퇴직연금 부담금을 손금산입하셨습니까?','퇴직급여충당금 한도와 세무조정이 적정합니까?','임원 퇴직급여는 정관·규정 한도 내에서 처리되었습니까?'],
+  docs:['퇴직급여충당금조정명세서','퇴직연금 계약서·납입내역','임원퇴직금 지급규정']},
+
+ {id:'INVENTORY',name:'재고자산 평가손실',law:'법인세법',art:'제42조',
+  test:(F)=>{const y=Object.keys(F).sort(),out=[];
+    for(let i=1;i<y.length;i++){const a=Number(F[y[i-1]].inventories),b=Number(F[y[i]].inventories);
+      if(a>0&&b<a*0.7)out.push(`${y[i]}년 재고자산 ${a.toLocaleString()}→${b.toLocaleString()}백만원 (${Math.round((b/a-1)*100)}%)`);}
+    return out.length?{fact:out.join(' · '),src:'재무상태표'}:null;},
+  q:['재고 감소가 판매인지 평가손실·폐기인지 구분됩니까?','재고자산 평가방법을 신고하셨고 저가법 평가손실을 계상하셨습니까?','감모손실·폐기손실 증빙이 있습니까?'],
+  docs:['재고자산평가방법신고서','재고실사표','폐기 증빙']},
+
+ {id:'INTEREST',name:'지급이자 손금불산입',law:'법인세법',art:'제28조',
+  test:(F)=>{const y=Object.keys(F).sort(),L=F[y[y.length-1]]||{};
+    const loan=Number(L.shortTermLoans||L.loanReceivable),fin=Number(L.financeCost);
+    return (loan>0&&fin>0)?{fact:`대여금 ${loan.toLocaleString()}백만원 · 금융비용 ${fin.toLocaleString()}백만원`,src:'재무제표'}:null;},
+  q:['업무무관 자산·가지급금 관련 지급이자 손금불산입액이 과다 계산되지 않았습니까?','대여금의 업무관련성과 적정 이자율이 확인됩니까?','건설자금이자 자본화 대상과 손금 대상이 구분됐습니까?'],
+  docs:['지급이자 조정명세서','가지급금 등의 인정이자 조정명세서','대여금 계약서']},
+
+ {id:'DIVINCOME',name:'수입배당금 익금불산입',law:'법인세법',art:'제18조의2',
+  test:(F,P)=>P.hasAffiliate?{fact:'관계회사·장기투자자산 보유 확인',src:'기업현황'}:null,
+  q:['자회사·관계회사로부터 받은 배당금에 익금불산입을 적용하셨습니까?','지분율 구간별 익금불산입률이 정확히 적용됐습니까?','차입금 이자 차감액 계산이 적정합니까?'],
+  docs:['수입배당금 익금불산입 조정명세서','주식보유 현황','배당 수령 내역']},
+
+ {id:'FOREIGN',name:'외국납부세액공제',law:'법인세법',art:'제57조',
+  test:(F,P)=>{const y=Object.keys(F).sort(),L=F[y[y.length-1]]||{};
+    if(P.hasOverseas)return {fact:'해외법인·해외거래 확인',src:'기업현황'};
+    const fx=Number(L.fxGainLoss);
+    return (Number.isFinite(fx)&&Math.abs(fx)>0)?{fact:`외화환산손익 ${fx.toLocaleString()}백만원 계상`,src:'손익계산서'}:null;},
+  q:['해외에서 납부한 법인세에 대해 외국납부세액공제를 적용하셨습니까?','간접외국납부세액공제 대상이 있습니까?','조세조약상 제한세율이 적용됐습니까?'],
+  docs:['외국납부세액공제 신청서','해외 납세증명','조세조약 적용 자료']},
+
+ {id:'DISASTER',name:'재해손실세액공제',law:'법인세법',art:'제58조',
+  test:(F)=>{const y=Object.keys(F).sort(),out=[];
+    for(const k of y){const v=Number(F[k].disasterLoss);
+      if(Number.isFinite(v)&&v>0)out.push(`${k}년 재해손실 ${v.toLocaleString()}백만원`);}
+    return out.length?{fact:out.join(' · '),src:'손익계산서'}:null;},
+  q:['재해로 자산총액의 20% 이상을 상실한 사업연도가 있습니까?','재해손실세액공제를 신청하셨습니까?','보험금 수령액과의 차액이 정확히 반영됐습니까?'],
+  docs:['재해 발생 증빙','재해손실세액공제 신청서','보험금 수령 내역']},
+
+ {id:'DEPREC',name:'감가상각·손금 계상',law:'법인세법',art:'제23조',
+  test:(F)=>{const y=Object.keys(F).sort(),L=F[y[y.length-1]]||{};
+    const ta=Number(L.tangibleAssets),dp=Number(L.depreciation);
+    return (ta>0&&Number.isFinite(dp))?{fact:`유형자산 ${ta.toLocaleString()}백만원 · 감가상각비 ${dp.toLocaleString()}백만원 (상각률 ${(dp/ta*100).toFixed(1)}%)`,src:'재무제표'}:null;},
+  q:['자산별 내용연수와 상각방법이 신고서와 일치합니까?','즉시상각 의제 대상 자산을 감가상각으로 처리한 건이 있습니까?','자본적 지출과 수익적 지출 구분이 적정합니까?'],
+  docs:['감가상각비명세서','자산별 취득명세','수선비 내역']},
+];
+
+function crRefundProfile(model){
+  const p=model?.profile||{}, R=crRegData();
+  const emp=Number(p.employees||p.employeeCount)||null;
+  return {hasPatent:/특허|인증/.test(String(p.certifications||p.notes||'')),
+    isSME:/중소기업/.test(String(p.companyType||p.scale||''))||true,
+    industry:p.industry||'', region:p.region||p.address||'',
+    hire:p.hireCount??null, leave:p.leaveCount??null, emp,
+    avgPay:Number(p.avgPay)||null, indAvgPay:Number(p.industryAvgPay)||null,
+    established:(R&&R.company&&R.company.established)||p.establishedDate||null,
+    hasAffiliate:!!(p.relatedCompanies&&p.relatedCompanies.length)||/관계회사|계열/.test(String(p.notes||'')),
+    hasOverseas:!!(p.foreignSubsidiaries&&p.foreignSubsidiaries.length)||/해외|수출/.test(String(p.notes||p.products||''))};
+}
+function crRefundSignals(model){
+  const F=model?.financials||{}; if(!Object.keys(F).length)return [];
+  const P=crRefundProfile(model), out=[];
+  for(const s of CR_REFUND_SIGNALS){
+    let r=null; try{r=s.test(F,P);}catch(_e){r=null;}
+    if(r)out.push({...s,...r});
+  }
+  return out;
+}
+
+/* ── 리포트 페이지 ─────────────────────────────────────────── */
+const CR_REFUND_DISCLAIMER=`<div class="notice amber refund-dis"><b>본 페이지는 세무자문이 아닙니다</b>
+  재무제표·등기부에서 <b>확인되는 사실</b>과 관련 제도를 정리한 것입니다. 요건 충족 여부·환급 가능 여부·환급 금액은
+  <b>세무대리인(세무사·회계사)의 검토로만 판단</b>됩니다. 본 시스템은 특정 세무대리인을 알선하지 않으며,
+  세무사법에 따른 세무대리·세무상담 업무를 수행하지 않습니다.</div>`;
+
+function crRefundPage(model){
+  const sig=crRefundSignals(model); if(!sig.length)return;
+  const rows=sig.map((s,i)=>`<tr>
+    <td class="tc">${i+1}</td>
+    <td><b>${esc(s.name)}</b><div class="rf-law">${crLawTag(s.law,s.art)}${s.law2?' · '+crLawTag(s.law2,s.art2):''}</div></td>
+    <td>${esc(s.fact)}<div class="rf-src">출처 ${esc(s.src)}</div></td>
+  </tr>`).join('');
+  addPage({id:'refund-claim',title:'경정청구 검토 신호',subtitle:'법정신고기한 후 5년 이내 확인 가능한 항목을 정리했습니다.',section:'REFUND REVIEW',visibility:'common',issueId:'TAX-07',summary:`검토 신호 ${sig.length}건`,
+   body:`${CR_REFUND_DISCLAIMER}
+   <div class="lead"><b>검토 신호 ${sig.length}건이 확인되었습니다.</b>
+     <p>${crLawTag('국세기본법','제45조의2')}는 신고한 과세표준·세액이 세법상 금액을 초과하거나, 신고한 결손금·세액공제액·환급세액이 미치지 못할 때
+     <b>법정신고기한이 지난 후 5년 이내</b> 경정을 청구할 수 있도록 정하고 있습니다. 아래는 재무·등기 자료에서 확인되는 사실이며,
+     해당 여부는 신고서 원본 확인이 필요합니다.</p></div>
+   <table><thead><tr><th style="width:34px">#</th><th style="width:200px">검토 항목 · 근거 조문</th><th>확인된 사실</th></tr></thead><tbody>${rows}</tbody></table>
+   <div class="source-box"><b>다음 단계</b> 「세무전문가 검토 요청서」 페이지를 인쇄하거나 저장해 <b>대표님의 세무대리인</b>께 전달하시면 됩니다.
+     확인에 필요한 자료 목록과 질문이 함께 정리되어 있습니다.</div>`});
+}
+
+function crRefundRequestPage(model){
+  const sig=crRefundSignals(model); if(!sig.length)return;
+  const p=model?.profile||{};
+  const blocks=sig.map((s,i)=>`<div class="rq-item">
+     <div class="rq-hd"><span class="rq-no">${i+1}</span><b>${esc(s.name)}</b>${crLawTag(s.law,s.art)}${s.law2?' · '+crLawTag(s.law2,s.art2):''}</div>
+     <div class="rq-fact"><b>확인된 사실</b> ${esc(s.fact)} <span class="rf-src">(${esc(s.src)})</span></div>
+     <div class="rq-q"><b>검토 요청</b><ul>${s.q.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
+     <div class="rq-doc"><b>준비 자료</b> ${s.docs.map(esc).join(' · ')}</div>
+   </div>`).join('');
+  addPage({id:'refund-request',title:'세무전문가 검토 요청서',subtitle:'이 페이지를 인쇄하거나 저장해 세무대리인께 전달하십시오.',section:'REFUND REVIEW · REQUEST',visibility:'common',summary:'세무전문가 검토 요청서',
+   body:`<div class="rq-head"><div><b>${esc(p.displayName||p.companyName||'—')}</b>${p.businessNumber?` · 사업자 ${esc(p.businessNumber)}`:''}</div>
+     <div class="rq-sub">검토 신호 ${sig.length}건 · 청구기한 ${crLawTag('국세기본법','제45조의2')} 법정신고기한 후 5년 이내</div></div>
+   ${CR_REFUND_DISCLAIMER}
+   ${blocks}
+   <div class="rq-sign"><b>검토 의견 (세무대리인 기재란)</b>
+     <div class="rq-sign-grid"><div>검토자<span>_______________ (세무사/회계사 · 등록번호 __________)</span></div>
+       <div>검토일<span>________________</span></div>
+       <div class="wide">의견<span>☐ 경정청구 대상 있음　☐ 대상 없음　☐ 추가자료 필요</span></div></div></div>`});
+}
+/* ── 초회면담 도입 화법 (컨설턴트 전용) ───────────────────────
+   구성: 📊 무슨 일이 있었나 · 🔍 왜 중요한가 · 🗣 대면 도입 ·
+         💬 예상 답변→후속질문 · ⚠️ 하지 말 것
+   모든 수치는 이 기업의 실제 재무·등기·국민연금 자료에서 산출한다.
+   상위 3개만 펼쳐 노출하고 나머지는 접는다.                        */
+function crOpeners(model){
+  const F=model?.financials||{}, ys=Object.keys(F).filter(y=>/^\d{4}$/.test(y)).sort();
+  if(!ys.length)return [];
+  const Y=ys[ys.length-1], Yp=ys[ys.length-2]||Y, Y0=ys[0];
+  const L=F[Y]||{}, P0=F[Yp]||{}, F0=F[Y0]||{};
+  const p=model?.profile||{}, R=crRegData(), V=model?.calculations?.valuation||null, c=crCharter()||{};
+  const num=x=>Number(x), ok=x=>Number.isFinite(Number(x))&&Number(x)!==0;
+  const eok=x=>{const v=Number(x)/100;return (Math.abs(v)>=10?v.toFixed(0):v.toFixed(1));};
+  const pct=(a,b)=>((Number(a)/Number(b)-1)*100);
+  const O=[]; const add=o=>O.push(o);
+  const ceo=R&&R.current&&R.current.find(o=>o.role==='대표이사');
+  const sig=(typeof crRefundSignals==='function')?crRefundSignals(model):[];
+
+  /* ═══ A. 긴급 신호 ═══ */
+  if(ok(L.cashAndCashEquivalents)&&ok(P0.cashAndCashEquivalents)&&num(L.cashAndCashEquivalents)<num(P0.cashAndCashEquivalents)*0.5){
+    const cur=ok(L.currentAssets)&&ok(L.currentLiabilities)?(num(L.currentAssets)/num(L.currentLiabilities)*100):null;
+    const prev=ok(P0.currentAssets)&&ok(P0.currentLiabilities)?(num(P0.currentAssets)/num(P0.currentLiabilities)*100):null;
+    const drop=num(P0.cashAndCashEquivalents)-num(L.cashAndCashEquivalents);
+    add({tag:'현금·유동성',theme:'긴급 신호',sev:1,hook:'가장 먼저 짚어야 할 신호',
+      facts:[`${Yp}년 말 현금 ${eok(P0.cashAndCashEquivalents)}억 → ${Y}년 말 ${eok(L.cashAndCashEquivalents)}억 (${eok(drop)}억 감소)`,
+        cur!=null?`유동비율 ${prev!=null?prev.toFixed(0)+'% → ':''}${cur.toFixed(0)}%`:null,
+        ok(L.tangibleAssets)&&ok(P0.tangibleAssets)?`유형자산 ${eok(P0.tangibleAssets)}억 → ${eok(L.tangibleAssets)}억`:null,
+        ok(L.totalBorrowings)&&ok(P0.totalBorrowings)?`차입금 ${eok(P0.totalBorrowings)}억 → ${eok(L.totalBorrowings)}억`:null],
+      insight:`유동비율 ${cur!=null?cur.toFixed(0)+'%':'급락'}는 1년 안에 갚아야 할 ${ok(L.currentLiabilities)?eok(L.currentLiabilities)+'억':'단기부채'}에 대해 현금화 가능한 자산이 ${ok(L.currentAssets)?eok(L.currentAssets)+'억뿐이라':'그보다 적다'}는 뜻입니다. 통상 100% 아래면 단기 지급능력에 문제가 있다고 봅니다. 다만 더 중요한 것은 ${prev!=null?`작년 ${prev.toFixed(0)}%에서 급락했다`:'단기간에 급락했다'}는 사실입니다. 정상 운영되던 회사에 1년 사이 큰 자금 이동이 있었다는 의미이고, 그 성격이 투자인지 대여인지 상환인지에 따라 이후 상담 전체가 갈립니다. 숫자만 보고 "자금난"으로 단정하면 안 됩니다. 설비투자로 현금이 자산으로 옮겨간 경우도 같은 모습으로 나타납니다.`,
+      talk:`대표님, 숫자 하나만 먼저 확인하겠습니다. ${Yp}년 말 현금이 ${eok(P0.cashAndCashEquivalents)}억이었는데 ${Y}년 말은 ${eok(L.cashAndCashEquivalents)}억입니다. 1년 사이 ${eok(drop)}억이 어디로 갔는지가 이 회사의 가장 중요한 질문입니다.`
+        +(cur!=null?`\n동시에 1년 안에 갚아야 할 돈이 ${eok(L.currentLiabilities)}억인데 1년 안에 현금화되는 자산은 ${eok(L.currentAssets)}억입니다. 유동비율이 ${cur.toFixed(0)}%입니다.${prev!=null?` 작년에는 ${prev.toFixed(0)}%였습니다.`:''}`:'')
+        +`\n제가 숫자만 봐서는 알 수 없는 부분이라 여쭙습니다. 무슨 일이 있었습니까?`,
+      qa:[['설비 투자를 했습니다','"투자세액공제는 받으셨습니까?" → 경정청구·투자공제로 연결'],
+        ['관계사나 대표에게 빌려줬습니다','"계약서와 이사회 결의는 있습니까?" → 가지급금 정상화'],
+        ['차입금을 상환했습니다','"그런데 차입금은 오히려 늘었는데요?" → 자금흐름 재확인'],
+        ['정확히는 잘 모르겠습니다','"경리 담당자분과 함께 보시겠습니까?" → 2차 미팅 확보']],
+      avoid:['"자금 사정이 안 좋으신 것 같다"고 단정하지 마십시오. 방어적으로 만들면 그 뒤 대화가 닫힙니다.','유동비율 같은 지표를 먼저 꺼내지 마십시오. 금액이 먼저 와닿습니다.','원인을 추측해서 말하지 말고 반드시 대표가 답하게 하십시오.'],
+      why:'대표가 반드시 답해야 하는 질문. 투자·상환·대여 중 무엇인지에 따라 이후 상담 전체가 갈립니다.'});
+  }
+  if(ok(L.operatingIncome)&&ok(L.financeCost)&&num(L.operatingIncome)/num(L.financeCost)<1.5){
+    const icr=num(L.operatingIncome)/num(L.financeCost);
+    add({tag:'이자보상배율',theme:'긴급 신호',sev:1,hook:'금융기관이 먼저 보는 숫자',
+      facts:[`${Y}년 영업이익 ${eok(L.operatingIncome)}억 · 금융비용 ${eok(L.financeCost)}억`,
+        `이자보상배율 ${icr.toFixed(2)}배`,
+        ok(P0.financeCost)?`전년 금융비용 ${eok(P0.financeCost)}억`:null],
+      insight:`이자보상배율은 영업이익으로 이자를 몇 배 갚을 수 있는지를 봅니다. 1배 미만이면 본업에서 번 돈으로 이자조차 감당하지 못한다는 뜻이고, ${icr<1?'현재 그 상태입니다.':'현재 '+icr.toFixed(2)+'배로 겨우 넘긴 수준입니다.'} 3년 연속 1배 미만이면 통상 한계기업으로 분류되어 신규 대출과 만기연장이 어려워집니다. 금융기관은 재무제표에서 이 숫자를 가장 먼저 봅니다. 대표님도 은행에서 이미 언급을 들으셨을 가능성이 높고, 그래서 민감하지만 동시에 가장 절실한 주제입니다.`,
+      talk:`${Y}년 영업이익이 ${eok(L.operatingIncome)}억, 금융비용이 ${eok(L.financeCost)}억입니다. 영업이익으로 이자를 갚는 배율이 ${icr.toFixed(2)}배입니다.\n${icr<1?'1배 미만은 본업으로 번 돈이 이자에 못 미친다는 뜻입니다. 3년 연속이면 한계기업으로 분류될 수 있습니다.':'1배는 넘겼지만 여유가 크지 않습니다. 금리가 오르거나 영업이익이 줄면 바로 역전됩니다.'}\n혹시 은행에서 이 부분을 언급한 적이 있으십니까?`,
+      qa:[['은행에서 얘기가 나왔습니다','"어떤 조건을 요구받으셨습니까?" → 차입구조 개선 컨설팅'],
+        ['처음 듣습니다','"올해 만기가 돌아오는 차입금은 얼마입니까?" → 만기 구조 점검'],
+        ['일시적입니다','"내년 영업이익 계획은 어떻게 잡고 계십니까?" → 개선 시나리오']],
+      avoid:['"한계기업"이라는 단어를 대표 앞에서 직접 쓰지 마십시오. 제도상 용어일 뿐인데 모욕으로 받아들입니다.','부채비율·차입금의존도를 함께 나열하지 마십시오. 숫자 하나에 집중해야 대화가 됩니다.'],
+      why:'대표가 가장 민감하게 반응하는 주제. 차입구조 개선 컨설팅으로 직결됩니다.'});
+  }
+  if(ok(L.totalBorrowings)&&ok(P0.totalBorrowings)&&num(L.totalBorrowings)>num(P0.totalBorrowings)*1.5){
+    add({tag:'차입 급증',theme:'긴급 신호',sev:2,hook:'자금조달 구조 확인',
+      facts:[`차입금 ${eok(P0.totalBorrowings)}억 → ${eok(L.totalBorrowings)}억 (${pct(L.totalBorrowings,P0.totalBorrowings).toFixed(0)}%)`,
+        ok(L.totalAssets)?`차입금의존도 ${(num(L.totalBorrowings)/num(L.totalAssets)*100).toFixed(1)}%`:null,
+        ok(L.currentBorrowings)?`1년 내 만기 ${eok(L.currentBorrowings)}억`:null],
+      insight:`차입금이 1년 사이 ${pct(L.totalBorrowings,P0.totalBorrowings).toFixed(0)}% 늘었다면 반드시 용도가 있습니다. 설비투자였다면 투자세액공제 대상일 수 있고, 운전자금이었다면 현금흐름 구조 자체를 봐야 합니다. 관계사 지원이었다면 가지급금·부당행위계산 쟁점이 됩니다. ${ok(L.currentBorrowings)&&ok(L.totalBorrowings)&&num(L.currentBorrowings)/num(L.totalBorrowings)>0.5?'특히 1년 내 만기 비중이 절반을 넘어 만기 구조가 단기에 몰려 있습니다. 차환이 막히면 즉시 유동성 위기로 이어집니다.':''}`,
+      talk:`차입금이 ${eok(P0.totalBorrowings)}억에서 ${eok(L.totalBorrowings)}억으로 ${pct(L.totalBorrowings,P0.totalBorrowings).toFixed(0)}% 늘었습니다.${ok(L.totalAssets)?` 자산총계 대비 의존도가 ${(num(L.totalBorrowings)/num(L.totalAssets)*100).toFixed(1)}%입니다.`:''}\n어떤 용도로 조달하셨습니까? 그리고 상환 계획은 어떻게 잡고 계십니까?`,
+      qa:[['설비투자입니다','"세액공제 신청하셨습니까?" → 경정청구'],
+        ['운전자금입니다','"매출은 느는데 현금이 부족한 구조입니까?" → 운전자금 진단'],
+        ['관계사를 지원했습니다','"이사회 결의와 이자 수취는 하셨습니까?" → 부당행위계산 점검']],
+      avoid:['"빚이 많다"는 표현을 쓰지 마십시오. 차입은 정상적인 조달 수단입니다.','상환 능력을 먼저 의심하지 말고 용도를 먼저 물으십시오.'],
+      why:'용도가 투자면 세액공제, 운전자금이면 현금흐름 개선으로 상담이 갈립니다.'});
+  }
+
+  /* ═══ B. 돌려받는 얘기 ═══ */
+  if(sig.length){
+    const zero=sig.find(s=>s.id==='ZEROTAX'), inv=sig.find(s=>s.id==='INVEST'), wage=sig.find(s=>s.id==='WAGEUP');
+    add({tag:'경정청구',theme:'돌려받는 얘기',sev:1,hook:'돈 드는 얘기가 아니라 돌려받는 얘기',
+      facts:sig.slice(0,6).map(s=>`${s.name} (${s.law} ${s.art})`),
+      insight:`경정청구는 이미 신고·납부한 세금이 세법상 금액보다 많았을 때 돌려받는 제도입니다. 국세기본법 제45조의2는 법정신고기한 후 5년 이내 청구를 허용합니다. 실무에서 세무대리인도 놓치는 경우가 많은데, 신고 당시 자료가 없었거나 요건 검토를 안 한 항목들이 대부분입니다. 특히 세액공제·감면은 신청서를 내야 적용되므로, 요건을 충족했어도 신청을 빠뜨리면 그대로 넘어갑니다. 이 회사에서는 ${sig.length}가지 확인 항목이 나왔습니다. 중요한 것은 컨설턴트가 판단하지 않는다는 점입니다. 사실만 정리해 세무사에게 넘기면 되고, 그 자체로 대표에게 실질적 도움이 됩니다.`,
+      talk:(()=>{
+        /* ★ 화법은 「억」 단위로 통일한다. 신호 원문(백만원)을 그대로 읽으면 대표가 못 알아듣는다. */
+        const zeroYears=Object.keys(F).filter(y=>num(F[y].netIncome)>0&&num(F[y].incomeTaxExpense||0)===0);
+        const zeroTxt=zeroYears.length
+          ? zeroYears.map(y=>`${y}년 ${eok(F[y].netIncome)}억 이익이 났는데 법인세비용이 0원`).join(', ')+'입니다'
+          : '';
+        const invTxt=(ok(L.tangibleAssets)&&ok(F0.tangibleAssets)&&num(L.tangibleAssets)>num(F0.tangibleAssets)*1.5)
+          ? `유형자산이 ${eok(F0.tangibleAssets)}억에서 ${eok(L.tangibleAssets)}억으로 늘었습니다`
+          : '';
+        const wageTxt=(p.avgPay&&p.industryAvgPay&&Number(p.avgPay)>Number(p.industryAvgPay)*1.5)
+          ? `평균보수도 동종업계의 ${(Number(p.avgPay)/Number(p.industryAvgPay)).toFixed(1)}배입니다`
+          : '';
+        let s='제안 드리기 전에 먼저 볼 게 있습니다. ';
+        s += zeroTxt ? zeroTxt+'. 결손금 공제 때문일 텐데, 그 과정에서 못 받고 넘어간 공제가 있을 수 있습니다.'
+                     : '재무제표에서 확인해 보실 항목이 몇 가지 있습니다.';
+        if(invTxt) s += `\n그리고 ${invTxt}. 설비투자 세액공제는 받으셨습니까?`;
+        if(wageTxt) s += `\n${wageTxt}. 임금이 오른 부분에도 세액공제가 있습니다.`;
+        s += `\n국세기본법은 법정신고기한 후 5년 이내 경정청구를 허용하고 있습니다. 해당 여부는 세무사님만 판단하실 수 있고, 저는 확인하실 항목 ${sig.length}가지만 정리해 드립니다.\n대표님 세무사님께 이 종이 한 장만 드리면 되는데, 한번 확인해 보시겠습니까?`;
+        return s;
+      })(),
+      qa:[['우리 세무사가 다 챙겼을 겁니다','"그러실 겁니다. 다만 신청서를 내야 적용되는 항목들이라 확인만 부탁드리는 겁니다." → 방어 해제'],
+        ['얼마나 돌려받을 수 있습니까?','"그건 신고서를 봐야 알 수 있고 세무사님 영역입니다. 저는 볼 항목만 정리해 드립니다." → 신뢰 형성'],
+        ['한번 물어보겠습니다','"결과 나오면 알려주십시오. 그때 다시 뵙겠습니다." → 2차 미팅 확정'],
+        ['세무사를 바꿀 생각은 없습니다','"바꾸시라는 말씀이 전혀 아닙니다. 지금 세무사님께 드리는 자료입니다." → 오해 차단']],
+      avoid:['"환급받으실 수 있습니다"라고 단정하지 마십시오. 세무사법 위반 소지가 있습니다.','금액을 추정해서 말하지 마십시오. "얼마쯤 될 것 같다"도 안 됩니다.','현재 세무대리인을 비판하는 뉘앙스를 절대 만들지 마십시오. 대표는 세무사와 오래된 관계인 경우가 많습니다.'],
+      why:'거절하기 어려운 도입부. 세무사 검토 결과를 들으러 2차 미팅이 자연스럽게 생깁니다.'});
+  }
+
+  /* ═══ C. 대표 개인 ═══ */
+  if(V&&V.perShare&&V.parValue){
+    add({tag:'주식가치',theme:'대표 개인',sev:1,hook:'대표가 가장 모르는 숫자',
+      facts:[`1주당 추정가치 ${V.perShare.toLocaleString()}원 (액면 ${V.parValue.toLocaleString()}원의 ${V.parMultiple}배)`,
+        `발행주식 ${V.shares.toLocaleString()}주 · 전체 약 ${(V.totalValue/1e8).toFixed(0)}억`,
+        `순자산가치 ${V.navPer.toLocaleString()}원 · 적용방법 ${V.method}`],
+      insight:`상속세및증여세법 보충적 평가방법은 순자산가치와 순손익가치를 가중평균하되 순자산가치의 80%를 하한으로 둡니다. 이 회사는 ${V.method}이 적용됐습니다. 대표가 놀라는 이유는 액면가로 기억하고 있기 때문입니다. 설립 때 ${V.parValue.toLocaleString()}원으로 낸 주식이 지금 ${V.perShare.toLocaleString()}원이면, 지분 100%를 넘길 때 약 ${(V.totalValue/1e8).toFixed(0)}억이 과세 대상이 됩니다. 이 숫자가 나오면 상속세·자기주식·후계자 지분매입·배당정책이 한 번에 연결됩니다. 다만 영업권 가산·최대주주 할증(20%)·부동산 개별 감정이 반영되면 달라지므로 확정 금액으로 말하면 안 됩니다.`,
+      talk:`대표님 회사 주식이 액면 ${V.parValue.toLocaleString()}원이시죠. 지금 상속·증여 기준으로 계산하면 1주당 약 ${V.perShare.toLocaleString()}원입니다. 액면의 ${V.parMultiple}배입니다.\n${V.shares.toLocaleString()}주 전체로는 약 ${(V.totalValue/1e8).toFixed(0)}억입니다.\n이 숫자를 알고 계셨습니까?`,
+      qa:[['몰랐습니다','"상속세도, 자기주식도, 후계자 지분매입도 전부 여기서 출발합니다." → 승계 대화 개시'],
+        ['그렇게 높습니까?','"장부상 순자산이 크기 때문입니다. 실제 평가는 더 복잡하지만 방향은 이렇습니다." → 정밀평가 제안'],
+        ['알고 있었습니다','"그럼 이전 계획도 세우고 계시겠군요. 어디까지 진행하셨습니까?" → 진도 확인'],
+        ['팔 생각 없습니다','"파실 때만 문제가 되는 게 아니라 상속 때 그대로 세금이 됩니다." → 리스크 인식']],
+      avoid:['"이 금액에 팔 수 있다"고 말하지 마십시오. 세법상 평가액이지 시장가가 아닙니다.','상속세율을 곧바로 곱해서 세금을 말하지 마십시오. 공제·할증이 반영되지 않습니다.'],
+      why:'대표가 거의 모릅니다. "몰랐다" 반응이 나오면 승계·자본거래 대화가 한 번에 열립니다.'});
+  }
+  if(ceo&&c.retireRule==='없음'){
+    add({tag:'퇴직금 규정',theme:'대표 개인',sev:1,hook:'대표가 가장 놀라는 지점',
+      facts:[`현 대표이사 근속 ${crRegTenure(ceo.since)} (${ceo.since} ${ceo.type})`,
+        `정관상 임원 퇴직금 지급규정 없음 (컨설턴트 확인)`,
+        ok(L.cashAndCashEquivalents)?`현금성자산 ${eok(L.cashAndCashEquivalents)}억`:null],
+      insight:`법인세법 시행령 제44조는 임원 퇴직급여를 정관 또는 정관에서 위임한 규정에 정해진 금액까지만 손금으로 인정합니다. 규정이 없으면 「임원 퇴직급여 지급규정이 없는 경우」의 법정 산식(퇴직 전 3년 평균급여 × 1/10 × 근속연수)만 인정되고, 초과 지급분은 손금불산입되어 상여로 처분됩니다. 대표가 놀라는 이유는 "회사 돈으로 내 퇴직금을 주는데 왜 비용이 안 되나"를 생각해본 적이 없기 때문입니다. 규정 정비는 주주총회 결의가 필요하고 소급 적용이 제한되므로, 빨리 할수록 유리합니다.`,
+      talk:`현 대표님 근속이 ${crRegTenure(ceo.since)}입니다. 그런데 정관에 임원 퇴직금 지급규정이 없다고 하셨습니다.\n규정이 없으면 퇴직금을 지급하셔도 손금으로 인정되지 않을 수 있습니다. 재원을 아무리 준비하셔도 세무상 효과가 크게 달라집니다.\n규정 정비부터 확인해 보시겠습니까?`,
+      qa:[['그런 게 필요합니까?','"정관이나 별도 규정에 근거가 있어야 손금 인정이 됩니다." → 정관 개정 컨설팅'],
+        ['세무사가 알아서 하겠죠','"정관은 세무 영역이 아니라 상법 영역입니다. 주총 결의가 필요합니다." → 법무 연결'],
+        ['이미 있는 것 같은데요','"확인해 보시고 배수와 적용대상 임원을 알려주십시오." → 자료요청'],
+        ['퇴직 계획이 없습니다','"규정은 미리 만들어두는 것입니다. 퇴직 직전에 만들면 부인될 수 있습니다." → 시급성']],
+      avoid:['"퇴직금을 못 받는다"고 말하지 마십시오. 받을 수는 있고 손금 인정이 문제입니다.','구체적 배수(3배 등)를 먼저 제시하지 마십시오. 세법 한도와 별개 문제입니다.'],
+      why:'"규정이 없으면 줘도 비용처리가 안 된다"는 대표가 가장 놀라는 지점. 정관 개정 → 유료컨설팅으로 연결됩니다.'});
+  } else if(ceo){
+    add({tag:'임원퇴직재원',theme:'대표 개인',sev:2,hook:'근속이 곧 퇴직금',
+      facts:[`현 대표이사 근속 ${crRegTenure(ceo.since)}`,
+        c.retireRate?`정관 지급배수 ${c.retireRate}`:'정관 지급배수 미확인',
+        ok(L.cashAndCashEquivalents)?`현금성자산 ${eok(L.cashAndCashEquivalents)}억`:null],
+      insight:`임원 퇴직금은 근속연수와 지급배수, 퇴직 전 급여로 결정됩니다. 문제는 금액이 아니라 시점입니다. 퇴직은 대개 회사 자금이 넉넉할 때가 아니라 승계·건강·경영권 변화 같은 사건과 함께 옵니다. 그때 현금이 없으면 규정이 있어도 지급할 수 없고, 무리하게 지급하면 회사 유동성이 흔들립니다. 그래서 필요재원과 현재재원의 차이를 먼저 계산해야 하고, 그 부족분을 어떻게 채울지가 컨설팅의 본론이 됩니다.`,
+      talk:`등기부상 현 대표님 근속이 ${crRegTenure(ceo.since)}입니다.${c.retireRate?` 정관 지급배수는 ${c.retireRate}로 확인됩니다.`:' 정관 지급배수는 확인이 필요합니다.'}\n퇴직금은 근속과 배수로 정해지는데, 지급 시점에 회사에 그만한 현금이 있어야 합니다.${ok(L.cashAndCashEquivalents)?` 현재 현금성자산이 ${eok(L.cashAndCashEquivalents)}억입니다.`:''}\n언제쯤 퇴직을 생각하고 계십니까?`,
+      qa:[['아직 멀었습니다','"그래서 지금 준비하면 부담이 적습니다." → 장기 재원 설계'],
+        ['3~5년 내입니다','"그럼 지금부터 재원을 나눠 쌓아야 합니다." → 부족재원 산출'],
+        ['생각해본 적 없습니다','"규정과 재원 두 가지만 먼저 확인해 보시겠습니까?" → 자료요청']],
+      avoid:['보험 상품을 먼저 꺼내지 마십시오. 필요재원 계산이 선행되어야 합니다.','퇴직금 금액을 확정적으로 계산해서 제시하지 마십시오.'],
+      why:'근속·배수·재원 3요소를 한 번에 짚습니다. 부족재원이 나오면 보험 검토의 근거가 됩니다.'});
+  }
+  if(p.avgPay&&p.industryAvgPay&&Number(p.avgPay)>Number(p.industryAvgPay)*1.5){
+    const r=(Number(p.avgPay)/Number(p.industryAvgPay));
+    add({tag:'보수구조',theme:'대표 개인',sev:2,hook:'동종업계 대비 이상치',
+      facts:[`국민연금 기준 평균연봉 ${Number(p.avgPay).toLocaleString()}만원`,
+        `동종업계 평균 ${Number(p.industryAvgPay).toLocaleString()}만원 (${r.toFixed(1)}배)`,
+        p.employees?`종업원 ${p.employees}명`:null],
+      insight:`국민연금 고지금액을 역산한 평균보수가 동종업계의 ${r.toFixed(1)}배라면, 대개 임원 보수 비중이 크기 때문입니다. 국민연금 가입자에는 임원이 포함되므로 인원이 적을수록 대표 보수가 평균을 끌어올립니다. 여기서 두 가지 논점이 생깁니다. 하나는 급여로 가져갈지 배당으로 가져갈지의 세후 비교이고, 다른 하나는 가족 임원의 보수가 실제 업무와 비례하는지입니다. 후자는 부당행위계산부인 대상이 될 수 있어 민감합니다. 다만 국민연금 기준소득월액에는 상한이 있어 실제 보수는 더 클 수 있습니다.`,
+      talk:`국민연금 기준 평균연봉이 ${Number(p.avgPay).toLocaleString()}만원인데 동종업계 평균은 ${Number(p.industryAvgPay).toLocaleString()}만원입니다. ${r.toFixed(1)}배입니다.\n임원 보수 비중이 크다는 뜻일 텐데, 급여로 가져가는 게 유리한지 배당이 유리한지는 세후로 비교해 봐야 합니다.\n지금 대표님 보수는 어떤 기준으로 정하셨습니까?`,
+      qa:[['그냥 정했습니다','"보수 지급규정과 주총 결의가 있어야 손금 인정이 안전합니다." → 정관·규정'],
+        ['세무사가 정해줬습니다','"세후 총액으로 배당과 비교해 보신 적 있습니까?" → 세후 비교표'],
+        ['가족도 등재돼 있습니다','"실제 업무와 보수가 비례하는지가 쟁점이 됩니다." → 부당행위계산 점검']],
+      avoid:['"보수가 과다하다"고 말하지 마십시오. 판단은 세무 영역입니다.','가족 임원을 문제 삼는 뉘앙스를 만들지 마십시오. 즉시 방어적으로 바뀝니다.'],
+      why:'임원보수·배당 설계로 직행. 가족임원 과다보수 리스크도 함께 확인됩니다.'});
+  }
+  if(ok(L.totalBorrowings)&&num(L.totalBorrowings)>0){
+    add({tag:'대표 유고',theme:'대표 개인',sev:2,hook:'대표에게 무슨 일이 생기면',
+      facts:[`차입금 ${eok(L.totalBorrowings)}억`,
+        ok(L.cashAndCashEquivalents)?`현금성자산 ${eok(L.cashAndCashEquivalents)}억`:null,
+        ok(L.sgaExpenses)?`월 고정비 추정 ${eok(num(L.sgaExpenses)/12)}억`:null],
+      insight:`대표 유고는 확률은 낮지만 발생하면 회복이 불가능한 위험입니다. 실무에서 가장 먼저 터지는 것은 세 가지입니다. 첫째 개인보증이 걸린 차입금의 기한이익 상실, 둘째 의사결정 공백으로 인한 거래 중단, 셋째 상속세 납부 재원 부족입니다. ${ok(L.cashAndCashEquivalents)&&ok(L.sgaExpenses)?`이 회사는 현금 ${eok(L.cashAndCashEquivalents)}억, 월 고정비 추정 ${eok(num(L.sgaExpenses)/12)}억으로 단순 계산 시 약 ${Math.max(0,Math.round(num(L.cashAndCashEquivalents)/(num(L.sgaExpenses)/12)))}개월분입니다.`:''} 이 대화의 목적은 보험 판매가 아니라 필요재원과 현재재원의 차이를 확인하는 것입니다. 순서를 바꾸면 신뢰를 잃습니다.`,
+      talk:`차입금이 ${eok(L.totalBorrowings)}억 있습니다. 대표님 개인보증이 걸려 있는 부분이 있습니까?\n대표님께 갑자기 일이 생기면 회사는 ${ok(L.cashAndCashEquivalents)?`현금 ${eok(L.cashAndCashEquivalents)}억으로 `:''}얼마나 버틸 수 있고, 은행은 어떻게 반응하겠습니까?\n그리고 의사결정 권한을 대신할 분은 정해져 있습니까?`,
+      qa:[['개인보증 있습니다','"해소 가능한 부분과 남는 부분을 나눠 봐야 합니다." → 보증 해소·비상재원'],
+        ['후계자가 있습니다','"실무 권한까지 넘어가 있습니까?" → 승계 실행 점검'],
+        ['생각해본 적 없습니다','"확률이 아니라 영향의 크기로 보셔야 합니다." → 필요재원 산출'],
+        ['보험은 이미 있습니다','"계약자·수익자 구조를 확인해 보셨습니까?" → 기존보험 진단']],
+      avoid:['"돌아가시면"이라는 직설적 표현을 반복하지 마십시오.','보험 상품명·보험료를 이 단계에서 꺼내지 마십시오. 필요재원 계산이 먼저입니다.'],
+      why:'개인보증·경영공백·긴급자금 3가지를 한 번에 확인. 필요재원 산출의 출발점입니다.'});
+  }
+
+  /* ═══ D. 자본·지분 ═══ */
+  if(ok(L.shortTermLoans)||ok(L.loanReceivable)){
+    const v=num(L.shortTermLoans||L.loanReceivable);
+    add({tag:'대여금·가지급금',theme:'자본·지분',sev:1,hook:'세무조사에서 가장 먼저 보는 계정',
+      facts:[`단기대여금 ${eok(v)}억`,
+        ok(L.financeCost)?`금융비용 ${eok(L.financeCost)}억`:null,
+        ok(L.totalAssets)?`자산총계 대비 ${(v/num(L.totalAssets)*100).toFixed(1)}%`:null],
+      insight:`대여금은 그 자체로 문제가 아니라 실질이 무엇이냐가 문제입니다. 업무 관련성이 확인되지 않으면 세 가지가 동시에 걸립니다. 인정이자 익금산입, 관련 지급이자 손금불산입, 그리고 대표자 귀속 시 상여 처분입니다. 실무에서는 대표가 "잠깐 쓴 돈"으로 생각하는데 세무상으로는 매년 누적됩니다. 중요한 것은 컨설턴트가 먼저 "가지급금"이라고 단정하지 않는 것입니다. 관계사 정상 거래인 경우도 많고, 단정하면 대표가 즉시 닫힙니다. 계약서·이사회 결의·이자 수취 세 가지를 확인하는 것으로 시작해야 합니다.`,
+      talk:`재무제표에 단기대여금이 ${eok(v)}억 있습니다.\n업무 관련성이 확인되지 않으면 인정이자와 지급이자 손금불산입이 동시에 걸릴 수 있어 여쭙습니다.\n이 돈은 누구에게, 어떤 목적으로 나간 것입니까? 계약서와 이사회 결의는 있습니까?`,
+      qa:[['관계사에 빌려준 것입니다','"이자는 받고 계십니까? 적정 이자율이 적용됐습니까?" → 부당행위계산'],
+        ['제가 잠깐 쓴 겁니다','"금액과 시기를 정리해 상환 계획을 만드는 게 우선입니다." → 정상화 프로젝트'],
+        ['임직원 대여입니다','"규정과 이자 수취 내역이 있으면 문제되지 않습니다." → 증빙 확인'],
+        ['잘 모르겠습니다','"계정별원장을 보시면 상대방이 나옵니다." → 자료요청']],
+      avoid:['"가지급금"이라고 먼저 단정하지 마십시오. 실질을 확인한 뒤에 쓸 용어입니다.','세무조사를 겁주는 방식으로 접근하지 마십시오. 방어만 강해집니다.'],
+      why:'대표자 가지급금으로 단정하지 말고 실질을 먼저 확인. 정상화 프로젝트로 연결됩니다.'});
+  }
+  if(ok(L.retainedEarnings)&&num(L.retainedEarnings)>0&&ok(L.totalEquity)){
+    add({tag:'미처분이익잉여금',theme:'자본·지분',sev:2,hook:'쌓여만 있는 돈',
+      facts:[`이익잉여금 ${eok(L.retainedEarnings)}억`,
+        `자본총계 ${eok(L.totalEquity)}억 대비 ${(num(L.retainedEarnings)/num(L.totalEquity)*100).toFixed(0)}%`,
+        V?`1주당 가치 ${V.perShare.toLocaleString()}원`:null],
+      insight:`이익잉여금은 회사가 번 돈 중 밖으로 나가지 않고 남은 금액입니다. 문제는 이 돈이 주식가치를 계속 밀어올린다는 점입니다. 주식가치가 오르면 상속·증여 시 세부담이 커지고, 자기주식 취득가액도 올라갑니다. 즉 아무것도 하지 않으면 세금이 자동으로 늘어나는 구조입니다. 해법은 배당, 임원 퇴직금, 자기주식 취득 세 갈래인데 각각 세율과 절차가 다릅니다. 배당은 즉시 종합과세, 퇴직금은 분리과세지만 규정이 필요하고, 자기주식은 절차 위반 시 부인됩니다. 순서와 조합을 설계하는 것이 컨설팅의 본론입니다.`,
+      talk:`이익잉여금이 ${eok(L.retainedEarnings)}억 쌓여 있습니다. 자본총계 ${eok(L.totalEquity)}억의 ${(num(L.retainedEarnings)/num(L.totalEquity)*100).toFixed(0)}%입니다.\n이 돈이 회사에 남아 있으면 주식가치가 계속 올라가고, 나중에 상속·증여세로 돌아옵니다.\n배당·퇴직금·자기주식 중 어떤 방식을 검토해 보신 적 있습니까?`,
+      qa:[['배당은 세금이 많아서요','"종합과세 구간에 따라 다릅니다. 퇴직금·자기주식과 세후로 비교해 보셨습니까?" → 세후 비교'],
+        ['회사에 두는 게 안전하죠','"안전하지만 주식가치가 오르면 상속세가 같이 오릅니다." → 리스크 인식'],
+        ['자기주식은 들어봤습니다','"절차가 까다로워서 요건 확인이 먼저입니다." → 자기주식 진단'],
+        ['생각해본 적 없습니다','"세 가지를 세후로 비교한 표를 만들어 드리겠습니다." → 2차 미팅']],
+      avoid:['"절세"라는 단어를 앞세우지 마십시오. 방법론이 아니라 구조 얘기로 시작해야 합니다.','특정 방법(자기주식 등)을 먼저 추천하지 마십시오. 요건 검토가 선행됩니다.'],
+      why:'잉여금 = 미래 세금. 배당정책·자기주식·퇴직재원 3개 주제가 동시에 열립니다.'});
+  }
+  if(R&&R.capital&&R.capital.length>2){
+    add({tag:'자본거래 이력',theme:'자본·지분',sev:2,hook:'등기부에서만 보이는 것',
+      facts:[`자본금 ${R.capital[0].capital.toLocaleString()}원 → ${R.capital[R.capital.length-1].capital.toLocaleString()}원 (${R.capital.length-1}회 변동)`,
+        R.par&&R.par.length>1?`액면가 ${R.par[0].amount.toLocaleString()}원 → ${R.par[R.par.length-1].amount.toLocaleString()}원`:null,
+        R.authorizedShares&&R.authorizedShares.length?`발행가능주식 ${R.authorizedShares[R.authorizedShares.length-1].shares.toLocaleString()}주`:null],
+      insight:`자본금 변동 이력은 등기부에만 남습니다. 재무제표는 현재 잔액만 보여주기 때문에 과거 증자·감자·액면분할이 언제 어떤 조건으로 이뤄졌는지 알 수 없습니다. 증자 시 주주별 참여 비율이 달랐다면 지분율이 변했을 것이고, 시가보다 낮게 발행했다면 이익을 본 주주에게 증여세 문제가 생길 수 있습니다. 액면분할은 주식 수만 늘리는 것이지만 1주당 평가액 계산의 기준이 되므로 승계 설계에서 반드시 확인해야 합니다. 이 대화는 등기부를 첨부했을 때만 가능하고, 재무제표만 보는 경쟁 도구는 접근할 수 없는 영역입니다.`,
+      talk:`과거 자본거래는 나중에 세무상 쟁점이 되는 경우가 많아 먼저 여쭙습니다.\n등기부상 자본금이 ${R.capital[0].capital.toLocaleString()}원에서 ${R.capital[R.capital.length-1].capital.toLocaleString()}원으로 ${R.capital.length-1}차례 변동됐습니다.${R.par&&R.par.length>1?` 액면가도 ${R.par[0].amount.toLocaleString()}원에서 ${R.par[R.par.length-1].amount.toLocaleString()}원으로 변경됐습니다.`:''}\n증자 때 주주별로 어떻게 참여하셨습니까? 지분율이 달라진 부분은 없습니까?`,
+      qa:[['제가 다 넣었습니다','"단독 증자면 다른 주주 지분이 희석됐을 텐데 동의는 받으셨습니까?" → 주주간 분쟁 예방'],
+        ['투자를 받았습니다','"발행가액이 시가와 차이가 있었습니까?" → 증여의제 점검'],
+        ['오래된 일이라 기억이 안 납니다','"등기부에 날짜가 남아 있으니 그때 자료를 찾아보시면 됩니다." → 자료요청']],
+      avoid:['"문제가 있다"고 단정하지 마십시오. 정상 거래가 대부분입니다.','증여세를 먼저 언급하지 마십시오. 사실 확인이 먼저입니다.'],
+      why:'증자 시 지분 희석·저가발행 쟁점 확인. 주주구성 대화의 자연스러운 입구입니다.'});
+  }
+  if(V&&V.totalValue){
+    add({tag:'승계·상속',theme:'자본·지분',sev:2,hook:'지금 돌아가시면',
+      facts:[`주식 전체 추정가치 약 ${(V.totalValue/1e8).toFixed(0)}억`,
+        ok(L.cashAndCashEquivalents)?`회사 현금성자산 ${eok(L.cashAndCashEquivalents)}억`:null,
+        ceo?`현 대표 근속 ${crRegTenure(ceo.since)}`:null],
+      insight:`승계에서 가장 흔한 실패는 세금을 준비하지 않은 것이 아니라, 재원의 성격을 잘못 준비한 것입니다. 상속세는 현금으로 납부해야 하는데 재산의 대부분이 주식이면 팔 수도 없고 담보로 쓰기도 어렵습니다. 회사에서 돈을 꺼내면 그 자체로 또 과세됩니다. 연부연납으로 나눠 낼 수 있지만 이자상당액이 붙고 담보가 필요합니다. 그래서 승계는 "언제 얼마를 넘길 것인가"보다 "그때 현금을 어디서 만들 것인가"가 먼저입니다. 가업상속공제 요건을 충족하면 부담이 크게 줄지만 사후관리 요건이 엄격해 사전 점검이 필수입니다.`,
+      talk:`주식 전체 가치가 약 ${(V.totalValue/1e8).toFixed(0)}억으로 추정됩니다. 지금 상황에서 상속이 일어나면 상속세 재원을 어디서 마련하시겠습니까?\n주식은 팔기 어렵고, 회사 돈을 꺼내면 또 세금이 붙습니다.\n후계자는 정해져 있습니까? 가족 간 합의는 되어 있습니까?`,
+      qa:[['아들이 이어받을 겁니다','"지분과 경영권을 나눠서 보셔야 합니다. 다른 자녀는 어떻게 하실 계획입니까?" → 가족 합의'],
+        ['가업상속공제 들어봤습니다','"업종·고용·지분 유지 요건이 있어 사전 점검이 필요합니다." → 요건 진단'],
+        ['아직 이릅니다','"이르지 않습니다. 가치가 더 오르면 세금도 같이 오릅니다." → 시급성'],
+        ['팔 생각입니다','"매각도 가치평가와 세무구조가 먼저입니다." → M&A 진단']],
+      avoid:['상속세 금액을 단순 곱셈으로 제시하지 마십시오. 공제와 할증이 반영되지 않습니다.','가족 관계를 먼저 캐묻지 마십시오. 대표가 스스로 말할 때까지 기다리십시오.'],
+      why:'금액이 구체적으로 나오면 대표가 처음으로 심각하게 받아들입니다. 승계재원 = 보험 검토의 근거.'});
+  }
+
+  /* ═══ E. 운영 ═══ */
+  if(ok(L.tradeReceivables)&&ok(L.revenue)){
+    const dso=num(L.tradeReceivables)/num(L.revenue)*365;
+    if(dso>90)add({tag:'매출채권 회수',theme:'운영',sev:2,hook:'돈이 묶여 있는 곳',
+      facts:[`매출채권 ${eok(L.tradeReceivables)}억 · 매출 ${eok(L.revenue)}억`,
+        `회수기간 약 ${Math.round(dso)}일 (${(dso/30).toFixed(1)}개월)`,
+        ok(P0.tradeReceivables)&&ok(P0.revenue)?`전년 ${Math.round(num(P0.tradeReceivables)/num(P0.revenue)*365)}일`:null],
+      insight:`회수기간 ${Math.round(dso)}일은 물건이나 용역이 나간 뒤 ${(dso/30).toFixed(1)}개월 뒤에 현금이 들어온다는 뜻입니다. 그동안 인건비·임차료·매입대금은 먼저 나가므로 매출이 늘수록 오히려 현금이 부족해지는 구조가 됩니다. 흑자도산의 전형적 경로입니다. 여기서 확인할 것은 두 가지입니다. 하나는 특정 거래처 집중도이고, 다른 하나는 장기 미회수 채권의 존재입니다. 거래처가 집중돼 있으면 그 한 곳이 무너질 때 회사가 같이 흔들리고, 장기 미회수는 대손 처리 시점을 놓치면 손금 인정이 어려워집니다.`,
+      talk:`매출채권이 ${eok(L.tradeReceivables)}억입니다. 매출 ${eok(L.revenue)}억 기준으로 회수기간이 약 ${Math.round(dso)}일입니다.\n${Math.round(dso)}일이면 물건은 나갔는데 돈은 ${(dso/30).toFixed(1)}개월 뒤에 들어온다는 뜻입니다.\n특정 거래처에 집중돼 있습니까? 연체나 대손이 있었던 곳은 어디입니까?`,
+      qa:[['업계 관행입니다','"관행이어도 자금은 회사가 부담합니다. 할인이나 팩토링을 검토해 보셨습니까?" → 회수 개선'],
+        ['한두 곳에 몰려 있습니다','"그 거래처에 문제가 생기면 어떻게 되겠습니까?" → 신용보험 검토'],
+        ['오래된 미수금이 있습니다','"대손 처리 시점을 놓치면 손금 인정이 어려워집니다." → 경정청구 연결']],
+      avoid:['"채권 관리를 못한다"고 평가하지 마십시오. 거래 관계상 어쩔 수 없는 경우가 많습니다.','보험을 먼저 꺼내지 말고 집중도부터 확인하십시오.'],
+      why:'회수기간이 곧 현금흐름. 거래처 집중은 신용보험 검토의 근거가 됩니다.'});
+  }
+  if(ok(L.revenue)&&ok(F0.revenue)&&ys.length>=3){
+    const g=pct(L.revenue,F0.revenue);
+    if(Math.abs(g)>=20)add({tag:'매출 추세',theme:'운영',sev:3,hook:'성장의 방향',
+      facts:[`매출 ${Y0}년 ${eok(F0.revenue)}억 → ${Y}년 ${eok(L.revenue)}억 (${g>0?'+':''}${g.toFixed(0)}%)`,
+        ok(F0.totalAssets)&&ok(L.totalAssets)?`자산총계 ${pct(L.totalAssets,F0.totalAssets).toFixed(0)}%`:null,
+        ok(L.operatingIncome)&&ok(L.revenue)?`영업이익률 ${(num(L.operatingIncome)/num(L.revenue)*100).toFixed(1)}%`:null],
+      insight:`${g>0?`매출이 ${g.toFixed(0)}% 성장했지만 자산총계가 ${ok(F0.totalAssets)&&ok(L.totalAssets)?pct(L.totalAssets,F0.totalAssets).toFixed(0)+'%':'그 이상'} 늘었다면 성장보다 투자가 앞선 상태입니다. 자산이 매출보다 빨리 늘면 총자산회전율이 떨어지고, 투자한 자산이 매출로 전환되는 시차 동안 현금 부담이 커집니다.`:`매출이 ${Math.abs(g).toFixed(0)}% 줄었는데 고정비가 그대로면 손익분기점이 올라갑니다. 인력과 설비는 단기간에 줄이기 어려우므로 회복 시점까지 버틸 현금이 관건이 됩니다.`} 이 질문의 목적은 진단이 아니라 대표가 스스로 상황을 말하게 하는 것입니다. 숫자를 먼저 해석해 주면 대표는 방어하거나 수긍만 하고, 정보는 나오지 않습니다.`,
+      talk:`매출이 ${Y0}년 ${eok(F0.revenue)}억에서 ${Y}년 ${eok(L.revenue)}억으로 ${g>0?'+':''}${g.toFixed(0)}% ${g>0?'성장했습니다':'감소했습니다'}.\n${g>0?`같은 기간 자산총계는 ${ok(F0.totalAssets)&&ok(L.totalAssets)?pct(L.totalAssets,F0.totalAssets).toFixed(0)+'%':'—'} 늘었습니다.`:'고정비 구조는 크게 달라지지 않았을 텐데요.'}\n이 흐름을 대표님은 어떻게 보고 계십니까?`,
+      qa:[['신규 거래처가 늘었습니다','"객단가와 신규 중 어느 쪽 비중이 큽니까?" → 성장 원천 분석'],
+        ['설비를 늘렸습니다','"가동률은 어느 정도입니까?" → 과대투자 점검'],
+        ['시장이 어렵습니다','"어느 구간에서 막혔다고 보십니까?" → 병목 진단']],
+      avoid:['"과대투자"라는 단어를 먼저 쓰지 마십시오. 판단은 대표가 하게 하십시오.','업종 평균을 먼저 들이대지 마십시오. 대표는 자기 사정이 다르다고 생각합니다.'],
+      why:'성장성 진단의 입구. 대표가 스스로 진단하게 만드는 질문입니다.'});
+  }
+
+  /* ═══ F. 지배구조 ═══ */
+  if(R&&R.ceoTerms>=3){
+    add({tag:'경영권 변동',theme:'지배구조',sev:2,hook:'등기부에서만 보이는 것',
+      facts:[`대표이사 취임 이력 ${R.ceoTerms}회`,
+        ceo?`현 대표 취임 ${ceo.since} (근속 ${crRegTenure(ceo.since)})`:null,
+        R.current?`현직 임원 ${R.current.length}명`:null],
+      insight:`대표이사가 자주 바뀌는 회사는 세 가지 중 하나입니다. 승계가 진행 중이거나, 전문경영인 체제이거나, 주주 간 갈등이 있는 경우입니다. 어느 쪽이든 지분 구조와 함께 봐야 합니다. 특히 임원 퇴직금은 근속에 비례하므로 대표가 바뀔 때마다 퇴직금 지급 의무가 발생하는데, 규정과 재원 없이 반복되면 회사 현금이 계속 빠져나갑니다. 등기부를 보지 않으면 이 패턴이 전혀 보이지 않습니다. 재무제표에는 대표 이름조차 나오지 않습니다.`,
+      talk:`등기부를 보니 대표이사가 ${R.ceoTerms}번 바뀌었습니다.${ceo?` 현재 대표님 취임이 ${ceo.since}, 근속 ${crRegTenure(ceo.since)}입니다.`:''}\n임원 퇴직금은 근속에 비례하고, 경영권이 자주 바뀌면 지분 구조도 함께 확인해야 합니다.\n혹시 승계나 지분 정리를 염두에 두고 계신 변화였습니까?`,
+      qa:[['승계 과정입니다','"지분은 어디까지 넘어갔습니까?" → 승계 진도 확인'],
+        ['전문경영인 체제입니다','"오너 지분과 경영권 분리 구조는 정관에 반영돼 있습니까?" → 지배구조'],
+        ['사정이 있었습니다','"퇴임하신 분들 퇴직금은 정리되셨습니까?" → 퇴직금 규정']],
+      avoid:['이유를 캐묻지 마십시오. 민감한 사정이 있을 수 있습니다.','"분쟁"이라는 단어를 먼저 쓰지 마십시오.'],
+      why:'등기부 첨부 시에만 가능. 재무제표만 보는 경쟁 도구는 할 수 없는 질문입니다.'});
+  }
+  if(R&&R.overdueOfficers&&R.overdueOfficers.length){
+    add({tag:'등기 정비',theme:'지배구조',sev:3,hook:'실무에서 자주 놓치는 것',
+      facts:[`임기 경과 추정 ${R.overdueOfficers.length}명 — ${R.overdueOfficers.map(o=>o.role+' '+o.name).join(', ')}`,
+        '상법 기본임기 3년 기준 추정 (정관 확인 필요)'],
+      insight:`이사의 임기는 상법상 3년을 초과할 수 없고, 임기 만료 후 중임등기를 하지 않으면 과태료가 부과됩니다. 더 큰 문제는 그 기간 이사회 결의의 효력이 다투어질 수 있다는 점입니다. 실무에서는 등기를 미루다가 몇 년치가 한꺼번에 쌓이는 경우가 흔합니다. 다만 정관에서 임기를 달리 정했을 수 있으므로 단정하면 안 되고, 확인을 권하는 선에서 멈춰야 합니다. 이 항목은 금액이 크지 않지만 "이런 것까지 봐주는구나"라는 인상을 주는 데 효과적입니다.`,
+      talk:`등기부상 ${R.overdueOfficers.map(o=>o.role+' '+o.name).join(', ')}의 임기가 이미 지난 것으로 보입니다.\n중임등기를 하지 않으면 과태료가 부과되고, 그 기간 의사결정의 효력이 다투어질 수 있습니다.\n최근 임원 변경등기는 언제 하셨습니까?`,
+      qa:[['법무사가 알아서 합니다','"연락이 안 갔을 수 있으니 한번 확인해 보십시오." → 실행 촉구'],
+        ['몰랐습니다','"정관상 임기를 먼저 확인하시면 됩니다." → 정관 자료요청']],
+      avoid:['"위법"이라는 표현을 쓰지 마십시오. 정관에 따라 다를 수 있습니다.','과태료 금액을 구체적으로 말하지 마십시오.'],
+      why:'상법 기본임기 3년 기준 추정. 정관 확인이 필요하지만 대화 물꼬로는 충분합니다.'});
+  }
+  if(c.shareTransfer==='제한 없음'||(R&&R.stockOption)){
+    add({tag:'지분 방어',theme:'지배구조',sev:3,hook:'지분이 흩어지면',
+      facts:[c.shareTransfer?`정관상 주식양도 제한 — ${c.shareTransfer}`:null,
+        R&&R.stockOption?'등기부상 주식매수선택권 설정 있음':null,
+        V?`1주당 가치 ${V.perShare.toLocaleString()}원`:null],
+      insight:`주식양도 제한이 없으면 주주가 지분을 누구에게든 팔 수 있습니다. 비상장회사에서 이는 상당한 위험입니다. 퇴사한 임원이나 갈라선 동업자가 지분을 외부에 넘기면 회사가 통제할 방법이 없고, 경영권 분쟁이나 회계장부 열람 청구로 이어집니다. 주식매수선택권이 설정돼 있으면 행사 시 지분이 희석되므로 대표 지분율이 예상보다 낮아질 수 있습니다. 해법은 정관에 이사회 승인 조항을 넣거나 주주간계약을 체결하는 것인데, 둘 다 기존 주주 동의가 필요하므로 관계가 나빠지기 전에 해야 합니다.`,
+      talk:`${c.shareTransfer==='제한 없음'?'정관에 주식양도 제한이 없습니다. 주주가 지분을 외부에 팔아도 회사가 막을 방법이 없다는 뜻입니다.':''}${R&&R.stockOption?`${c.shareTransfer==='제한 없음'?'\n그리고 ':''}등기부상 주식매수선택권이 설정돼 있습니다. 행사되면 지분이 희석됩니다.`:''}\n지금 지분 구조에서 대표님 의결권은 안전합니까?`,
+      qa:[['제가 대부분 가지고 있습니다','"나머지는 누가 가지고 계십니까? 관계는 어떻습니까?" → 주주 구성 확인'],
+        ['공동주주가 있습니다','"주주간계약은 체결하셨습니까?" → 주주간계약 컨설팅'],
+        ['퇴사한 임원이 가지고 있습니다','"회수 방법을 정해두지 않으면 나중에 어려워집니다." → 자기주식·양수도']],
+      avoid:['분쟁 가능성을 겁주는 방식으로 말하지 마십시오.','특정 주주를 의심하는 뉘앙스를 만들지 마십시오.'],
+      why:'주주간계약·정관 정비 유료컨설팅으로 연결. 공동주주가 있으면 특히 강력합니다.'});
+  }
+
+  /* ★ facts 배열의 null/빈값 제거 — 화면·인쇄에 빈 항목이 남지 않도록 */
+  O.forEach(o=>{o.facts=(o.facts||[]).filter(x=>x!=null&&String(x).trim()!=='');});
+  const ORDER=['긴급 신호','돌려받는 얘기','대표 개인','자본·지분','운영','지배구조'];
+  const best={};O.forEach(o=>{best[o.theme]=Math.min(best[o.theme]??9,o.sev);});
+  O.sort((a,b)=>(best[a.theme]-best[b.theme])||(ORDER.indexOf(a.theme)-ORDER.indexOf(b.theme))||(a.sev-b.sev));
+  /* 상위 3개는 서로 다른 주제로 뽑아 대화 방향이 쏠리지 않게 한다 */
+  const top=[],seen=new Set();
+  for(const o of O){if(top.length<3&&!seen.has(o.theme)){top.push(o);seen.add(o.theme);}}
+  for(const o of O){if(top.length<3&&!top.includes(o))top.push(o);}
+  O.forEach(o=>{o.featured=top.includes(o);});
+  return O;
+}
+/* ★ [2026-08-01] AI 도입 화법 — 코드 화법을 대체하지 않고 보완한다.
+   숫자는 코드 계산기가 만들고 AI는 해석만 한다(기획안 12장 원칙).      */
+function crAiOpenerPayload(model){
+  const R=crRegData(), c=crCharter();
+  const sig=(typeof crRefundSignals==='function')?crRefundSignals(model):[];
+  return {
+    profile:model?.profile||{},
+    financials:model?.financials||{},
+    valuation:model?.calculations?.valuation||null,
+    registry:R?{company:R.company,current:R.current,ceoTerms:R.ceoTerms,capital:R.capital,
+      par:R.par,authorizedShares:R.authorizedShares,stockOption:R.stockOption,
+      nameHistory:R.nameHistory,addressHistory:R.addressHistory,
+      overdueOfficers:R.overdueOfficers,entityType:R.entityType}:null,
+    charter:(c&&Object.keys(c).length)?c:null,
+    refundSignals:sig.map(s=>({id:s.id,name:s.name,law:s.law,art:s.art,fact:s.fact,src:s.src})),
+    issues:(model?.issues||[]).map(x=>({id:x.id,title:x.title,severity:x.severity,meaning:x.meaning}))
+  };
+}
+async function crLoadAiOpeners(model){
+  if(!model)return null;
+  const out=await ServerAdapter.aiOpeners(crAiOpenerPayload(model));
+  if(out&&out.ok&&Array.isArray(out.openers)&&out.openers.length){
+    state.aiOpeners={openers:out.openers,review:out.review||null,meta:out.meta||null,loadedAt:nowIso()};
+  }
+  return out;
+}
+function crAiOpenerBlock(){
+  const A=state.aiOpeners;
+  if(!A||!A.openers||!A.openers.length){
+    return (state.live&&state.live.aiOpeners===false)
+      ? '<div class="notice ai-pending"><b>AI 추가 화법 — 생성되지 않았습니다</b>서버 연결이 확인되지 않아 이번에는 규칙 기반 화법만 표시했습니다. 위 화법만으로도 초회면담에는 충분합니다.</div>'
+      : '';
+  }
+  const rv=A.review||{};
+  const badge=rv.passed===true?'<span class="ai-ok">교차검수 통과</span>'
+    :rv.passed===false?'<span class="ai-fix">검수 후 교정본</span>'
+    :'<span class="ai-warn">검수 미완</span>';
+  const body=o=>`
+     <div class="op-sec"><b>📊 무슨 일이 있었나</b><ul>${(o.facts||[]).filter(Boolean).map(f=>`<li>${esc(f)}</li>`).join('')}</ul></div>
+     <div class="op-sec op-insight"><b>🔍 왜 중요한가</b><p>${esc(o.insight||'')}</p></div>
+     <div class="op-sec"><b>🗣 대면 도입</b><div class="op-talk">${String(o.talk||'').split('\n').map(l=>`<p>${esc(l)}</p>`).join('')}</div></div>
+     ${(o.qa||[]).length?`<div class="op-sec"><b>💬 예상 답변 → 이어갈 질문</b><table class="op-qa"><tbody>${o.qa.map(x=>`<tr><td>"${esc(x[0])}"</td><td>${esc(x[1])}</td></tr>`).join('')}</tbody></table></div>`:''}
+     ${(o.avoid||[]).length?`<div class="op-sec op-avoid"><b>⚠️ 하지 말 것</b><ul>${o.avoid.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
+     ${o.why?`<div class="op-why"><b>왜 이 질문인가</b> ${esc(o.why)}</div>`:''}`;
+  return `<h3 style="margin-top:6mm">🤖 AI 추가 화법 ${A.openers.length}개 ${badge}</h3>
+    <div class="notice ai-note"><b>규칙으로는 잡히지 않는 조합·문맥을 해석한 화법입니다.</b>
+      숫자는 확정값을 그대로 인용하도록 통제했으나 <b>원인과 배경은 대표님께 확인</b>하십시오.
+      ${(rv.issues&&rv.issues.length)?('검수에서 '+rv.issues.length+'건이 교정되었습니다.'):''}</div>
+    ${A.openers.map((o,i)=>`<div class="op-item ai"><div class="op-hd"><span class="op-no ai">AI</span><b>${esc(o.tag||('추가 화법 '+(i+1)))}</b>${o.theme?`<span class="op-theme">${esc(o.theme)}</span>`:''}${o.hook?`<span class="op-hook">${esc(o.hook)}</span>`:''}</div>${body(o)}</div>`).join('')}`;
+}
+function crOpenerPage(model){
+  const O=crOpeners(model); if(!O.length)return;
+  const feat=O.filter(o=>o.featured), rest=O.filter(o=>!o.featured);
+  const body=(o,i)=>`
+     <div class="op-sec"><b>📊 무슨 일이 있었나</b><ul>${(o.facts||[]).filter(Boolean).map(f=>`<li>${esc(f)}</li>`).join('')}</ul></div>
+     <div class="op-sec op-insight"><b>🔍 왜 중요한가</b><p>${esc(o.insight||'')}</p></div>
+     <div class="op-sec"><b>🗣 대면 도입</b><div class="op-talk">${o.talk.split('\n').map(l=>`<p>${esc(l)}</p>`).join('')}</div></div>
+     <div class="op-sec"><b>💬 예상 답변 → 이어갈 질문</b>
+       <table class="op-qa"><tbody>${(o.qa||[]).map(([a,b])=>`<tr><td>"${esc(a)}"</td><td>${esc(b)}</td></tr>`).join('')}</tbody></table></div>
+     <div class="op-sec op-avoid"><b>⚠️ 하지 말 것</b><ul>${(o.avoid||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
+     <div class="op-why"><b>왜 이 질문인가</b> ${esc(o.why)}</div>`;
+  const card=(o,i,open)=>`<div class="op-item sev${o.sev}${open?' featured':''}">
+     <div class="op-hd"><span class="op-no">${i+1}</span><b>${esc(o.tag)}</b><span class="op-theme">${esc(o.theme)}</span><span class="op-hook">${esc(o.hook)}</span></div>
+     ${body(o,i)}</div>`;
+  const fold=(o,i)=>`<details class="op-fold"><summary><span class="op-no sm">${i+1}</span><b>${esc(o.tag)}</b><span class="op-theme">${esc(o.theme)}</span><span class="op-hook">${esc(o.hook)}</span></summary>${body(o,i)}</details>`;
+  addPage({id:'openers',title:'초회면담 도입 화법',subtitle:'이 기업의 실제 숫자로 만든 첫 질문입니다. 읽고 이해한 뒤 상황에 맞게 쓰십시오.',section:'CONSULTANT ONLY · OPENING',visibility:'consultant',summary:`도입 화법 ${O.length}개`,
+   body:`<div class="notice"><b>컨설턴트 전용</b>이 페이지는 CEO 전달본·발표모드에 표시되지 않습니다. 대표님 앞에서 열지 마십시오.</div>
+   <div class="lead"><b>이 기업 데이터로 생성된 도입 화법 ${O.length}개 — 우선 3개를 펼쳤습니다</b>
+     <p>모든 숫자는 이 기업의 실제 재무·등기·국민연금 자료에서 산출한 값입니다. 상위 3개는 서로 다른 주제로 골라, 어느 방향으로든 대화를 열 수 있게 배치했습니다. 나머지는 아래에서 펼쳐 보실 수 있습니다.</p>
+     <div class="op-themes">${[...new Set(O.map(x=>x.theme))].map(th=>`<span>${esc(th)} ${O.filter(x=>x.theme===th).length}</span>`).join('')}</div></div>
+   ${feat.map((o,i)=>card(o,i,true)).join('')}
+   ${rest.length?`<h3 style="margin-top:6mm">나머지 ${rest.length}개 — 필요할 때 펼쳐 보십시오</h3>${rest.map((o,i)=>fold(o,i+feat.length)).join('')}`:''}
+   ${crAiOpenerBlock()}
+   <div class="notice amber"><b>표현 경계</b>숫자는 확인된 자료 기준입니다. 원인과 배경은 <b>단정하지 말고 대표님께 여쭈십시오.</b> 세무·법률 판단이 필요한 항목은 전문가 검토 대상으로 안내하고, 컨설턴트가 결론을 내리지 않습니다.</div>`});
+}
+
 function crValuationPage(model){
   const V=model?.calculations?.valuation; if(!V)return;
   const won=n=>Number(n).toLocaleString('ko-KR');
@@ -1969,6 +2577,9 @@ function generatePages(model){
   crRegistryPage();
   crValuationPage(model);
   crCharterPage(model);
+  crRefundPage(model);
+  crRefundRequestPage(model);
+  crOpenerPage(model);
  addPage({id:'toc',title:'통합 목차',subtitle:'현재 기업에 실제로 활성화된 페이지만 구성합니다.',section:'CONTENTS',visibility:'common',summary:'조건부 페이지 목차',body:`<div class="toc-grid" id="tocInside"></div><div class="notice amber"><b>조건부 생성</b>내용이 부족하면 페이지를 만들지 않으며, 미확인 사실로 페이지 수를 채우지 않습니다.</div>`});
  const r=model.calculations.ratios,c=model.financials['2025'],p=model.profile;
  const ratioClass=(v,good,warn)=>!Number.isFinite(v)?'warn':v>=good?'good':v>=warn?'warn':'bad';
@@ -2136,6 +2747,11 @@ async function generateReport(reason='generate'){
 }
 async function tryLiveEnhancements(){
  const targets=state.analysis.issues.filter(x=>['LOAN_RECEIVABLE','CAPITAL_TRANSACTIONS','SUCCESSION'].includes(x.id)).slice(0,3);for(const issue of targets){const out=await ServerAdapter.legalSearch({...issue,evidenceQueries:[issue.title+' 관련 법령 요건',issue.title+' 국세청 예규 판례']});if(out.ok||out.results?.length)state.analysis.legalEvidence.push({issueId:issue.id,...out});}
+ /* ★ [2026-08-01] AI 도입 화법 — 실패해도 리포트는 완결되므로 조용히 진행 */
+ try{
+   const _ai=await crLoadAiOpeners(state.analysis);
+   if(_ai&&_ai.ok&&state.aiOpeners){ generatePages(state.analysis); renderPages(); crAutoSaveSoon(); }
+ }catch(e){ console.warn('AI 도입화법 생성 실패:',e.message); }
  state.quality=runQuality();renderQualityPage();
 }
 function prepareCase(data,{confirmed=false,autoGenerate=false}={}){
