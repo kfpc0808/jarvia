@@ -13519,20 +13519,24 @@ function _fcrRenderList(filter){
     const c = colorMap[r.status] || '#888780';
     const tc = textColor[r.status] || '#5A6484';
     const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
+    const dateBadge = _fcrDateBadge(r);   // ★ 내 날짜 자료 요청 배지 (2026-08-01)
     const tags = (r.fields || []).slice(0, 3).map(f =>
       '<span style="font-size:10px;padding:2px 7px;background:#EEF4FF;color:#1B3A6B;border-radius:8px;font-weight:600">' + _fcrEsc(_fcrFieldLabels[f] || f) + '</span>'
     ).join('');
     const meta = [_fcrAgeLabels[r.ageGroup] || '', r.assetGroup ? _fcrAssetLabels[r.assetGroup] : ''].filter(Boolean).join(' · ');
     const metaSpan = meta ? '<span style="font-size:10px;color:#8B93AE;font-weight:500;margin-left:4px">' + _fcrEsc(meta) + '</span>' : '';
-    return '<div onclick="openFcRequestDetail(\'' + _fcrEsc(r.id) + '\')" style="background:#fff;border-left:3px solid ' + c + ';border-radius:0 8px 8px 0;padding:11px 13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
+    return '<div data-fcr-id="' + _fcrEsc(r.id) + '" onclick="openFcRequestDetail(\'' + _fcrEsc(r.id) + '\')" style="background:#fff;border-left:3px solid ' + c + ';border-radius:0 8px 8px 0;padding:11px 13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
       + '<div style="font-size:13px;font-weight:800;color:#2C3E50">' + _fcrEsc(r.name || '-') + metaSpan + '</div>'
       + '<div style="font-size:10px;font-weight:800;color:' + tc + '">' + (_fcrStatusLabels[r.status] || r.status) + '</div>'
       + '</div>'
-      + '<div style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">' + _fcrEsc(_fcrFmtPhone(r.phone)) + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div class="fcrPhone" style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">'
+        + ((!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인' : _fcrEsc(_fcrFmtPhone(r.phone)))
+        + '</div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
   }).join('');
+  _fcrFillPhones(arr);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
 }
 
 // 필터 클릭
@@ -13562,6 +13566,41 @@ window.fcrFilter = function(btn){
 const _fcrQuizLabels = {
   coverage:{name:'보장진단',icon:'\uD83D\uDEE1',q:{q1:'연령대',q2:'가족 구성',q11:'직업·소득형태',q12:'소득 비중',q13:'부채',q14:'소득 끊길 때 버틸 기간',q3:'실손보험',q4:'암 보장',q5:'뇌·심장 보장',q6:'수술·입원(정액)',q7:'사망보장',q15:'소득상실 대비',q16:'간병 대비',q17:'보장 내용 인지',q8:'보험료 인지',q9:'마지막 점검',q10:'최근 상황'}},
   retirement:{name:'은퇴준비',icon:'\uD83C\uDFD6',q:{q1:'연령대',q2:'희망 은퇴 시점',q3:'가구 형태',q4:'희망 월 생활비',q5:'노후용 자산',q6:'국민연금 예상액',q7:'퇴직연금',q8:'개인연금',q9:'주택 상태',q10:'은퇴 시 부채',q11:'노후 저축률',q12:'의료·간병',q13:'부모 부양',q14:'추가 소득원',q15:'현재 소득'}}};
+/* ★ 내 날짜 자료 요청 배지 (2026-08-01)
+   고객 데일리 리포트「내 날짜」카드에서 온 요청.
+   c 토큰으로 고객이 이미 식별되어 연락처를 받지 않으므로, 배지가 없으면
+   "이름만 있고 번호 없는 요청"으로 보여 일반 신청과 구분되지 않는다.
+   내채널(fc.html)의 mdReqBadge 와 같은 규격. */
+function _fcrDateBadge(r){
+  if(r.source !== 'my_dates') return '';
+  const L = { age:'보험나이 기준일', renew:'갱신', auto:'자동차보험 만기',
+              expire:'보장 종료', maturity:'만기', paidup:'납입 완료' };
+  const t  = L[r.dateType] || '일정';
+  const d  = r.dateOn ? String(r.dateOn).slice(5).replace('-','/') : '';
+  const dd = (typeof r.dateDday === 'number') ? (' D-' + r.dateDday) : '';
+  return '<span style="font-size:10px;padding:2px 7px;background:#FBF3E2;color:#7A5A12;border:0.5px solid #E0C98A;border-radius:8px;font-weight:800">📅 '
+       + _fcrEsc(t) + (d ? (' · ' + _fcrEsc(d)) : '') + _fcrEsc(dd) + '</span>';
+}
+
+/* 내 날짜 요청은 서버(fc_clients)에 전화번호가 없다.
+   전화번호는 설계상 컨설턴트 기기의 IndexedDB(SmsCore)에만 저장된다.
+   요청 문서의 clientId(= fc_clients 문서 ID)로 로컬 번호를 찾아 화면에서만 채운다.
+   → 고객을 등록한 기기에서만 번호가 보이고, 서버에는 여전히 저장되지 않는다.
+   목록 렌더를 막지 않도록 그린 뒤 비동기로 채운다. */
+async function _fcrFillPhones(arr){
+  try{
+    if(!window.SmsCore || typeof SmsCore.getNumber !== 'function') return;
+    const targets = (arr||[]).filter(r => r && r.source==='my_dates' && !r.phone && r.clientId);
+    for(const r of targets){
+      let ph = '';
+      try{ ph = (await SmsCore.getNumber(r.clientId)) || ''; }catch(e){ continue; }
+      if(!ph) continue;
+      const box = document.querySelector('#fcr-list [data-fcr-id="' + r.id + '"] .fcrPhone');
+      if(box) box.textContent = _fcrFmtPhone(ph);
+    }
+  }catch(e){}
+}
+
 function _fcrQuizBadge(r){
   if(r.source !== 'quiz') return '';
   const L = _fcrQuizLabels[r.quizType] || _fcrQuizLabels.coverage;
