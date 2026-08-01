@@ -2159,10 +2159,59 @@ function audioAction(action){
 }
 async function generateMp3(script){toast('서버 MP3 생성을 요청합니다.');const out=await ServerAdapter.tts(script);if(out.url){const a=new Audio(out.url);a.controls=true;a.autoplay=true;const t=$('audioTranscript');t.parentElement.insertBefore(a,t);toast('고급 MP3가 생성되었습니다.','ok');}else toast('현재 1차 파일은 브라우저 음성을 사용합니다. 서버 TTS 연결 후 MP3가 활성화됩니다.');}
 
-function saveCase(){
- if(!state.caseData)return;const payload={app:'JARVIA_CORPORATE_REPORT',version:VERSION,savedAt:nowIso(),factsConfirmed:state.factsConfirmed,questionsConfirmed:state.questionsConfirmed,caseData:state.caseData,analysis:state.analysis};downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`${state.caseData.profile?.displayName||'기업'}_기업종합Report_케이스.json`);toast('케이스 JSON을 저장했습니다.');
+/* ════ [2026-08-01] 작업 자동저장·복구 ════
+   브라우저를 닫거나 오류가 나도 이어서 작업할 수 있도록 로컬에 스냅샷을 남긴다.
+   개인정보 최소화: 등기부 원문 텍스트(pageTexts/text)는 저장하지 않고 파싱 결과만 보관한다. */
+const CR_AUTOSAVE_KEY='jarvia.corpReport.autosave.v1';
+function crSnapshot(){
+  const reg=state.registry?{fileName:state.registry.fileName,pages:state.registry.pages,parsed:state.registry.parsed,attachedAt:state.registry.attachedAt}:null;
+  return {app:'JARVIA_CORPORATE_REPORT',version:VERSION,savedAt:nowIso(),
+    factsConfirmed:state.factsConfirmed,questionsConfirmed:state.questionsConfirmed,
+    caseData:state.caseData,analysis:state.analysis,
+    registry:reg,charter:state.charter||null,consultant:state.consultant||null};
 }
-function loadCaseFile(file){const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result);state.caseData=p.analysis||p.caseData;state.analysis=p.analysis||null;state.factsConfirmed=p.factsConfirmed!==false;state.questionsConfirmed=!!p.questionsConfirmed;if(state.analysis){generatePages(state.analysis);renderPages();showWorkspace();}else prepareCase(state.caseData,{confirmed:state.factsConfirmed,autoGenerate:true});toast('케이스를 불러왔습니다.','ok');}catch(e){toast('케이스 파일 형식이 올바르지 않습니다.','err');}};r.readAsText(file);}
+function crAutoSave(){
+  try{
+    if(!state.caseData)return;
+    localStorage.setItem(CR_AUTOSAVE_KEY,JSON.stringify(crSnapshot()));
+    const el=$('autosaveMark');
+    if(el){el.textContent='자동저장 '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});el.hidden=false;}
+  }catch(e){console.warn('자동저장 실패(용량 초과 가능):',e);}
+}
+let _crAutoTimer=null;
+function crAutoSaveSoon(){clearTimeout(_crAutoTimer);_crAutoTimer=setTimeout(crAutoSave,1200);}
+function crRestorePayload(p){
+  if(!p||p.app!=='JARVIA_CORPORATE_REPORT')throw new Error('형식이 다른 파일입니다.');
+  state.caseData=p.caseData||null;
+  state.analysis=p.analysis||null;
+  state.factsConfirmed=!!p.factsConfirmed;
+  state.questionsConfirmed=!!p.questionsConfirmed;
+  if(p.registry)state.registry=p.registry;
+  if(p.charter)state.charter=p.charter;
+  if(p.consultant)state.consultant=p.consultant;
+}
+function crCheckAutoSave(){
+  try{
+    const raw=localStorage.getItem(CR_AUTOSAVE_KEY); if(!raw)return;
+    const p=JSON.parse(raw); if(!p||!p.caseData)return;
+    const nm=p.caseData.profile?.displayName||p.caseData.profile?.companyName||'이전 작업';
+    const when=p.savedAt?new Date(p.savedAt).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    if(!confirm(`저장되지 않은 작업이 있습니다.\n\n  ${nm}\n  ${when}\n\n이어서 진행할까요?\n(취소하면 새로 시작하며 기록은 삭제됩니다)`)){
+      localStorage.removeItem(CR_AUTOSAVE_KEY);return;
+    }
+    crRestorePayload(p);
+    /* ★ 복구: 분석 결과가 있으면 페이지 재생성, 없으면 케이스만 준비 (loadCaseFile과 동일 경로) */
+    if(state.analysis){generatePages(state.analysis);renderPages();showWorkspace();}
+    else if(state.caseData)prepareCase(state.caseData,{confirmed:!!p.factsConfirmed,autoGenerate:true});
+    else return;
+    toast('이전 작업을 복구했습니다.','ok');
+  }catch(e){console.warn('자동저장 복구 실패:',e);}
+}
+function crClearAutoSave(){try{localStorage.removeItem(CR_AUTOSAVE_KEY);}catch(_e){}}
+function saveCase(){
+ if(!state.caseData)return;const payload=crSnapshot();   /* ★ 등기부·정관·컨설턴트 정보 포함 */downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`${state.caseData.profile?.displayName||'기업'}_기업종합Report_케이스.json`);toast('케이스 JSON을 저장했습니다.');
+}
+function loadCaseFile(file){const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result);crRestorePayload(p);if(!state.caseData)state.caseData=p.analysis||null;if(state.analysis){generatePages(state.analysis);renderPages();showWorkspace();crAutoSaveSoon();}else prepareCase(state.caseData,{confirmed:state.factsConfirmed,autoGenerate:true});toast('케이스를 불러왔습니다.','ok');}catch(e){toast('케이스 파일 형식이 올바르지 않습니다.','err');}};r.readAsText(file);}
 function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
 function buildCEOExportHtml(){
  const css=qs('style')?.textContent||'';
@@ -2224,6 +2273,7 @@ function crSaveConsultant(){
   for(const [id,k] of CR_CON_KEYS){const el=$(id);o[k]=el?String(el.value||'').trim():'';}
   if(state.caseData)state.caseData.consultant=o;
   state.consultant=o;
+  crAutoSaveSoon();
   closeModal('consultantModal');
   toast('컨설턴트 정보를 저장했습니다. 리포트 재생성 시 표지·마지막 장에 반영됩니다.','ok');
 }
@@ -2428,6 +2478,7 @@ function crFillCharterForm(){
   }
   for(const [id,k] of CR_CHARTER_FIELDS){const el=$(id);if(el&&c[k]!=null&&c[k]!=='')el.value=c[k];}
   crRenderCharterFromRegistry();
+  crBindAutoGrow();
 }
 /* ★ [2026-08-01] 등기부 확인 요약 — 정관 입력 시 참고할 값을 여기 모아 보여준다
    (등기부 아코디언이 닫혀도 필요한 정보가 눈앞에 남도록) */
@@ -2437,19 +2488,33 @@ function crRenderCharterFromRegistry(){
   if(!R){box.hidden=true;box.innerHTML='';return;}
   const ceo=R.current&&R.current.find(o=>o.role==='대표이사');
   const it=[];
+  /* 정관 입력에 직접 필요한 3개만 (자본금·액면가 등은 리포트에서 확인) */
   it.push(`주식매수선택권 <b>${R.stockOption?'설정 있음':'설정 없음'}</b>`);
   if(R.current&&R.current.length)it.push(`현직 임원 <b>${R.current.length}명</b>`);
-  if(ceo)it.push(`대표이사 ${esc(ceo.name)} 근속 <b>${crRegTenure(ceo.since)}</b>`);
-  if(R.capital&&R.capital.length){const c=R.capital[R.capital.length-1];it.push(`자본금 <b>${c.capital.toLocaleString()}원</b> · 발행주식 <b>${c.shares.toLocaleString()}주</b>`);}
-  if(R.par&&R.par.length)it.push(`액면가 <b>${R.par[R.par.length-1].amount.toLocaleString()}원</b>`);
+  if(ceo)it.push(`대표이사 근속 <b>${crRegTenure(ceo.since)}</b>`);
   box.innerHTML=`<span class="cf-hd">📋 등기부에서 확인된 값 — 아래 입력의 참고 자료입니다</span>${it.join(' · ')}`;
   box.hidden=false;
+}
+/* ★ [2026-08-01] textarea 자동 높이 — 입력 길이에 맞춰 전체 내용이 보이도록 */
+function crAutoGrow(el){
+  if(!el)return;
+  el.style.height='auto';
+  el.style.height=Math.max(64,el.scrollHeight+2)+'px';
+}
+function crBindAutoGrow(){
+  ['chRetireText','chEtc'].forEach(id=>{
+    const el=$(id); if(!el||el._agBound)return;
+    el._agBound=true;
+    el.addEventListener('input',()=>{crAutoGrow(el);crAutoSaveSoon();});
+    crAutoGrow(el);
+  });
 }
 function crSaveCharter(){
   const c={};
   for(const [id,k] of CR_CHARTER_FIELDS){const el=$(id);c[k]=el?String(el.value||'').trim():'';}
   c.savedAt=new Date().toISOString();
   state.charter=c; if(state.caseData)state.caseData.charter=c;
+  crAutoSaveSoon();
   const filled=CR_CHARTER_FIELDS.filter(([id,k])=>c[k]).length;
   const st=$('charterStatus');
   if(st){st.innerHTML='✅ 정관 확인사항 저장 — '+filled+'/9 항목 입력'+(c.retireRule?'':' <b style="color:#B91C1C">· 퇴직금 규정 미확인</b>');st.style.color='#0F6E56';}
@@ -2518,6 +2583,7 @@ async function crHandleRegistry(file){
     setMsg('✅ 등기부 첨부 완료 — '+esc(file.name)+' ('+pdf.numPages+'p)','#0F6E56');
     if(box)box.insertAdjacentHTML('beforeend',crRegistrySummaryHtml(parsed));
     try{crRenderCharterFromRegistry();}catch(_e){}
+    crAutoSaveSoon();
     toast('등기부등본을 첨부했습니다.','ok');
   }catch(e){
     console.error('등기부 분석 실패:',e);
@@ -2553,6 +2619,7 @@ function crInitIosSupport(){
 }
 function initEvents(){
  crInitIosSupport();
+ try{setTimeout(crCheckAutoSave,400);}catch(_e){}
  $('sampleBtn').onclick=()=>prepareCase(clone(GOLDEN_SAMPLE),{confirmed:true,autoGenerate:true});$('manualBtn').onclick=()=>{renderManualForm();openModal('manualModal');};$('manualApplyBtn').onclick=applyManual;
  $('pdfInput').onchange=e=>handlePdf(e.target.files?.[0]);const zone=$('uploadZone');['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('drag');}));['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('drag');}));zone.addEventListener('drop',e=>handlePdf(e.dataTransfer.files?.[0]));
  qsa('[data-mode]').forEach(b=>b.onclick=()=>applyMode(b.dataset.mode));$('menuBtn').onclick=()=>$('sidePanel').classList.toggle('on');$('closeSide').onclick=()=>$('sidePanel').classList.remove('on');
