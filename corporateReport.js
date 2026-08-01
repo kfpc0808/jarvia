@@ -2680,6 +2680,9 @@ function collectFactsForm(){
  qsa('[data-financial]',$('factsForm')).forEach(el=>{const [y,k]=el.dataset.financial.split('.');if(!d.financials[y])d.financials[y]={};d.financials[y][k]=n(el.value);});qsa('[data-quarterly]',$('factsForm')).forEach(el=>{if(d.latestQuarterly)d.latestQuarterly[el.dataset.quarterly]=n(el.value);});d.speechOverrides=buildSpeechOverrides(d);d.meta.confirmed=true;state.factsConfirmed=true;return d;
 }
 function renderQuestions(){
+ /* ★ [2026-08-01] 질문지를 다시 그린 뒤 모달을 맨 위로 올린다.
+    목적 5문항을 채우느라 내려간 스크롤이 유지되면 새 질문지가 안 보인다. */
+ setTimeout(()=>{const _b=$('questionsBody'); if(_b)_b.scrollTop=0;},0);
  if(!state.analysis)state.analysis=buildConfirmedModel(state.caseData);const questions=allQuestions(state.analysis);const ans=state.caseData.answers||{};$('questionsBody').innerHTML=questions.map((q,i)=>{let input='';const val=ans[q.id]??'';if(q.type==='select')input=`<select data-question="${q.id}">${q.options.map(o=>`<option ${String(val)===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`;else if(q.type==='textarea')input=`<textarea data-question="${q.id}" placeholder="${attr(q.example||'')}">${esc(val)}</textarea>`;else input=`<input data-question="${q.id}" type="${q.type||'text'}" value="${attr(val)}" placeholder="${attr(q.example||'')}">`;return `<div class="question-card"><h3>${i+1}. ${esc(q.label)}</h3><p>${esc(q.reason)}${q.unit?' · 단위 '+esc(q.unit):''}</p>${input}</div>`;}).join('');
 }
 function collectQuestions(){
@@ -4742,6 +4745,9 @@ const CR_PURPOSE_OPTIONS=[
  {value:'보험증권·추가자료를 확보하고 2차 미팅 확정',issueIds:['INSURANCE_OPTIMIZATION']},
  {value:'기존 고객 사후관리 및 추가계약 기회 발굴',issueIds:['INSURANCE_OPTIMIZATION']},
  {value:'경쟁 제안과 차별화된 종합 솔루션 제시',issueIds:[]},
+ {value:'경정청구·세액공제 누락 검토(환급 가능성)',issueIds:[]},
+ {value:'정관 정비·임원 보수·퇴직금 규정 점검',issueIds:['EXECUTIVE_RETIREMENT']},
+ {value:'등기 정비·임원 임기·중임등기 점검',issueIds:['SUCCESSION']},
  {value:'CEO 의사결정용 종합 법인컨설팅 리포트',issueIds:['WORKING_CAPITAL','CAPITAL_POLICY','KEY_PERSON','SUCCESSION']}
 ];
 const CR_PURPOSE_QUESTIONS=[
@@ -5170,9 +5176,22 @@ generateReport=async function(reason='production-ai'){
  progress(true,'실제 AI P1~P9 파이프라인을 실행합니다.');window.jvTrack?.('corporate_report_ai_generate');const started=Date.now();
  try{
   logProgress('확정 팩트와 계산기 결과를 서버에 전달합니다.','now',3);const payload=crProdPayload();if(!payload.calculatorResults?.calculator?.ratios?.ok)throw new Error('JARVIA 계산기 번들이 정상 실행되지 않았습니다. jarvia-calculators-browser.js를 확인해 주세요.');if(payload.calculatorResults?.crossValidation?.passed===false)throw new Error('계산기 교차검증 실패: '+asArray(payload.calculatorResults.crossValidation.errors).join(' / '));
-  const out=await ServerAdapter.runAI('generateCorporateReport',payload,540000);
+  let out=null;
+  try{ out=await ServerAdapter.runAI('generateCorporateReport',payload,540000); }
+  catch(_e){ out={ok:false,pending:true,error:_e?.message||String(_e)}; }
+  /* ★ [2026-08-01] AI 파이프라인(P1~P9)이 준비 전이거나 실패하면 규칙 기반으로 완결한다.
+     리포트가 아예 안 나오는 것보다, 확정 팩트·계산기 기반 리포트를 내는 편이 낫다. */
+  if(!out || out.pending || !out.report || !out.review){
+    const _why=out?.error||'AI 리포트 파이프라인 응답 없음';
+    console.warn('[기업진단Report] AI 생성 폴백:',_why);
+    logProgress('AI 파이프라인 미가동 — 확정 팩트·계산기 기반으로 생성합니다.','warn',60);
+    progress(false);
+    state.aiProduction=null;state.aiProductionReview=null;
+    await crGenerateReportV210Base('rule-based');
+    toast('규칙 기반 리포트를 생성했습니다. (AI 보강 대기)','ok');
+    return;
+  }
   crProdProgressLogs(out);
-  if(!out?.report||!out?.review)throw new Error(out?.error||'AI 리포트 결과가 없습니다.');
   state.aiProduction=out;state.aiProductionReview=out.review;
   if(!out.ok||!out.review.passed)throw new Error('P9 최종검수 실패: '+asArray(out.review.hardFails).slice(0,3).join(' / '));
   const model=buildConfirmedModel(state.caseData);model.reportPurposeProfile=state.caseData.answers.reportPurposeProfile;model.aiPipeline=out.aiLog;model.legalEvidence=out.report.evidence||[];model.audioChapters=out.report.audio?.chapters||[];model.issues=asArray(out.report.issues).map(x=>({id:x.id,title:x.title,score:Math.max(1,6-safeNum(x.priority,3)),severity:x.severity,confidence:x.confidence,facts:x.confirmedFacts||[],meaning:x.interpretation,risks:x.risks||[],solutions:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.options?.map(o=>o.name)||[],consulting:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.paidConsulting?.scope||'',insurance:(out.report.solutions||[]).find(s=>s.issueId===x.id)?.insurance?.status||''}));state.analysis=model;state.lastGeneration={elapsedMs:Date.now()-started,pipelineVersion:out.pipelineVersion,aiLog:out.aiLog};crBuildProductionPages(out,model);renderPages();state.quality=runQuality();renderQualityPage();logProgress(`AI 완성본 생성 · ${state.pages.length}페이지 · P9 ${state.quality.average.toFixed(1)}점`,'ok',100);await sleep(300);progress(false);showWorkspace();window.jvDone?.('corporate_report_ai_generate');toast('실제 AI·계산기·TaxNavi·P9 검수 완성본을 생성했습니다.','ok');
