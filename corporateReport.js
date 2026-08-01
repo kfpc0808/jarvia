@@ -1273,7 +1273,7 @@ const GOLDEN_SAMPLE = {"meta":{"caseId":"CR-DEMO-MOLAX-2026","sourceType":"CRETO
 'use strict';
 
 const VERSION='3.0.1-credit-ai-endpoint-errorfix-final';
-const ACCESS={mode:'allowlist',allowedLoginIds:['gildong']};
+const ACCESS={mode:'allowlist',allowedLoginIds:['gildong','admin']};   /* [2026-08-01] index.html 게이트와 동일 범위 */
 const ENDPOINTS={
   jebanseo:global.JARVIA_JEBANSEO_API||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi',
   corporate:global.CORPORATE_REPORT_API_URL||'https://asia-northeast3-jarvia-platform.cloudfunctions.net/corporateReportApi'
@@ -1771,15 +1771,15 @@ function buildAudioChapters(model){
  model.audioLectureType=lectureType;
  const company=p.displayName||p.companyName||'이 기업';
  const introType=!activeIssues.length?'현재 자동 임계치상 핵심 이슈를 확정하지 않고 추가 확인이 필요한 기업':{INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
- const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:2,sourceIssueIds:active.slice(),script:`자비아 기업경영 의사결정 해설교육, 시작하겠습니다. 오늘의 목표는 리포트를 외우는 것이 아니라 ${company}에서 무엇을 묻고 어떤 순서로 상담해야 하는지 익히는 것입니다. 이번 기업은 ${introType}입니다. 보험은 분석의 출발점이 아니라 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
+ const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:2,sourceIssueIds:active.slice(),script:`기업경영 의사결정 해설교육을 시작하겠습니다. 오늘의 목표는 리포트를 외우는 것이 아니라 ${company}에서 무엇을 묻고 어떤 순서로 상담해야 하는지 익히는 것입니다. 이번 기업은 ${introType}입니다. 보험은 분석의 출발점이 아니라 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
  active.slice(0,3).forEach((id,idx)=>{const lib=SpeechEngine.get(id,model),note=SpeechEngine.notes({issueId:id,title:lib.title,summary:lib.signal},model,model),branch=note.branches[idx%note.branches.length],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${lib.title}`,minutes:4,sourceIssueIds:[id],script:`학습목표는 ${lib.title}의 숫자를 경영언어로 설명하고 다음 행동에 합의하는 것입니다.\n\n${note.speech3m}\n\n실전 질문은 다음과 같습니다. ${note.questions.slice(0,3).join(' ')}\n\n대표가 ${branch?.expression||'다른 의견을 제시'}하면 ${branch?.response||'우려를 인정합니다.'} 이어서 ${branch?.followUp||'판단기준을 질문합니다.'} 최종 행동은 ${branch?.agreement||lib.nextAction}입니다.${obj?`\n\n대표 반론 “${obj.title}”에는 ${obj.dialogue.filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
  if(lectureType==='INSURANCE_OPPORTUNITY')chapters.push({title:'보험을 꺼내는 시점과 8단계',minutes:4,sourceIssueIds:active.filter(id=>['KEY_PERSON','SUCCESSION','EXECUTIVE_RETIREMENT','EXPORT_CREDIT','PROPERTY_BI','INSURANCE_OPTIMIZATION'].includes(id)),script:`잘못된 접근은 상품과 세금부터 말하는 것입니다. 올바른 순서는 위험사건, 재무충격, 필요재원, 현재재원, 부족재원, 보험 외 대안, 보험 역할입니다. ${INSURANCE_SPEECH_STAGES.map(x=>`${x.stage}. ${x.speech} 완료조건은 ${x.gate}.`).join(' ')} 부족재원이 없으면 보험을 확대하지 않습니다.`});
  else if(lectureType==='INSURANCE_OPTIMIZATION')chapters.push({title:'기존 증권 최적화 원칙',minutes:4,sourceIssueIds:['INSURANCE_OPTIMIZATION'],script:`신규가입보다 모든 법인·개인 증권을 목적별로 분류합니다. 계약자·피보험자·수익자, 보장금액·기간, 현금가치, 해지손실, 면책, 신규심사를 필요재원과 비교합니다. 목적과 기간이 맞으면 유지가 결론이고, 과다하면 감액을 검토하며, 실제 부족분에만 추가설계를 검토합니다. 기존 담당자와의 관계를 존중하고 공동검토할 수 있습니다.`});
  else chapters.push({title:'보험을 배제하고 유료진단을 제안하는 법',minutes:3,sourceIssueIds:active.slice(),script:`현재 분석에서 보험의 직접 당위성이 낮다면 명확히 배제해야 신뢰가 생깁니다. 운전자금, 대여금, 자본거래, 규정과 절차는 보험으로 해결하지 않습니다. 정밀진단의 산출물, 담당자, 기한, KPI와 중단조건을 먼저 합의하고 별도의 우연한 위험과 부족재원이 발견될 때만 보험 게이트를 엽니다.`});
  const objection=SpeechEngine.objectionsFor(active[0]||'WORKING_CAPITAL')[0];
  chapters.push({title:'대표 반론 역할극과 다음 미팅',minutes:3,sourceIssueIds:active.slice(0,1),script:`반론은 거절이 아니라 추가 확인 요청입니다. ${objection?objection.dialogue.map(x=>`${x.speaker}: ${x.text}`).join(' '):'대표의 우려를 인정하고 진짜 이유를 확인한 뒤 범위를 한 단계로 줄입니다.'} 모든 반론의 끝에는 자료, 담당자, 기한, 재검토일 중 하나가 남아야 합니다.`});
- chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에서는 ${active.slice(0,3).flatMap(documentList).slice(0,8).join(', ')}를 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면, 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.`});
- let total=chapters.reduce((s,x)=>s+x.minutes,0);if(total<18)chapters[chapters.length-2].minutes+=18-total;if(total>25)chapters.filter(x=>x.minutes>3).forEach(x=>{if(total>25){x.minutes--;total--;}});return chapters;
+ chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에서는 ${active.slice(0,3).flatMap(documentList).slice(0,8).join(', ')}를 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면, 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상으로 기업경영 의사결정 해설교육을 마칩니다.`});
+ let total=chapters.reduce((s,x)=>s+x.minutes,0);if(total<18)chapters[chapters.length-2].minutes+=18-total;if(total>25)chapters.filter(x=>x.minutes>3).forEach(x=>{if(total>25){x.minutes--;total--;}});crAuditScripts(chapters).forEach(h=>console.warn('[TTS 차단검수] 챕터',h.index,h.title,'금지어:',h.terms.join(',')));chapters.forEach(c=>{if(c&&c.script)c.script=crScrubBrand(c.script);});return chapters;
 }
 
 function generatePages(model){
@@ -2016,10 +2016,17 @@ body{padding:12mm 0}.ceo-toolbar{position:fixed;z-index:9999;right:14px;top:14px
 function exportCEO(){if(!state.pages.length)return;const out=buildCEOExportHtml();if(out.leaks.length){toast('CEO 전달본 내부정보 누출검사 실패: '+out.leaks.join(', '),'err');return;}downloadBlob(new Blob([out.html],{type:'text/html;charset=utf-8'}),`${state.caseData.profile?.displayName||'기업'}_CEO_의사결정리포트.html`);toast('내부정보가 제거된 CEO 전달본을 생성했습니다.','ok');}
 function searchAll(){const q=$('searchInput').value.trim();if(!q){$('searchResults').innerHTML='<p>검색어를 입력해 주세요.</p>';return;}const qp=q.toLowerCase();const pages=state.pages.filter(p=>(p.title+' '+p.subtitle+' '+p.summary+' '+p.html.replace(/<[^>]+>/g,' ')).toLowerCase().includes(qp)).slice(0,20);const speech=SpeechEngine.search(q).slice(0,15);$('searchResults').innerHTML=`<h3>리포트 ${pages.length}건</h3>${pages.map(p=>`<button class="card" style="display:block;width:100%;text-align:left;margin:6px 0" data-search-jump="${p.id}"><b>${esc(p.title)}</b><p>${esc(p.summary||p.subtitle)}</p></button>`).join('')||'<p>결과 없음</p>'}<h3>화법교본 ${speech.length}건</h3>${speech.map(x=>`<details class="card" style="margin:6px 0"><summary><b>${esc(x.title)}</b></summary><p>${esc(sentence(x.text,700))}</p></details>`).join('')||'<p>결과 없음</p>'}`;qsa('[data-search-jump]').forEach(b=>b.onclick=()=>{closeModal('searchModal');$(b.dataset.searchJump)?.scrollIntoView({behavior:'smooth'});});}
 
-function enterPresentation(startId=null){if(!state.visiblePages.length)return;state.present=true;state.presentIndex=Math.max(0,state.visiblePages.findIndex(x=>x.id===startId));if(state.presentIndex<0)state.presentIndex=0;document.body.classList.add('present');updatePresentation();}
+function enterPresentation(startId=null){if(!state.visiblePages.length)return;
+ /* ★ [2026-08-01] 대표 앞 화면 노출 방지 — 발표 진입 시 컨설턴트 전용 블록 물리 차단 */
+ state._modeBeforePresent=state.mode;
+ try{qsa('.consultant-only,.consultant-block,.note-trigger,[data-note-page],[data-visibility="consultant"],[data-visibility="audio"]').forEach(el=>{el.dataset.crHidden='1';el.style.display='none';});}catch(_e){}
+ state.present=true;state.presentIndex=Math.max(0,state.visiblePages.findIndex(x=>x.id===startId));if(state.presentIndex<0)state.presentIndex=0;document.body.classList.add('present');updatePresentation();}
 function updatePresentation(){qsa('.report-page').forEach(x=>x.classList.remove('present-active'));const p=state.visiblePages[state.presentIndex];if(!p)return;const el=$(p.id);el.classList.add('present-active');const sx=(innerWidth-40)/el.offsetWidth,sy=(innerHeight-80)/el.offsetHeight;document.documentElement.style.setProperty('--present-scale',String(Math.min(sx,sy,.98)));$('presCount').textContent=`${state.presentIndex+1} / ${state.visiblePages.length}`;}
 function movePresentation(d){state.presentIndex=clamp(state.presentIndex+d,0,state.visiblePages.length-1);updatePresentation();}
-function exitPresentation(){state.present=false;document.body.classList.remove('present');qsa('.report-page').forEach(x=>x.classList.remove('present-active'));}
+function exitPresentation(){
+ /* ★ 발표 종료 — 숨긴 컨설턴트 블록 복원 */
+ try{qsa('[data-cr-hidden="1"]').forEach(el=>{el.style.display='';delete el.dataset.crHidden;});}catch(_e){}
+state.present=false;document.body.classList.remove('present');qsa('.report-page').forEach(x=>x.classList.remove('present-active'));}
 
 function initEvents(){
  $('sampleBtn').onclick=()=>prepareCase(clone(GOLDEN_SAMPLE),{confirmed:true,autoGenerate:true});$('manualBtn').onclick=()=>{renderManualForm();openModal('manualModal');};$('manualApplyBtn').onclick=applyManual;
@@ -2242,14 +2249,14 @@ buildAudioChapters=function(model){
  const optimize=active.includes('INSURANCE_OPTIMIZATION')||['일부 확보','전체 확보'].includes(model.answers?.existingInsurance);
  const lectureType=optimize?'INSURANCE_OPTIMIZATION':insuranceHigh?'INSURANCE_OPPORTUNITY':'CONSULTING_PRIORITY';model.audioLectureType=lectureType;
  const introType=!activeIssues.length?'현재 자동 임계치상 핵심 이슈를 확정하지 않고 추가 확인이 필요한 기업':{INSURANCE_OPPORTUNITY:'대표 유고·승계의 부족재원을 계산할 가치가 높은 기업',CONSULTING_PRIORITY:'보험보다 경영 정밀진단과 실행프로젝트가 우선인 기업',INSURANCE_OPTIMIZATION:'신규가입보다 기존 증권의 목적·공백·중복 점검이 우선인 기업'}[lectureType];
- const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:3,sourceIssueIds:active.slice(),script:`자비아 기업경영 의사결정 해설교육, 시작하겠습니다. 오늘은 ${company}의 리포트를 읽는 것이 아니라 무엇을 묻고 어떤 순서로 상담할지 훈련합니다. 이 기업은 ${introType}입니다. 활성 이슈는 ${activeIssues.map(x=>x.title).join(', ')||'추가 확인 필요'}입니다. 보험은 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
+ const chapters=[{title:'기업의 한 문장 진단과 학습목표',minutes:3,sourceIssueIds:active.slice(),script:`기업경영 의사결정 해설교육을 시작하겠습니다. 오늘은 ${company}의 리포트를 읽는 것이 아니라 무엇을 묻고 어떤 순서로 상담할지 훈련합니다. 이 기업은 ${introType}입니다. 활성 이슈는 ${activeIssues.map(x=>x.title).join(', ')||'추가 확인 필요'}입니다. 보험은 위험과 부족재원이 확인된 뒤 비교하는 결론입니다.`}];
  chapters.push({title:'숫자를 경영언어로 번역하는 법',minutes:3,sourceIssueIds:active.slice(),script:`숫자는 매출·자산·비율을 나열하지 않습니다. 현금이 어디에 묶였는지, 1년 안에 갚을 돈과 즉시 쓸 자산의 여유가 어떤지, 대표와 주주의 의사결정에 어떤 영향을 주는지 설명합니다. 원본·계산값·시나리오·확인필요를 구분하고, 확인되지 않은 금액은 질문과 자료요청으로 남깁니다.`});
  if(!activeIssues.length){
   chapters.push({title:'자동 이슈 미확정 시 상담 원칙',minutes:4,sourceIssueIds:[],script:'현재 자료에서 자동 임계치를 넘는 핵심 이슈가 확정되지 않았습니다. 이것은 문제가 전혀 없다는 뜻이 아니라, 추가 근거 없이 대여금·자본거래·승계·대표 유고를 가정하지 않는다는 뜻입니다. 대표가 체감하는 경영과제와 자료의 공백을 먼저 확인하고, 근거가 확인될 때만 진단범위를 넓힙니다.'});
   chapters.push({title:'추가 확인질문과 자료 요청',minutes:4,sourceIssueIds:[],script:'대표님이 현재 가장 먼저 해결하고 싶은 경영과제, 보고서 수치와 체감이 다른 부분, 향후 1년의 투자·차입·주주 의사결정을 질문합니다. 최근 자금수지, 차입만기, 주요 거래처와 재고, 주주·임원 관련 변동자료 중 실제로 존재하는 자료만 요청하고 미확인 항목을 0이나 없음으로 단정하지 않습니다.'});
   chapters.push({title:'문제가 없다는 반론과 재검토 기준',minutes:4,sourceIssueIds:[],script:'대표가 현재 문제가 없다고 답하면 그 판단을 존중합니다. 어느 수치나 사건부터 관리가 필요하다고 판단할지 경계값을 합의하고, 매출·현금·차입·주주구조에 의미 있는 변화가 생길 때만 재검토합니다. 오늘은 전체 프로젝트가 아니라 모니터링 기준과 재확인일을 정하는 것으로 충분합니다.'});
-  chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:[],script:'다음 미팅에는 원본 기업보고서, 최신 결산자료, 최근 자금수지와 대표가 중요하다고 보는 의사결정 목록을 준비하십시오. 확인된 이슈가 없으면 보험이나 유료프로젝트를 억지로 만들지 않습니다. 오늘 주제에서 딱 하나만 기억한다면 확인되지 않은 사실을 문제로 만들어서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.'});
-  return chapters;
+  chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:[],script:'다음 미팅에는 원본 기업보고서, 최신 결산자료, 최근 자금수지와 대표가 중요하다고 보는 의사결정 목록을 준비하십시오. 확인된 이슈가 없으면 보험이나 유료프로젝트를 억지로 만들지 않습니다. 오늘 주제에서 딱 하나만 기억한다면 확인되지 않은 사실을 문제로 만들어서는 안 된다는 원칙입니다. 이상으로 기업경영 의사결정 해설교육을 마칩니다.'});
+  crAuditScripts(chapters).forEach(h=>console.warn('[TTS 차단검수] 챕터',h.index,h.title,'금지어:',h.terms.join(',')));chapters.forEach(c=>{if(c&&c.script)c.script=crScrubBrand(c.script);});return chapters;
  }
  const top=activeIssues.slice(0,3),per=activeIssues.length===1?5:activeIssues.length===2?4:3;
  top.forEach((issue,idx)=>{const id=issue.id,lib=SpeechEngine.get(id,model),displayTitle=issue.title||lib.title||id,note=SpeechEngine.notes({id:'audio-'+id,issueId:id,title:displayTitle,summary:issue.meaning},model,model),branch=note.branches[idx%7],obj=note.objections[0];chapters.push({title:`핵심 이슈 ${idx+1} · ${displayTitle}`,minutes:per,sourceIssueIds:[id],script:`학습목표는 ${displayTitle}의 확인된 사실과 경영적 의미를 설명하고 다음 행동에 합의하는 것입니다. ${note.speech3m} 실전 질문은 ${note.questions.slice(0,3).join(' ')} 대표가 ${branch.expression}라고 답하면 1차로 ${branch.response}라고 설명하고 ${branch.followUp}라고 재질문합니다. 2차로는 ${branch.secondResponse} 최종 행동은 ${branch.agreement}입니다.${obj?` 반론 “${obj.title}”에는 ${(obj.dialogue||[]).filter(x=>x.speaker==='컨설턴트').map(x=>x.text).join(' ')}`:''}`});});
@@ -2259,9 +2266,9 @@ buildAudioChapters=function(model){
  else chapters.push({title:'보험을 배제하고 유료진단을 제안하는 법',minutes:3,sourceIssueIds:active.slice(),script:`보험의 직접 당위성이 낮다면 ${activeIssues.length?activeIssues.map(x=>x.title).join(', '):'현재 확인된 재무사실과 추가 확인사항'}을 중심으로 정밀진단을 우선합니다. 확인되지 않은 대여금·자본거래·승계·대표 유고를 임의로 가정하지 않습니다. 산출물·담당자·기한·KPI·중단조건을 합의하고, 별도의 우연한 위험과 부족재원이 확인될 때만 보험 게이트를 엽니다.`});
  const objection=speechV16ObjectionsFor({id:'audio-objection',issueId:active[0]||'',title:'반론'},model)[0];
  chapters.push({title:'대표 반론 역할극과 다음 미팅',minutes:2,sourceIssueIds:active.slice(),script:`반론은 거절이 아니라 추가 확인 요청입니다. ${objection?(objection.dialogue||[]).map(x=>`${x.speaker}: ${x.text}`).join(' '):'대표의 우려를 인정하고 진짜 이유를 확인한 뒤 범위를 한 단계로 줄입니다.'} 모든 반론의 끝에는 자료·담당자·기한·재검토일이 남아야 합니다.`});
- chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에는 ${active.slice(0,5).flatMap(documentList).filter((v,i,a)=>a.indexOf(v)===i).slice(0,10).join(', ')||'원본 자료와 담당자 목록'}을 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상, 자비아 기업경영 의사결정 해설교육이었습니다.`});
+ chapters.push({title:'현장 실행과제',minutes:2,sourceIssueIds:active.slice(),script:`다음 미팅에는 ${active.slice(0,5).flatMap(documentList).filter((v,i,a)=>a.indexOf(v)===i).slice(0,10).join(', ')||'원본 자료와 담당자 목록'}을 준비하십시오. 오늘 전체 계약을 요구하지 않고 판단자료와 다음 확인일까지만 합의합니다. 오늘 주제에서 딱 하나만 기억한다면 확인된 사실과 계산된 부족재원보다 보험이 먼저 나가서는 안 된다는 원칙입니다. 이상으로 기업경영 의사결정 해설교육을 마칩니다.`});
  let total=chapters.reduce((s,x)=>s+x.minutes,0);while(total<18){chapters[chapters.length-2].minutes++;total++;}while(total>25){const c=chapters.find(x=>x.minutes>2&&x.title.startsWith('핵심 이슈'));if(!c)break;c.minutes--;total--;}
- return chapters;
+ crAuditScripts(chapters).forEach(h=>console.warn('[TTS 차단검수] 챕터',h.index,h.title,'금지어:',h.terms.join(',')));chapters.forEach(c=>{if(c&&c.script)c.script=crScrubBrand(c.script);});return chapters;
 };
 function speechV16StaticCoverage(){
  const scenarioTitles=SCENARIO_LIBRARY.map(x=>x.title),scenarioRoutes=Object.keys(SPEECH_V16_SCENARIO_ROUTE_MATRIX),objectionTitles=OBJECTION_LIBRARY.map(x=>x.title);
@@ -3790,7 +3797,15 @@ function crPopulateAudioVoices(){const sel=$('audioVoice');if(!sel||!('speechSyn
 function crSyncAudioSettingsUi(){const a=crReadAudioSettings();if($('audioSettingsRate'))$('audioSettingsRate').value=a.rate;if($('audioPitch'))$('audioPitch').value=a.pitch;if($('audioVolume'))$('audioVolume').value=a.volume;if($('audioAutoNext'))$('audioAutoNext').value=a.autoNext?'1':'0';if($('audioRateValue'))$('audioRateValue').textContent=Number(a.rate).toFixed(2).replace(/0$/,'')+'×';if($('audioPitchValue'))$('audioPitchValue').textContent=Number(a.pitch).toFixed(2).replace(/0$/,'');if($('audioVolumeValue'))$('audioVolumeValue').textContent=Math.round(a.volume*100)+'%';if($('audioRate'))$('audioRate').value=[...$('audioRate').options].some(o=>Number(o.value)===Number(a.rate))?String(a.rate):'1';crPopulateAudioVoices();}
 function openAudioSettings(){crSyncAudioSettingsUi();openModal('audioSettingsModal');}
 function crApplyAudioSettings(){state.audioSettings.voiceURI=$('audioVoice')?.value||'';state.audioSettings.rate=safeNum($('audioSettingsRate')?.value,1);state.audioSettings.pitch=safeNum($('audioPitch')?.value,1);state.audioSettings.volume=safeNum($('audioVolume')?.value,1);state.audioSettings.autoNext=$('audioAutoNext')?.value!=='0';crWriteAudioSettings();crSyncAudioSettingsUi();closeModal('audioSettingsModal');toast('음성강의 설정을 적용했습니다.','ok');}
-function crSpeakText(text,{preview=false}={}){if(!('speechSynthesis' in global)){toast('이 브라우저는 음성재생을 지원하지 않습니다.','err');return;}speechSynthesis.cancel();const a=crReadAudioSettings(),u=new SpeechSynthesisUtterance(preview?String(text).slice(0,110):text);u.lang='ko-KR';u.rate=a.rate;u.pitch=a.pitch;u.volume=a.volume;const voice=speechSynthesis.getVoices().find(v=>v.voiceURI===a.voiceURI);if(voice)u.voice=voice;state.speechUtterance=u;if(!preview)u.onend=()=>{if(a.autoNext){const chapters=state.analysis?.audioChapters||[];if(state.audioIndex<chapters.length-1){selectChapter(state.audioIndex+1);setTimeout(()=>audioAction('play'),180);}}};speechSynthesis.speak(u);}
+/* ★ [2026-08-01] TTS 브랜드 사전검수 — 고객·컨설턴트 대본에 자사 브랜드가 발음되지 않도록 생성 전 차단 */
+const CR_TTS_BANNED=/자비아|JARVIA|Jarvia/g;
+function crScrubBrand(s){return String(s||'').replace(CR_TTS_BANNED,'').replace(/\s{2,}/g,' ').replace(/^[,·\s]+/,'').trim();}
+function crAuditScripts(chapters){const hits=[];(chapters||[]).forEach((c,i)=>{const m=String(c&&c.script||'').match(CR_TTS_BANNED);if(m)hits.push({index:i,title:(c&&c.title)||'',terms:[...new Set(m)]});});return hits;}
+function crSpeakText(text,{preview=false}={}){
+ const _raw=String(text||''), _clean=crScrubBrand(_raw);
+ if(_clean!==_raw){console.warn('[TTS 차단검수] 브랜드 표현을 제거했습니다.');}
+ text=_clean;
+ if(!('speechSynthesis' in global)){toast('이 브라우저는 음성재생을 지원하지 않습니다.','err');return;}speechSynthesis.cancel();const a=crReadAudioSettings(),u=new SpeechSynthesisUtterance(preview?String(text).slice(0,110):text);u.lang='ko-KR';u.rate=a.rate;u.pitch=a.pitch;u.volume=a.volume;const voice=speechSynthesis.getVoices().find(v=>v.voiceURI===a.voiceURI);if(voice)u.voice=voice;state.speechUtterance=u;if(!preview)u.onend=()=>{if(a.autoNext){const chapters=state.analysis?.audioChapters||[];if(state.audioIndex<chapters.length-1){selectChapter(state.audioIndex+1);setTimeout(()=>audioAction('play'),180);}}};speechSynthesis.speak(u);}
 audioAction=function(action){const chapters=state.analysis?.audioChapters||state.caseData?.audioChapters||[],ch=chapters[state.audioIndex];if(!ch){toast('음성대본이 없습니다.');return;}if(action==='play'){const quick=safeNum($('audioRate')?.value,state.audioSettings.rate);if(quick!==state.audioSettings.rate){state.audioSettings.rate=quick;crWriteAudioSettings();}crSpeakText(ch.script);toast(`챕터 ${state.audioIndex+1} 음성강의를 재생합니다.`);}else if(action==='pause'){if(speechSynthesis.paused)speechSynthesis.resume();else speechSynthesis.pause();}else if(action==='stop'){speechSynthesis.cancel();}else if(action==='mp3'){generateMp3(ch.script);}};
 const crBindDynamicV210Base=bindDynamic;
 bindDynamic=function(){crBindDynamicV210Base();qsa('[data-audio-settings]').forEach(b=>b.onclick=openAudioSettings);};
@@ -3803,7 +3818,7 @@ loadCaseFile=function(file){if(!file)return;const r=new FileReader();r.onload=()
 function crWireFinalEvents(){
  crWirePurposeFlow();
  if($('consultantExportBtn'))$('consultantExportBtn').onclick=exportConsultant;if($('consultantExportSideBtn'))$('consultantExportSideBtn').onclick=exportConsultant;
- if($('audioSettingsApplyBtn'))$('audioSettingsApplyBtn').onclick=crApplyAudioSettings;if($('audioTestBtn'))$('audioTestBtn').onclick=()=>crSpeakText('자비아 기업경영 의사결정 해설강의입니다. 현재 설정된 목소리와 속도를 확인해 주세요.',{preview:true});
+ if($('audioSettingsApplyBtn'))$('audioSettingsApplyBtn').onclick=crApplyAudioSettings;if($('audioTestBtn'))$('audioTestBtn').onclick=()=>crSpeakText('기업경영 의사결정 해설강의입니다. 현재 설정된 목소리와 속도를 확인해 주세요.',{preview:true});
  for(const id of ['audioSettingsRate','audioPitch','audioVolume'])if($(id))$(id).oninput=()=>{if(id==='audioSettingsRate')$('audioRateValue').textContent=Number($(id).value).toFixed(2).replace(/0$/,'')+'×';if(id==='audioPitch')$('audioPitchValue').textContent=Number($(id).value).toFixed(2).replace(/0$/,'');if(id==='audioVolume')$('audioVolumeValue').textContent=Math.round(Number($(id).value)*100)+'%';};
  if('speechSynthesis' in global){speechSynthesis.onvoiceschanged=crPopulateAudioVoices;crPopulateAudioVoices();}
  if($('loadCaseBtn'))$('loadCaseBtn').onclick=()=>$('caseFileInput').click();if($('caseFileInput'))$('caseFileInput').onchange=e=>loadCaseFile(e.target.files?.[0]);
