@@ -1069,6 +1069,7 @@
     <button class="mdl-x" onclick="closeM('mdl-fcc-quick')">×</button>
     <h2 style="font-size:17px;font-weight:800;color:var(--primary);margin:0 0 4px">🎂 고객 생일·상령일</h2>
     <p style="font-size:12px;color:#6B7280;margin:0 0 10px">오늘부터 60일간 예정 이벤트입니다. 행을 누르면 💬 안부 멘트를 바로 보낼 수 있습니다.</p>
+    <div id="fcq-mtabs" style="display:flex;gap:6px;margin-bottom:8px"></div><!-- ★ [2026-08-03] 전체(60일)·당월·익월 월 필터 탭 -->
     <div id="fcq-tabs" style="display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin-bottom:12px;padding-bottom:2px"></div><!-- ★ [2026-07-31] 전체·생일·상령일·만기 필터 탭 / [2026-08-03] 모바일 한 줄 유지 + 좌우 스크롤 -->
     <div id="fcq-months" onclick="fccMsgClick(event)"></div><!-- ★ [2026-07-31] 오늘부터 60일 롤링 — 월 블록 동적 생성 -->
     <div style="display:flex;justify-content:flex-end;border-top:1px solid #F3F4F6;padding-top:10px">
@@ -7061,38 +7062,51 @@ window.fccQuickList=async function(){
   try{await fccFetch();}
   catch(e){console.error('fccQuickList error:',e);if(box)box.innerHTML='<div style="font-size:12px;color:#DC2626;padding:2px 0">고객 정보를 불러오지 못했습니다.</div>';return;}
   fcqKind='';   /* ★ [2026-07-31] 모달 열 때마다 '전체' 탭으로 초기화 */
+  fcqMonth='';  /* ★ [2026-08-03] 월 필터도 '전체(60일)'로 초기화 */
   fcqRender();
 };
 /* ★ [2026-07-31] 퀵 모달 탭 필터 — 전체·생일·상령일·만기 / 오늘 이후만 표시(지난 일정 접기) */
 let fcqKind='';   /* '' | '생일' | '상령일' | '만기' */
+let fcqMonth='';  /* ★ [2026-08-03] '' 전체(60일) | 'cur' 당월 | 'next' 익월 */
 function fcqRender(){
   const t=fccToday();
   /* ★ [2026-07-31] 오늘부터 60일 롤링 윈도우 (오늘 포함 +59일) — 최대 3개월에 걸침 */
   const end=new Date(t.y,t.m-1,t.d+59);
   const eY=end.getFullYear(),eM=end.getMonth()+1,eD=end.getDate();
-  const months=[];{let y=t.y,m=t.m;while(y<eY||(y===eY&&m<=eM)){months.push([y,m]);m++;if(m>12){m=1;y++;}}}
+  let months=[];{let y=t.y,m=t.m;while(y<eY||(y===eY&&m<=eM)){months.push([y,m]);m++;if(m>12){m=1;y++;}}}
+  /* ★ [2026-08-03] 당월·익월 월 필터 — 전체는 기존 60일 롤링 그대로 */
+  const win60=(fcqMonth==='');
+  if(fcqMonth==='cur')months=[[t.y,t.m]];
+  else if(fcqMonth==='next'){let ny=t.y,nm=t.m+1;if(nm>12){nm=1;ny++;}months=[[ny,nm]];}
   const box=$('fcq-months');
   if(box){
     box.innerHTML=months.map(([Y,M],i)=>{
-      const lb=M+'월'+(i===0?' (이번 달)':(Y===eY&&M===eM?' (~'+eM+'/'+eD+'일까지)':''));
+      const lb=M+'월'+(fcqMonth==='next'?' (다음 달)':(Y===t.y&&M===t.m?' (이번 달)':(win60&&Y===eY&&M===eM?' (~'+eM+'/'+eD+'일까지)':'')));   /* ★ [2026-08-03] 월 필터 라벨 */
       return '<div style="font-size:11px;font-weight:700;color:#9CA3AF;margin-bottom:5px">'+lb+'</div>'
         +'<div id="fcq-m-'+i+'" style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px"></div>';
     }).join('');
     const kinds=fcqKind?[fcqKind]:null;
     months.forEach(([Y,M],i)=>{
       const o={kinds:kinds};
-      if(i===0)o.fromD=t.d;
-      if(Y===eY&&M===eM)o.toD=eD;
+      if(Y===t.y&&M===t.m)o.fromD=t.d;   /* ★ [2026-08-03] 당월은 항상 오늘 이후만 (기존 i===0과 동일 효과) */
+      if(win60&&Y===eY&&M===eM)o.toD=eD; /* ★ [2026-08-03] 60일 캡은 전체 모드에서만 — 익월 모드는 말일까지 */
       fccRenderMonthInto('fcq-m-'+i,Y,M,o);
     });
   }
-  /* 탭 건수: 60일 윈도우 합산 */
+  /* 탭 건수: 선택된 월 범위 합산 — ★ [2026-08-03] 월 필터 반영 */
   const _cnt=k=>{
     const f=e=>!k||e.k===k||e.k.indexOf(k+'_')===0;
     let s=0;
-    months.forEach(([Y,M],i)=>{s+=fccMonthEvents(Y,M).filter(e=>(i>0||e.d>=t.d)&&!(Y===eY&&M===eM&&e.d>eD)).filter(f).length;});
+    months.forEach(([Y,M])=>{s+=fccMonthEvents(Y,M).filter(e=>!(Y===t.y&&M===t.m&&e.d<t.d)&&!(win60&&Y===eY&&M===eM&&e.d>eD)).filter(f).length;});
     return s;
   };
+  /* ★ [2026-08-03] 월 필터 탭: 전체(60일)·당월·익월 */
+  const mtabs=[['','전체 (60일)'],['cur','당월'],['next','익월']];
+  const mtb=$('fcq-mtabs');
+  if(mtb)mtb.innerHTML=mtabs.map(([m,lb])=>{
+    const on=(fcqMonth===m);
+    return '<button type="button" onclick="fcqSetMonth(\''+m+'\')" style="flex:0 0 auto;white-space:nowrap;font-size:12px;font-weight:700;padding:6px 12px;border-radius:16px;cursor:pointer;border:1px solid '+(on?'#B8860B':'#D1D5DB')+';background:'+(on?'#FBF2E2':'#fff')+';color:'+(on?'#633806':'#475569')+'">'+lb+'</button>';
+  }).join('');
   const tabs=[['','전체'],['생일','🎂 생일'],['상령일','📅 상령일'],['만기','⏰ 만기']];
   const tb=$('fcq-tabs');
   if(tb)tb.innerHTML=tabs.map(([k,lb])=>{
@@ -7101,6 +7115,7 @@ function fcqRender(){
   }).join('');
 }
 window.fcqSetKind=function(k){fcqKind=k;fcqRender();};   /* ★ module 스코프 → onclick용 window 등록 */
+window.fcqSetMonth=function(m){fcqMonth=m;fcqRender();};   /* ★ [2026-08-03] 당월·익월 월 필터 — onclick용 window 등록 */
 /* ═══ 🔔 [2026-07-31] 고객 반응 — fc_client_views(고객별 합계)·fc_view_logs(열람자별 상세) 재활용 ═══ */
 let jvSigRange='7d';   /* 'today' | '7d' | 'month' */
 let _jvSigAgg=null;    /* cid → {name,total,ch,dl,days,todayN,last,byCard,bySec} */
