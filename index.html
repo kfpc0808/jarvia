@@ -274,8 +274,9 @@
           <input type="hidden" id="rg-sms-verified" value="N">
         </div>
         <div class="fg fg-vertical"><label>이메일 <i>*</i></label><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap"><input id="rg-email-id" style="flex:1;min-width:80px" placeholder="아이디" required data-next="rg-loginid"><span>@</span><select id="rg-email-sel" style="flex:1;min-width:100px" onchange="rgEmailSel()"><option value="">선택</option><option value="naver.com">naver.com</option><option value="gmail.com">gmail.com</option><option value="daum.net">daum.net</option><option value="hanmail.net">hanmail.net</option><option value="kakao.com">kakao.com</option><option value="nate.com">nate.com</option><option value="hotmail.com">hotmail.com</option><option value="direct">직접입력</option></select><input id="rg-email-domain" style="flex:1;min-width:80px;display:none" placeholder="도메인 직접 입력"></div><p style="margin:6px 0 0;font-size:13px;color:#D32F2F;font-weight:700">※ 서비스 관련 정보 제공에 사용됩니다. 정확한 메일주소를 입력해 주세요.<br>※ 이용료=가입시 10만원 *월이용료=5만(익월말일자부터 등록카드로 자동결제 진행)</p></div>
-        <div class="fg"><label>아이디 <i>*</i></label><input id="rg-loginid" required minlength="4" data-next="rg-pw"></div>
-        <div class="fr"><div class="fg"><label>비밀번호 <i>*</i></label><input id="rg-pw" type="password" required minlength="6" data-next="rg-pw2"></div><div class="fg"><label>비밀번호 확인 <i>*</i></label><input id="rg-pw2" type="password" required></div></div>
+        <div class="fg fg-vertical"><label>아이디 <i>*</i></label><input id="rg-loginid" required minlength="4" maxlength="20" placeholder="영문 소문자+숫자 4자 이상" autocapitalize="none" autocomplete="username" data-next="rg-pw" oninput="rgIdHint(this)"><p id="rg-id-hint" style="margin:4px 0 0;font-size:12px;color:#888">영문 소문자와 숫자만 사용 가능합니다 (4~20자)</p></div>
+        <div class="fr"><div class="fg"><label>비밀번호 <i>*</i></label><input id="rg-pw" type="password" required minlength="6" placeholder="6자 이상" data-next="rg-pw2"></div><div class="fg"><label>비밀번호 확인 <i>*</i></label><input id="rg-pw2" type="password" required placeholder="한번 더 입력"></div></div>
+        <p style="margin:-6px 0 0;font-size:12px;color:#888">비밀번호는 6자 이상 자유롭게 입력하세요 (영문 대소문자·숫자·특수문자 사용 가능)</p>
         <div class="terms-box">
           <label class="ck"><input type="checkbox" id="rg-terms" required> <a onclick="showTerms('tos')">이용약관</a>에 동의합니다. <i>*</i></label>
           <label class="ck"><input type="checkbox" id="rg-privacy" required> <a onclick="showTerms('pp')">개인정보처리방침</a>에 동의합니다. <i>*</i></label>
@@ -4644,7 +4645,9 @@ async function doLogin(e){
       await updateDoc(aSnap.docs[0].ref,{lastLoginAt:serverTimestamp()});
       window.location.href='admin.html';return;
     }
-    const uSnap=await getDocs(query(collection(db,'users'),where('loginId','==',lid),limit(1)));
+    /* ★ 2026-08-04: 대소문자 무시 로그인 — loginIdLower 우선, 미백필 기존회원 대비 원문 폴백 */
+    let uSnap=await getDocs(query(collection(db,'users'),where('loginIdLower','==',lid.toLowerCase()),limit(1)));
+    if(uSnap.empty)uSnap=await getDocs(query(collection(db,'users'),where('loginId','==',lid),limit(1)));
     if(uSnap.empty)return toast('존재하지 않는 아이디입니다.','error');
     const ud=uSnap.docs[0].data();
     if(ud.status==='suspended')return toast('정지된 계정입니다.','error');
@@ -4652,7 +4655,11 @@ async function doLogin(e){
     window._justLoggedIn=true;
     await signInWithEmailAndPassword(auth,ud.email,pw);
     try{localStorage.setItem('jarvia_last_id',lid);}catch(_){}
+    /* ★ 자가치유: loginIdLower 미보유 회원은 로그인 성공 시 조용히 백필 (실패해도 로그인 흐름 무영향) */
     await updateDoc(uSnap.docs[0].ref,{lastLoginAt:serverTimestamp()});
+    if(!ud.loginIdLower&&ud.loginId){
+      try{await updateDoc(uSnap.docs[0].ref,{loginIdLower:String(ud.loginId).toLowerCase()});}catch(_bf){console.warn('loginIdLower 백필 실패(무시)',_bf);}
+    }
   }catch(err){
     if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential')toast('비밀번호가 올바르지 않습니다.','error');
     else if(err.code==='auth/too-many-requests')toast('시도가 너무 많습니다. 잠시 후 다시 시도하세요.','error');
@@ -4677,6 +4684,7 @@ async function doRegister(e){
   const addr='';/* ★ 주소 필드 삭제 — 회원가입 시 빈 값 저장, 마이페이지에서 입력 가능 */
   const loginId=$('rg-loginid').value.trim(),pw=$('rg-pw').value,pw2=$('rg-pw2').value;
   if(!/^[가-힣\s]+$/.test(name))return toast('이름은 한글로만 입력해 주세요.','error');
+  if(!/^[a-z0-9]{4,20}$/.test(loginId))return toast('아이디는 영문 소문자와 숫자로 4~20자 입력해 주세요.','error');   /* ★ 2026-08-04: 아이디 형식 검증 (한글·대문자·특수문자 차단) */
   if(!email)return toast('이메일을 입력하세요.','error');
   if(pw!==pw2)return toast('비밀번호가 일치하지 않습니다.','error');
   if(pw.length<6)return toast('비밀번호는 6자 이상이어야 합니다.','error');
@@ -4684,7 +4692,9 @@ async function doRegister(e){
   if($('rg-sms-verified').value!=='Y')return toast('연락처 인증을 완료해주세요.','error');
   try{
     toast('가입 처리 중...');
-    const idChk=await getDocs(query(collection(db,'users'),where('loginId','==',loginId),limit(1)));
+    /* ★ 2026-08-04: 대소문자 무시 중복체크 — loginIdLower 우선, 미백필 기존회원 대비 원문 폴백 */
+    let idChk=await getDocs(query(collection(db,'users'),where('loginIdLower','==',loginId.toLowerCase()),limit(1)));
+    if(idChk.empty)idChk=await getDocs(query(collection(db,'users'),where('loginId','==',loginId),limit(1)));
     if(!idChk.empty)return toast('이미 사용 중인 아이디입니다.','error');
     const emChk=await getDocs(query(collection(db,'users'),where('email','==',email),limit(1)));
     if(!emChk.empty)return toast('이미 가입된 이메일입니다.','error');
@@ -4703,7 +4713,7 @@ async function doRegister(e){
     //    문서ID 유일성으로 완전 동시요청도 하나만 성공(race 원천 차단). 실패 시 롤백.
     const _nphone=String(phone||'').replace(/[^0-9]/g,'');
     try{
-      await setDoc(doc(db,'uniq_loginid',loginId),{uid:cred.user.uid,createdAt:serverTimestamp()});
+      await setDoc(doc(db,'uniq_loginid',loginId.toLowerCase()),{uid:cred.user.uid,createdAt:serverTimestamp()});   /* ★ 2026-08-04: 잠금 문서ID 소문자 통일 (대소문자 무시 중복방지) */
     }catch(_le){
       try{await cred.user.delete();}catch(_){}                 // 롤백: 방금 만든 Auth 삭제
       return toast('이미 사용 중인 아이디입니다.','error');
@@ -4711,7 +4721,7 @@ async function doRegister(e){
     try{
       if(_nphone&&_nphone!=='01091198211')await setDoc(doc(db,'uniq_phone',_nphone),{uid:cred.user.uid,createdAt:serverTimestamp()});   /* 010-9119-8211 테스트 예외: 연락처 중복 허용 */
     }catch(_pe){
-      try{await deleteDoc(doc(db,'uniq_loginid',loginId));}catch(_){}  // 롤백: 아이디 잠금 해제
+      try{await deleteDoc(doc(db,'uniq_loginid',loginId.toLowerCase()));}catch(_){}  // 롤백: 아이디 잠금 해제
       try{await cred.user.delete();}catch(_){}                          // 롤백: Auth 삭제
       return toast('이미 가입된 연락처입니다. 담당자에게 문의해 주세요.','error');
     }
@@ -4758,7 +4768,7 @@ async function doRegister(e){
       });
     }catch(_ue){
       // users 문서 생성 실패 → 잠금·계정 롤백 후 중단
-      try{await deleteDoc(doc(db,'uniq_loginid',loginId));}catch(_){}
+      try{await deleteDoc(doc(db,'uniq_loginid',loginId.toLowerCase()));}catch(_){}
       if(_nphone){try{await deleteDoc(doc(db,'uniq_phone',_nphone));}catch(_){}}
       try{await cred.user.delete();}catch(_){}
       return toast('가입 처리 실패: '+(_ue.message||'오류')+' 다시 시도해 주세요.','error');
@@ -11589,6 +11599,15 @@ function closeWelcomeAndLogin(){closeM('mdl-welcome-payment');nav('login');}
 
 // ── Expose to window for onclick handlers ──
 window.nav=nav;window.openM=openM;window.closeM=closeM;window.mpTab=mpTab;window.toggleMobMenu=toggleMobMenu;window.closeMobMenu=closeMobMenu;window.showTickerNotice=showTickerNotice;window.showGuide=showGuide;
+/* ★ 2026-08-04: 회원가입 아이디 실시간 형식 안내 (영문 소문자+숫자 4~20자) */
+function rgIdHint(el){
+  const h=$('rg-id-hint');if(!h)return;
+  const v=el.value;
+  if(!v){h.textContent='영문 소문자와 숫자만 사용 가능합니다 (4~20자)';h.style.color='#888';return;}
+  if(!/^[a-z0-9]{4,20}$/.test(v)){h.textContent='⚠️ 영문 소문자와 숫자만, 4~20자로 입력해 주세요'+(/[A-Z]/.test(v)?' (대문자 불가)':/[가-힣]/.test(v)?' (한글 불가)':'');h.style.color='#D32F2F';}
+  else{h.textContent='✓ 사용 가능한 형식입니다';h.style.color='#2E7D32';}
+}
+window.rgIdHint=rgIdHint;
 window.doLogin=doLogin;window.doRegister=doRegister;window.doResetPw=doResetPw;window.doLogout=doLogout;window.doLandLogin=doLandLogin;window.logoClick=logoClick;window.goSnapshot=goSnapshot;window.goCalc=goCalc;window.openPolicyAnalysis=openPolicyAnalysis;window.startPolicyAnalysis=startPolicyAnalysis;
 window.copyAccountInfo=copyAccountInfo;window.closeWelcomeAndLogin=closeWelcomeAndLogin;
 // ★ 택스컨설팅위클리 오디오 재생
