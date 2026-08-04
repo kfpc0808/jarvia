@@ -119,6 +119,15 @@
   function exportNumbers() {
     return store(STORE_NUM, 'readonly').then(function (s) { return reqP(s.getAll()); }).then(function (a) { return a || []; });
   }
+  /* ★ [2026-08-04] 로그아웃 시 전화번호 캐시 완전 삭제 (공용 PC 잔류 방지)
+   *   · numbers 저장소만 비운다 — daily 발송 카운터(안전 상한)는 유지해
+   *     로그아웃→재로그인으로 한도를 우회할 수 없게 한다.
+   *   · 고객입력 폴백 캐시(_mcCache)도 함께 초기화. mycustomers_db 자체는
+   *     index.html/fc.html 로그아웃 로직이 삭제한다. */
+  function clearAll() {
+    _mcCache = null; _mcAt = 0;
+    return store(STORE_NUM, 'readwrite').then(function (s) { return reqP(s.clear()); }).catch(function () {});
+  }
 
   // ── KST 날짜 ──
   function todayStr() { var k = new Date(Date.now() + 9 * 3600000); return k.toISOString().slice(0, 10); }
@@ -257,7 +266,7 @@
   window.SmsCore = {
     LIMITS: LIMITS,
     normalizePhone: normalizePhone,
-    getNumber: getNumber, setNumber: setNumber, bulkSetNumbers: bulkSetNumbers, exportNumbers: exportNumbers,
+    getNumber: getNumber, setNumber: setNumber, bulkSetNumbers: bulkSetNumbers, exportNumbers: exportNumbers, clearAll: clearAll,
     mcGetNumber: mcGetNumber, mcRefresh: mcRefresh,   /* ★ [2026-07-24] 고객입력 번호 폴백 (읽기 전용) */
     getToday: getToday, canSend: canSend, addSent: addSent, addSession: addSession, sessionGate: sessionGate,
     buildSmsUrl: buildSmsUrl, sendOne: sendOne, isIOS: isIOS, todayStr: todayStr,
