@@ -11674,28 +11674,39 @@ window.mrUploadHtml=async function(){
     st.textContent='✅ 완료';toast(prev.exists()?'리포트 재업로드 완료 — 기존 게시 상태 유지':'리포트 업로드 완료');mrLoad();
     /* ★ [2026-08-04] 문서 확정 → 요약본 재생성 + 대본 생성 자동 실행.
        plan.json 이 아니라 방금 올린 확정 report.html 을 소스로 쓴다. */
-    if(confirm('업로드한 문서를 기준으로 요약본과 음성 대본을 새로 만들까요?\n\n· 소요 5~10분 (창을 닫아도 서버에서 계속 진행됩니다)\n· 기존 대본은 교체됩니다\n· 요약본을 수동 업로드한 이력이 있으면 요약본은 보존됩니다')){
-      st.textContent='⏳ 대본 생성 요청 중...';
-      mrBuildScripts(m);
-    }
+    mrBuildScripts(m,1);
   }catch(e){st.textContent='';toast('업로드 실패: '+e.message,'error');console.error(e);}
 };
-/* ★ [2026-08-04] 확정 문서 기준 요약본·대본 생성 트리거 */
+/* ★ [2026-08-04] 확정 문서 기준 요약본·대본 생성 트리거.
+   생성에 5~10분 걸리므로 요청은 fire-and-forget 으로 던지고,
+   monthly_report_progress 를 폴링해 진행 상태만 화면에 반영한다.
+   (요청을 await 하면 로드밸런서·브라우저가 먼저 끊어 서버는 도는데 화면은 실패로 표시됨) */
 window.mrBuildScripts=async function(m,ask){
   if(!m)m=mrMonth();if(!m)return;
-  if(ask&&!confirm(`${m}호 대본을 확정 문서 기준으로 새로 만들까요?\n\n· 소요 5~10분\n· 기존 대본은 교체됩니다`))return;
+  if(ask&&!confirm(`${m}호 대본을 확정 문서 기준으로 새로 만들까요?\n\n· 소요 5~10분 (창을 닫아도 서버에서 계속 진행됩니다)\n· 기존 대본은 교체됩니다\n· 요약본 수동본이 있으면 요약본은 보존됩니다`))return;
+  const st=$('mr-html-stat');
+  if(st)st.textContent='⏳ 대본 생성 요청 중...';
+  fetch(`https://asia-northeast3-jarvia-platform.cloudfunctions.net/buildMonthlyScripts?month=${m}`,
+    {method:'POST',headers:{'x-internal-key':'tcw-jarvia-2026-kfpc'}})
+    .then(r=>{if(!r.ok)r.text().then(t=>toast('대본 생성 요청 거부('+r.status+'): '+t.slice(0,120),'error'));})
+    .catch(e=>console.warn('[MR] 요청 전송 경고(서버는 진행 중일 수 있음):',e.message));
+  toast(`${m}호 대본 생성을 시작했습니다 — 진행 상태가 아래에 표시됩니다`);
+  mrPollScripts(m,0);
+};
+/* 진행 상태 폴링 — 최대 15분 */
+window.mrPollScripts=async function(m,n){
+  if(n>90)return;
   const st=$('mr-html-stat');
   try{
-    const r=await fetch(`https://asia-northeast3-jarvia-platform.cloudfunctions.net/buildMonthlyScripts?month=${m}`,
-      {method:'POST',headers:{'x-internal-key':'tcw-jarvia-2026-kfpc'}});
-    if(!r.ok)throw new Error((await r.text()).slice(0,200));
-    const j=await r.json();
-    if(st)st.textContent=`✅ 대본 ${j.tracks}종 생성 완료 (${j.elapsedSec}초)`;
-    toast(`대본 ${j.tracks}종 생성 완료 — 산출물에서 내려받아 음성을 만드십시오`);mrLoad();
-  }catch(e){
-    if(st)st.textContent='';
-    toast('대본 생성 실패: '+e.message,'error');console.error(e);
-  }
+    const p=await getDoc(doc(db,'monthly_report_progress',m));
+    if(p.exists()){
+      const d=p.data();
+      if(d.status==='done'){if(st)st.textContent='✅ '+(d.label||'완료');toast('대본 생성 완료 — 산출물에서 내려받아 음성을 만드십시오');mrLoad();return;}
+      if(d.status==='error'){if(st)st.textContent='';toast('대본 생성 실패: '+(d.label||''),'error');return;}
+      if(st)st.textContent=`⏳ ${d.step||0}/${d.total||3} ${d.label||''}`;
+    }
+  }catch(e){console.warn('[MR] 폴링 경고:',e.message);}
+  setTimeout(()=>mrPollScripts(m,n+1),10000);
 };
 window.mrUploadSlides=async function(){
   const m=mrMonth();if(!m)return;
