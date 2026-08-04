@@ -13052,6 +13052,47 @@ function crRenderSchedule() {
       <td style="text-align:center;padding:8px">${actions}</td>
     </tr>`;
   }).join('');
+
+  /* ★ [2026-08-04] 생성 진행률 실시간 갱신.
+     종전에는 loadCrSchedule() 이 일회성 조회라 "진행중 75%" 가 그 자리에 멈춰 있었고,
+     담당자가 수동 새로고침해야만 값이 바뀌었다(0% → 새로고침 → 75%).
+     진행 중인 행이 있을 때만 폴링하고, 전부 끝나면 스스로 멈춘다.
+     마스터가이드(mgAutoRefreshSync)와 동일한 방식. */
+  crSchedAutoRefreshSync(rows);
+}
+
+/* 진행 중 행 존재 여부 — running 상태이거나 로컬 추적 중인 행.
+   에러로 멈춘 행은 제외한다(무한 폴링 방지). */
+function crSchedHasActive(rows) {
+  return (rows || []).some((r) => {
+    if (r.completed) return false;
+    const rep = crSchedReports['sid:' + r._id]
+      || ((r.date && r.topicSlug) ? crSchedReports['dt:' + r.date + '|' + r.topicSlug] : null);
+    if (rep) {
+      if (rep.readyToPublish === true) return false;                       /* 점검대기 = 생성 완료 */
+      if (rep.error || /error|fail/i.test(String(rep.status || ''))) return false;   /* 실패 = 더 돌 필요 없음 */
+      return true;
+    }
+    return !!crSchedRunning[r._id];
+  });
+}
+let _crSchedPoll = null;
+/* 폴링 상한 — 생성이 통상 5~10분이므로 15분(8초 × 112회) 넘으면 중단. 무한 조회 방지 */
+let _crSchedPollN = 0;
+function stopCrSchedAutoRefresh() { if (_crSchedPoll) { clearInterval(_crSchedPoll); _crSchedPoll = null; } _crSchedPollN = 0; }
+function crSchedAutoRefreshSync(rows) {
+  const panel = document.getElementById('p-case-report');
+  const visible = panel && !panel.classList.contains('hidden');
+  if (visible && crSchedHasActive(rows)) {
+    if (!_crSchedPoll) _crSchedPoll = setInterval(() => {
+      const p = document.getElementById('p-case-report');
+      if (!p || p.classList.contains('hidden')) { stopCrSchedAutoRefresh(); return; }   /* 탭 이탈 안전망 */
+      if (++_crSchedPollN > 112) { stopCrSchedAutoRefresh(); return; }                  /* 15분 상한 */
+      loadCrSchedule();   /* 재호출 끝에서 다시 판단 — 완주하면 자동 중지 */
+    }, 8000);
+  } else {
+    stopCrSchedAutoRefresh();
+  }
 }
 
 // ─── 배지·포맷 헬퍼 ─────────────────────────────────────────────────
