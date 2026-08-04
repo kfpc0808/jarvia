@@ -185,7 +185,7 @@
       <button class="btn-h" onclick="navNotices()">공지사항</button>
       <button class="btn-h" onclick="nav('mypage')">마이페이지<span id="header-fc-req-badge" style="display:none;background:#DC2626;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;min-width:16px;text-align:center;line-height:1.4"></span></button>
       <span id="hdr-name" class="hdr-name"></span>
-      <button class="btn-h btn-h-logout" onclick="doLogout()">로그아웃</button>
+      <button class="btn-h btn-h-logout" onclick="doLogout(true)">로그아웃</button>
     </nav>
     <button class="mob-menu-btn" onclick="toggleMobMenu()">☰</button>
   </div>
@@ -199,7 +199,7 @@
     <a onclick="openFeatures()" style="color:#C9A96E;font-weight:700">📖 이용가이드</a>
     <a onclick="navNotices()">공지사항</a>
     <a onclick="nav('mypage')">마이페이지<span id="header-fc-req-badge-mobile" style="display:none;background:#DC2626;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;min-width:16px;text-align:center;line-height:1.4"></span></a>
-    <a onclick="doLogout()">로그아웃</a>
+    <a onclick="doLogout(true)">로그아웃</a>
 </div>
 <div id="notice-ticker" class="ticker-wrap hidden"><div class="ticker" id="ticker-inner"></div></div>
 
@@ -4899,7 +4899,16 @@ async function doWithdraw(){
   }
 }
 
-async function doLogout(){if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}try{localStorage.removeItem('jarvia_hasLogin');}catch(_e){}await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
+async function doLogout(manual){
+  /* ★ 2026-08-04: 수동 로그아웃 시 미백업(mpc_dirty) 수정분 확인 — 자동 로그아웃(정지·세션교체)은 확인 없이 진행 */
+  if(manual===true){try{if(localStorage.getItem('mpc_dirty')==='1'&&!confirm('아직 드라이브에 백업되지 않은 고객 수정분이 있습니다.\n지금 로그아웃하면 이 수정분이 사라질 수 있습니다.\n\n그래도 로그아웃할까요?'))return;}catch(_e){}}
+  if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}try{localStorage.removeItem('jarvia_hasLogin');}catch(_e){}
+  /* ★ 2026-08-04: 이 기기의 고객·장소 로컬 데이터 완전 삭제 (공용 PC 잔류 방지 — 다음 로그인 때 드라이브 자동 복원) */
+  try{indexedDB.deleteDatabase('mycustomers_db');}catch(_e){}
+  try{indexedDB.deleteDatabase('myplaces_db');}catch(_e){}
+  try{const _rm=[];for(let _i=0;_i<localStorage.length;_i++){const _k=localStorage.key(_i);if(/^(mpc_|cc_pin_)/.test(_k)&&_k!=='mpc_custom_rels')_rm.push(_k);   /* custom_rels는 드라이브 백업에 없어 보존 (고객정보 아님) */}_rm.forEach(k=>{try{localStorage.removeItem(k);}catch(_e2){}});}catch(_e){}
+  try{if(window.SmsCore&&typeof SmsCore.clearAll==='function')await SmsCore.clearAll();}catch(_e){}
+  await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
 async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
