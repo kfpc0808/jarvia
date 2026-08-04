@@ -12631,6 +12631,7 @@ let crCurrentScheduleDate = null;
 let crSchedRunning = {};
 let crSchedReports = {};   // ★ [2026-07-21] 일정 표 ↔ 실제 생성 문서(upcoming_case_reports) 조인 맵
 let crSchedPublished = {}; // ★ [2026-07-28] 일정 표 ↔ 게시 완료 문서(case_reports) 조인 맵 — 산출물 버튼용
+let crSchedJoinFailed = false;   // ★ [2026-08-04] 생성 현황 조인 실패 여부 — 실패 시 행을 '대기'로 오표시하지 않기 위함
 try { crSchedRunning = JSON.parse(localStorage.getItem('crSchedRunning') || '{}'); } catch (e) { crSchedRunning = {}; }
 function crSaveSchedRunning() { try { localStorage.setItem('crSchedRunning', JSON.stringify(crSchedRunning)); } catch (e) {} }
 let crCurrentClientType = null;
@@ -12947,12 +12948,17 @@ async function loadCrSchedule() {
 
     // ★ [2026-07-21] 실제 생성 현황 조인 — 생성일시=실제 createdAt, 전일 '점검대기' 상태 표시용
     //   (scheduleId 우선 매칭, 없으면 게시일+토픽 매칭. 최신 생성분 우선)
+    /* ★ [2026-08-04] limit(400) 제거 + 조인 실패를 명시적으로 추적.
+       종전에는 ① 문서가 400건을 넘으면 오래된 생성물이 조회에서 잘리고
+       ② 조회가 실패해도 console.warn 만 찍고 넘어가,
+       두 경우 모두 rep 가 null 이 되어 행이 "노출예약/미생성" 으로 되돌아갔다.
+       실제 생성물은 살아 있는데 화면만 초기화된 것처럼 보여, 담당자가 재생성하게 되는 사고. */
     crSchedReports = {};
+    crSchedJoinFailed = false;
     try {
       const upSnap = await getDocs(query(
         collection(db, 'upcoming_case_reports'),
-        orderBy('createdAt', 'desc'),
-        limit(400)
+        orderBy('createdAt', 'desc')
       ));
       upSnap.docs.forEach(d => {
         const u = { _id: d.id, ...d.data() };
@@ -12961,16 +12967,19 @@ async function loadCrSchedule() {
         if (k1 && !crSchedReports[k1]) crSchedReports[k1] = u;
         if (k2 && !crSchedReports[k2]) crSchedReports[k2] = u;
       });
-    } catch (je) { console.warn('[CR] 생성 현황 조인 실패(기존 표시로 대체):', je.message); }
+    } catch (je) {
+      crSchedJoinFailed = true;
+      console.error('[CR] 생성 현황 조인 실패:', je);
+      toast('생성 현황을 불러오지 못했습니다. 새로고침 후 다시 확인하세요 — 이 상태에서 [지금 생성]을 누르면 중복 생성됩니다.', 'error');
+    }
 
     // ★ [2026-07-28] 게시 완료분 조인 — case_reports (문서ID = reportId) → 게시된 행에도 산출물 버튼 제공
     crSchedPublished = {};
     try {
       const pubSnap = await getDocs(query(
         collection(db, 'case_reports'),
-        orderBy('publishedAt', 'desc'),
-        limit(300)
-      ));
+        orderBy('publishedAt', 'desc')
+      ));   /* ★ [2026-08-04] limit(300) 제거 — 누적분이 넘으면 게시행 산출물 버튼이 사라졌다 */
       pubSnap.docs.forEach(d => { crSchedPublished[d.id] = { _id: d.id, ...d.data() }; });
     } catch (pe) { console.warn('[CR] 게시분 조인 실패(관리 버튼으로 대체):', pe.message); }
 
@@ -13038,6 +13047,9 @@ function crRenderSchedule() {
     else if (rep && rep.readyToPublish === true) st = 'review';
     else if (rep) { st = 'running'; if (typeof rep.progress === 'number') stExtra = ' ' + rep.progress + '%'; }
     else if (_running) st = 'running';
+    /* ★ [2026-08-04] 조인 실패 시에는 "대기/노출예약" 으로 떨어뜨리지 않는다.
+       생성물이 있는데 없는 것처럼 보이면 담당자가 재생성 버튼을 눌러 중복 생성된다. */
+    else if (crSchedJoinFailed) { st = 'unknown'; stExtra = ''; }
     else if (r.revealed) st = 'revealed';
     else st = 'pending';
     const sb = crStatusBadge(st, stExtra);
@@ -13110,6 +13122,8 @@ function crStatusBadge(status, extra) {
     revealed:  { label: '노출예약', bg: '#e3f2fd', fg: '#1565c0' },   // ★ [2026-07-21] 메인 노출 예약됨·미생성
     published: { label: '게시됨', bg: '#f3e5f5',  fg: '#4a148c' },
     error:     { label: '에러',   bg: '#ffebee',  fg: '#b71c1c' },
+    /* ★ [2026-08-04] 조인 실패 — 생성 여부를 알 수 없는 상태. '대기'로 오표시하면 재생성 사고가 난다 */
+    unknown:   { label: '확인불가', bg: '#fff3e0', fg: '#e65100' },
   };
   const s = map[status] || map.pending;
   return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:${s.bg};color:${s.fg};font-size:10px;font-weight:500">${s.label}${extra || ''}</span>`;
@@ -13201,19 +13215,29 @@ async function handleCrReportUpload(fileType){
     uploadTask.on('state_changed', null, (err) => {
       toast(`${label} 업로드 실패: ` + err.message, 'error');
     }, async () => {
-      const url = await getDownloadURL(uploadTask.snapshot.ref);
-      const params = new URLSearchParams({ key: CR_API_KEY });
-      const res = await fetch(`${CR_SET_REPORT_URL}?${params}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportId: crCurrentReportId, fileType, url })
-      });
-      const data = await res.json();
-      if (data.ok) {
+      /* ★ [2026-08-04] 이 콜백은 바깥 try/catch 밖에서 실행된다.
+         종전에는 여기서 예외가 나면(엔드포인트 404 등) 조용히 죽어
+         성공·실패 토스트조차 안 뜨고, Storage 파일만 바뀐 채 DB 는 그대로였다. */
+      try {
+        const url = await getDownloadURL(uploadTask.snapshot.ref);
+        const params = new URLSearchParams({ key: CR_API_KEY });
+        const res = await fetch(`${CR_SET_REPORT_URL}?${params}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reportId: crCurrentReportId, fileType, url })
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(`서버 응답 ${res.status} — ${txt.slice(0, 150)}`);
+        }
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '알 수 없는 오류');
         toast(`✅ ${label} 교체 완료!`, 'success');
         if (typeof loadCaseReports === 'function') loadCaseReports();
-      } else {
-        toast(`⚠ ${label} 교체 실패: ` + (data.error || ''), 'error');
+        if (typeof loadCrSchedule === 'function') loadCrSchedule();   /* 일정표도 갱신 */
+      } catch (e) {
+        console.error(`[CR ${label} 교체]`, e);
+        toast(`⚠ ${label} 교체 실패 — 파일은 올라갔으나 DB 반영 안 됨: ` + e.message, 'error');
       }
     });
   } catch (err) {
@@ -13276,6 +13300,11 @@ function crBuildActions(slug, state) {
 function crBuildScheduleActions(r, rep) {
   // ★ [2026-07-28] 생성완료(점검대기)·게시됨 공통 — 보기/다운로드/교체 업로드 버튼 (토픽 풀과 동일 세트)
   const S = 'font-size:10px;padding:3px 6px;white-space:nowrap';
+  /* ★ [2026-08-04] 생성 현황 조인이 실패한 상태에서는 생성 계열 버튼을 내보내지 않는다.
+     이미 만들어진 보고서를 "미생성" 으로 오인해 다시 만드는 사고를 막기 위함. */
+  if (crSchedJoinFailed && !r.completed && !rep) {
+    return `<span style="font-size:10px;color:#e65100">생성 현황 확인 불가 · 새로고침 필요</span>`;
+  }
   const d = rep || null;
   const rid = (d && d._id) || r.reportId || '';
   const h  = (d && d.step5 && d.step5.htmlUrl) || '';
@@ -13663,7 +13692,10 @@ async function submitCrCustomCreateConfirmed() {
     const res = await fetch(`${CR_CUSTOM_CREATE_URL}?${params}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, clientType, topicSlug, title, personaSeed }),
+      /* ★ [2026-08-04] persona 동봉 — 미리보기에서 담당자가 승인·확정한 페르소나를 그대로 전달.
+         빠뜨리면 서버가 새 페르소나를 만들어, 화면에서 본 인물과 다른 보고서가 나온다.
+         (토픽 풀 → [이 페르소나로 진행] 경로는 원래 이렇게 넘기고 있었다) */
+      body: JSON.stringify({ date, clientType, topicSlug, title, personaSeed, persona: crCurrentPersona || null }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '생성 실패');
