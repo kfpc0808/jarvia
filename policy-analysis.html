@@ -558,6 +558,16 @@ function classify429(t){return quotaInfo(t).kind;}
    한글 1자 ≈ 1토큰 이상이므로 글자 수를 그대로 토큰 추정치로 쓴다(보수적). */
 const MIN_GAP_MS=5000, RPM_LIMIT=12, TPM_BUDGET=200000;
 let _lastCallAt=0, _calls=[]; // {t:시각, tok:입력토큰추정}
+/* 대기 중 표시할 '분석 로그' — 기본 문장 + 사용자 질문 반영 문장을 2.6초마다 번갈아 회전 */
+let _anQ='', _anProg='';   // 현재 질문 / 진행 위치("3/8 부분")
+function _qShort(){var s=(_anQ||'').replace(/\s+/g,' ').trim();return s.length>22?s.slice(0,22)+'…':s;}
+function _waitLine(){
+  var q=_qShort();
+  var base=['약관 본문을 한 조항씩 살펴보는 중','특약별 내용을 구분해 정리하는 중','금액·기간·비율을 원문 그대로 대조하는 중','놓친 조항이 없는지 다시 확인하는 중'];
+  var qp=q?['"'+q+'" 관련 조항을 약관에서 찾는 중','"'+q+'"에 대한 보장 범위를 확인하는 중','"'+q+'"의 면책·제한 조건을 살피는 중','"'+q+'" 근거가 되는 조항을 확인하는 중']:null;
+  var pool=[];for(var i=0;i<base.length;i++){pool.push(base[i]);if(qp)pool.push(qp[i]);}
+  return '🔎 '+pool[Math.floor(Date.now()/2600)%pool.length]+'…'+(_anProg?' ('+_anProg+')':'');
+}
 async function gate(onProgress,inputChars){
   const tok=Math.ceil((inputChars||0)*1.0)||1000;
   for(;;){
@@ -570,7 +580,7 @@ async function gate(onProgress,inputChars){
     }
     const oldest=_calls.length?_calls[0].t:now;
     const wait=Math.ceil((60000-(now-oldest))/1000)+1;
-    if(onProgress)onProgress('무료 사용량 조절을 위해 잠시 쉬는 중… '+wait+'초 후 자동으로 계속됩니다. 화면을 닫지 마세요');
+    if(onProgress)onProgress(_waitLine());
     await sleep(1000);
   }
 }
@@ -594,6 +604,7 @@ async function askGemini(question,fullText,onProgress){
   const OVERLAP=30000; // 덩이 사이 겹침 (특약 중간 잘림 방지)
 
   EXTRACT_USED='';SYNTH_USED='';SYNTH_FELLBACK=false;
+  _anQ=question;_anProg='';
 
   const chunks=[];
   let pos=0;
@@ -607,7 +618,8 @@ async function askGemini(question,fullText,onProgress){
   const partials=[];
   let skipped=0, consecFail=0, dayLimit=false, lastErr=null;
   for(let i=0;i<chunks.length;i++){
-    if(onProgress)onProgress('약관에서 관련 조항을 찾는 중… ('+(i+1)+'/'+chunks.length+' 부분)'+(skipped?' · 건너뜀 '+skipped:''));
+    _anProg=(i+1)+'/'+chunks.length+' 부분'+(skipped?' · 건너뜀 '+skipped:'');
+    if(onProgress)onProgress('🔎 약관에서 관련 조항을 찾는 중… ('+_anProg+')');
     const note=chunks.length>1?'\n(참고: 이 약관은 분량이 커서 '+chunks.length+'개로 나눠 읽는 중이며, 지금은 '+(i+1)+'번째 부분입니다. 이 부분에 있는 내용만 발췌하세요. "다음 부분에 이어진다"거나 "이후 페이지 참고" 같은 안내 문구는 넣지 마세요 — 나중에 자동으로 합쳐집니다.)':'';
     try{
       await gate(onProgress,chunks[i].length+1500);
@@ -643,7 +655,8 @@ async function askGemini(question,fullText,onProgress){
     : '';
 
   // 발췌가 하나뿐이어도 반드시 종합 단계를 거친다 (답변 품질을 일정하게 유지)
-  if(onProgress)onProgress('찾은 조항을 하나로 정리하는 중…');
+  _anProg='';
+  if(onProgress)onProgress('🔎 찾은 조항을 하나로 정리하는 중…');
   const merged=partials.join('\n\n');
   const plain=merged.replace(/\[부분 \d+\]\n/g,'');
   const mergePrompt=
@@ -728,7 +741,7 @@ async function callModel(model,prompt,maxTokens,onProgress,_try){
       if(res.status===429&&kind!=='day'&&tryNo<=MAX_RETRY){
         let left=Math.max(qi.delay||0,[20,40,60][tryNo-1]||60);
         while(left>0){
-          if(onProgress)onProgress('사용량 한도에 걸려 대기 중… '+left+'초 후 재시도 ('+tryNo+'/'+MAX_RETRY+')');
+          if(onProgress)onProgress(_waitLine());
           await sleep(1000);left--;
         }
         return await callModel(model,prompt,maxTokens,onProgress,tryNo);
