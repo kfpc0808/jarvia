@@ -1084,8 +1084,10 @@
                 <input type="date" id="cr-custom-date" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box">
               </div>
               <div>
-                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">토픽 <span style="color:#dc3545">*</span> <span style="font-weight:400;font-size:11px;color:var(--text-lt)">28토픽 중 선택 (페르소나·계산 엔진)</span></label>
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">토픽 <span style="color:#dc3545">*</span> <span style="font-weight:400;font-size:11px;color:var(--text-lt)">전체 토픽 중 선택 (페르소나·계산 엔진 결정)</span></label>
                 <select id="cr-custom-slug" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box"></select>
+                <!-- ★ [2026-08-04] 어떤 토픽 기준으로 본문이 생성되는지 상시 안내 -->
+                <div id="cr-custom-topic-hint" style="display:none;margin-top:6px;padding:8px 10px;background:#f6f3fb;border-left:3px solid #6a1b9a;border-radius:6px;font-size:11.5px;line-height:1.6;color:#4a4a4a"></div>
               </div>
               <div>
                 <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">제목 (5~80자) <span style="color:#dc3545">*</span></label>
@@ -12379,7 +12381,12 @@ const CR_TOPICS_ALL = [
 ];
 
 // 어드민 표시·생성 대상 = active 토픽만 (비활성은 객체 보존, 화면에서만 숨김)
-const CR_TOPICS = CR_TOPICS_ALL.filter(t => t.active !== false);
+/* ★ [2026-08-04] active 필터 제거 — 종전에는 active:false 인 14개가 드롭다운에서 통째로 사라져,
+   담당자가 다루려는 주제(예: 법인차량)의 토픽이 목록에 없으면 비슷한 토픽을 고르고 제목만 바꾸는
+   우회를 하게 됐다. 그 결과 겉과 속이 다른 보고서가 생성됐다(202608 법인차량/가지급금 사고).
+   이제 34개 전부 노출하고, 중복 발행은 "숨기기"가 아니라 "발행 이력 표시"로 막는다.
+   레지스트리(personaGen.js TOPIC_REGISTRY)에는 원래 34개가 모두 살아 있으므로 서버 수정은 불필요. */
+const CR_TOPICS = CR_TOPICS_ALL;
 /* ★ [2026-08-04] 제목↔토픽 불일치 감지.
    본문은 제목이 아니라 topicSlug 로 생성되므로, 다른 분야의 제목을 붙이면
    겉과 속이 다른 보고서가 만들어진다(202608 법인차량/가지급금 사고).
@@ -13316,10 +13323,22 @@ async function openCrScheduleDelete(scheduleId) {
 function openCrCustomCreate() {
   const sel = document.getElementById('cr-custom-slug');
   if (sel) {
-    sel.innerHTML = CR_TOPICS.map(t =>
-      `<option value="${t.slug}">${t.emoji || ''} ${t.field || t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})</option>`
-    ).join('');
+    /* ★ [2026-08-04] 토픽을 반드시 먼저 고르게 한다 — 미선택 상태로 열리고,
+       고르기 전까지 제목·시드 입력이 잠긴다. 제목이 토픽을 벗어나는 것을 원천 차단. */
+    sel.innerHTML = '<option value="">— 토픽을 먼저 선택하세요 —</option>' +
+      CR_TOPICS.map(t => {
+        const st = (typeof crCardStates !== 'undefined' && crCardStates) ? crCardStates[t.slug] : null;
+        /* 발행 이력 표시 — 숨기지 않고 정보만 준다(중복 발행 눈으로 방지).
+           crCardStates 는 토픽 풀 표가 채우므로, 아직 안 열었으면 이력 없이 표시된다. */
+        const hist = (st && st.recentAt)
+          ? ` · ${crFormatDateTime(st.recentAt).slice(0, 10)} 생성${st.count > 1 ? ` ${st.count}회` : ''}`
+          : '';
+        return `<option value="${t.slug}">${t.emoji || ''} ${t.field || t.label} (${t.clientType === 'corporate' ? '법인' : '개인'})${hist}</option>`;
+      }).join('');
+    sel.value = '';
+    sel.onchange = crCustomTopicChanged;
   }
+  crCustomTopicChanged();
   // 기본 날짜 = 오늘 (KST) — 하루 다건 생성 허용 (오늘 포함)
   const d = new Date(Date.now() + 9 * 3600 * 1000);
   const ds = d.toISOString().slice(0, 10);
@@ -13328,6 +13347,41 @@ function openCrCustomCreate() {
   document.getElementById('cr-custom-title').value = '';
   document.getElementById('cr-custom-persona-seed').value = '';
   document.getElementById('cr-custom-modal').classList.remove('hidden');
+}
+
+/* ★ [2026-08-04] 토픽 선택 여부에 따라 제목·시드 잠금/해제 + 어떤 페르소나로 생성되는지 안내 */
+function crCustomTopicChanged() {
+  const sel = document.getElementById('cr-custom-slug');
+  const titleEl = document.getElementById('cr-custom-title');
+  const seedEl = document.getElementById('cr-custom-persona-seed');
+  const goBtn = document.getElementById('cr-custom-go');
+  const hint = document.getElementById('cr-custom-topic-hint');
+  const slug = sel ? sel.value : '';
+  const t = slug ? crFindTopic(slug) : null;
+
+  const lock = !slug;
+  [titleEl, seedEl].forEach(el => {
+    if (!el) return;
+    el.disabled = lock;
+    el.style.background = lock ? '#f1f3f5' : '';
+    el.style.cursor = lock ? 'not-allowed' : '';
+  });
+  if (titleEl) titleEl.placeholder = lock
+    ? '토픽을 먼저 선택하세요'
+    : `예: ${(t && t.label) ? String(t.label).slice(0, 34) : '주제에 맞는 제목'}`;
+  if (goBtn) goBtn.disabled = lock;
+
+  if (hint) {
+    if (!t) { hint.style.display = 'none'; hint.textContent = ''; return; }
+    const st = (typeof crCardStates !== 'undefined' && crCardStates) ? crCardStates[slug] : null;
+    hint.style.display = 'block';
+    hint.innerHTML =
+      `본문은 <b>${t.emoji || ''} ${t.field || t.label}</b> 페르소나·계산 엔진으로 생성됩니다. ` +
+      `제목만 바꿔도 내용은 이 토픽을 따릅니다.` +
+      ((st && st.recentAt)
+        ? `<br><span style="color:#B7791F">최근 생성: ${crFormatDateTime(st.recentAt)}${st.count > 1 ? ` (누적 ${st.count}회)` : ''} — 중복 발행 여부를 확인하세요.</span>`
+        : '');
+  }
 }
 
 function closeCrCustomCreate() {
