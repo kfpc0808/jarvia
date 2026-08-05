@@ -4390,7 +4390,7 @@ document.addEventListener('DOMContentLoaded', function(){
 </div>
 <div id="mdl-charge" class="modal hidden">
   <div class="mdl-bg" onclick="closeM('mdl-charge')"></div>
-  <div class="mdl-box"><button class="mdl-x" onclick="closeM('mdl-charge')">×</button><h2>포인트 충전</h2><div id="charge-opts" class="charge-grid"></div><button id="charge-btn" class="btn btn-full" onclick="doCharge()" disabled>결제하기</button></div>
+  <div class="mdl-box"><button class="mdl-x" onclick="closeM('mdl-charge')">×</button><h2>포인트 충전</h2><div id="charge-opts" class="charge-grid"></div><button id="charge-card-btn" class="btn btn-full" style="display:none;margin-bottom:8px" onclick="doChargeWithCard(this)" disabled>등록카드로 결제</button><button id="charge-btn" class="btn btn-full" onclick="doCharge()" disabled>새 카드로 결제</button><div id="charge-card-hint" style="display:none;font-size:12px;color:#9099AD;text-align:center;margin-top:8px"></div></div>
 </div>
 <div id="mdl-terms" class="modal hidden">
   <div class="mdl-bg" onclick="closeM('mdl-terms')"></div>
@@ -6590,7 +6590,18 @@ async function doFav(cid,btn){
 //  CHARGE
 // ════════════════════════════════════════
 let _selOpt=null;
+async function _setupCardChargeBtn(){
+  const cb=$('charge-card-btn'),hint=$('charge-card-hint');window._hasCard=false;
+  if(!cb)return;
+  try{
+    if(me){const s=await getDoc(doc(db,'billing_cards',me.uid));
+      if(s.exists()&&s.data().status==='active'){window._hasCard=true;const last4=(s.data().cardMasked||'').replace(/[^0-9]/g,'').slice(-4);cb.style.display='block';cb.disabled=true;cb.textContent='등록카드'+(last4?'('+last4+')':'')+'로 결제';if(hint){hint.style.display='none';}}
+      else{cb.style.display='none';if(hint){hint.style.display='block';hint.textContent='카드정보 탭에서 카드를 등록하면 원클릭 결제가 가능합니다.';}}
+    }
+  }catch(e){cb.style.display='none';}
+}
 async function openCharge(){
+  await _setupCardChargeBtn();
   try{
     let snap;try{snap=await getDocs(query(collection(db,'charge_options'),where('isActive','==',true),orderBy('sortOrder')));}catch(e){snap=await getDocs(collection(db,'charge_options'));snap={docs:snap.docs.filter(d=>d.data().isActive===true).sort((a,b)=>(a.data().sortOrder||0)-(b.data().sortOrder||0))};}
     const opts=snap.docs.map(d=>d.data());
@@ -6608,8 +6619,19 @@ async function openCharge(){
     }else{toast('충전 옵션 로드 실패: '+e.message,'error');}
   }
 }
-function selOpt(el,id,paid,credit){document.querySelectorAll('.ch-opt').forEach(e=>e.classList.remove('selected'));el.classList.add('selected');_selOpt={id,paid,credit};$('charge-btn').disabled=false;}
+function selOpt(el,id,paid,credit){document.querySelectorAll('.ch-opt').forEach(e=>e.classList.remove('selected'));el.classList.add('selected');_selOpt={id,paid,credit};$('charge-btn').disabled=false;if(window._hasCard&&$('charge-card-btn'))$('charge-card-btn').disabled=false;}
 
+async function doChargeWithCard(btn){
+  if(!_selOpt||!me)return;
+  if(!confirm(fmt(_selOpt.paid)+'원을 등록된 카드로 결제하시겠습니까?'))return;
+  const _o=btn.textContent;btn.disabled=true;btn.textContent='결제 중...';const cb2=$('charge-btn');if(cb2)cb2.disabled=true;
+  try{
+    const fn=httpsCallable(functions,'innopayBillCharge');
+    const r=await fn({optionId:_selOpt.id});
+    if(r.data&&r.data.success){toast(fmt(r.data.chargeAmount)+'원이 충전되었습니다.','success');await refreshMe();updateBal();closeM('mdl-charge');}
+    else{toast((r.data&&r.data.error)||'결제에 실패했습니다.','error');btn.disabled=false;btn.textContent=_o;if(cb2)cb2.disabled=false;}
+  }catch(e){console.error('등록카드 결제 오류:',e);toast('결제 처리 중 오류가 발생했습니다.','error');btn.disabled=false;btn.textContent=_o;if(cb2)cb2.disabled=false;}
+}
 async function doCharge(){
   if(!_selOpt||!me)return;
   const btn=$('charge-btn');btn.disabled=true;btn.textContent='결제창 호출중...';
@@ -12073,7 +12095,7 @@ window.goClientReportLogged=async function(){
   if(me){try{const logId=gid();await setDoc(doc(db,'service_logs',logId),{logId,userId:me.uid,userName:meData?.name||'',service:'client_report',createdAt:serverTimestamp()});}catch(e){console.warn('client_report log 실패:',e);}}
   window.location.href='/client-daily.html?fc='+encodeURIComponent(_id);
 };
-window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.chargeAfterPayment=chargeAfterPayment;window.pptgenStart=pptgenStart;
+window.openCharge=openCharge;window.selOpt=selOpt;window.doCharge=doCharge;window.doChargeWithCard=doChargeWithCard;window.chargeAfterPayment=chargeAfterPayment;window.pptgenStart=pptgenStart;
 window.doUpdateProfile=doUpdateProfile;window.doPartnership=doPartnership;window.doChangePw=doChangePw;window.doSendVerify=doSendVerify;window.doCheckVerify=doCheckVerify;
 window.openWithdraw=openWithdraw;window.doWithdraw=doWithdraw;
 // ═══ 특별 메시지 에디터 ═══
