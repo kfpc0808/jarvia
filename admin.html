@@ -624,7 +624,7 @@
         <button class="btn" style="margin-top:14px" onclick="saveBillingDays()">결제일 저장</button>
       </div>
       <div class="toolbar">
-        <label>조회 월</label><input type="month" id="rc-month" onchange="renderRecurring()">
+        <label>조회 월</label><input type="month" id="rc-month" onchange="rcLoadMonthStatus()">
         <span style="color:#c4ccd1">|</span>
         <label>기간</label><input type="month" id="rc-from"> ~ <input type="month" id="rc-to"> <button class="btn btn-sec" onclick="renderRecurringRange()">구간 조회</button>
         <button class="btn btn-sec" onclick="rcQuick('this')">이번 달</button>
@@ -639,7 +639,7 @@
         <div class="dash-c" style="border-left-color:#E65100"><span>신규(첫 과금)</span><strong id="rc-new">0</strong><em>명</em></div>
       </div>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr>
-        <th>No.</th><th>이름</th><th>아이디</th><th>연락처</th><th>소속</th><th>등록일</th><th>과금시작월</th><th>월 결제금액</th><th>등록비</th><th>관리</th>
+        <th>No.</th><th>이름</th><th>아이디</th><th>연락처</th><th>소속</th><th>등록일</th><th>과금시작월</th><th>월 결제금액</th><th>등록비</th><th>카드</th><th>자동결제</th><th>결제상태</th><th>관리</th>
       </tr></thead><tbody id="tb-recurring"></tbody></table></div>
       <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">📅 기간 요약 (구간 조회)</h3>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>결제월</th><th style="text-align:right">과금 대상</th><th style="text-align:right">신규</th><th style="text-align:right">결제예정 합계</th></tr></thead><tbody id="tb-recurring-range"></tbody></table></div>
@@ -5166,13 +5166,13 @@ async function loadRecurring(){
   if($('rc-month')&&!$('rc-month').value)$('rc-month').value=cur;
   if($('rc-from')&&!$('rc-from').value)$('rc-from').value=cur;
   if($('rc-to')&&!$('rc-to').value)$('rc-to').value=cur;
-  renderRecurring();
+  rcLoadMonthStatus();
   renderRecurringRange();
 }
 function renderRecurring(){
   const mv=$('rc-month')?$('rc-month').value:'';
   if($('rc-month-label'))$('rc-month-label').textContent=mv||'-';
-  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="10" class="tc">조회 월을 선택하세요.</td></tr>';return;}
+  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="13" class="tc">조회 월을 선택하세요.</td></tr>';return;}
   const a=mv.split('-').map(Number);const viewYM=a[0]*12+(a[1]-1);
   const rows=_rcMonthRows(viewYM,$('rc-search')?$('rc-search').value:'');
   const sum=rows.reduce((t,m)=>t+_rcFee(m),0);
@@ -5182,8 +5182,19 @@ function renderRecurring(){
   if($('rc-new'))$('rc-new').textContent=newCnt;
   $('tb-recurring').innerHTML=rows.length?rows.map((m,i)=>{
     const ds=m._regD.toLocaleDateString('ko-KR');
-    return '<tr'+(m._isNew?' style="background:#FFF8F0"':'')+'><td style="text-align:center">'+(i+1)+'</td><td>'+esc(m.name)+(m._isNew?' <span style="font-size:10px;color:#E65100">신규</span>':'')+'</td><td>'+esc(m.loginId||'')+'</td><td>'+esc(m.phone||'')+'</td><td>'+esc(m.company||'')+'</td><td style="text-align:center;color:#5F6E78">'+ds+'</td><td style="text-align:center'+(m._isNew?';color:#E65100;font-weight:600':'')+'">'+_rcYmStr(m._billYM)+'</td><td style="text-align:right;font-weight:600">'+fmt(_rcFee(m))+'원</td><td style="text-align:center">'+(m.regFeePaid?'✅확인':'❌미확인')+'</td><td><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button></td></tr>';
-  }).join(''):'<tr><td colspan="10" class="tc">해당 월의 과금 대상이 없습니다.</td></tr>';
+    const hasCard=_rcCardSet.has(m.id);
+    const cardCell='<td style="text-align:center">'+(hasCard?'<span style="color:#2E7D32">✅등록</span>':'<span style="color:#C62828">❌미등록</span>')+'</td>';
+    const paused=m.billingPaused===true;
+    const pauseCell='<td style="text-align:center"><span onclick="toggleMemberBilling(\''+m.id+'\')" style="cursor:pointer;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;'+(paused?'background:#FFEBEE;color:#C62828':'background:#E8F5E9;color:#2E7D32')+'" title="클릭하여 중지/재개">'+(paused?'중지':'정상')+'</span></td>';
+    const run=_rcRunMap[m.id];const paid=run&&run.status==='paid';
+    let statusCell;
+    if(paid)statusCell='<td style="text-align:center"><span style="color:#2E7D32;font-weight:600">✅완료</span></td>';
+    else if(run&&run.status==='failed')statusCell='<td style="text-align:center"><span style="color:#E65100;font-weight:600" title="'+esc(run.resultMsg||'')+'">⚠️실패</span></td>';
+    else statusCell='<td style="text-align:center;color:#999">미결</td>';
+    const mvYm=$('rc-month')?$('rc-month').value:'';
+    const chargeBtn=(hasCard&&!paid&&mvYm)?' <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32" onclick="chargeOneMember(\''+m.id+'\',\''+mvYm+'\')">지금 결제</button>':'';
+    return '<tr'+(m._isNew?' style="background:#FFF8F0"':'')+'><td style="text-align:center">'+(i+1)+'</td><td>'+esc(m.name)+(m._isNew?' <span style="font-size:10px;color:#E65100">신규</span>':'')+'</td><td>'+esc(m.loginId||'')+'</td><td>'+esc(m.phone||'')+'</td><td>'+esc(m.company||'')+'</td><td style="text-align:center;color:#5F6E78">'+ds+'</td><td style="text-align:center'+(m._isNew?';color:#E65100;font-weight:600':'')+'">'+_rcYmStr(m._billYM)+'</td><td style="text-align:right;font-weight:600">'+fmt(_rcFee(m))+'원</td><td style="text-align:center">'+(m.regFeePaid?'✅확인':'❌미확인')+'</td>'+cardCell+pauseCell+statusCell+'<td style="white-space:nowrap"><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button>'+chargeBtn+'</td></tr>';
+  }).join(''):'<tr><td colspan="13" class="tc">해당 월의 과금 대상이 없습니다.</td></tr>';
 }
 function renderRecurringRange(){
   if(!$('tb-recurring-range'))return;
@@ -5285,6 +5296,47 @@ async function saveBillingDays(){
   }catch(e){console.error('결제일 저장 오류:',e);toast('저장 실패: '+e.message,'error');}
 }
 window.toggleAutoBilling=toggleAutoBilling;window.saveBillingDays=saveBillingDays;window.loadBillingConfig=loadBillingConfig;
+
+// ═══ 수동 건별결제 · 카드현황 · 회원별 중지 (Phase 3b) ═══
+let _rcCardSet=new Set(), _rcRunMap={};
+async function rcLoadMonthStatus(){
+  const mv=$('rc-month')?$('rc-month').value:'';
+  _rcCardSet=new Set(); _rcRunMap={};
+  try{
+    const cs=await getDocs(collection(db,'billing_cards'));
+    cs.docs.forEach(d=>{if(d.data().status==='active')_rcCardSet.add(d.id);});
+  }catch(e){console.error('카드현황 로드 오류:',e);}
+  if(mv){
+    try{
+      const rs=await getDocs(query(collection(db,'billing_runs'),where('ym','==',mv)));
+      rs.docs.forEach(d=>{const r=d.data();if(r.uid)_rcRunMap[r.uid]=r;});
+    }catch(e){console.error('결제현황 로드 오류:',e);}
+  }
+  renderRecurring();
+}
+async function toggleMemberBilling(uid){
+  const m=_rcData.find(x=>x.id===uid);if(!m)return;
+  const next=!(m.billingPaused===true);
+  try{
+    await updateDoc(doc(db,'users',uid),{billingPaused:next,updatedAt:serverTimestamp()});
+    m.billingPaused=next;
+    toast(esc(m.name)+' 자동결제 '+(next?'중지':'재개'),'success');
+    renderRecurring();
+  }catch(e){console.error('회원별 중지 오류:',e);toast('변경 실패: '+e.message,'error');}
+}
+async function chargeOneMember(uid,ym){
+  const m=_rcData.find(x=>x.id===uid);if(!m)return;
+  const fee=_rcFee(m);
+  if(!confirm(m.name+' 회원 · '+ym+' 멤버십 요금 '+fmt(fee)+'원을\n등록된 카드로 지금 결제합니다. (이용약관 동의에 근거)\n\n진행하시겠습니까?'))return;
+  try{
+    const fn=httpsCallable(functions,'adminBillingChargeOne');
+    const r=await fn({uid,ym});
+    if(r.data&&r.data.success){toast(m.name+' '+fmt(r.data.amount)+'원 결제 완료','success');}
+    else{toast((r.data&&r.data.error)||'결제 실패','error');}
+  }catch(e){console.error('건별결제 오류:',e);toast('결제 처리 중 오류가 발생했습니다.','error');}
+  await rcLoadMonthStatus();
+}
+window.rcLoadMonthStatus=rcLoadMonthStatus;window.toggleMemberBilling=toggleMemberBilling;window.chargeOneMember=chargeOneMember;
 
 // ===== 단체계정 관련 함수 =====
 function toggleGroupSection(uid, checked) {
