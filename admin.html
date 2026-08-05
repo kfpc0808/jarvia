@@ -643,6 +643,23 @@
       </tr></thead><tbody id="tb-recurring"></tbody></table></div>
       <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">📅 기간 요약 (구간 조회)</h3>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>결제월</th><th style="text-align:right">과금 대상</th><th style="text-align:right">신규</th><th style="text-align:right">결제예정 합계</th></tr></thead><tbody id="tb-recurring-range"></tbody></table></div>
+      <div id="rc-manage-modal" class="modal hidden">
+        <div class="mdl-bg" onclick="closeM('rc-manage-modal')"></div>
+        <div class="mdl-box">
+          <button class="mdl-x" onclick="closeM('rc-manage-modal')">×</button>
+          <h3 id="rcm-title" style="margin-bottom:4px">정기결제 관리</h3>
+          <div id="rcm-sub" style="font-size:13px;color:#888;margin-bottom:18px"></div>
+          <div style="border:1px solid var(--border-lt);border-radius:8px;padding:14px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">월 결제금액 <span style="font-size:11px;color:#888;font-weight:400">(영구 · 매달 적용)</span></div>
+            <div style="display:flex;gap:8px;align-items:center"><input id="rcm-fee" type="number" min="0" step="1000" style="width:140px;text-align:right"> <span>원</span> <button class="btn btn-sm" onclick="rcSaveFee()">저장</button></div>
+          </div>
+          <div style="border:1px solid var(--border-lt);border-radius:8px;padding:14px">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px"><span id="rcm-ym"></span> 결제상태</div>
+            <div id="rcm-status" style="font-size:14px;margin-bottom:14px"></div>
+            <div id="rcm-actions"></div>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="p-role-history" class="panel hidden"><h2>📜 회원유형 변경이력</h2>
       <p style="color:#666;margin-bottom:16px">회원유형 변경, 멤버십 부여/해제, 만료 자동복원 등 모든 등급 변경 내역을 조회합니다.</p>
@@ -5192,7 +5209,7 @@ function renderRecurring(){
     else if(run&&run.status==='failed')statusCell='<td style="text-align:center"><span style="color:#E65100;font-weight:600" title="'+esc(run.resultMsg||'')+'">⚠️실패</span></td>';
     else statusCell='<td style="text-align:center;color:#999">미결</td>';
     const mvYm=$('rc-month')?$('rc-month').value:'';
-    const chargeBtn=(hasCard&&!paid&&mvYm)?' <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32" onclick="chargeOneMember(\''+m.id+'\',\''+mvYm+'\')">지금 결제</button>':'';
+    const chargeBtn=mvYm?' <button class="btn btn-sm" style="background:#2E86AB;color:#fff;border-color:#2E86AB" onclick="openRcManage(\''+m.id+'\',\''+mvYm+'\')">정기결제 관리</button>':'';
     return '<tr'+(m._isNew?' style="background:#FFF8F0"':'')+'><td style="text-align:center">'+(i+1)+'</td><td>'+esc(m.name)+(m._isNew?' <span style="font-size:10px;color:#E65100">신규</span>':'')+'</td><td>'+esc(m.loginId||'')+'</td><td>'+esc(m.phone||'')+'</td><td>'+esc(m.company||'')+'</td><td style="text-align:center;color:#5F6E78">'+ds+'</td><td style="text-align:center'+(m._isNew?';color:#E65100;font-weight:600':'')+'">'+_rcYmStr(m._billYM)+'</td><td style="text-align:right;font-weight:600">'+fmt(_rcFee(m))+'원</td><td style="text-align:center">'+(m.regFeePaid?'✅확인':'❌미확인')+'</td>'+cardCell+pauseCell+statusCell+'<td style="white-space:nowrap"><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button>'+chargeBtn+'</td></tr>';
   }).join(''):'<tr><td colspan="13" class="tc">해당 월의 과금 대상이 없습니다.</td></tr>';
 }
@@ -5337,6 +5354,86 @@ async function chargeOneMember(uid,ym){
   await rcLoadMonthStatus();
 }
 window.rcLoadMonthStatus=rcLoadMonthStatus;window.toggleMemberBilling=toggleMemberBilling;window.chargeOneMember=chargeOneMember;
+
+// ═══ 정기결제 관리 모달 (금액수정·카드결제·송금완료·되돌리기) — Phase 3b+ ═══
+let _rcMng=null;
+function openRcManage(uid,ym){
+  const m=_rcData.find(x=>x.id===uid);if(!m){toast('회원 정보를 찾을 수 없습니다.','error');return;}
+  _rcMng={uid,ym};
+  $('rcm-title').textContent=(m.name||'')+' 정기결제 관리';
+  $('rcm-sub').textContent=(m.loginId||'')+' · '+(m.company||'');
+  $('rcm-ym').textContent=ym;
+  $('rcm-fee').value=(m.monthlyFee!=null?m.monthlyFee:50000);
+  rcRenderStatus();
+  openM('rc-manage-modal');
+}
+function rcRenderStatus(){
+  if(!_rcMng)return;
+  const {uid,ym}=_rcMng;
+  const m=_rcData.find(x=>x.id===uid);
+  const run=_rcRunMap[uid];
+  const hasCard=_rcCardSet.has(uid);
+  const fee=(m&&m.monthlyFee!=null)?m.monthlyFee:50000;
+  const st=$('rcm-status'),ac=$('rcm-actions');
+  if(run&&run.status==='paid'){
+    const via=run.method==='transfer'?'송금':'카드';
+    st.innerHTML='<span style="color:#2E7D32;font-weight:700">✅ 완료</span> <span style="color:#888">('+via+' · '+fmt(run.amount||0)+'원)</span>';
+    ac.innerHTML='<button class="btn btn-sm" style="background:#B91C1C;color:#fff;border-color:#B91C1C" onclick="rcRevert()">완료 취소 (→ 미결)</button>';
+  }else{
+    st.innerHTML='<span style="color:#999">미결</span>'+(run&&run.status==='failed'?' <span style="color:#E65100;font-size:12px">(직전 시도 실패: '+esc(run.resultMsg||'')+')</span>':'');
+    let html='';
+    if(hasCard)html+='<button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;margin-bottom:12px" onclick="rcChargeCard()">💳 카드로 지금 결제 ('+fmt(fee)+'원)</button><br>';
+    else html+='<div style="font-size:12px;color:#C62828;margin-bottom:12px">⚠️ 등록된 카드가 없어 카드결제는 불가합니다. (송금완료만 가능)</div>';
+    html+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="font-size:13px">송금 입금액</span><input id="rcm-transfer-amt" type="number" min="0" step="1000" value="'+fee+'" style="width:120px;text-align:right"> <span>원</span> <button class="btn btn-sm" onclick="rcMarkTransfer()">송금완료 처리</button></div>';
+    ac.innerHTML=html;
+  }
+}
+async function rcSaveFee(){
+  if(!_rcMng)return;
+  const fee=parseInt($('rcm-fee').value,10);
+  if(!(fee>=0)){toast('금액을 확인하세요.','warning');return;}
+  try{
+    const r=await httpsCallable(functions,'adminUpdateMonthlyFee')({uid:_rcMng.uid,fee});
+    if(r.data&&r.data.success){const m=_rcData.find(x=>x.id===_rcMng.uid);if(m)m.monthlyFee=fee;toast('월 결제금액이 '+fmt(fee)+'원으로 저장되었습니다.','success');renderRecurring();rcRenderStatus();}
+    else toast((r.data&&r.data.error)||'저장 실패','error');
+  }catch(e){console.error('월요금 저장 오류:',e);toast('저장 중 오류가 발생했습니다.','error');}
+}
+async function rcChargeCard(){
+  if(!_rcMng)return;
+  const m=_rcData.find(x=>x.id===_rcMng.uid);const fee=(m&&m.monthlyFee!=null)?m.monthlyFee:50000;
+  if(!confirm((m.name||'')+' · '+_rcMng.ym+' 멤버십 '+fmt(fee)+'원을 등록카드로 결제합니다.\n(이용약관 동의에 근거)\n\n진행할까요?'))return;
+  try{
+    const r=await httpsCallable(functions,'adminBillingChargeOne')({uid:_rcMng.uid,ym:_rcMng.ym});
+    if(r.data&&r.data.success)toast(fmt(r.data.amount)+'원 결제 완료','success');
+    else toast((r.data&&r.data.error)||'결제 실패','error');
+  }catch(e){console.error('카드결제 오류:',e);toast('결제 중 오류가 발생했습니다.','error');}
+  await rcLoadMonthStatus();rcRenderStatus();
+}
+async function rcMarkTransfer(){
+  if(!_rcMng)return;
+  const amt=parseInt($('rcm-transfer-amt').value,10);
+  if(!(amt>=0)){toast('입금액을 확인하세요.','warning');return;}
+  if(!confirm(_rcMng.ym+' 송금 입금액 '+fmt(amt)+'원으로 결제완료 처리합니다.\n(실제 카드 청구 없음)\n\n진행할까요?'))return;
+  try{
+    const r=await httpsCallable(functions,'adminMarkPaidTransfer')({uid:_rcMng.uid,ym:_rcMng.ym,amount:amt});
+    if(r.data&&r.data.success)toast('송금완료 처리되었습니다.','success');
+    else toast((r.data&&r.data.error)||'처리 실패','error');
+  }catch(e){console.error('송금완료 오류:',e);toast('처리 중 오류가 발생했습니다.','error');}
+  await rcLoadMonthStatus();rcRenderStatus();
+}
+async function rcRevert(){
+  if(!_rcMng)return;
+  const run=_rcRunMap[_rcMng.uid];
+  const wasCard=run&&run.method!=='transfer'&&run.tid;
+  if(!confirm(_rcMng.ym+' 결제완료를 취소하고 미결로 되돌립니다.'+(wasCard?'\n\n⚠️ 이 건은 카드 실결제 건입니다. 되돌려도 카드 청구는 취소되지 않으며, 이노페이 관리자에서 별도 취소가 필요합니다.':'')+'\n\n진행할까요?'))return;
+  try{
+    const r=await httpsCallable(functions,'adminRevertPayment')({uid:_rcMng.uid,ym:_rcMng.ym});
+    if(r.data&&r.data.success)toast('미결로 되돌렸습니다.'+(r.data.wasCard?' (카드 청구는 이노페이에서 별도 취소 필요)':''),'success');
+    else toast((r.data&&r.data.error)||'처리 실패','error');
+  }catch(e){console.error('되돌리기 오류:',e);toast('처리 중 오류가 발생했습니다.','error');}
+  await rcLoadMonthStatus();rcRenderStatus();
+}
+window.openRcManage=openRcManage;window.rcSaveFee=rcSaveFee;window.rcChargeCard=rcChargeCard;window.rcMarkTransfer=rcMarkTransfer;window.rcRevert=rcRevert;
 
 // ===== 단체계정 관련 함수 =====
 function toggleGroupSection(uid, checked) {
