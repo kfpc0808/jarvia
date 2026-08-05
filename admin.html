@@ -631,16 +631,26 @@
         <button class="btn btn-sec" onclick="rcQuick('next')">다음 달</button>
         <button class="btn btn-sec" onclick="rcQuick('year')">올해 전체</button>
         <button class="btn btn-sec" onclick="exportRecurringCSV()">📊 엑셀 다운로드</button>
-        <input id="rc-search" placeholder="이름/아이디/연락처 검색..." oninput="renderRecurring()">
+        <input id="rc-search" placeholder="이름/아이디/연락처 검색..." oninput="rcApplyFilter()">
       </div>
       <div class="dash-row mt">
         <div class="dash-c" style="border-left-color:#2E86AB"><span><span id="rc-month-label">-</span> 과금 대상</span><strong id="rc-count">0</strong><em>명</em></div>
         <div class="dash-c" style="border-left-color:#2E7D32"><span>결제예정 합계</span><strong id="rc-sum">0</strong><em>원</em></div>
         <div class="dash-c" style="border-left-color:#E65100"><span>신규(첫 과금)</span><strong id="rc-new">0</strong><em>명</em></div>
       </div>
+      <div class="toolbar mt" style="align-items:center;flex-wrap:wrap">
+        <label>결제상태</label>
+        <select id="rc-filter-status" onchange="rcApplyFilter()"><option value="all">전체</option><option value="unpaid">미결(+실패)</option><option value="paid">완료</option><option value="failed">실패만</option></select>
+        <label>카드</label>
+        <select id="rc-filter-card" onchange="rcApplyFilter()"><option value="all">전체</option><option value="has">등록</option><option value="no">미등록</option></select>
+        <label>표시</label>
+        <select id="rc-page-size" onchange="rcSetPageSize(this.value)"><option value="10">10개씩</option><option value="20" selected>20개씩</option><option value="30">30개씩</option><option value="40">40개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select>
+        <span style="margin-left:auto;font-size:13px;color:#185FA5;font-weight:600">선택: <span id="rc-sel-count">0</span>명</span>
+      </div>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr>
-        <th>No.</th><th>이름</th><th>아이디</th><th>연락처</th><th>소속</th><th>등록일</th><th>과금시작월</th><th>월 결제금액</th><th>등록비</th><th>카드</th><th>자동결제</th><th>결제상태</th><th>관리</th>
+        <th style="width:32px"><input type="checkbox" id="rc-chk-all" onchange="rcSelectAll(this.checked)"></th><th>No.</th><th style="cursor:pointer" onclick="rcSort('name')">이름 <span id="rcsort-name"></span></th><th>아이디</th><th>연락처</th><th>소속</th><th style="cursor:pointer" onclick="rcSort('reg')">등록일 <span id="rcsort-reg"></span></th><th>과금시작월</th><th style="cursor:pointer" onclick="rcSort('fee')">월 결제금액 <span id="rcsort-fee"></span></th><th>등록비</th><th style="cursor:pointer" onclick="rcSort('card')">카드 <span id="rcsort-card"></span></th><th>자동결제</th><th style="cursor:pointer" onclick="rcSort('status')">결제상태 <span id="rcsort-status"></span></th><th>관리</th>
       </tr></thead><tbody id="tb-recurring"></tbody></table></div>
+      <div id="rc-pager" style="display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;flex-wrap:wrap"></div>
       <h3 style="margin-top:24px;padding-top:16px;border-top:2px solid var(--border-lt)">📅 기간 요약 (구간 조회)</h3>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr><th>결제월</th><th style="text-align:right">과금 대상</th><th style="text-align:right">신규</th><th style="text-align:right">결제예정 합계</th></tr></thead><tbody id="tb-recurring-range"></tbody></table></div>
       <div id="rc-manage-modal" class="modal hidden">
@@ -5189,17 +5199,44 @@ async function loadRecurring(){
 function renderRecurring(){
   const mv=$('rc-month')?$('rc-month').value:'';
   if($('rc-month-label'))$('rc-month-label').textContent=mv||'-';
-  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="13" class="tc">조회 월을 선택하세요.</td></tr>';return;}
+  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="14" class="tc">조회 월을 선택하세요.</td></tr>';if($('rc-pager'))$('rc-pager').innerHTML='';return;}
   const a=mv.split('-').map(Number);const viewYM=a[0]*12+(a[1]-1);
-  const rows=_rcMonthRows(viewYM,$('rc-search')?$('rc-search').value:'');
+  let rows=_rcMonthRows(viewYM,$('rc-search')?$('rc-search').value:'');
+  // ── 필터 (결제상태 / 카드) ──
+  const fStatus=$('rc-filter-status')?$('rc-filter-status').value:'all';
+  const fCard=$('rc-filter-card')?$('rc-filter-card').value:'all';
+  rows=rows.filter(m=>{
+    const run=_rcRunMap[m.id];const st=run?run.status:'unpaid';
+    if(fStatus==='paid'&&st!=='paid')return false;
+    if(fStatus==='unpaid'&&st==='paid')return false;      // 미결 = 완료 아님 (미결+실패)
+    if(fStatus==='failed'&&st!=='failed')return false;
+    const hasCard=_rcCardSet.has(m.id);
+    if(fCard==='has'&&!hasCard)return false;
+    if(fCard==='no'&&hasCard)return false;
+    return true;
+  });
+  // ── 정렬 ──
+  rows=_rcSortRows(rows);
+  // ── 요약 (필터된 전체 기준) ──
   const sum=rows.reduce((t,m)=>t+_rcFee(m),0);
   const newCnt=rows.filter(m=>m._isNew).length;
   if($('rc-count'))$('rc-count').textContent=rows.length;
   if($('rc-sum'))$('rc-sum').textContent=fmt(sum);
   if($('rc-new'))$('rc-new').textContent=newCnt;
-  $('tb-recurring').innerHTML=rows.length?rows.map((m,i)=>{
+  _rcFilteredCache=rows;
+  _rcUpdateSortIndicators();
+  // ── 페이지네이션 ──
+  const total=rows.length;const size=_rcPageSize;
+  const pages=Math.max(1,Math.ceil(total/size));
+  if(_rcPage>pages)_rcPage=pages;if(_rcPage<1)_rcPage=1;
+  const start=(_rcPage-1)*size;
+  const pageRows=rows.slice(start,start+size);
+  // ── 렌더 ──
+  $('tb-recurring').innerHTML=pageRows.length?pageRows.map((m,idx)=>{
+    const no=start+idx+1;
     const ds=m._regD.toLocaleDateString('ko-KR');
     const hasCard=_rcCardSet.has(m.id);
+    const chk='<td style="text-align:center"><input type="checkbox" class="rc-chk" value="'+m.id+'" onchange="rcToggleSel(\''+m.id+'\',this.checked)"'+(_rcSelected.has(m.id)?' checked':'')+'></td>';
     const cardCell='<td style="text-align:center">'+(hasCard?'<span style="color:#2E7D32">✅등록</span>':'<span style="color:#C62828">❌미등록</span>')+'</td>';
     const paused=m.billingPaused===true;
     const pauseCell='<td style="text-align:center"><span onclick="toggleMemberBilling(\''+m.id+'\')" style="cursor:pointer;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;'+(paused?'background:#FFEBEE;color:#C62828':'background:#E8F5E9;color:#2E7D32')+'" title="클릭하여 중지/재개">'+(paused?'중지':'정상')+'</span></td>';
@@ -5208,10 +5245,51 @@ function renderRecurring(){
     if(paid)statusCell='<td style="text-align:center"><span style="color:#2E7D32;font-weight:600">✅완료</span></td>';
     else if(run&&run.status==='failed')statusCell='<td style="text-align:center"><span style="color:#E65100;font-weight:600" title="'+esc(run.resultMsg||'')+'">⚠️실패</span></td>';
     else statusCell='<td style="text-align:center;color:#999">미결</td>';
-    const mvYm=$('rc-month')?$('rc-month').value:'';
-    const chargeBtn=mvYm?' <button class="btn btn-sm" style="background:#2E86AB;color:#fff;border-color:#2E86AB" onclick="openRcManage(\''+m.id+'\',\''+mvYm+'\')">정기결제 관리</button>':'';
-    return '<tr'+(m._isNew?' style="background:#FFF8F0"':'')+'><td style="text-align:center">'+(i+1)+'</td><td>'+esc(m.name)+(m._isNew?' <span style="font-size:10px;color:#E65100">신규</span>':'')+'</td><td>'+esc(m.loginId||'')+'</td><td>'+esc(m.phone||'')+'</td><td>'+esc(m.company||'')+'</td><td style="text-align:center;color:#5F6E78">'+ds+'</td><td style="text-align:center'+(m._isNew?';color:#E65100;font-weight:600':'')+'">'+_rcYmStr(m._billYM)+'</td><td style="text-align:right;font-weight:600">'+fmt(_rcFee(m))+'원</td><td style="text-align:center">'+(m.regFeePaid?'✅확인':'❌미확인')+'</td>'+cardCell+pauseCell+statusCell+'<td style="white-space:nowrap"><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button>'+chargeBtn+'</td></tr>';
-  }).join(''):'<tr><td colspan="13" class="tc">해당 월의 과금 대상이 없습니다.</td></tr>';
+    const chargeBtn=mv?' <button class="btn btn-sm" style="background:#2E86AB;color:#fff;border-color:#2E86AB" onclick="openRcManage(\''+m.id+'\',\''+mv+'\')">정기결제 관리</button>':'';
+    return '<tr'+(m._isNew?' style="background:#FFF8F0"':'')+'>'+chk+'<td style="text-align:center">'+no+'</td><td>'+esc(m.name)+(m._isNew?' <span style="font-size:10px;color:#E65100">신규</span>':'')+'</td><td>'+esc(m.loginId||'')+'</td><td>'+esc(m.phone||'')+'</td><td>'+esc(m.company||'')+'</td><td style="text-align:center;color:#5F6E78">'+ds+'</td><td style="text-align:center'+(m._isNew?';color:#E65100;font-weight:600':'')+'">'+_rcYmStr(m._billYM)+'</td><td style="text-align:right;font-weight:600">'+fmt(_rcFee(m))+'원</td><td style="text-align:center">'+(m.regFeePaid?'✅확인':'❌미확인')+'</td>'+cardCell+pauseCell+statusCell+'<td style="white-space:nowrap"><button class="btn btn-sm" onclick="showMember(\''+m.id+'\')">수정</button>'+chargeBtn+'</td></tr>';
+  }).join(''):'<tr><td colspan="14" class="tc">해당 조건의 회원이 없습니다.</td></tr>';
+  _rcRenderPager(total,pages);
+  _rcUpdateSelUI();
+}
+// ── 정렬 ──
+function _rcSortRows(rows){
+  const {key,dir}=_rcSort;const mul=dir==='asc'?1:-1;
+  const rank=m=>{const r=_rcRunMap[m.id];return r?(r.status==='paid'?2:1):0;}; // 미결0 실패1 완료2
+  rows.sort((x,y)=>{
+    if(key==='name')return (x.name||'').localeCompare(y.name||'','ko')*mul;
+    if(key==='fee')return (_rcFee(x)-_rcFee(y))*mul;
+    if(key==='status')return (rank(x)-rank(y))*mul;
+    if(key==='card')return ((_rcCardSet.has(x.id)?1:0)-(_rcCardSet.has(y.id)?1:0))*mul;
+    return (x._regD-y._regD)*mul; // 기본: 등록일
+  });
+  return rows;
+}
+function rcSort(key){if(_rcSort.key===key)_rcSort.dir=_rcSort.dir==='asc'?'desc':'asc';else _rcSort={key,dir:'asc'};_rcPage=1;renderRecurring();}
+function _rcUpdateSortIndicators(){
+  ['name','reg','fee','card','status'].forEach(k=>{const el=$('rcsort-'+k);if(el)el.textContent=(_rcSort.key===k)?(_rcSort.dir==='asc'?'▲':'▼'):'';});
+}
+// ── 페이지네이션 ──
+function rcSetPageSize(v){_rcPageSize=parseInt(v,10)||20;_rcPage=1;renderRecurring();}
+function rcGoPage(p){_rcPage=p;renderRecurring();}
+function _rcRenderPager(total,pages){
+  const el=$('rc-pager');if(!el)return;
+  if(total===0){el.innerHTML='';return;}
+  let h='<span style="margin-right:10px;color:#666;font-size:13px">총 '+total+'명 · '+_rcPage+'/'+pages+'페이지</span>';
+  h+='<button class="btn btn-sm" '+(_rcPage<=1?'disabled':'')+' onclick="rcGoPage('+(_rcPage-1)+')">◀ 이전</button> ';
+  const win=5;let s=Math.max(1,_rcPage-2),e=Math.min(pages,s+win-1);s=Math.max(1,e-win+1);
+  for(let p=s;p<=e;p++)h+='<button class="btn btn-sm" style="'+(p===_rcPage?'background:#1B3A5C;color:#fff;border-color:#1B3A5C':'')+'" onclick="rcGoPage('+p+')">'+p+'</button> ';
+  h+='<button class="btn btn-sm" '+(_rcPage>=pages?'disabled':'')+' onclick="rcGoPage('+(_rcPage+1)+')">다음 ▶</button>';
+  el.innerHTML=h;
+}
+// ── 필터 변경 ──
+function rcApplyFilter(){_rcPage=1;renderRecurring();}
+// ── 체크박스 선택 (페이지 넘겨도 유지) ──
+function rcToggleSel(uid,ch){if(ch)_rcSelected.add(uid);else _rcSelected.delete(uid);_rcUpdateSelUI();}
+function rcSelectAll(ch){(_rcFilteredCache||[]).forEach(m=>{if(ch)_rcSelected.add(m.id);else _rcSelected.delete(m.id);});renderRecurring();}
+function _rcUpdateSelUI(){
+  const cnt=$('rc-sel-count');if(cnt)cnt.textContent=_rcSelected.size;
+  const all=$('rc-chk-all');
+  if(all){const ids=(_rcFilteredCache||[]).map(m=>m.id);const sel=ids.filter(id=>_rcSelected.has(id)).length;all.checked=ids.length>0&&sel===ids.length;all.indeterminate=sel>0&&sel<ids.length;}
 }
 function renderRecurringRange(){
   if(!$('tb-recurring-range'))return;
@@ -5316,9 +5394,10 @@ window.toggleAutoBilling=toggleAutoBilling;window.saveBillingDays=saveBillingDay
 
 // ═══ 수동 건별결제 · 카드현황 · 회원별 중지 (Phase 3b) ═══
 let _rcCardSet=new Set(), _rcRunMap={};
+let _rcSort={key:'reg',dir:'asc'}, _rcPage=1, _rcPageSize=20, _rcSelected=new Set(), _rcFilteredCache=[];
 async function rcLoadMonthStatus(){
   const mv=$('rc-month')?$('rc-month').value:'';
-  _rcCardSet=new Set(); _rcRunMap={};
+  _rcCardSet=new Set(); _rcRunMap={}; _rcSelected=new Set(); _rcPage=1;
   try{
     const cs=await getDocs(collection(db,'billing_cards'));
     cs.docs.forEach(d=>{if(d.data().status==='active')_rcCardSet.add(d.id);});
@@ -5354,6 +5433,7 @@ async function chargeOneMember(uid,ym){
   await rcLoadMonthStatus();
 }
 window.rcLoadMonthStatus=rcLoadMonthStatus;window.toggleMemberBilling=toggleMemberBilling;window.chargeOneMember=chargeOneMember;
+window.rcSort=rcSort;window.rcGoPage=rcGoPage;window.rcSetPageSize=rcSetPageSize;window.rcApplyFilter=rcApplyFilter;window.rcToggleSel=rcToggleSel;window.rcSelectAll=rcSelectAll;
 
 // ═══ 정기결제 관리 모달 (금액수정·카드결제·송금완료·되돌리기) — Phase 3b+ ═══
 let _rcMng=null;
