@@ -2154,7 +2154,7 @@
   <div class="cr-note">
     🏠 <b>고객 홈페이지 과금</b>: 컨설턴트당 연결 <b>50명 무료</b>, 초과분 <b>1인당 월 200원</b> (월 요금 = (연결−50)×200).
     ⚠ <b>폰번호·주소</b>는 컨설턴트 기기(로컬) 저장이라 서버 집계 불가(<span class="mut">—</span>).
-    <b>활성</b>은 열람 로그 연동 예정, <b>데이터 용량</b>은 근사치(정확값: GCP 콘솔).
+    <b>활성</b>은 최근 30일 내 홈페이지에 접속한 고객 수, <b>데이터 용량</b>은 근사치(정확값: GCP 콘솔).
   </div>
   <div class="toolbar">
     <input id="cr-search" placeholder="FC 이름/아이디/소속 검색..." oninput="renderRegistryTable()" style="flex:1;min-width:160px">
@@ -4505,8 +4505,26 @@ function crApproxBytes(data){ try{ return new Blob([JSON.stringify(data)]).size;
 function crFmtBytes(b){ if(b>=1048576)return (b/1048576).toFixed(1)+' MB'; if(b>=1024)return Math.round(b/1024)+' KB'; return b+' B'; }
 function crHasBirth(c){ const d=String((c&&c.birthDate)||'').replace(/\D/g,''); const m=String((c&&c.birthMmdd)||'').replace(/\D/g,''); return d.length>=8||m.length>=3; }
 function crHasMmdd(v){ return String(v||'').replace(/\D/g,'').length>=3; }
-/* 열람 활성(30일) — fc_view_logs 스키마 확정 후 구현. 현재 null → 표에 '—' */
-async function crActiveCount(/* login, u */){ return null; }
+/* 열람 활성(최근 30일): fc_view_logs에서 해당 FC의 30일 내 이벤트 중 distinct clientId 수.
+   = 최근 30일에 자기 홈페이지에 한 번이라도 접속한 고객 수. (하루 몇 번 보든 고객 1명 기준)
+   정석 경로: 복합 인덱스(fcAuthUid↑+createdAt↓). 인덱스 없으면 최근 N건 폴백+화면 필터.
+   안전 상한(limit)으로 대량 FC의 폭주 읽기 방지. */
+async function crActiveCount(login,u){
+  const uid=(u&&(u.authUid||u.docId))||''; if(!uid)return null;
+  const d30=Timestamp.fromDate(new Date(Date.now()-30*24*60*60*1000));
+  const seen=new Set();
+  try{
+    const snap=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',uid),where('createdAt','>=',d30),limit(5000)));
+    snap.docs.forEach(dd=>{ const c=dd.data().clientId; if(c)seen.add(c); });
+  }catch(e){
+    try{
+      const t30=d30.toMillis();
+      const snap=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',uid),limit(2000)));
+      snap.docs.forEach(dd=>{ const v=dd.data(); const ms=(v.createdAt&&v.createdAt.toMillis)?v.createdAt.toMillis():0; if(ms>=t30&&v.clientId)seen.add(v.clientId); });
+    }catch(_){ return null; }
+  }
+  return seen.size;
+}
 
 async function loadClientRegistry(){
   const load=$('cr-loading'); if(load)load.style.display='block';
@@ -4517,7 +4535,7 @@ async function loadClientRegistry(){
       const snap=await getDocs(query(collection(db,'users'),where('role','==',role)));
       snap.docs.forEach(d=>{
         const u=d.data();
-        if(u.loginId&&!fcMap.has(u.loginId))fcMap.set(u.loginId,{docId:d.id,name:u.name||'',company:u.company||'',role:u.role||''});
+        if(u.loginId&&!fcMap.has(u.loginId))fcMap.set(u.loginId,{docId:d.id,authUid:u.authUid||d.id,name:u.name||'',company:u.company||'',role:u.role||''});
         const uid=u.authUid||d.id; if(u.loginId)uidToLogin[uid]=u.loginId;
       });
     }
