@@ -12980,7 +12980,19 @@ async function loadCrSchedule() {
         collection(db, 'case_reports'),
         orderBy('publishedAt', 'desc')
       ));   /* ★ [2026-08-04] limit(300) 제거 — 누적분이 넘으면 게시행 산출물 버튼이 사라졌다 */
-      pubSnap.docs.forEach(d => { crSchedPublished[d.id] = { _id: d.id, ...d.data() }; });
+      /* ★ [2026-08-04] 게시분을 3중 색인.
+         게시(caseReportPublishNow)는 upcoming_case_reports 에서 문서를 지우고 case_reports 로
+         옮기면서 일정 문서의 completed·reportId 는 갱신하지 않는다. 종전에는 문서ID 로만,
+         그것도 r.completed 가 참일 때만 조인해서 게시 직후 행이 "노출예약" 으로 되돌아갔다.
+         게시 문서에는 scheduleId·scheduledDate·topicSlug 가 그대로 복사되므로
+         어느 하나만 살아 있어도 붙도록 세 갈래로 색인한다. */
+      pubSnap.docs.forEach(d => {
+        const p = { _id: d.id, ...d.data() };
+        crSchedPublished[d.id] = p;                                        // ① 문서ID
+        if (p.scheduleId && !crSchedPublished['sid:' + p.scheduleId]) crSchedPublished['sid:' + p.scheduleId] = p;   // ② 일정ID
+        const dk = (p.scheduledDate && p.topicSlug) ? ('dt:' + p.scheduledDate + '|' + p.topicSlug) : null;
+        if (dk && !crSchedPublished[dk]) crSchedPublished[dk] = p;         // ③ 날짜+토픽
+      });
     } catch (pe) { console.warn('[CR] 게시분 조인 실패(관리 버튼으로 대체):', pe.message); }
 
     // 월별 필터 옵션 채우기
@@ -13033,17 +13045,23 @@ function crRenderSchedule() {
     // ★ [2026-07-21] 실제 생성 문서 조인 — '생성일시'에 실제 생성 시각(createdAt) 표시 (게시 전·후 공통)
     const rep = crSchedReports['sid:' + r._id] || ((r.date && r.topicSlug) ? crSchedReports['dt:' + r.date + '|' + r.topicSlug] : null);
     // ★ [2026-07-28] 산출물 버튼 전용 조인본 — 게시분은 case_reports 로 폴백 (생성일시 표시 로직에는 미사용)
-    const repOut = rep || ((r.completed && r.reportId) ? crSchedPublished[r.reportId] : null);
+    /* ★ [2026-08-04] completed 플래그 의존 제거 — 게시 함수가 일정 문서를 갱신하지 않으므로
+       그 플래그를 믿으면 게시 직후 행이 초기화된다. 일정ID → 날짜+토픽 → reportId 순으로 찾는다. */
+    const pub = crSchedPublished['sid:' + r._id]
+      || ((r.date && r.topicSlug) ? crSchedPublished['dt:' + r.date + '|' + r.topicSlug] : null)
+      || (r.reportId ? crSchedPublished[r.reportId] : null);
+    const repOut = rep || pub;
     const _manualTag = (rep && rep._manual === true) ? ' <span style="display:inline-block;padding:1px 4px;border-radius:3px;background:#fff3e0;color:#e65100;font-size:9px;font-weight:600">수동</span>' : '';
     const generated = rep
       ? crFormatDateTime(rep.createdAt) + _manualTag
-      : (r.completed ? crFormatDateTime(r.completedAt) + ' <span style="color:#bbb;font-size:9px">(게시시각)</span>'
+      : ((r.completed || pub) ? crFormatDateTime(r.completedAt || (pub && (pub.publishedAt || pub.createdAt))) + ' <span style="color:#bbb;font-size:9px">(게시시각)</span>'
         : (_running ? '<span style="color:#0d47a1;font-weight:600">생성중</span>'
           : (r.revealed ? '<span style="color:#1565c0">예약됨</span>' : '<span style="color:#bbb;font-style:italic">미생성</span>')));
 
     // 상태: 게시됨 → 점검대기(생성완료·게시 전) → 생성중(진행률) → 노출예약 → 대기
     let st, stExtra = '';
-    if (r.completed) st = 'published';
+    /* ★ [2026-08-04] 일정 문서의 completed 가 없어도 case_reports 에 실물이 있으면 게시됨 */
+    if (r.completed || pub) st = 'published';
     else if (rep && rep.readyToPublish === true) st = 'review';
     else if (rep) { st = 'running'; if (typeof rep.progress === 'number') stExtra = ' ' + rep.progress + '%'; }
     else if (_running) st = 'running';
