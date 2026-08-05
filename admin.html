@@ -611,6 +611,18 @@
     </div>
     <div id="p-recurring" class="panel hidden"><h2>💰 정기결제 대상</h2>
       <div style="background:#E7F2F8;border-left:4px solid #2E86AB;border-radius:0 6px 6px 0;padding:9px 12px;font-size:13px;color:#185FA5;margin-bottom:16px">ℹ️ 월 이용료는 <b>등록(멤버십 부여) 익월부터</b> 발생합니다. 당월 가입(부여)자는 금액·합계에서 제외되며, 다음 달부터 과금 대상이 됩니다.</div>
+      <div id="rc-config" style="background:#fff;border:1px solid var(--border-lt);border-radius:10px;padding:16px 18px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:15px;font-weight:700">⚙️ 자동결제 설정</span>
+            <span id="rc-master-badge" style="font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:#eee;color:#888">불러오는 중...</span>
+          </div>
+          <button id="rc-master-btn" class="btn" onclick="toggleAutoBilling()" disabled>—</button>
+        </div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:1.6">지정한 날 <b>오전 8시</b>에 자동결제가 실행됩니다. 마스터가 <b>중지</b> 상태면 결제일이어도 실행되지 않습니다. <b>미입력한 달은 결제하지 않습니다.</b></div>
+        <div id="rc-days" style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end"></div>
+        <button class="btn" style="margin-top:14px" onclick="saveBillingDays()">결제일 저장</button>
+      </div>
       <div class="toolbar">
         <label>조회 월</label><input type="month" id="rc-month" onchange="renderRecurring()">
         <span style="color:#c4ccd1">|</span>
@@ -5144,6 +5156,7 @@ function _rcMonthRows(viewYM,search){
   return rows;
 }
 async function loadRecurring(){
+  loadBillingConfig();
   _rcData=[];
   try{
     const snap=await getDocs(collection(db,'users'));
@@ -5221,6 +5234,57 @@ async function exportRecurringCSV(){
   }catch(e){toast('엑셀 생성 실패: '+e.message,'error');console.error(e);}
 }
 window.loadRecurring=loadRecurring;window.renderRecurring=renderRecurring;window.renderRecurringRange=renderRecurringRange;window.rcQuick=rcQuick;window.exportRecurringCSV=exportRecurringCSV;
+
+// ═══ 자동결제 설정 (billing_config/schedule) — Phase 3a ═══
+let _billingCfg={enabled:false,days:{}};
+async function loadBillingConfig(){
+  try{
+    const s=await getDoc(doc(db,'billing_config','schedule'));
+    _billingCfg=s.exists()?{enabled:s.data().enabled===true,days:s.data().days||{}}:{enabled:false,days:{}};
+  }catch(e){console.error('결제설정 로드 오류:',e);_billingCfg={enabled:false,days:{}};}
+  const badge=$('rc-master-badge'),btn=$('rc-master-btn');
+  if(badge&&btn){
+    if(_billingCfg.enabled){badge.textContent='작동 중';badge.style.background='#E8F5E9';badge.style.color='#2E7D32';btn.textContent='자동결제 중지';btn.style.background='#B91C1C';btn.style.color='#fff';btn.style.borderColor='#B91C1C';}
+    else{badge.textContent='중지됨';badge.style.background='#FFEBEE';badge.style.color='#C62828';btn.textContent='자동결제 재개';btn.style.background='#2E7D32';btn.style.color='#fff';btn.style.borderColor='#2E7D32';}
+    btn.disabled=false;
+  }
+  const n=new Date();const pad=x=>String(x).padStart(2,'0');
+  let html='';
+  for(let i=0;i<3;i++){
+    const d=new Date(n.getFullYear(),n.getMonth()+i,1);
+    const ym=d.getFullYear()+'-'+pad(d.getMonth()+1);
+    const val=_billingCfg.days[ym]!=null?_billingCfg.days[ym]:'';
+    html+='<div style="display:flex;flex-direction:column;gap:4px"><label style="font-size:12px;color:#888">'+d.getFullYear()+'년 '+pad(d.getMonth()+1)+'월'+(i===0?' (당월)':'')+'</label><div style="display:flex;align-items:center;gap:6px"><input type="number" min="1" max="31" data-ym="'+ym+'" value="'+val+'" placeholder="미설정" style="width:80px;text-align:center"><span style="font-size:13px;color:#666">일 · 08시</span></div></div>';
+  }
+  if($('rc-days'))$('rc-days').innerHTML=html;
+}
+async function toggleAutoBilling(){
+  const next=!_billingCfg.enabled;
+  if(!confirm('자동결제를 '+(next?'재개':'중지')+'하시겠습니까?'+(next?'':'\n\n중지 중에는 결제일이 되어도 자동결제가 실행되지 않습니다.')))return;
+  try{
+    await setDoc(doc(db,'billing_config','schedule'),{enabled:next,updatedAt:serverTimestamp()},{merge:true});
+    _billingCfg.enabled=next;
+    toast('자동결제가 '+(next?'재개':'중지')+'되었습니다.','success');
+    loadBillingConfig();
+  }catch(e){console.error('자동결제 토글 오류:',e);toast('설정 변경 실패: '+e.message,'error');}
+}
+async function saveBillingDays(){
+  const days={};
+  let bad=false;
+  document.querySelectorAll('#rc-days input[data-ym]').forEach(inp=>{
+    const ym=inp.getAttribute('data-ym');const raw=inp.value.trim();
+    if(raw===''){return;} // 미입력 = 그 달 결제 안 함
+    const v=parseInt(raw,10);
+    if(v>=1&&v<=31)days[ym]=v;else bad=true;
+  });
+  if(bad){toast('결제일은 1~31 사이로 입력하세요.','warning');return;}
+  try{
+    await setDoc(doc(db,'billing_config','schedule'),{days,updatedAt:serverTimestamp()},{merge:true});
+    _billingCfg.days=days;
+    toast('결제일이 저장되었습니다.','success');
+  }catch(e){console.error('결제일 저장 오류:',e);toast('저장 실패: '+e.message,'error');}
+}
+window.toggleAutoBilling=toggleAutoBilling;window.saveBillingDays=saveBillingDays;window.loadBillingConfig=loadBillingConfig;
 
 // ===== 단체계정 관련 함수 =====
 function toggleGroupSection(uid, checked) {
