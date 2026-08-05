@@ -646,6 +646,15 @@
         <label>표시</label>
         <select id="rc-page-size" onchange="rcSetPageSize(this.value)"><option value="10">10개씩</option><option value="20" selected>20개씩</option><option value="30">30개씩</option><option value="40">40개씩</option><option value="50">50개씩</option><option value="100">100개씩</option></select>
         <span style="margin-left:auto;font-size:13px;color:#185FA5;font-weight:600">선택: <span id="rc-sel-count">0</span>명</span>
+        <button class="btn" style="background:#B91C1C;color:#fff;border-color:#B91C1C" onclick="rcBulkCharge()">🔴 선택 회원 일괄결제</button>
+      </div>
+      <div id="rc-job-box" style="display:none;background:#FFFCF5;border:1px solid #FFE0B2;border-radius:10px;padding:14px 16px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+          <strong id="rc-job-title" style="font-size:14px;color:#E65100">일괄결제 진행 중...</strong>
+          <span id="rc-job-counts" style="font-size:13px;color:#5F6E78"></span>
+        </div>
+        <div style="background:#eee;border-radius:8px;height:14px;overflow:hidden"><div id="rc-job-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2E86AB,#2E7D32);transition:width .4s"></div></div>
+        <div id="rc-job-note" style="font-size:12px;color:#888;margin-top:8px">창을 닫아도 서버에서 계속 진행됩니다. 완료 시 자동 반영됩니다.</div>
       </div>
       <div class="tbl-wrap mt"><table class="tbl"><thead><tr>
         <th style="width:32px"><input type="checkbox" id="rc-chk-all" onchange="rcSelectAll(this.checked)"></th><th>No.</th><th style="cursor:pointer" onclick="rcSort('name')">이름 <span id="rcsort-name"></span></th><th>아이디</th><th>연락처</th><th>소속</th><th style="cursor:pointer" onclick="rcSort('reg')">등록일 <span id="rcsort-reg"></span></th><th>과금시작월</th><th style="cursor:pointer" onclick="rcSort('fee')">월 결제금액 <span id="rcsort-fee"></span></th><th>등록비</th><th style="cursor:pointer" onclick="rcSort('card')">카드 <span id="rcsort-card"></span></th><th>자동결제</th><th style="cursor:pointer" onclick="rcSort('status')">결제상태 <span id="rcsort-status"></span></th><th>관리</th>
@@ -5195,6 +5204,7 @@ async function loadRecurring(){
   if($('rc-to')&&!$('rc-to').value)$('rc-to').value=cur;
   rcLoadMonthStatus();
   renderRecurringRange();
+  _rcCheckActiveJob();
 }
 function renderRecurring(){
   const mv=$('rc-month')?$('rc-month').value:'';
@@ -5434,6 +5444,51 @@ async function chargeOneMember(uid,ym){
 }
 window.rcLoadMonthStatus=rcLoadMonthStatus;window.toggleMemberBilling=toggleMemberBilling;window.chargeOneMember=chargeOneMember;
 window.rcSort=rcSort;window.rcGoPage=rcGoPage;window.rcSetPageSize=rcSetPageSize;window.rcApplyFilter=rcApplyFilter;window.rcToggleSel=rcToggleSel;window.rcSelectAll=rcSelectAll;
+
+// ═══ 안전 배치 일괄결제 (Phase 3c-2) ═══
+let _rcJobUnsub=null;
+async function rcBulkCharge(){
+  const mv=$('rc-month')?$('rc-month').value:'';
+  if(!mv){toast('조회 월을 먼저 선택하세요.','warning');return;}
+  const uids=Array.from(_rcSelected);
+  if(uids.length===0){toast('결제할 회원을 선택하세요.','warning');return;}
+  let cardCnt=0,est=0;
+  uids.forEach(uid=>{const m=_rcData.find(x=>x.id===uid);if(!m)return;if(_rcCardSet.has(uid)){cardCnt++;est+=_rcFee(m);}});
+  if(cardCnt===0){toast('선택 회원 중 카드 등록자가 없습니다. (미등록은 결제 불가)','warning');return;}
+  if(!confirm('일괄결제를 시작합니다.\n\n· 선택 '+uids.length+'명\n· 카드등록(실결제 대상) '+cardCnt+'명\n· 예상 합계 '+fmt(est)+'원\n· 대상 월 '+mv+'\n\n※ 카드 미등록·이미 완료 회원은 자동 제외\n※ 서버에서 1명씩 안전하게 순차 결제 (시간 소요)\n\n진행하시겠습니까?'))return;
+  try{
+    const r=await httpsCallable(functions,'adminStartBillingJob')({ym:mv,uids});
+    if(r.data&&r.data.success){toast('일괄결제 작업 시작 ('+r.data.total+'명)','success');_rcSelected=new Set();_rcSubscribeJob(r.data.jobId);renderRecurring();}
+    else toast((r.data&&r.data.error)||'작업 시작 실패','error');
+  }catch(e){console.error('일괄결제 시작 오류:',e);toast('작업 시작 중 오류가 발생했습니다.','error');}
+}
+function _rcSubscribeJob(jobId){
+  if(_rcJobUnsub){_rcJobUnsub();_rcJobUnsub=null;}
+  const box=$('rc-job-box');if(box)box.style.display='block';
+  _rcJobUnsub=onSnapshot(doc(db,'billing_jobs',jobId),(snap)=>{
+    if(!snap.exists()){if(box)box.style.display='none';return;}
+    const j=snap.data();const total=j.total||0,cur=j.cursor||0;const pct=total?Math.round(cur/total*100):0;
+    if($('rc-job-bar'))$('rc-job-bar').style.width=pct+'%';
+    if($('rc-job-counts'))$('rc-job-counts').textContent=cur+' / '+total+'  (성공 '+(j.success||0)+' · 실패 '+(j.failed||0)+' · 스킵 '+(j.skipped||0)+')';
+    if(j.status==='done'){
+      if($('rc-job-title'))$('rc-job-title').textContent='✅ 일괄결제 완료';
+      if($('rc-job-note'))$('rc-job-note').textContent='완료 — 성공 '+(j.success||0)+'건 · 실패 '+(j.failed||0)+'건 · 스킵 '+(j.skipped||0)+'건.';
+      if(_rcJobUnsub){_rcJobUnsub();_rcJobUnsub=null;}
+      rcLoadMonthStatus();
+    }else{
+      if($('rc-job-title'))$('rc-job-title').textContent='⏳ 일괄결제 진행 중...';
+      if($('rc-job-note'))$('rc-job-note').textContent='창을 닫아도 서버에서 계속 진행됩니다. 완료 시 자동 반영됩니다.';
+    }
+  });
+}
+async function _rcCheckActiveJob(){
+  try{
+    const q=await getDocs(query(collection(db,'billing_jobs'),where('status','==','processing'),limit(1)));
+    if(!q.empty)_rcSubscribeJob(q.docs[0].id);
+    else if($('rc-job-box'))$('rc-job-box').style.display='none';
+  }catch(e){console.error('활성 작업 확인 오류:',e);}
+}
+window.rcBulkCharge=rcBulkCharge;
 
 // ═══ 정기결제 관리 모달 (금액수정·카드결제·송금완료·되돌리기) — Phase 3b+ ═══
 let _rcMng=null;
