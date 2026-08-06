@@ -2472,9 +2472,12 @@
 
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:14px">
           <button type="button" id="ccbRemoveBtn" onclick="ccbRemove()" style="display:none;background:none;border:1px solid #D9A0A0;color:#A32D2D;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">이번 달 메시지 내리기</button>
+          <button type="button" onclick="ccbHistToggle()" style="background:none;border:1px solid #C9B37E;color:#8B6914;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">🗂 지난 메시지 보기</button>
           <span style="flex:1"></span>
           <button type="button" onclick="ccbSave()" style="background:#1B3A6B;border:none;color:#fff;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer">저장 · 게시</button>
         </div>
+        <!-- ★ [2026-08-06] 지난 메시지 보관함 — 본인이 작성한 월별 메시지 열람·재사용 -->
+        <div id="ccbHist" style="display:none;margin-top:12px;border-top:1px dashed #E5D9B8;padding-top:12px"></div>
       </div>
 
       <div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-bottom:14px">
@@ -9729,6 +9732,61 @@ async function ccbRemove(){
   }catch(e){toast('삭제 실패: '+(e.message||''),'error');}
 }
 window.ccbRemove=ccbRemove;
+
+/* ★ [2026-08-06] 지난 메시지 보관함 — 최근 24개월 문서ID 직접 조회 (복합 인덱스 불필요), 열람·이달로 불러오기 */
+let _ccbHistCache=null;
+async function ccbHistToggle(){
+  const box=document.getElementById('ccbHist');if(!box)return;
+  if(box.style.display!=='none'){box.style.display='none';return;}
+  box.style.display='block';
+  const myId=(meData&&meData.loginId)||'';if(!myId){box.innerHTML='<div style="font-size:12px;color:#9CA3AF">로그인이 필요합니다</div>';return;}
+  box.innerHTML='<div style="font-size:12px;color:#9CA3AF">지난 메시지를 불러오는 중…</div>';
+  try{
+    if(!_ccbHistCache){
+      const now=new Date(),curYm=ccbYM(),jobs=[];
+      for(let i=1;i<=24;i++){
+        const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+        const ym=String(d.getFullYear())+String(d.getMonth()+1).padStart(2,'0');
+        jobs.push(getDoc(doc(db,'consultant_broadcasts',myId+'_'+ym)).then(s=>s.exists()?{ym,...s.data()}:null).catch(()=>null));
+      }
+      _ccbHistCache=(await Promise.all(jobs)).filter(Boolean);
+    }
+    if(!_ccbHistCache.length){box.innerHTML='<div style="font-size:12px;color:#9CA3AF">지난 메시지가 없습니다 (최근 24개월 기준)</div>';return;}
+    box.innerHTML='<div style="font-size:11px;font-weight:800;color:#B49A64;margin-bottom:8px">지난 메시지 '+_ccbHistCache.length+'건 (최근 24개월)</div>'
+      +_ccbHistCache.map((m,i)=>{
+        const label=m.ym.slice(0,4)+'년 '+String(Number(m.ym.slice(4)))+'월';
+        return '<div style="border:1px solid #EDE4CC;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#FDFBF5">'
+          +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+            +'<span style="font-size:11px;font-weight:800;color:#8B6914;background:#FBF3DC;border-radius:5px;padding:2px 7px;flex-shrink:0">'+label+'</span>'
+            +'<span style="flex:1;min-width:120px;font-size:13px;font-weight:700;color:#141B2D;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+ccbEsc(m.title||'(제목 없음)')+'</span>'
+            +'<span style="font-size:11px;color:#0F6E56;flex-shrink:0">확인 '+(Number(m.viewCount)||0)+'명</span>'
+            +'<button type="button" onclick="ccbHistView('+i+')" style="background:none;border:1px solid #C9B37E;color:#8B6914;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0">내용 보기</button>'
+            +'<button type="button" onclick="ccbHistUse('+i+')" style="background:#1B3A6B;border:none;color:#fff;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0">이달로 불러오기</button>'
+          +'</div>'
+          +'<div id="ccbHistBody'+i+'" style="display:none;margin-top:9px;border-top:1px dashed #EDE4CC;padding-top:9px;font-size:12.5px;color:#374151;line-height:1.7;white-space:pre-wrap;word-break:break-word"></div>'
+        +'</div>';
+      }).join('');
+  }catch(e){box.innerHTML='<div style="font-size:12px;color:#A32D2D">불러오기 실패: '+ccbEsc(e.message||'')+'</div>';}
+}
+function ccbHistView(i){
+  const m=(_ccbHistCache||[])[i];const el=document.getElementById('ccbHistBody'+i);if(!m||!el)return;
+  if(el.style.display!=='none'){el.style.display='none';return;}
+  const atts=Array.isArray(m.attachments)?m.attachments:[];
+  el.innerHTML=ccbSanitizeHtml(m.bodyHtml||ccbEsc(m.body||''))
+    +(atts.length?'<div style="margin-top:7px;font-size:11.5px;color:#6B7280">📎 첨부 '+atts.length+'건: '+atts.map(a=>ccbEsc(a.title||a.url||'')).join(' · ')+'</div>':'');
+  el.style.display='block';
+}
+function ccbHistUse(i){
+  const m=(_ccbHistCache||[])[i];if(!m)return;
+  if(!confirm(m.ym.slice(0,4)+'년 '+String(Number(m.ym.slice(4)))+'월 메시지를 편집기로 불러올까요?\n\n· 현재 편집 중인 내용은 덮어써집니다\n· 내용 확인 후 [저장 · 게시]를 눌러야 이번 달 메시지로 게시됩니다'))return;
+  document.getElementById('ccbTitle').value=m.title||'';
+  document.getElementById('ccbBody').innerHTML=ccbSanitizeHtml(m.bodyHtml||ccbEsc(m.body||''));
+  _ccbAtt=Array.isArray(m.attachments)?m.attachments.slice(0,6):[];
+  ccbRenderAtt();ccbCount();ccbPrev();
+  const box=document.getElementById('ccbHist');if(box)box.style.display='none';
+  toast('불러왔습니다 — 내용 확인 후 [저장 · 게시]를 눌러주세요','info');
+}
+window.ccbHistToggle=ccbHistToggle;window.ccbHistView=ccbHistView;window.ccbHistUse=ccbHistUse;
 
 async function loadChannelData(){
   if(!me||!meData)return;
