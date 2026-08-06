@@ -1818,7 +1818,7 @@
       <div class="form-box">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <label style="font-weight:600;font-size:14px">발송 대상</label>
-          <select id="sms-role-filter" onchange="renderSmsMembers()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <select id="sms-role-filter" onchange="smsFilterChanged()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
             <option value="">전체 회원</option>
             <option value="free_user">자비아(기간제)</option>
             <option value="user">일반회원</option>
@@ -1829,18 +1829,49 @@
             <option value="branch_manager">지사장</option>
             <option value="jarvia_report">리포트회원</option>
           </select>
-          <input id="sms-search" placeholder="이름/연락처 검색" oninput="renderSmsMembers()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:180px">
+          <input id="sms-search" placeholder="이름/연락처 검색" oninput="smsFilterChanged()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:180px">
+          <select id="sms-page-size" onchange="smsSetPageSize(this.value)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="10">10개씩</option>
+            <option value="20" selected>20개씩</option>
+            <option value="30">30개씩</option>
+            <option value="50">50개씩</option>
+            <option value="100">100개씩</option>
+            <option value="all">전체</option>
+          </select>
           <span id="sms-sel-count" style="font-size:13px;color:var(--primary);font-weight:600"></span>
         </div>
-        <div class="tbl-wrap" style="max-height:300px;overflow-y:auto">
+        <div class="tbl-wrap" style="max-height:420px;overflow-y:auto">
           <table class="tbl">
             <thead><tr>
-              <th style="width:40px"><input type="checkbox" id="sms-chk-all" onchange="toggleSmsAll()"></th>
-              <th>이름</th><th>아이디</th><th>회원유형</th><th>연락처</th>
+              <th style="width:40px"><input type="checkbox" id="sms-chk-all" onchange="toggleSmsAll()" title="필터된 전체 회원 선택/해제"></th>
+              <th onclick="smsSort('name')" style="cursor:pointer" title="클릭 시 정렬">이름 <span id="sms-sort-name"></span></th>
+              <th onclick="smsSort('loginId')" style="cursor:pointer" title="클릭 시 정렬">아이디 <span id="sms-sort-loginId"></span></th>
+              <th onclick="smsSort('role')" style="cursor:pointer" title="클릭 시 정렬">회원유형 <span id="sms-sort-role"></span></th>
+              <th onclick="smsSort('phone')" style="cursor:pointer" title="클릭 시 정렬">연락처 <span id="sms-sort-phone"></span></th>
             </tr></thead>
             <tbody id="tb-sms-members"></tbody>
           </table>
         </div>
+        <div id="sms-pager" style="display:flex;gap:4px;justify-content:center;align-items:center;margin-top:10px;flex-wrap:wrap"></div>
+      </div>
+      <!-- 직접입력 발송 대상 -->
+      <div class="form-box" style="margin-top:12px">
+        <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">📞 번호 직접입력 (비회원 발송)</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="sms-manual-name" placeholder="이름 (선택)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:120px">
+          <input id="sms-manual-phone" placeholder="010-0000-0000 (콤마로 여러 개 입력 가능)" onkeydown="if(event.key==='Enter')addSmsManualPhone()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:280px">
+          <button class="btn btn-sec" onclick="addSmsManualPhone()">➕ 추가</button>
+        </div>
+        <div id="sms-manual-list" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+      </div>
+      <!-- 선택 목록 관리: 검색으로 개별 제외 -->
+      <div class="form-box" style="margin-top:12px">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <label style="font-weight:600;font-size:14px">✅ 선택 목록 <span id="sms-sel-total" style="color:var(--primary)"></span></label>
+          <input id="sms-sel-search" placeholder="선택 목록에서 이름/번호 검색" oninput="renderSmsSelected()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:220px">
+          <button class="btn btn-sec" onclick="clearSmsSel()">🗑 전체 해제</button>
+        </div>
+        <div id="sms-sel-list" style="display:flex;gap:6px;flex-wrap:wrap;max-height:180px;overflow-y:auto"></div>
       </div>
       <div class="form-box" style="margin-top:12px">
         <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">메시지 내용</label>
@@ -11137,6 +11168,13 @@ async function handlePrFileUpload(input,type){
 
 const ROLE_LABELS_SMS={'free_user':'자비아(기간제)','user':'일반회원','jarvia_member':'JARVIA멤버십','inner_circle':'이너서클','con_homepage':'컨홈페이지','branch_manager':'지사장','jarvia_inner':'자비아(이너서클)','jarvia_report':'리포트회원','admin':'관리자'};
 let _smsMembers=[];
+let _smsSel=new Map();            // uid → {uid,name,phone,loginId} — 페이지/정렬/검색과 무관하게 선택 유지
+let _smsManual=[];                // 직접입력 번호 [{name,phone}]
+let _smsSort={key:'name',dir:1};  // 정렬 상태
+let _smsPage=1;
+let _smsPageSize=20;              // 'all' 가능
+
+const _smsEscH=s=>(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 async function loadSmsMembers(){
   const snap=await getDocs(query(collection(db,'users'),orderBy('name')));
@@ -11149,31 +11187,158 @@ async function loadSmsMembers(){
   renderSmsMembers();
 }
 
-function renderSmsMembers(){
-  const tb=$('tb-sms-members');
+function _smsFiltered(){
   const roleF=$('sms-role-filter').value;
   const kw=($('sms-search').value||'').trim().toLowerCase();
   let list=_smsMembers;
   if(roleF)list=list.filter(m=>m.role===roleF);
   if(kw)list=list.filter(m=>(m.name+m.phone).toLowerCase().includes(kw));
-  const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  tb.innerHTML=list.map(m=>{
+  const {key,dir}=_smsSort;
+  list=list.slice().sort((a,b)=>{
+    const av=(a[key]||'').toString(),bv=(b[key]||'').toString();
+    return av.localeCompare(bv,'ko')*dir;
+  });
+  return list;
+}
+
+function smsFilterChanged(){_smsPage=1;renderSmsMembers();}
+
+function smsSort(key){
+  if(_smsSort.key===key)_smsSort.dir*=-1;
+  else _smsSort={key,dir:1};
+  renderSmsMembers();
+}
+
+function smsSetPageSize(v){
+  _smsPageSize=(v==='all')?'all':parseInt(v,10);
+  _smsPage=1;
+  renderSmsMembers();
+}
+
+function smsGotoPage(p){_smsPage=p;renderSmsMembers();}
+
+function renderSmsMembers(){
+  const tb=$('tb-sms-members');
+  const list=_smsFiltered();
+  // 정렬 표시
+  ['name','loginId','role','phone'].forEach(k=>{
+    const el=$('sms-sort-'+k);
+    if(el)el.textContent=(_smsSort.key===k)?(_smsSort.dir===1?'▲':'▼'):'';
+  });
+  // 페이지 슬라이스
+  const total=list.length;
+  const size=(_smsPageSize==='all')?(total||1):_smsPageSize;
+  const totalPages=Math.max(1,Math.ceil(total/size));
+  if(_smsPage>totalPages)_smsPage=totalPages;
+  const start=(_smsPage-1)*size;
+  const pageList=(_smsPageSize==='all')?list:list.slice(start,start+size);
+  tb.innerHTML=pageList.map(m=>{
     const rl=ROLE_LABELS_SMS[m.role]||m.role;
-    return `<tr><td><input type="checkbox" class="sms-chk" data-uid="${esc(m.uid)}" data-name="${esc(m.name)}" data-phone="${esc(m.phone)}" data-loginid="${esc(m.loginId)}" onchange="updateSmsCount()"></td><td>${esc(m.name)}</td><td>${esc(m.loginId)}</td><td>${rl}</td><td>${esc(m.phone)}</td></tr>`;
+    const chk=_smsSel.has(m.uid)?' checked':'';
+    return `<tr><td><input type="checkbox" class="sms-chk" data-uid="${_smsEscH(m.uid)}"${chk} onchange="onSmsRowChk(this)"></td><td>${_smsEscH(m.name)}</td><td>${_smsEscH(m.loginId)}</td><td>${rl}</td><td>${_smsEscH(m.phone)}</td></tr>`;
   }).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-lt)">연락처가 등록된 회원이 없습니다</td></tr>';
-  $('sms-chk-all').checked=false;
+  // 전체선택 체크박스: 필터된 전체가 모두 선택돼 있을 때만 체크
+  $('sms-chk-all').checked=total>0&&list.every(m=>_smsSel.has(m.uid));
+  // 페이저
+  const pager=$('sms-pager');
+  if(_smsPageSize==='all'||totalPages<=1){
+    pager.innerHTML=total?`<span style="font-size:13px;color:var(--text-lt)">전체 ${total}명</span>`:'';
+  }else{
+    const btn=(p,label,dis,cur)=>`<button class="btn btn-sec" style="padding:4px 10px;font-size:13px${cur?';background:var(--primary);color:#fff':''}" ${dis?'disabled':''} onclick="smsGotoPage(${p})">${label}</button>`;
+    let html=btn(_smsPage-1,'‹',_smsPage===1,false);
+    const win=2;
+    let s=Math.max(1,_smsPage-win),e=Math.min(totalPages,_smsPage+win);
+    if(s>1){html+=btn(1,'1',false,_smsPage===1);if(s>2)html+='<span style="color:var(--text-lt)">…</span>';}
+    for(let p=s;p<=e;p++)html+=btn(p,p,false,p===_smsPage);
+    if(e<totalPages){if(e<totalPages-1)html+='<span style="color:var(--text-lt)">…</span>';html+=btn(totalPages,totalPages,false,_smsPage===totalPages);}
+    html+=btn(_smsPage+1,'›',_smsPage===totalPages,false);
+    html+=`<span style="font-size:13px;color:var(--text-lt);margin-left:8px">전체 ${total}명 · ${_smsPage}/${totalPages}쪽</span>`;
+    pager.innerHTML=html;
+  }
+  updateSmsCount();
+}
+
+function onSmsRowChk(cb){
+  const uid=cb.dataset.uid;
+  if(cb.checked){
+    const m=_smsMembers.find(x=>x.uid===uid);
+    if(m)_smsSel.set(uid,{uid:m.uid,name:m.name,phone:m.phone,loginId:m.loginId});
+  }else{
+    _smsSel.delete(uid);
+  }
+  const list=_smsFiltered();
+  $('sms-chk-all').checked=list.length>0&&list.every(m=>_smsSel.has(m.uid));
   updateSmsCount();
 }
 
 function toggleSmsAll(){
   const v=$('sms-chk-all').checked;
-  document.querySelectorAll('.sms-chk').forEach(c=>c.checked=v);
+  const list=_smsFiltered();   // 현재 페이지가 아닌, 필터된 전체 회원 대상
+  if(v)list.forEach(m=>_smsSel.set(m.uid,{uid:m.uid,name:m.name,phone:m.phone,loginId:m.loginId}));
+  else list.forEach(m=>_smsSel.delete(m.uid));
+  renderSmsMembers();
+}
+
+// ── 직접입력 번호 ──
+function addSmsManualPhone(){
+  const nameEl=$('sms-manual-name'),phoneEl=$('sms-manual-phone');
+  const name=(nameEl.value||'').trim();
+  const raw=(phoneEl.value||'').trim();
+  if(!raw){toast('전화번호를 입력하세요.','error');return;}
+  const parts=raw.split(/[,\n;]+/).map(s=>s.trim()).filter(Boolean);
+  let added=0;
+  for(const p of parts){
+    const digits=p.replace(/[^0-9]/g,'');
+    if(digits.length<10||digits.length>11||!digits.startsWith('01')){toast(`잘못된 번호: ${p}`,'error');continue;}
+    const fmt=digits.length===11?digits.replace(/(\d{3})(\d{4})(\d{4})/,'$1-$2-$3'):digits.replace(/(\d{3})(\d{3})(\d{4})/,'$1-$2-$3');
+    if(_smsManual.some(x=>x.phone===fmt)||[..._smsSel.values()].some(x=>x.phone===fmt)){toast(`이미 추가된 번호: ${fmt}`,'error');continue;}
+    _smsManual.push({name:name||'직접입력',phone:fmt});
+    added++;
+  }
+  if(added){nameEl.value='';phoneEl.value='';}
+  renderSmsManual();
   updateSmsCount();
 }
 
+function removeSmsManual(i){
+  _smsManual.splice(i,1);
+  renderSmsManual();
+  updateSmsCount();
+}
+
+function renderSmsManual(){
+  $('sms-manual-list').innerHTML=_smsManual.map((m,i)=>
+    `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:#eef3fb;border:1px solid var(--border);border-radius:14px;font-size:13px">${_smsEscH(m.name)} ${_smsEscH(m.phone)}<b style="cursor:pointer;color:#DA3633" onclick="removeSmsManual(${i})">×</b></span>`
+  ).join('');
+}
+
+// ── 선택 목록 관리 (검색 후 개별 삭제) ──
+function renderSmsSelected(){
+  const kw=($('sms-sel-search').value||'').trim().toLowerCase();
+  let arr=[..._smsSel.values()];
+  if(kw)arr=arr.filter(m=>(m.name+m.phone).toLowerCase().includes(kw));
+  $('sms-sel-total').textContent=_smsSel.size?`(${_smsSel.size}명${kw?` · 검색결과 ${arr.length}명`:''})`:'(0명)';
+  $('sms-sel-list').innerHTML=arr.map(m=>
+    `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:#f0f7ff;border:1px solid var(--border);border-radius:14px;font-size:13px">${_smsEscH(m.name)} ${_smsEscH(m.phone)}<b style="cursor:pointer;color:#DA3633" title="선택 해제" onclick="removeSmsSel('${_smsEscH(m.uid)}')">×</b></span>`
+  ).join('')||(_smsSel.size?'<span style="font-size:13px;color:var(--text-lt)">검색 결과가 없습니다</span>':'<span style="font-size:13px;color:var(--text-lt)">선택된 회원이 없습니다</span>');
+}
+
+function removeSmsSel(uid){
+  _smsSel.delete(uid);
+  renderSmsMembers();   // 본 목록 체크박스·전체선택 상태 동기화 (updateSmsCount 포함)
+}
+
+function clearSmsSel(){
+  if(_smsSel.size===0)return;
+  if(!confirm(`선택된 ${_smsSel.size}명을 모두 해제하시겠습니까?`))return;
+  _smsSel.clear();
+  renderSmsMembers();
+}
+
 function updateSmsCount(){
-  const checked=document.querySelectorAll('.sms-chk:checked').length;
-  $('sms-sel-count').textContent=checked?`${checked}명 선택됨`:'';
+  const total=_smsSel.size+_smsManual.length;
+  $('sms-sel-count').textContent=total?`${total}명 선택됨${_smsManual.length?` (직접입력 ${_smsManual.length})`:''}`:'';
+  renderSmsSelected();
   updateSmsCost();
 }
 
@@ -11182,7 +11347,7 @@ function updateSmsCost(){
   const bytes=new Blob([msg]).size;
   const isLMS=bytes>90;
   $('sms-byte-info').textContent=`${bytes} 바이트 (${isLMS?'LMS':'SMS'})`;
-  const checked=document.querySelectorAll('.sms-chk:checked').length;
+  const checked=_smsSel.size+_smsManual.length;
   const unitCost=isLMS?50:20;
   const total=checked*unitCost;
   $('sms-cost-info').textContent=`예상 금액: ${total.toLocaleString()}원 (${checked}건 × ${unitCost}원)`;
@@ -11191,10 +11356,10 @@ function updateSmsCost(){
 async function doSendAdminSMS(){
   const msg=$('sms-msg').value.trim();
   if(!msg){toast('메시지 내용을 입력하세요.','error');return;}
-  const checks=document.querySelectorAll('.sms-chk:checked');
-  if(checks.length===0){toast('발송 대상을 선택하세요.','error');return;}
   const recipients=[];
-  checks.forEach(c=>recipients.push({name:c.dataset.name,phone:c.dataset.phone,loginId:c.dataset.loginid}));
+  _smsSel.forEach(m=>recipients.push({name:m.name,phone:m.phone,loginId:m.loginId}));
+  _smsManual.forEach(m=>recipients.push({name:m.name,phone:m.phone,loginId:''}));
+  if(recipients.length===0){toast('발송 대상을 선택하세요.','error');return;}
   const bytes=new Blob([msg]).size;
   const unitCost=bytes>90?50:20;
   const totalCost=recipients.length*unitCost;
@@ -11209,7 +11374,8 @@ async function doSendAdminSMS(){
     resultEl.classList.remove('hidden');
     resultEl.innerHTML=`<div style="font-size:15px;font-weight:600;margin-bottom:8px">✅ 발송 완료</div><div style="font-size:14px">총 ${d.totalCount}건 — 성공 <b style="color:#238636">${d.successCount}</b>건, 실패 <b style="color:#DA3633">${d.failCount}</b>건</div><div style="font-size:13px;color:var(--text-lt);margin-top:4px">예상 비용: ${(d.successCount*unitCost).toLocaleString()}원 (성공 건 기준)</div>`;
     $('sms-msg').value='';
-    updateSmsCost();
+    _smsSel.clear();_smsManual=[];
+    renderSmsManual();renderSmsMembers();
     loadSmsLogs();
   }catch(e){
     toast('발송 실패: '+(e.message||'오류'),'error');
@@ -11339,7 +11505,7 @@ async function resendSmsFails(){
   }
 }
 
-window.loadSmsMembers=loadSmsMembers;window.renderSmsMembers=renderSmsMembers;window.toggleSmsAll=toggleSmsAll;window.updateSmsCount=updateSmsCount;window.updateSmsCost=updateSmsCost;window.doSendAdminSMS=doSendAdminSMS;window.loadSmsLogs=loadSmsLogs;window.showSmsLogDetail=showSmsLogDetail;window.closeSmsLogDetail=closeSmsLogDetail;window.resendSmsFails=resendSmsFails;
+window.loadSmsMembers=loadSmsMembers;window.renderSmsMembers=renderSmsMembers;window.toggleSmsAll=toggleSmsAll;window.updateSmsCount=updateSmsCount;window.updateSmsCost=updateSmsCost;window.doSendAdminSMS=doSendAdminSMS;window.loadSmsLogs=loadSmsLogs;window.showSmsLogDetail=showSmsLogDetail;window.closeSmsLogDetail=closeSmsLogDetail;window.resendSmsFails=resendSmsFails;window.smsFilterChanged=smsFilterChanged;window.smsSort=smsSort;window.smsSetPageSize=smsSetPageSize;window.smsGotoPage=smsGotoPage;window.onSmsRowChk=onSmsRowChk;window.addSmsManualPhone=addSmsManualPhone;window.removeSmsManual=removeSmsManual;window.renderSmsManual=renderSmsManual;window.renderSmsSelected=renderSmsSelected;window.removeSmsSel=removeSmsSel;window.clearSmsSel=clearSmsSel;
 
 // ═══════════════════════════════════════════════════
 //  📋 시스템 활동 로그
