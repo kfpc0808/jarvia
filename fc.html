@@ -6169,15 +6169,15 @@ async function aiChkBuild(){
     cts.forEach(x=>{
       const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
       if(!p||ex.length<10)return;const kk=p+'|'+ex;if(seen[kk])return;seen[kk]=1;
-      const dd=aiDday(ex);if(dd==null||dd<0||dd>45)return;
+      const dd=aiDday(ex);if(dd==null||dd<0||dd>60)return;   /* ★ [2026-08-07] 45→60일 — 익월 만기까지 표시 */
       if(!bx||dd<bx.dd)bx={dd:dd,p:p,ex:ex,pt:String((x&&x.ptype)||'')};});
     if(bx){const _c={'실손':'silson','자동차':'auto','보장성':'protect','저축성':'saving','연금':'pension'}[bx.pt]||'';g.exp.push({nm:nm,sub:sub,dd:bx.dd,why:_aiEsc(bx.p)+' <b>'+aiChkYmd(bx.ex)+' 만기</b>',mk:(_c?('만기_'+_c):'만기'),mm:parseInt(bx.ex.slice(5,7),10),md:parseInt(bx.ex.slice(8,10),10),mp:bx.p,cid:(c.fccId||''),ph:(c.phone||'')});}
     /* ② 상령일 ③ 생일 */
     if(c.birthDate&&c.birthDate.length===10&&!c.birthUnknown){
       const sm=aiSangMmdd(c.birthDate),sd=aiDdayMmdd(sm);
-      if(sd!=null&&sd<=30)g.sang.push({nm:nm,sub:sub,dd:sd,why:'상령일 <b>'+aiChkMd(sm)+'</b> · 지나면 보험료가 오릅니다',mk:'상령일',mm:parseInt(sm.slice(0,2),10),md:parseInt(sm.slice(2,4),10),mp:'',cid:(c.fccId||''),ph:(c.phone||'')});
+      if(sd!=null&&sd<=60)g.sang.push({nm:nm,sub:sub,dd:sd,why:'상령일 <b>'+aiChkMd(sm)+'</b> · 지나면 보험료가 오릅니다',mk:'상령일',mm:parseInt(sm.slice(0,2),10),md:parseInt(sm.slice(2,4),10),mp:'',cid:(c.fccId||''),ph:(c.phone||'')});
       const bm=c.birthDate.slice(5,7)+c.birthDate.slice(8,10),bd=aiDdayMmdd(bm),ag=aiAge(c.birthDate);
-      if(bd!=null&&bd<=30)g.bday.push({nm:nm,sub:sub,dd:bd,why:'생일 <b>'+aiChkMd(bm)+'</b>'+(ag!=null?' · 만 '+(ag+1)+'세':''),mk:'생일',mm:parseInt(bm.slice(0,2),10),md:parseInt(bm.slice(2,4),10),mp:'',cid:(c.fccId||''),ph:(c.phone||'')});
+      if(bd!=null&&bd<=60)g.bday.push({nm:nm,sub:sub,dd:bd,why:'생일 <b>'+aiChkMd(bm)+'</b>'+(ag!=null?' · 만 '+(ag+1)+'세':''),mk:'생일',mm:parseInt(bm.slice(0,2),10),md:parseInt(bm.slice(2,4),10),mp:'',cid:(c.fccId||''),ph:(c.phone||'')});
     }
     /* ④ 다음 연락 예정 — 지났거나 7일 내 */
     if(c.nextContact&&c.nextContact.length>=10){
@@ -6248,9 +6248,24 @@ function aiChkGrpRender(g){
   const grp=AI_CHK_GROUPS.filter(x=>x.k===aiChkTab)[0];
   if(!grp){pn.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:9px 2px 2px;line-height:1.6">위 항목을 탭하면 해당 고객 명단이 펼쳐집니다.</div>';return;}
   const arr=g[grp.k]||[],cap=aiSideNarrow()?4:6;   /* ★ 모바일은 4개까지 — 화면 점유 최소화 */
-  let s='<div style="font-size:11.5px;color:#8A93A8;margin:9px 2px 7px">탭하면 그 고객으로 바로 대화를 시작해요</div><div class="aichk-grid">';
-  const _slice=arr.slice(0,cap);_aiChkMsgArr=_slice;   /* ★ 💬문자 버튼이 인덱스로 참조 */
-  _slice.forEach((it,i)=>{
+  let s='<div style="font-size:11.5px;color:#8A93A8;margin:9px 2px 7px">탭하면 그 고객으로 바로 대화를 시작해요</div>';
+  /* ★ [2026-08-07] 당월/익월 섹션 구분 — 만기·상령일·생일 그룹을 실제 월 기준으로 나눠 각각 표시 (익월이 당월에 밀려 안 보이던 문제 해결) */
+  const _hasMm=arr.length&&arr[0].mm!=null;
+  const _curM=new Date(Date.now()+9*3600*1000).getUTCMonth()+1;
+  let _sections;
+  if(_hasMm){
+    const _byM={},_ord=[];
+    arr.forEach(x=>{if(!_byM[x.mm]){_byM[x.mm]=[];_ord.push(x.mm);}_byM[x.mm].push(x);});
+    const _mLab=m=>{const d=(m-_curM+12)%12;return m+'월 ('+(d===0?'이번 달':(d===1?'다음 달':'다다음 달'))+')';};
+    _sections=_ord.map(m=>({label:_mLab(m),items:_byM[m]}));
+  }else{_sections=[{label:'',items:arr}];}
+  _aiChkMsgArr=[];
+  _sections.forEach(sec=>{
+    const _slice=sec.items.slice(0,cap);
+    if(sec.label)s+='<div style="font-size:11px;font-weight:800;color:#8B6914;margin:7px 2px 5px">'+sec.label+' · '+sec.items.length+'명</div>';
+    s+='<div class="aichk-grid">';
+    _slice.forEach(it=>{
+    const i=_aiChkMsgArr.length;_aiChkMsgArr.push(it);   /* ★ 💬문자 버튼 인덱스 = 표시 순서 */
     const urg=!!(grp.urg&&it.dd<=14);
     const dlab=(grp.k==='cold')?(it.days+'일'):(it.dd<0?((-it.dd)+'일 지남'):(it.dd===0?'오늘':'D-'+it.dd));
     const _msgBtn=it.mk?('<button type="button" data-aimsg="'+i+'" title="문자 보내기" style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:1px solid #E0C36B;background:#FFF8E7;color:#8B6914;border-radius:9px;padding:4px 7px;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer;line-height:1;margin-left:1px">💬<span style="font-size:9px;font-weight:800">문자</span></button>'):'';
@@ -6260,9 +6275,10 @@ function aiChkGrpRender(g){
       +'<span style="display:block;font-size:12px;color:#3A4457;margin-top:2px;line-height:1.45">'+it.why+'</span></span>'
       +'<span style="font-size:11px;font-weight:800;border-radius:8px;padding:2px 7px;white-space:nowrap;flex-shrink:0;background:'+(urg?'#C0392B':'#F0E6CE')+';color:'+(urg?'#fff':'#15294A')+'">'+dlab+'</span>'
       +_msgBtn+'</div>';
+    });
+    s+='</div>';
+    if(sec.items.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(sec.items.length-cap)+'명</div>';
   });
-  s+='</div>';
-  if(arr.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(arr.length-cap)+'명</div>';
   pn.innerHTML=s;
   Array.prototype.forEach.call(pn.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
   Array.prototype.forEach.call(pn.querySelectorAll('[data-aimsg]'),b=>{b.onclick=(e)=>{if(e&&e.stopPropagation)e.stopPropagation();aiChkMsg(parseInt(b.getAttribute('data-aimsg'),10),b);};});
@@ -6708,7 +6724,7 @@ async function aiBuildContext(q){
     if(c.phone)o.ph=c.phone;
     o.em=c.email?1:0;
     if((c.family||[]).length)o.fm=(c.family||[]).map(f=>((f.rel||'')+(f.name?':'+f.name:''))).slice(0,6);
-    if(cts.length)o.cp=cts.map(x=>String(x.product||'')).filter(Boolean).slice(0,8);
+    if(cts.length)o.cp=cts.map(x=>{const p=String(x.product||'');const e=String(x.expiry||x.expireDate||'').slice(0,10);return p?(p+(e?'~'+e:'')):'';}).filter(Boolean).slice(0,8);   /* ★ [2026-08-07] 만기일 포함('상품~YYYY-MM-DD') — 몇 월 만기 질문에도 전 고객 계산 가능 */
     const lm=aiLastMeetDate(c);if(lm)o.lm=lm;
     o.mt=aiHumanMeetings(c).length;
     if(c.memo)o.mo=1;
@@ -6764,11 +6780,11 @@ async function aiBuildContext(q){
     const up=[];
     (customers||[]).forEach(c=>{
       if(c.birthDate&&!c.birthUnknown){
-        const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=30)up.push({name:c.name,event:'생일',dday:bd});
-        const sg=aiDdayMmdd(aiSangMmdd(c.birthDate));if(sg!=null&&sg<=30)up.push({name:c.name,event:'상령일',dday:sg});
+        const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=60)up.push({name:c.name,event:'생일',dday:bd});   /* ★ [2026-08-07] 30→60일 — 익월 질문에 답할 수 있게 */
+        const sg=aiDdayMmdd(aiSangMmdd(c.birthDate));if(sg!=null&&sg<=60)up.push({name:c.name,event:'상령일',dday:sg});
       }
       let cts=(c.contracts||[]);const key=(c.name||'')+'|'+(c.birthDate||'');if(fcc&&fcc[key])cts=cts.concat(fcc[key].contracts);
-      cts.forEach(ct=>{const dd=aiDday(ct.expiry);if(dd!=null&&dd>=0&&dd<=30)up.push({name:c.name,event:'만기('+(ct.product||'')+')',dday:dd});});
+      cts.forEach(ct=>{const dd=aiDday(ct.expiry);if(dd!=null&&dd>=0&&dd<=60)up.push({name:c.name,event:'만기('+(ct.product||'')+')',dday:dd});});
       if(c.nextContact){const nc=aiDday(c.nextContact);if(nc!=null&&nc<=7)up.push({name:c.name,event:'연락 예정',dday:nc});}
     });
     up.sort((a,b)=>a.dday-b.dday);
@@ -6804,7 +6820,7 @@ async function aiBuildContext(q){
         });
       }
     });
-    ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,20),noMeetingOver90days:noMeet,
+    ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,40),noMeetingOver90days:noMeet,
                   needsByTag:needByTag};
   }
   return ctx;
