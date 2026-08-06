@@ -6217,7 +6217,7 @@ function aiChkRender(){
     w.innerHTML=h;
     if(total){
       try{const _sv=localStorage.getItem('ai_chk_tab')||'';aiChkTab=(_sv&&(g[_sv]||[]).length)?_sv:'';}catch(_e){aiChkTab='';}
-      aiChkTabsRender(g);aiChkGrpRender(g);
+      _aiChkMon=null;aiChkTabsRender(g);aiChkGrpRender(g);
     }
   }).catch(()=>{const w=document.getElementById('aiChkWrap');if(w)w.innerHTML='<div style="font-size:12.5px;color:#8A93A8;padding:12px 2px">고객 현황을 불러오지 못했어요. 고객 이름을 입력해 물어보셔도 돼요.</div>';});
 }
@@ -6240,29 +6240,34 @@ function aiChkTabsRender(g){
     const k=b.getAttribute('data-aitab');
     aiChkTab=(aiChkTab===k)?'':k;   /* 같은 탭 재클릭 = 접기 */
     try{localStorage.setItem('ai_chk_tab',aiChkTab);}catch(_e){}
-    aiChkTabsRender(g);aiChkGrpRender(g);
+    _aiChkMon=null;aiChkTabsRender(g);aiChkGrpRender(g);
   };});
 }
+let _aiChkMon=null;   /* ★ [2026-08-07 v2] 점검카드 월 선택 상태 (그룹 탭 바꾸면 초기화) */
 function aiChkGrpRender(g){
   const pn=document.getElementById('aiChkPanel');if(!pn)return;
   const grp=AI_CHK_GROUPS.filter(x=>x.k===aiChkTab)[0];
   if(!grp){pn.innerHTML='<div style="font-size:11.5px;color:#8A93A8;padding:9px 2px 2px;line-height:1.6">위 항목을 탭하면 해당 고객 명단이 펼쳐집니다.</div>';return;}
   const arr=g[grp.k]||[],cap=aiSideNarrow()?4:6;   /* ★ 모바일은 4개까지 — 화면 점유 최소화 */
   let s='<div style="font-size:11.5px;color:#8A93A8;margin:9px 2px 7px">탭하면 그 고객으로 바로 대화를 시작해요</div>';
-  /* ★ [2026-08-07] 당월/익월 섹션 구분 — 만기·상령일·생일 그룹을 실제 월 기준으로 나눠 각각 표시 (익월이 당월에 밀려 안 보이던 문제 해결) */
+  /* ★ [2026-08-07 v2] 월 선택 칩 — 만기·상령일·생일 그룹은 [이번 달][다음 달] 버튼으로 전환 표시 (섹션 나열 대비 화면 점유 최소화) */
   const _hasMm=arr.length&&arr[0].mm!=null;
   const _curM=new Date(Date.now()+9*3600*1000).getUTCMonth()+1;
-  let _sections;
+  let _view=arr;
   if(_hasMm){
     const _byM={},_ord=[];
     arr.forEach(x=>{if(!_byM[x.mm]){_byM[x.mm]=[];_ord.push(x.mm);}_byM[x.mm].push(x);});
-    const _mLab=m=>{const d=(m-_curM+12)%12;return m+'월 ('+(d===0?'이번 달':(d===1?'다음 달':'다다음 달'))+')';};
-    _sections=_ord.map(m=>({label:_mLab(m),items:_byM[m]}));
-  }else{_sections=[{label:'',items:arr}];}
+    if(_aiChkMon==null||!_byM[_aiChkMon])_aiChkMon=_ord[0];   /* 기본: 가장 임박한 달 */
+    const _mLab=m=>{const d=(m-_curM+12)%12;return (d===0?'이번 달':(d===1?'다음 달':'다다음 달'));};
+    s+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 2px 8px">'+_ord.map(m=>{
+      const on=(m===_aiChkMon);
+      return '<button type="button" data-aimon="'+m+'" style="border:1.5px solid '+(on?'#C9A96E':'#E4E0D6')+';background:'+(on?'#F5EBD6':'#fff')+';color:'+(on?'#8B6914':'#5A6478')+';border-radius:999px;padding:5px 12px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer">'+m+'월 '+_mLab(m)+' · '+_byM[m].length+'명</button>';
+    }).join('')+'</div>';
+    _view=_byM[_aiChkMon];
+  }
   _aiChkMsgArr=[];
-  _sections.forEach(sec=>{
-    const _slice=sec.items.slice(0,cap);
-    if(sec.label)s+='<div style="font-size:11px;font-weight:800;color:#8B6914;margin:7px 2px 5px">'+sec.label+' · '+sec.items.length+'명</div>';
+  {
+    const _slice=_view.slice(0,cap);
     s+='<div class="aichk-grid">';
     _slice.forEach(it=>{
     const i=_aiChkMsgArr.length;_aiChkMsgArr.push(it);   /* ★ 💬문자 버튼 인덱스 = 표시 순서 */
@@ -6277,9 +6282,10 @@ function aiChkGrpRender(g){
       +_msgBtn+'</div>';
     });
     s+='</div>';
-    if(sec.items.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(sec.items.length-cap)+'명</div>';
-  });
+    if(_view.length>cap)s+='<div style="text-align:center;font-size:11.5px;color:#8A93A8;padding:1px 0 6px">외 '+(_view.length-cap)+'명</div>';
+  }
   pn.innerHTML=s;
+  Array.prototype.forEach.call(pn.querySelectorAll('[data-aimon]'),b=>{b.onclick=(e)=>{if(e&&e.stopPropagation)e.stopPropagation();_aiChkMon=parseInt(b.getAttribute('data-aimon'),10);aiChkGrpRender(g);};});   /* ★ 월 칩 전환 */
   Array.prototype.forEach.call(pn.querySelectorAll('[data-aichk]'),b=>{b.onclick=()=>aiChkPick(b.getAttribute('data-aichk'));});
   Array.prototype.forEach.call(pn.querySelectorAll('[data-aimsg]'),b=>{b.onclick=(e)=>{if(e&&e.stopPropagation)e.stopPropagation();aiChkMsg(parseInt(b.getAttribute('data-aimsg'),10),b);};});
 }
@@ -6820,6 +6826,23 @@ async function aiBuildContext(q){
         });
       }
     });
+    /* ★ [2026-08-07] 12개월 월별 색인 사전 계산 — 상령일·생일·만기를 화면이 정확히 계산해 전달 (AI 암산 금지, '9월 상령일 없음' 오답 재발 방지) */
+    const _mi={sang:{},bday:{},exp:{},noBirth:[]};
+    (customers||[]).forEach(c=>{
+      const nm=String(c.name||'').trim();if(!nm)return;
+      const b=String(c.birthDate||'');
+      if(/^\d{4}-\d{2}-\d{2}/.test(b)){
+        const bm=parseInt(b.slice(5,7),10),bdy=b.slice(8,10);
+        (_mi.bday[bm]=_mi.bday[bm]||[]).push(nm+'('+bm+'/'+parseInt(bdy,10)+')');
+        const sm=((bm+5)%12)+1;
+        (_mi.sang[sm]=_mi.sang[sm]||[]).push(nm+'('+sm+'/'+parseInt(bdy,10)+')');
+      }else{_mi.noBirth.push(nm);}
+      (Array.isArray(c.contracts)?c.contracts:[]).forEach(ct=>{
+        const e=String(ct.expiry||ct.expireDate||'');
+        if(/^\d{4}-\d{2}-\d{2}/.test(e)){const em=parseInt(e.slice(5,7),10);(_mi.exp[em]=_mi.exp[em]||[]).push(nm+'('+String(ct.product||'').slice(0,12)+'~'+e.slice(0,10)+')');}
+      });
+    });
+    ctx.monthIndex=_mi;
     ctx.overview={customerCount:(customers||[]).length,upcomingEvents:up.slice(0,40),noMeetingOver90days:noMeet,
                   needsByTag:needByTag};
   }
