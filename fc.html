@@ -876,6 +876,9 @@ a{color:inherit;text-decoration:none}
             <div class="dtSub">고객 지도 · 가볼 곳</div>
           </button>
         </div>
+        <button type="button" class="insEntry" id="insEntryBtn" onclick="if(window.ccIsLocked&&window.ccIsLocked()){window.ccLockToast&&window.ccLockToast();return;}window.ccVaultGate(function(){window.insOpen();})" aria-label="내 보험 한 번에 정리하기">
+          <span class="ei"><i class="ti ti-shield-check"></i></span><span class="et"><b>내 보험, 한 번에 정리해보세요</b><small>내보험찾아줌 결과 붙여넣기 · 3분</small></span><span class="ec">›</span>
+        </button>
         <button type="button" class="dcEntry" id="dcEntryBtn" aria-label="오늘의 선택 시작">
           <span class="ei">⚖️</span><span class="et"><b>오늘의 선택</b><small>10초 밸런스 게임 · 매일 새 질문</small></span><span class="ec">›</span>
         </button>
@@ -8827,6 +8830,126 @@ function ccaEdit(item){
     m.remove();ccaSave();
   };
 }
+/* ═══ 🛡️ 내 보험 정리 — 내보험찾아줌 붙여넣기 → My 자산관리(보험)로 저장 (2026-08-08) ═══
+   설계 원칙:
+   ① 증권번호 등 숫자열은 자동신뢰 금지 — 항상 사람이 확인/수정하는 미리보기 단계를 거친다
+   ② 만기일이 9999-12-31/공란이면 "해당없음"으로 자동 표시(수동 전환 가능)
+   ③ 신규 저장소를 만들지 않고 기존 My 자산관리(_ccaData, CCA_TYPES 'ins')에 그대로 병합한다
+   ④ 텍스트 붙여넣기만 우선 구현 — 스크린샷 업로드는 AI Vision Cloud Function이 필요해 별도 작업 범위 */
+let _insRows=[];
+function insOpen(){
+  (async()=>{
+    if(!_ccaData){try{_ccaData=(await ccSync.get('자산관리','자산'))||{items:[]};}catch(_e){_ccaData={items:[]};}}
+    _insRows=[];
+    insRenderGuide();
+  })();
+}
+window.insOpen=insOpen;
+function insShell(bodyHtml){
+  let m=document.getElementById('insM');if(m)m.remove();
+  m=document.createElement('div');m.id='insM';
+  m.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(0,0,0,.5)';
+  m.innerHTML='<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94vw,380px);max-height:88vh;overflow:auto;background:#F8F7F3;border-radius:18px 18px 14px 14px;padding:0">'
+    +'<div style="background:#15294A;padding:16px 18px 14px;border-radius:18px 18px 0 0"><div style="font-size:15px;font-weight:700;color:#fff">내 보험 한 번에 정리하기</div></div>'
+    +'<div style="padding:16px 16px 20px">'+bodyHtml+'</div>'
+    +'<button id="insClose" type="button" style="position:absolute;top:14px;right:14px;background:none;border:0;color:#fff;font-size:18px;cursor:pointer">✕</button></div>';
+  document.body.appendChild(m);
+  document.getElementById('insClose').onclick=()=>m.remove();
+  return m;
+}
+function insRenderGuide(){
+  const body=
+    '<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:12px">'
+    +'<div style="font-size:13.5px;font-weight:700;color:#141B2D;margin-bottom:8px">1. 내보험찾아줌에서 조회하기</div>'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">본인인증 후 내가 가입한 모든 보험을 무료로 확인할 수 있어요.</div>'
+    +'<a href="https://cont.insure.or.kr" target="_blank" rel="noopener" style="display:flex;align-items:center;justify-content:center;gap:6px;background:#fff;border:1px solid #15294A;border-radius:10px;padding:11px;font-size:12.5px;font-weight:700;color:#15294A;text-decoration:none">내보험찾아줌 열기<i class="ti ti-external-link" style="font-size:14px"></i></a>'
+    +'</div>'
+    +'<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:12px">'
+    +'<div style="font-size:13.5px;font-weight:700;color:#141B2D;margin-bottom:8px">2. 조회결과 표 전체를 복사해서 붙여넣기</div>'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">제목 줄부터 마지막 줄까지 표 전체를 드래그(모바일은 길게 눌러 선택)해서 복사한 뒤 아래에 붙여넣어 주세요.</div>'
+    +'<textarea id="insPasteBox" placeholder="복사한 표를 여기에 붙여넣으세요" style="width:100%;min-height:90px;border:1px dashed #C9A96E;border-radius:10px;padding:10px;font-size:11.5px;resize:vertical;background:#FBF9F4;box-sizing:border-box;font-family:inherit"></textarea>'
+    +'</div>'
+    +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:11px;color:#5A6484;line-height:1.65">붙여넣으면 자동으로 표로 정리돼요. 피보험자·월보험료·특약·비고는 아는 만큼 채우면 되고, 저장한 뒤 <b style="color:#141B2D">My 자산관리</b>에서 언제든 다시 열어 이어서 채울 수 있어요. 이 정보는 이 기기와 <b style="color:#141B2D">내 구글드라이브</b>에만 저장되고, 운영사 서버에는 남지 않습니다.</div>'
+    +'<button id="insParseBtn" type="button" style="width:100%;background:#15294A;border:0;border-radius:12px;padding:13px;font-size:13.5px;font-weight:700;color:#fff;cursor:pointer">표로 정리하기</button>';
+  insShell(body);
+  document.getElementById('insParseBtn').onclick=()=>{
+    const raw=(document.getElementById('insPasteBox').value||'').trim();
+    if(!raw){toast('붙여넣은 내용이 없어요','warn');return;}
+    _insRows=insParseText(raw);
+    if(!_insRows.length){toast('표 형식을 인식하지 못했어요 — 제목 줄부터 다시 복사해 보세요','warn');return;}
+    insRenderPreview();
+  };
+}
+/* 내보험찾아줌 표 헤더 순서: 보험회사·구분·상품명·증권번호·계약상태·계약관계·시작일·종료일·담당점포·전화번호
+   탭 구분을 우선 시도하고, 실패하면 공백 2칸 이상을 구분자로 폴백 — 형식이 어긋난 줄(부제목 등)은 건너뜀 */
+function insParseText(raw){
+  const lines=raw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const rows=[];
+  lines.forEach(line=>{
+    if(/보험회사|증권\(계좌\)|보험기간|^구분$/.test(line))return; // 헤더/부제목 줄 제외
+    let f=line.split('\t');
+    if(f.length<5)f=line.split(/ {2,}/);
+    if(f.length<5)return;
+    f=f.map(s=>s.trim());
+    const company=f[0],product=f[2]||f[1]||'',policyNo=(f.find(x=>/^\d{6,}$/.test(x.replace(/[-\s]/g,'')))||'').replace(/\s+/g,'');
+    const status=(f.find(x=>/유지|해지|만기|실효/.test(x))||'').trim();
+    const dates=f.filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x));
+    const expiryRaw=dates[1]||dates[0]||'';
+    if(!company||!policyNo)return; // 최소 조건 — 보험사·증권번호 없으면 데이터행 아님
+    rows.push({
+      company, product, policyNo, status: status||'유지(정상)',
+      expiry: (expiryRaw==='9999-12-31'||!expiryRaw)?null:expiryRaw
+    });
+  });
+  return rows;
+}
+function insRenderPreview(){
+  let head='<tr style="background:#15294A"><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left;position:sticky;left:0;background:#15294A">보험사</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left">상품명</th><th style="color:#C9A96E;font-weight:700;padding:7px 8px;text-align:left">증권번호</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left">만기일</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left">피보험자</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left">월보험료</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left;min-width:80px">특약</th><th style="color:#fff;font-weight:700;padding:7px 8px;text-align:left;min-width:80px">비고</th></tr>';
+  let body='';
+  _insRows.forEach((r,i)=>{
+    const bg=i%2?'#FBFAF7':'#fff';
+    const expiry=r.expiry?('<span style="color:#141B2D">'+esc(r.expiry)+'</span>'):'<span style="font-size:9.5px;background:#F1EFE8;color:#5F5E5A;padding:2px 6px;border-radius:99px">해당없음</span>';
+    body+='<tr style="background:'+bg+'">'
+      +'<td style="padding:6px 8px;color:#141B2D;position:sticky;left:0;background:'+bg+';border-bottom:1px solid #EEF0F4">'+esc(r.company)+'</td>'
+      +'<td style="padding:6px 8px;color:#141B2D;border-bottom:1px solid #EEF0F4">'+esc(r.product)+'</td>'
+      +'<td style="padding:6px 8px;background:#FFF8E7;color:#8a6a1f;border-bottom:1px solid #EEF0F4">'+esc(r.policyNo)+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid #EEF0F4">'+expiry+'</td>'
+      +'<td style="padding:5px 6px;border-bottom:1px solid #EEF0F4"><select data-f="insured" data-i="'+i+'" style="font-size:10px;padding:3px;border:1px solid #E5E9F0;border-radius:5px"><option>본인</option><option>배우자</option><option>자녀1</option><option>자녀2</option><option>기타</option></select></td>'
+      +'<td style="padding:5px 6px;border-bottom:1px solid #EEF0F4"><input data-f="premium" data-i="'+i+'" placeholder="입력" style="width:46px;font-size:10px;padding:3px;border:1px solid #E5E9F0;border-radius:5px"></td>'
+      +'<td style="padding:5px 6px;border-bottom:1px solid #EEF0F4;min-width:80px"><input data-f="rider" data-i="'+i+'" placeholder="입력" style="width:74px;font-size:10px;padding:3px;border:1px solid #E5E9F0;border-radius:5px"></td>'
+      +'<td style="padding:5px 6px;border-bottom:1px solid #EEF0F4;min-width:80px"><input data-f="note" data-i="'+i+'" placeholder="입력" style="width:74px;font-size:10px;padding:3px;border:1px solid #E5E9F0;border-radius:5px"></td>'
+      +'</tr>';
+  });
+  const bodyHtml='<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:10px;padding:9px 11px;margin-bottom:10px;font-size:10.5px;color:#5A6484;line-height:1.6"><b style="color:#141B2D">증권번호</b>는 원본과 한 번 대조해 주세요. 총 '+_insRows.length+'건 인식됨.</div>'
+    +'<div style="overflow-x:auto;margin-bottom:14px"><table style="border-collapse:collapse;font-size:10.5px;white-space:nowrap;width:100%"><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>'
+    +'<button id="insSaveBtn" type="button" style="width:100%;background:#15294A;border:0;border-radius:12px;padding:13px;font-size:13.5px;font-weight:700;color:#fff;cursor:pointer">저장하기 — My 자산관리에 반영</button>';
+  insShell(bodyHtml);
+  document.getElementById('insSaveBtn').onclick=insSaveToAssets;
+}
+async function insSaveToAssets(){
+  const m=document.getElementById('insM');if(!m)return;
+  m.querySelectorAll('[data-f]').forEach(el=>{
+    const i=Number(el.dataset.i),f=el.dataset.f,v=el.value;
+    if(!_insRows[i])return;
+    _insRows[i][f]=v;
+  });
+  if(!_ccaData)_ccaData={items:[]};
+  _insRows.forEach(r=>{
+    const pRaw=String(r.premium||'').trim();
+    let amt=0;
+    if(/만/.test(pRaw)){amt=Math.round((parseFloat(pRaw.replace(/[^0-9.]/g,''))||0)*10000);}   /* ★ 수정: "4.2만원" → 소수점 보존 후 계산(기존엔 소수점이 지워져 10배 오차 발생) */
+    else{amt=Number(pRaw.replace(/[^0-9]/g,''))||0;}
+    _ccaData.items.push({
+      id:'a'+Date.now()+Math.random().toString(36).slice(2,6),
+      type:'ins', name:r.product, org:r.company,
+      amt, rate:'', owner:r.insured||'본인',
+      detail:{sub:'기타', holder:'', who:r.insured||'본인', bene:'', payTerm:'', coverTerm:r.expiry||'', coverage:r.rider||'', surrender:'',
+        policyNo:r.policyNo, status:r.status, expiry:r.expiry, note:r.note||''}
+    });
+  });
+  m.remove();
+  await ccaSave();   /* ★ 수정: 자체 put/toast 대신 기존 My자산관리 저장함수 재사용(드라이브 백업 상태에 따른 정확한 토스트 문구까지 그대로 재사용) */
+}
 /* ── 📖 자산관리 이용가이드 (프리미엄 · 최초 1회 자동, 버튼 상시) ── */
 function ccaGuideSheet(){
   let m=document.getElementById('ccaGuideM');if(m)m.remove();
@@ -12321,6 +12444,12 @@ if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name
 .dcEntry .et b{display:block;font-size:13.5px;font-weight:700;color:#141B2D;letter-spacing:-.2px}
 .dcEntry .et small{display:block;font-size:11px;color:#8B93AE;margin-top:1px}
 .dcEntry .ec{margin-left:auto;color:#C2A365;font-size:16px;font-weight:700}
+/* ★ [2026-08-08] 내 보험 정리 배너 — .dcEntry와 같은 구조, 남색 톤으로 우선순위 구분 */
+.insEntry{display:flex;align-items:center;gap:11px;width:100%;margin-top:0;background:#15294A;border:1px solid #1c3357;border-radius:13px;padding:12px 14px;cursor:pointer;font-family:inherit;text-align:left;box-shadow:0 1px 2px rgba(16,24,40,.045);transition:transform .12s}
+.insEntry .ei{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:rgba(201,169,110,.18);color:#C9A96E;font-size:17px;flex-shrink:0}
+.insEntry .et b{display:block;font-size:13.5px;font-weight:700;color:#fff;letter-spacing:-.2px}
+.insEntry .et small{display:block;font-size:11px;color:#C9A96E;margin-top:1px}
+.insEntry .ec{margin-left:auto;color:#C9A96E;font-size:16px;font-weight:700}
 @media (min-width:480px){#dcSheet{border-radius:22px;bottom:24px;transform:translate(-50%,calc(100% + 40px))}#dcSheet.show{transform:translate(-50%,0)}#dcSheet::before{border-radius:22px 22px 0 0}}
 </style>
 <style>
