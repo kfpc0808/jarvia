@@ -2187,6 +2187,7 @@ async function init(){
       const cSnap=await getDoc(doc(db,'consultants',loginId));
       if(cSnap.exists())consultantData=cSnap.data();
     }catch(e){}
+    try{ccCardEntryCheck();}catch(_e){}   /* ★ [2026-08-08] ?card=1 소개카드 단독 화면 · ?consult=1 재무진단 폼 자동 오픈 */
     // 3. Auth 상태 확인 (FC 본인 여부 판단)
     onAuthStateChanged(auth,user=>{
       currentUser=user;
@@ -9088,6 +9089,7 @@ function ccConsultantProfile(){
     capability: cd.capability||'',
     stats: cd.stats||{},
     photo: consultantData?.photoUrl||consultantData?.photo||fcData?.photoUrl||'',
+    phone: consultantData?.phone||fcData?.phone||'',   /* ★ [2026-08-08] 카드 하단 문자(sms:) 버튼용 — contactFooter(2786행)와 동일 우선순위 */
     certifications: Array.isArray(cd.certifications)?cd.certifications:[],
     naverUrl: consultantData?.naverUrl||'',
     expertUrl: (btns[1]&&btns[1].url)||'',
@@ -9142,28 +9144,108 @@ function insRenderShare(){
 /* ★ [2026-08-08] 컨설턴트 소개카드 — 재사용 가능한 독립 빌더.
    호출부(insShowConsultantIntro)뿐 아니라 향후 client-daily.html 등 다른 고객 접점에서도
    같은 함수를 그대로 옮겨 쓸 수 있도록 순수 HTML 문자열만 반환한다 (DOM 삽입은 호출부 책임). */
+/* ★ [2026-08-08 개편] 확정 디자인: 상단 골드바·동심원 장식·FINANCIAL CONSULTANT 라벨·
+   우측 두 줄 링크(My/home · 전문/위원)·사진 좌측 가로형 헤더·통계 밴드·후기 섹션 삭제·
+   하단 네이비 스트립 4버튼(문자·재무상담·고객리포트·공유). 값 없는 섹션은 자동 숨김. */
 function ccBuildConsultantCard(){
   const P=ccConsultantProfile();
   const cName=P.name,cTitle=P.title,cCompany=P.company,cBio=P.bio,cCapability=P.capability,cStats=P.stats,cPhoto=P.photo;
-  const stat=(v,u,l)=>v?'<div style="flex:1;text-align:center"><div style="font-size:17px;font-weight:800;color:#fff">'+esc(v)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">'+u+'</span></div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">'+l+'</div></div>':'';
-  const ratingTxt=P.stats.rating?(P.stats.rating+'<span style="font-size:11px;color:#C9A96E;font-weight:500">/10★</span>'):'';
-  return '<div style="border-radius:16px;overflow:hidden;box-shadow:0 4px 14px rgba(21,41,74,.15)">'
-    +'<div style="background:linear-gradient(160deg,#0F1B33,#1A3358);padding:26px 20px 18px;text-align:center">'
-    +(cPhoto?'<img src="'+esc(cPhoto)+'" style="width:68px;height:68px;border-radius:50%;object-fit:cover;margin:0 auto 10px;display:block;border:2px solid rgba(201,169,110,.5)">':'<div style="width:68px;height:68px;border-radius:50%;background:rgba(201,169,110,.18);border:2px solid rgba(201,169,110,.5);color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;margin:0 auto 10px">'+esc((cName||'?').charAt(0))+'</div>')
-    +'<div style="font-size:17px;font-weight:800;color:#fff">'+esc(cName)+(cTitle?' <span style="font-size:13px;font-weight:500;color:#C9A96E">'+esc(cTitle)+'</span>':'')+'</div>'
-    +(cCompany?'<div style="font-size:11.5px;color:#8FA0C2;margin-top:3px">'+esc(cCompany)+'</div>':'')
-    +((cStats.years||cStats.clients||cStats.rating)?'<div style="display:flex;gap:2px;margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)">'+stat(cStats.years,'년','경력')+stat(cStats.clients?Number(cStats.clients).toLocaleString():'','명','고객 수')+(cStats.rating?'<div style="flex:1;text-align:center"><div style="font-size:17px;font-weight:800;color:#fff">'+ratingTxt+'</div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">만족도</div></div>':'')+'</div>':'')
-    +'</div>'
-    +(P.testimonial?'<div style="background:#F7F8FA;padding:14px 18px;border-bottom:1px solid #EEF0F4"><div style="font-size:10.5px;font-weight:800;color:#5F5E5A;margin-bottom:5px">✓ 실제 고객 후기</div><div style="font-size:12.5px;color:#33415C;line-height:1.6">"'+esc(P.testimonial.content||'')+'"</div><div style="font-size:10.5px;color:#8B93AE;margin-top:5px">— '+esc(P.testimonial.author||'고객')+(P.testimonial.authorMeta?' ('+esc(P.testimonial.authorMeta)+')':'')+'</div></div>':'')
-    +(P.certifications.length?'<div style="background:#fff;padding:14px 18px 4px;border-bottom:1px solid #EEF0F4"><div style="display:flex;flex-wrap:wrap;gap:6px">'+P.certifications.map(c=>'<span style="font-size:11px;font-weight:700;color:#8a6a1f;background:#FFF8E7;border:1px solid #E0C36B;padding:3px 10px;border-radius:99px">'+esc(c)+'</span>').join('')+'</div><div style="height:10px"></div></div>':'')
-    +(cBio?'<div style="background:#fff;padding:14px 18px;font-size:12.5px;color:#33415C;line-height:1.6;border-bottom:1px solid #EEF0F4">"'+esc(cBio)+'"</div>':'')
-    +(cCapability?'<div style="background:#fff;padding:16px 18px 18px"><div style="font-size:11px;font-weight:800;color:#8a6a1f;background:#FFF8E7;display:inline-block;padding:3px 9px;border-radius:99px;margin-bottom:8px">💪 컨설팅 역량</div><div style="font-size:12.5px;color:#33415C;line-height:1.7;white-space:pre-wrap">'+esc(cCapability)+'</div></div>':'')
-    +(P.naverUrl?'<a href="'+esc(P.naverUrl)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;border-top:1px solid #EEF0F4;text-decoration:none"><div style="width:36px;height:36px;background:#03C75A;display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="color:#fff;font-size:16px;font-weight:900">N</span></div><div style="flex:1;padding:0 12px;font-size:11.5px;font-weight:500;color:#141B2D;background:#fff">네이버 경영컨설턴트 프로필 보기</div></a>':'')
-    +((P.homeUrl||P.expertUrl)?'<div style="display:flex;gap:8px;background:#F7F8FA;padding:12px 14px">'
-      +(P.homeUrl?'<a href="'+esc(P.homeUrl)+'" target="_blank" rel="noopener" style="flex:1;text-align:center;background:#15294A;color:#C9A96E;border-radius:9px;padding:10px;font-size:11.5px;font-weight:700;text-decoration:none">🏠 내 홈페이지</a>':'')
-      +(P.expertUrl?'<a href="'+esc(P.expertUrl)+'" target="_blank" rel="noopener" style="flex:1;text-align:center;background:#fff;border:1px solid #D8DEE9;color:#33415C;border-radius:9px;padding:10px;font-size:11.5px;font-weight:700;text-decoration:none">전문위원 홈페이지</a>':'')
-      +'</div>':'')
+  const phoneClean=(P.phone||'').replace(/\D/g,'');
+  const cardShareUrl=P.homeUrl?(P.homeUrl+'?card=1'):'';
+  const dailyUrl='/client-daily.html?fc='+encodeURIComponent(loginId);
+  const stat=(v,u,l)=>v?'<div style="flex:1;text-align:center"><div style="font-size:16px;font-weight:800;color:#fff">'+esc(v)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">'+u+'</span></div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">'+l+'</div></div>':'';
+  const statDiv='<div style="width:1px;background:rgba(255,255,255,.09)"></div>';
+  const ratingTxt=cStats.rating?(esc(cStats.rating)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">/10★</span>'):'';
+  const hasStats=!!(cStats.years||cStats.clients||cStats.rating);
+  /* 우측 상단 두 줄 링크 — 각 줄 nowrap 고정 (글자 단위 세로 깨짐 방지) */
+  const linkSt='color:rgba(216,222,233,.85);padding:1px 2px 3px;font-size:10.5px;font-weight:600;text-align:center;line-height:1.4;text-decoration:none;cursor:pointer';
+  const line=t=>'<span style="white-space:nowrap;display:block">'+t+'</span>';
+  const topLinks='<div style="display:flex;gap:14px;align-items:flex-start;flex-shrink:0">'
+    +'<a onclick="ccCardHomeGo();return false" href="'+esc(P.homeUrl)+'" style="'+linkSt+';border-bottom:1px solid rgba(201,169,110,.6)">'+line('🏠 My')+line('home')+'</a>'
+    +(P.expertUrl?'<a href="'+esc(P.expertUrl)+'" target="_blank" rel="noopener" style="'+linkSt+';border-bottom:1px solid rgba(255,255,255,.3)">'+line('전문')+line('위원')+'</a>':'')
     +'</div>';
+  /* 하단 스트립 4버튼 — 아이콘 위·라벨 아래·세로 구분선 (연락처 없으면 문자 셀 숨김) */
+  const cellSt='flex:1;text-align:center;padding:12px 0 11px;text-decoration:none;cursor:pointer;display:block';
+  const cellDiv='border-right:1px solid rgba(255,255,255,.12)';
+  const cell=(ic,lb,extra)=>'<span style="font-size:18px;line-height:1;display:block;color:#fff">'+ic+'</span><span style="font-size:10.5px;color:#D8DEE9;font-weight:600;display:block;margin-top:4px">'+lb+'</span>';
+  const strip='<div style="display:flex;background:#15294A">'
+    +(phoneClean?'<a href="sms:'+phoneClean+'" style="'+cellSt+';'+cellDiv+'">'+cell('💬','문자')+'</a>':'')
+    +'<a onclick="ccCardConsultGo();return false" href="'+esc(P.homeUrl)+'?consult=1" style="'+cellSt+';'+cellDiv+'">'+cell('🤝','재무상담')+'</a>'
+    +'<a href="'+dailyUrl+'" target="_blank" rel="noopener" style="'+cellSt+';'+cellDiv+'">'+cell('📋','고객리포트')+'</a>'
+    +'<a onclick="ccCardShareLink();return false" href="'+esc(cardShareUrl)+'" style="'+cellSt+'">'+cell('🔗','공유')+'</a>'
+    +'</div>';
+  return '<div style="border-radius:16px;overflow:hidden;box-shadow:0 4px 14px rgba(21,41,74,.15)">'
+    +'<div style="background:linear-gradient(160deg,#0F1B33,#1A3358);position:relative;overflow:hidden">'
+    +'<svg viewBox="0 0 340 40" style="position:absolute;top:0;right:0;width:100%;opacity:.5;pointer-events:none" aria-hidden="true"><circle cx="330" cy="-30" r="90" fill="none" stroke="#C9A96E" stroke-width=".6" opacity=".5"/><circle cx="330" cy="-30" r="65" fill="none" stroke="#C9A96E" stroke-width=".6" opacity=".35"/><circle cx="330" cy="-30" r="115" fill="none" stroke="#C9A96E" stroke-width=".6" opacity=".25"/></svg>'
+    +'<div style="height:3px;background:#C9A96E"></div>'
+    +'<div style="padding:17px 18px 0;position:relative">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+    +'<div style="font-size:10px;letter-spacing:3px;color:rgba(201,169,110,.75);font-weight:600;padding-top:3px;line-height:1.5">FINANCIAL<br>CONSULTANT</div>'
+    +topLinks
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:15px;margin-top:12px'+(hasStats?'':';padding-bottom:18px')+'">'
+    +(cPhoto?'<img src="'+esc(cPhoto)+'" style="width:62px;height:62px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1.5px solid rgba(201,169,110,.55)">':'<div style="width:62px;height:62px;border-radius:50%;background:rgba(201,169,110,.14);border:1.5px solid rgba(201,169,110,.55);color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;flex-shrink:0">'+esc((cName||'?').charAt(0))+'</div>')
+    +'<div style="flex:1;min-width:0"><div style="font-size:21px;font-weight:800;color:#fff;letter-spacing:.5px">'+esc(cName)+'</div>'
+    +'<div style="font-size:12px;color:#C9A96E;margin-top:4px">'+(cTitle?esc(cTitle):'')+(cTitle&&cCompany?'<span style="color:rgba(255,255,255,.28);padding:0 4px">|</span>':'')+(cCompany?'<span style="color:#8FA0C2">'+esc(cCompany)+'</span>':'')+'</div></div>'
+    +'</div>'
+    +'</div>'
+    +(hasStats?'<div style="display:flex;gap:2px;margin-top:15px;padding:11px 18px 13px;border-top:1px solid rgba(201,169,110,.22);background:rgba(0,0,0,.18)">'
+      +stat(cStats.years,'년','경력')
+      +((cStats.years&&(cStats.clients||cStats.rating))?statDiv:'')
+      +stat(cStats.clients?Number(cStats.clients).toLocaleString():'','명','고객 수')
+      +((cStats.clients&&cStats.rating)?statDiv:'')
+      +(cStats.rating?'<div style="flex:1;text-align:center"><div style="font-size:16px;font-weight:800;color:#fff">'+ratingTxt+'</div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">만족도</div></div>':'')
+      +'</div>':'')
+    +'</div>'
+    +(P.certifications.length?'<div style="background:#fff;padding:11px 15px;border-bottom:1px solid #EEF0F4"><div style="display:flex;flex-wrap:wrap;gap:6px">'+P.certifications.map(c=>'<span style="font-size:10.5px;font-weight:700;color:#8a6a1f;background:#FFF8E7;border:1px solid #E0C36B;padding:3px 10px;border-radius:99px">'+esc(c)+'</span>').join('')+'</div></div>':'')
+    +(cBio?'<div style="background:#fff;padding:12px 15px;font-size:12px;color:#33415C;line-height:1.65;border-bottom:1px solid #EEF0F4">"'+esc(cBio)+'"</div>':'')
+    +(cCapability?'<div style="background:#fff;padding:12px 15px 14px;border-bottom:1px solid #EEF0F4"><div style="font-size:10.5px;font-weight:800;color:#8a6a1f;background:#FFF8E7;display:inline-block;padding:3px 9px;border-radius:99px;margin-bottom:7px">💪 컨설팅 역량</div><div style="font-size:12px;color:#33415C;line-height:1.7;white-space:pre-wrap">'+esc(cCapability)+'</div></div>':'')
+    +(P.naverUrl?'<a href="'+esc(P.naverUrl)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;text-decoration:none;background:#fff"><div style="width:32px;height:32px;background:#03C75A;display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="color:#fff;font-size:14px;font-weight:900">N</span></div><div style="flex:1;padding:0 12px;font-size:11.5px;font-weight:500;color:#141B2D">네이버 경영컨설턴트 프로필 보기</div></a>':'')
+    +strip
+    +'</div>';
+}
+/* ★ [2026-08-08] 카드 동작 — 모듈 스크립트 스코프이므로 inline onclick용 window 등록 필수 */
+window.ccCardHomeGo=function(){
+  const ov=document.getElementById('ccCardOv');
+  if(ov){ov.remove();document.body.style.overflow='';return;}   /* 카드 단독 화면이면 닫기만 → 뒤의 채널 홈 노출 */
+  const u=ccConsultantProfile().homeUrl;if(u)window.open(u,'_blank','noopener');
+};
+window.ccCardConsultGo=function(){
+  const ov=document.getElementById('ccCardOv');if(ov){ov.remove();document.body.style.overflow='';}
+  const m=document.getElementById('insM');if(m)m.remove();
+  const fa=document.getElementById('formArea');
+  if(!fa){const u=ccConsultantProfile().homeUrl;if(u)location.href=u+'?consult=1';return;}   /* 고객 홈 등 폼 없는 화면 → 채널로 이동해 폼 자동 오픈 */
+  setTimeout(()=>{try{
+    const b=document.getElementById('scrollToFormBtn');
+    if(fa.style.display==='none'&&b)b.click();else fa.style.display='block';
+    setTimeout(()=>fa.scrollIntoView({behavior:'smooth',block:'start'}),250);
+  }catch(_e){}},150);
+};
+window.ccCardShareLink=function(){
+  const u=ccConsultantProfile().homeUrl;if(!u){toast('공유 링크를 만들 수 없습니다','warning');return;}
+  const link=u+'?card=1';
+  /* 카톡 SDK 카드 대신 복사 방식 — kakaoShareBtn(2797행)과 동일: SDK 공유 카드의 자비아 푸터 노출 방지(B2B2C) */
+  if(navigator.clipboard){navigator.clipboard.writeText(link).then(()=>toast('소개카드 링크가 복사되었습니다. 카톡·문자에 붙여넣어 전달하세요.','info')).catch(()=>toast(link,'info'));}
+  else{const ta=document.createElement('textarea');ta.value=link;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('소개카드 링크가 복사되었습니다. 카톡·문자에 붙여넣어 전달하세요.','info');}
+};
+/* ★ [2026-08-08] 진입 파라미터 처리 — ?card=1: 소개카드 단독 화면 · ?consult=1: 재무진단 폼 자동 오픈.
+   고객 채널(_ccSlug)에서는 미적용. 데이터 로딩 완료 직후 1회 호출. */
+function ccCardEntryCheck(){
+  try{
+    if(window._ccSlug)return;
+    if(params.get('consult')==='1'){
+      setTimeout(()=>{try{
+        const fa=document.getElementById('formArea'),b=document.getElementById('scrollToFormBtn');
+        if(fa){if(fa.style.display==='none'&&b)b.click();setTimeout(()=>fa.scrollIntoView({behavior:'smooth',block:'start'}),350);}
+      }catch(_e){}},900);
+    }
+    if(params.get('card')!=='1')return;
+    const ov=document.createElement('div');ov.id='ccCardOv';
+    ov.style.cssText='position:fixed;inset:0;z-index:99990;background:#EFEDE6;overflow-y:auto;-webkit-overflow-scrolling:touch';
+    ov.innerHTML='<div style="max-width:400px;margin:0 auto;padding:22px 14px 40px">'+ccBuildConsultantCard()+'</div>';
+    document.body.appendChild(ov);
+    document.body.style.overflow='hidden';
+  }catch(_e){}
 }
 function insShowConsultantIntro(){
   const body=ccBuildConsultantCard()
