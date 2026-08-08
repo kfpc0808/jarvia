@@ -3189,6 +3189,7 @@ const phoneClean=(r.phone||'').replace(/\D/g,'');
         </div>
       </div>
       ${lcReqSection(r)}
+      ${insReqSection(r)}
       ${qzReqSection(r)}
       ${r.quizLogId?'<div id="fcrAiBox" style="margin-bottom:14px"></div>':''}
       ${r.message?`<div style="margin-bottom:14px;background:#F7F8FA;border-left:3px solid var(--gold);padding:10px 12px;border-radius:0 7px 7px 0">
@@ -3209,6 +3210,7 @@ const phoneClean=(r.phone||'').replace(/\D/g,'');
   $('requestDetailModal').classList.add('active');
   if(r.quizLogId){getDoc(doc(db,'quiz_logs',r.quizLogId)).then(snap=>{const box=$('fcrAiBox');if(!box)return;if(snap.exists()){const dl=snap.data();box.innerHTML=fcrAiHtml(dl.ai1,dl.ai2);}else{box.remove();}}).catch(()=>{const box=$('fcrAiBox');if(box)box.remove();});}
   lcWireAdminDetail(r,reqId);
+  insWireAdminDetail(r,reqId);
   // 상태 변경
   $('requestDetailBox').querySelectorAll('.statusBtn').forEach(b=>{
     b.addEventListener('click',async()=>{
@@ -3406,6 +3408,61 @@ function lcFileStatusLabel(v){return({sending:'전송 중',sent_unconfirmed:'전
 async function lcDownloadStoredFile(f,btn){if(!f?.storagePath)return;btn.disabled=true;btn.textContent='다운로드 중...';try{const blob=await getBlob(storageRef(storage,f.storagePath));const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=f.fileName||'file';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);await deleteObject(storageRef(storage,f.storagePath));if(f.offlineDocId)await deleteDoc(doc(db,'p2p_offline_files',f.offlineDocId));await updateDoc(doc(db,'life_request_files',f.id),{transferStatus:'received',receivedAt:serverTimestamp(),updatedAt:serverTimestamp()});toast('다운로드 완료 · 서버 임시파일이 삭제되었습니다','success');await lcLoadFileMeta(f.requestId);}catch(e){console.error('life stored file download',e);btn.disabled=false;btn.textContent='다운로드';toast('다운로드 실패: '+e.message,'error');}}
 async function lcLoadFileMeta(reqId){const box=$('lcFileMetaBox');if(!box)return;try{const snap=await getDocs(query(collection(db,'life_request_files'),where('requestId','==',reqId),limit(20)));const arr=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));if(!arr.length){box.innerHTML='<div style="font-size:10px;color:var(--text-mute)">아직 전송된 자료가 없습니다.</div>';return;}box.innerHTML='<div style="font-size:10px;font-weight:800;color:var(--navy);margin-bottom:4px">전송자료 '+arr.length+'건</div>'+arr.map(f=>`<div style="display:flex;gap:6px;align-items:flex-start;padding:5px 0;font-size:10px;border-bottom:.5px dashed #E5E9F0"><span>${f.transferMode==='p2p'?'🔒':'📦'}</span><span style="flex:1;min-width:0"><b>${esc(f.fileName||'파일')}</b><br><span style="color:var(--text-mute)">${f.transferMode==='p2p'?'기기 직접전송':'7일 임시전송'} · ${esc(lcFileStatusLabel(f.transferStatus))}</span></span>${f.transferMode==='storage'&&f.transferStatus==='pending'&&f.storagePath?`<button type="button" class="lcStoredDownload" data-file-id="${esc(f.id)}" style="flex-shrink:0;padding:6px 8px;border:1px solid var(--navy);border-radius:6px;background:#fff;color:var(--navy);font-size:9px;font-weight:800">다운로드</button>`:''}</div>`).join('');box.querySelectorAll('.lcStoredDownload').forEach(btn=>{const f=arr.find(x=>x.id===btn.dataset.fileId);if(f)btn.onclick=()=>lcDownloadStoredFile(f,btn);});}catch(e){console.error('life file list',e);box.innerHTML='<div style="font-size:10px;color:var(--text-mute)">자료목록을 불러오지 못했습니다.</div>';}}
 function lcWireAdminDetail(r,reqId){if(r.source!=='life_change')return;lcLoadFileMeta(reqId);const prepBox=$('lcPrepAdmin');if(prepBox)prepBox.querySelectorAll('[data-prep]').forEach(row=>row.onclick=async()=>{const idx=Number(row.dataset.prep);let done=Array.isArray(r.consultantPrepDone)?[...r.consultantPrepDone]:[];if(done.includes(idx))done=done.filter(x=>x!==idx);else done.push(idx);done.sort((a,b)=>a-b);try{await updateDoc(doc(db,'fc_consultation_requests',reqId),{consultantPrepDone:done,updatedAt:serverTimestamp()});r.consultantPrepDone=done;row.classList.toggle('done');toast('준비 체크가 저장되었습니다','success');}catch(e){toast('저장 실패: '+e.message,'error');}});const sel=$('lcProgressSelect');if(sel)sel.onchange=async()=>{const prev=r.lifeProgress||'received';sel.disabled=true;try{const result=await setLifeRequestProgressFn({requestId:reqId,progress:sel.value});r.lifeProgress=sel.value;r.status=result?.data?.status||r.status;const iso=result?.data?.retentionDeleteAt;if(iso){r.retentionDeleteAt={toDate:()=>new Date(iso)};if(!r.completedAt)r.completedAt={toDate:()=>new Date(result?.data?.completedAt||Date.now())};}if(sel.value==='delivered')toast('결과 전달 완료 · 1년 후 자동파기 일정이 저장되었습니다','success');else toast('진행단계가 저장되었습니다','success');}catch(e){sel.value=prev;toast('저장 실패: '+e.message,'error');}finally{sel.disabled=false;}};const delBtn=$('lcDeleteRequestBtn');if(delBtn)delBtn.onclick=async()=>{if(!confirm('고객의 명시적인 동의 철회 또는 삭제 요청을 확인하셨습니까?\n\n삭제하면 요청정보, 전송기록, 남아 있는 임시파일이 함께 삭제되며 복구할 수 없습니다.'))return;delBtn.disabled=true;delBtn.textContent='삭제 처리 중...';try{await deleteLifeChangeRequestFn({requestId:reqId});$('requestDetailModal').classList.remove('active');toast('고객 요청정보가 삭제되었습니다','success');await refreshRequestList('all');}catch(e){delBtn.disabled=false;delBtn.textContent='고객 요청에 따라 정보 삭제';toast('삭제 실패: '+e.message,'error');}};}
+/* ═══ 🛡️ 내 보험 정리 — 상담요청 상세 섹션 (2026-08-08) ═══
+   고객이 "공유하기"로 보낸 보험 포트폴리오를 컨설턴트가 여기서 확인하고,
+   버튼 클릭 한 번으로 "내 고객" 로컬 레코드에 병합한다(별도 수락/동의 절차 없음 — 열어보는 행위 자체가 확인). */
+function insReqSection(r){
+  if(r.source!=='insurance_portfolio')return '';
+  const rows=(r.policies||[]);
+  const trs=rows.map(p=>`<tr><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.company||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.product||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4;color:#8a6a1f">${esc(p.policyNo||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.expiry||'해당없음')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.insured||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.premium||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.rider||'')}</td><td style="padding:5px 6px;border-bottom:1px solid #EEF0F4">${esc(p.note||'')}</td></tr>`).join('');
+  return `<div style="margin-bottom:14px;background:linear-gradient(135deg,#F3F8FF,#FFFBF1);border:1px solid #BFD3EA;border-radius:10px;padding:12px 13px">
+    <div style="font-size:10px;color:var(--gold-dark);font-weight:850;letter-spacing:.5px">INSURANCE PORTFOLIO REQUEST</div>
+    <div style="font-size:15px;font-weight:900;color:var(--navy);margin:3px 0">내 보험 정리 공유 · 총 ${rows.length}건</div>
+  </div>
+  <div class="lcAdminBlock">
+    <div class="lcAdminH">공유받은 보험 목록</div>
+    <div style="overflow-x:auto"><table style="width:100%;min-width:640px;font-size:10.5px;border-collapse:collapse">
+      <tr style="background:#F7F8FA"><th style="padding:5px 6px;text-align:left">보험사</th><th style="padding:5px 6px;text-align:left">상품명</th><th style="padding:5px 6px;text-align:left">증권번호</th><th style="padding:5px 6px;text-align:left">만기일</th><th style="padding:5px 6px;text-align:left">피보험자</th><th style="padding:5px 6px;text-align:left">월보험료</th><th style="padding:5px 6px;text-align:left">특약사항</th><th style="padding:5px 6px;text-align:left">비고</th></tr>
+      ${trs}
+    </table></div>
+    <button type="button" id="insMergeBtn" style="width:100%;margin-top:10px;padding:10px;background:var(--navy);color:#fff;border:0;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer">📋 내 고객 정보로 저장하고 상세 보기</button>
+    <div style="font-size:9.5px;color:var(--text-mute);margin-top:6px">이름·연락처로 기존 고객을 찾아 병합하고, 없으면 새 고객으로 등록합니다.</div>
+  </div>`;
+}
+function insWireAdminDetail(r,reqId){
+  if(r.source!=='insurance_portfolio')return;
+  const btn=$('insMergeBtn');if(!btn)return;
+  btn.onclick=()=>insMergeToCustomer(r);
+}
+async function insMergeToCustomer(r){
+  const btn=$('insMergeBtn');if(btn){btn.disabled=true;btn.textContent='저장 중...';}
+  try{
+    await new Promise(res=>{try{window.__mpcEnsureCustomers(function(){res();});}catch(_e){res();}});
+    const phoneDigits=(r.phone||'').replace(/\D/g,'');
+    let target=null;
+    if(phoneDigits)target=customers.find(c=>c.phone&&c.phone.replace(/\D/g,'')===phoneDigits);
+    if(!target&&r.name){const hits=customers.filter(c=>(c.name||'')===r.name);if(hits.length===1)target=hits[0];}
+    const policies=(r.policies||[]).map(p=>({...p}));
+    if(target){
+      target.insurancePortfolio=policies;
+      target.createdAt=Date.now();
+      await custPut(target);
+    }else{
+      target={id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),name:r.name||'',phone:r.phone||'',birthUnknown:true,insurancePortfolio:policies,createdAt:Date.now()};
+      customers.push(target);
+      await custPut(target);
+    }
+    mpcGdPush();
+    toast('내 고객 정보로 저장했어요','info');
+    $('requestDetailModal').classList.remove('active');
+    myPlacesOpen();
+    setTimeout(()=>{try{forceCustTab();}catch(_e){}setTimeout(()=>{try{openCustForm(target);}catch(_e){}},150);},150);
+  }catch(e){
+    console.error('insMergeToCustomer',e);
+    toast('저장에 실패했어요: '+e.message,'error');
+    if(btn){btn.disabled=false;btn.textContent='📋 내 고객 정보로 저장하고 상세 보기';}
+  }
+}
 
 // ── 생활변화 자료: FC 본인 채널에서 P2P 직접 수신 ──
 const LC_OWNER_P2P_ICE=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
@@ -8881,7 +8938,7 @@ function insRenderGuide(){
     +'<div id="insPhotoPane" style="display:none">'
     +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">보험사 카드가 잘리지 않게 화면을 캡처해 주세요. 12건이면 보통 2~3장이면 충분해요.</div>'
     +'<label for="insPhotoInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1px dashed #C9A96E;border-radius:10px;padding:20px;background:#FBF9F4;cursor:pointer">'
-    +'<i class="ti ti-camera-plus" style="font-size:22px;color:#8a6a1f"></i><span style="font-size:12px;color:#8a6a1f;font-weight:700">사진 선택 (최대 5장)</span></label>'
+    +'<i class="ti ti-camera-plus" style="font-size:22px;color:#8a6a1f"></i><span style="font-size:12px;color:#8a6a1f;font-weight:700">사진 선택 (최대 20장)</span></label>'
     +'<input type="file" id="insPhotoInput" accept="image/*" multiple style="display:none">'
     +'<div id="insPhotoList" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"></div>'
     +'</div>'
@@ -8903,7 +8960,7 @@ function insRenderGuide(){
   let _insPhotoFiles=[];
   const photoInput=document.getElementById('insPhotoInput'),photoList=document.getElementById('insPhotoList');
   photoInput.onchange=()=>{
-    const files=Array.from(photoInput.files||[]).slice(0,5);
+    const files=Array.from(photoInput.files||[]).slice(0,20);
     _insPhotoFiles=files;
     photoList.innerHTML=files.map((f,i)=>'<div style="width:52px;height:52px;border-radius:8px;overflow:hidden;background:#eee;position:relative"><img src="'+URL.createObjectURL(f)+'" style="width:100%;height:100%;object-fit:cover"></div>').join('');
   };
@@ -8995,7 +9052,10 @@ async function insSaveToAssets(){
     _insRows[i][f]=v;
   });
   if(!_ccaData)_ccaData={items:[]};
+  const existingNos=new Set(_ccaData.items.filter(x=>x.type==='ins'&&x.detail&&x.detail.policyNo).map(x=>x.detail.policyNo));
+  let skipped=0;
   _insRows.forEach(r=>{
+    if(r.policyNo&&existingNos.has(r.policyNo)){skipped++;return;}   /* ★ [2026-08-08] 증권번호 중복 저장 방지 — 여러 번 나눠 올릴 때 같은 카드가 겹쳐도 안전 */
     const pRaw=String(r.premium||'').trim();
     let amt=0;
     if(/만/.test(pRaw)){amt=Math.round((parseFloat(pRaw.replace(/[^0-9.]/g,''))||0)*10000);}   /* ★ 수정: "4.2만원" → 소수점 보존 후 계산(기존엔 소수점이 지워져 10배 오차 발생) */
@@ -9007,9 +9067,11 @@ async function insSaveToAssets(){
       detail:{sub:'기타', holder:'', who:r.insured||'본인', bene:'', payTerm:'', coverTerm:r.expiry||'', coverage:r.rider||'', surrender:'',
         policyNo:r.policyNo, status:r.status, expiry:r.expiry, note:r.note||''}
     });
+    if(r.policyNo)existingNos.add(r.policyNo);
   });
   m.remove();
   await ccaSave();
+  if(skipped)toast('이미 저장돼 있던 '+skipped+'건은 건너뛰었어요','info');
   insRenderShare();   /* ★ [2026-08-08] 저장만 하고 끝나면 컨설턴트에게 신호가 안 감 — 저장 직후 공유 여부를 바로 물어본다 */
 }
 const INS_CONSENT_VERSION='insurance-portfolio-2026-08-v1';
