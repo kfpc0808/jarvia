@@ -2508,6 +2508,7 @@ async function loadFcTestimonials(){
   try{
     const snap=await getDocs(query(collection(db,'fc_testimonials'),where('fcAuthUid','==',fcUid),orderBy('order')));
     const items=snap.docs.map(d=>({id:d.id,...d.data()}));
+    window._ccTestimonialsCache=items;   /* ★ [2026-08-08] 소개카드(ccBuildConsultantCard)가 재요청 없이 재사용 */
     if(!items.length)return;
     const renderItem=t=>`<div class="testimonial">
       <div class="content">"${esc(t.content||'')}"</div>
@@ -8837,10 +8838,12 @@ function ccaEdit(item){
    ③ 신규 저장소를 만들지 않고 기존 My 자산관리(_ccaData, CCA_TYPES 'ins')에 그대로 병합한다
    ④ 텍스트 붙여넣기만 우선 구현 — 스크린샷 업로드는 AI Vision Cloud Function이 필요해 별도 작업 범위 */
 let _insRows=[];
+let _insDraft={name:'',phone:''};   /* ★ 컨설턴트 소개 보기 후 돌아왔을 때 입력값 보존용 */
 function insOpen(){
   (async()=>{
     if(!_ccaData){try{_ccaData=(await ccSync.get('자산관리','자산'))||{items:[]};}catch(_e){_ccaData={items:[]};}}
     _insRows=[];
+    _insDraft={name:'',phone:''};
     insRenderGuide();
   })();
 }
@@ -8857,6 +8860,7 @@ function insShell(bodyHtml){
   document.getElementById('insClose').onclick=()=>m.remove();
   return m;
 }
+let _insInputMode='text';
 function insRenderGuide(){
   const body=
     '<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:12px">'
@@ -8865,19 +8869,76 @@ function insRenderGuide(){
     +'<a href="https://cont.insure.or.kr" target="_blank" rel="noopener" style="display:flex;align-items:center;justify-content:center;gap:6px;background:#fff;border:1px solid #15294A;border-radius:10px;padding:11px;font-size:12.5px;font-weight:700;color:#15294A;text-decoration:none">내보험찾아줌 열기<i class="ti ti-external-link" style="font-size:14px"></i></a>'
     +'</div>'
     +'<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:12px">'
-    +'<div style="font-size:13.5px;font-weight:700;color:#141B2D;margin-bottom:8px">2. 조회결과 표 전체를 복사해서 붙여넣기</div>'
+    +'<div style="font-size:13.5px;font-weight:700;color:#141B2D;margin-bottom:10px">2. 조회결과 가져오기</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:12px;background:#F1EFE8;border-radius:10px;padding:3px">'
+    +'<button type="button" id="insModeTextBtn" style="flex:1;border:0;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;background:#15294A;color:#fff">📋 텍스트 붙여넣기<br><span style="font-weight:500;font-size:10px">PC 권장</span></button>'
+    +'<button type="button" id="insModePhotoBtn" style="flex:1;border:0;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:#5A6484">📷 사진으로 올리기<br><span style="font-weight:500;font-size:10px">모바일 권장</span></button>'
+    +'</div>'
+    +'<div id="insTextPane">'
     +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">제목 줄부터 마지막 줄까지 표 전체를 드래그(모바일은 길게 눌러 선택)해서 복사한 뒤 아래에 붙여넣어 주세요.</div>'
     +'<textarea id="insPasteBox" placeholder="복사한 표를 여기에 붙여넣으세요" style="width:100%;min-height:90px;border:1px dashed #C9A96E;border-radius:10px;padding:10px;font-size:11.5px;resize:vertical;background:#FBF9F4;box-sizing:border-box;font-family:inherit"></textarea>'
     +'</div>'
-    +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:11px;color:#5A6484;line-height:1.65">붙여넣으면 자동으로 표로 정리돼요. 피보험자·월보험료·특약·비고는 아는 만큼 채우면 되고, 저장한 뒤 <b style="color:#141B2D">My 자산관리</b>에서 언제든 다시 열어 이어서 채울 수 있어요. 이 정보는 이 기기와 <b style="color:#141B2D">내 구글드라이브</b>에만 저장되고, 운영사 서버에는 남지 않습니다.</div>'
+    +'<div id="insPhotoPane" style="display:none">'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">보험사 카드가 잘리지 않게 화면을 캡처해 주세요. 12건이면 보통 2~3장이면 충분해요.</div>'
+    +'<label for="insPhotoInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1px dashed #C9A96E;border-radius:10px;padding:20px;background:#FBF9F4;cursor:pointer">'
+    +'<i class="ti ti-camera-plus" style="font-size:22px;color:#8a6a1f"></i><span style="font-size:12px;color:#8a6a1f;font-weight:700">사진 선택 (최대 5장)</span></label>'
+    +'<input type="file" id="insPhotoInput" accept="image/*" multiple style="display:none">'
+    +'<div id="insPhotoList" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"></div>'
+    +'</div>'
+    +'</div>'
+    +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:11px;color:#5A6484;line-height:1.65">가져오면 자동으로 표로 정리돼요. 피보험자·월보험료·특약·비고는 아는 만큼 채우면 되고, 저장한 뒤 <b style="color:#141B2D">My 자산관리</b>에서 언제든 다시 열어 이어서 채울 수 있어요. 이 정보는 이 기기와 <b style="color:#141B2D">내 구글드라이브</b>에만 저장되고, 운영사 서버에는 남지 않습니다.</div>'
     +'<button id="insParseBtn" type="button" style="width:100%;background:#15294A;border:0;border-radius:12px;padding:13px;font-size:13.5px;font-weight:700;color:#fff;cursor:pointer">표로 정리하기</button>';
   insShell(body);
-  document.getElementById('insParseBtn').onclick=()=>{
-    const raw=(document.getElementById('insPasteBox').value||'').trim();
-    if(!raw){toast('붙여넣은 내용이 없어요','warn');return;}
-    _insRows=insParseText(raw);
-    if(!_insRows.length){toast('표 형식을 인식하지 못했어요 — 제목 줄부터 다시 복사해 보세요','warn');return;}
-    insRenderPreview();
+  const textBtn=document.getElementById('insModeTextBtn'),photoBtn=document.getElementById('insModePhotoBtn');
+  const textPane=document.getElementById('insTextPane'),photoPane=document.getElementById('insPhotoPane');
+  const setMode=mode=>{
+    _insInputMode=mode;
+    textPane.style.display=mode==='text'?'block':'none';
+    photoPane.style.display=mode==='photo'?'block':'none';
+    textBtn.style.background=mode==='text'?'#15294A':'none';textBtn.style.color=mode==='text'?'#fff':'#5A6484';
+    photoBtn.style.background=mode==='photo'?'#15294A':'none';photoBtn.style.color=mode==='photo'?'#fff':'#5A6484';
+  };
+  textBtn.onclick=()=>setMode('text');
+  photoBtn.onclick=()=>setMode('photo');
+  let _insPhotoFiles=[];
+  const photoInput=document.getElementById('insPhotoInput'),photoList=document.getElementById('insPhotoList');
+  photoInput.onchange=()=>{
+    const files=Array.from(photoInput.files||[]).slice(0,5);
+    _insPhotoFiles=files;
+    photoList.innerHTML=files.map((f,i)=>'<div style="width:52px;height:52px;border-radius:8px;overflow:hidden;background:#eee;position:relative"><img src="'+URL.createObjectURL(f)+'" style="width:100%;height:100%;object-fit:cover"></div>').join('');
+  };
+  document.getElementById('insParseBtn').onclick=async()=>{
+    if(_insInputMode==='text'){
+      const raw=(document.getElementById('insPasteBox').value||'').trim();
+      if(!raw){toast('붙여넣은 내용이 없어요','warn');return;}
+      _insRows=insParseText(raw);
+      if(!_insRows.length){toast('표 형식을 인식하지 못했어요 — 제목 줄부터 다시 복사해 보세요','warn');return;}
+      insRenderPreview();
+    }else{
+      if(!_insPhotoFiles.length){toast('사진을 먼저 선택해 주세요','warn');return;}
+      const btn=document.getElementById('insParseBtn');btn.disabled=true;btn.textContent='사진 분석 중… (최대 1분)';
+      try{
+        const files=await Promise.all(_insPhotoFiles.map(f=>new Promise((res,rej)=>{
+          const r=new FileReader();
+          r.onload=()=>res({media_type:f.type||'image/jpeg',data:String(r.result).split(',')[1]});
+          r.onerror=rej;r.readAsDataURL(f);
+        })));
+        const result=await httpsCallable(fns,'insuranceParseScreenshot')({files});
+        const d=result?.data;
+        if(!d||!d.success){toast(d?.error||'사진 분석에 실패했어요. 다시 시도해 주세요','error');btn.disabled=false;btn.textContent='표로 정리하기';return;}
+        _insRows=(d.policies||[]).map(p=>({
+          company:p.company||'',product:p.product||'',policyNo:p.policyNo||'',status:p.status||'유지(정상)',
+          expiry:(p.endDate==='9999-12-31'||!p.endDate)?null:p.endDate
+        }));
+        if(!_insRows.length){toast('사진에서 보험 정보를 찾지 못했어요 — 다른 사진으로 시도해 보세요','warn');btn.disabled=false;btn.textContent='표로 정리하기';return;}
+        if(d.uncertain&&d.uncertain.length)toast('일부 항목은 확인이 필요해요: '+d.uncertain[0],'warn');
+        insRenderPreview();
+      }catch(e){
+        console.error('insurance photo parse',e);
+        toast('사진 분석 중 오류가 발생했어요. 다시 시도해 주세요','error');
+        btn.disabled=false;btn.textContent='표로 정리하기';
+      }
+    }
   };
 }
 /* 내보험찾아줌 표 헤더 순서: 보험회사·구분·상품명·증권번호·계약상태·계약관계·시작일·종료일·담당점포·전화번호
@@ -8948,7 +9009,141 @@ async function insSaveToAssets(){
     });
   });
   m.remove();
-  await ccaSave();   /* ★ 수정: 자체 put/toast 대신 기존 My자산관리 저장함수 재사용(드라이브 백업 상태에 따른 정확한 토스트 문구까지 그대로 재사용) */
+  await ccaSave();
+  insRenderShare();   /* ★ [2026-08-08] 저장만 하고 끝나면 컨설턴트에게 신호가 안 감 — 저장 직후 공유 여부를 바로 물어본다 */
+}
+const INS_CONSENT_VERSION='insurance-portfolio-2026-08-v1';
+/* ★ 컨설턴트 프로필 정보 — 단일 소스. insRenderShare(미리보기 행)와
+   ccBuildConsultantCard(전체 소개카드) 양쪽에서 이 함수 하나만 참조한다. */
+function ccConsultantProfile(){
+  const cd=(fcData?.channelData||{});
+  const btns=Array.isArray(cd.customButtons)?cd.customButtons:[];
+  return {
+    name: consultantData?.name||fcData?.name||loginId||'담당 컨설턴트',
+    title: consultantData?.title||fcData?.title||'',
+    company: consultantData?.company||fcData?.company||'',
+    bio: cd.bio||consultantData?.greeting||'',
+    capability: cd.capability||'',
+    stats: cd.stats||{},
+    photo: consultantData?.photoUrl||consultantData?.photo||fcData?.photoUrl||'',
+    certifications: Array.isArray(cd.certifications)?cd.certifications:[],
+    naverUrl: consultantData?.naverUrl||'',
+    expertUrl: (btns[1]&&btns[1].url)||'',
+    homeUrl: loginId?('https://jarvia.co.kr/@'+loginId):'',
+    testimonial: (Array.isArray(window._ccTestimonialsCache)&&window._ccTestimonialsCache[0])||null
+  };
+}
+function insRenderShare(){
+  const cnt=_insRows.length;
+  const P=ccConsultantProfile();
+  const cName=P.name,cTitle=P.title,cPhoto=P.photo;
+  const body=
+    '<div style="background:#fff;border-radius:14px;padding:20px 16px;text-align:center;margin-bottom:12px">'
+    +'<div style="width:44px;height:44px;border-radius:50%;background:#E1F5EE;display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><i class="ti ti-check" style="font-size:22px;color:#0F6E56"></i></div>'
+    +'<div style="font-size:14.5px;font-weight:700;color:#141B2D;margin-bottom:6px">'+cnt+'건이 My 자산관리에 저장됐어요</div>'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6">지금 안 하셔도 My 자산관리에서 언제든 공유할 수 있어요.</div>'
+    +'</div>'
+    +'<div style="background:#FFF8E7;border:1px solid #E0C36B;border-radius:12px;padding:14px;margin-bottom:12px">'
+    +'<div style="font-size:12.5px;font-weight:700;color:#141B2D;margin-bottom:6px">🎁 공유하면 이런 걸 받아요</div>'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.7">놓친 보험금·중복 가입·보장 공백을 담당 컨설턴트가 확인해서, <b style="color:#141B2D">24시간 내 1:1 맞춤 리포트</b>로 답변해드려요.</div>'
+    +'</div>'
+    +'<button id="insShowConsultant" type="button" style="width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #E5E9F0;border-radius:12px;padding:11px 12px;margin-bottom:14px;cursor:pointer;text-align:left">'
+    +(cPhoto?'<img src="'+esc(cPhoto)+'" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0">':'<div style="width:34px;height:34px;border-radius:50%;background:#15294A;color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0">'+esc((cName||'?').charAt(0))+'</div>')
+    +'<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700;color:#141B2D">'+esc(cName)+(cTitle?' '+esc(cTitle):'')+'</div><div style="font-size:10.5px;color:#8B93AE">받는 분이 누구인지 확인하기</div></div>'
+    +'<i class="ti ti-chevron-right" style="color:#B4B2A9"></i></button>'
+    +'<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:14px">'
+    +'<div style="font-size:11.5px;color:#5A6484;line-height:1.6;margin-bottom:10px">공유는 담당 컨설턴트에게 분석을 요청하는 것과 같아요. 어느 분인지 알 수 있게 성함과 연락처를 남겨주세요.</div>'
+    +'<div style="font-size:10px;color:#8B93AE;margin-bottom:3px">이름</div>'
+    +'<input id="insShareName" placeholder="홍길동" style="width:100%;font-size:12.5px;padding:9px;border:1px solid #E5E9F0;border-radius:8px;box-sizing:border-box;margin-bottom:8px">'
+    +'<div style="font-size:10px;color:#8B93AE;margin-bottom:3px">휴대폰번호</div>'
+    +'<input id="insSharePhone" placeholder="01012345678" inputmode="numeric" style="width:100%;font-size:12.5px;padding:9px;border:1px solid #E5E9F0;border-radius:8px;box-sizing:border-box">'
+    +'</div>'
+    +'<div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:14px">'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:#33415C;margin-bottom:8px"><input type="checkbox" id="insConsentPersonal" style="margin-top:2px">개인정보 수집·이용에 동의합니다</label>'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:#33415C;margin-bottom:8px"><input type="checkbox" id="insConsentCredit" style="margin-top:2px">개인(신용)정보 처리에 동의합니다</label>'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:#33415C;margin-bottom:2px"><input type="checkbox" id="insConsentConsultant" style="margin-top:2px">담당 컨설턴트 제공에 동의합니다</label>'
+    +'<div style="font-size:10px;color:#9AA3B2;margin-top:8px;line-height:1.6">전달 과정은 암호화되며, 운영사는 내용을 열람하지 않습니다. 언제든 컨설턴트에게 철회를 요청할 수 있습니다.</div>'
+    +'</div>'
+    +'<button id="insShareBtn" type="button" style="width:100%;background:#15294A;border:0;border-radius:12px;padding:13px;font-size:13.5px;font-weight:700;color:#fff;cursor:pointer;margin-bottom:8px">담당 컨설턴트에게 공유하기</button>'
+    +'<button id="insSkipBtn" type="button" style="width:100%;background:none;border:0;color:#8B93AE;font-size:12px;padding:8px;cursor:pointer">나중에 할게요</button>';
+  insShell(body);
+  document.getElementById('insSkipBtn').onclick=()=>{document.getElementById('insM')?.remove();toast('저장됐어요 — My 자산관리에서 확인하세요','info');};
+  document.getElementById('insShareBtn').onclick=insSubmitShare;
+  document.getElementById('insShowConsultant').onclick=()=>{
+    _insDraft.name=document.getElementById('insShareName')?.value||'';
+    _insDraft.phone=document.getElementById('insSharePhone')?.value||'';
+    insShowConsultantIntro();
+  };
+  if(document.getElementById('insShareName'))document.getElementById('insShareName').value=_insDraft.name;
+  if(document.getElementById('insSharePhone'))document.getElementById('insSharePhone').value=_insDraft.phone;
+}
+/* ★ [2026-08-08] 컨설턴트 소개카드 — 재사용 가능한 독립 빌더.
+   호출부(insShowConsultantIntro)뿐 아니라 향후 client-daily.html 등 다른 고객 접점에서도
+   같은 함수를 그대로 옮겨 쓸 수 있도록 순수 HTML 문자열만 반환한다 (DOM 삽입은 호출부 책임). */
+function ccBuildConsultantCard(){
+  const P=ccConsultantProfile();
+  const cName=P.name,cTitle=P.title,cCompany=P.company,cBio=P.bio,cCapability=P.capability,cStats=P.stats,cPhoto=P.photo;
+  const stat=(v,u,l)=>v?'<div style="flex:1;text-align:center"><div style="font-size:17px;font-weight:800;color:#fff">'+esc(v)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">'+u+'</span></div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">'+l+'</div></div>':'';
+  const ratingTxt=P.stats.rating?(P.stats.rating+'<span style="font-size:11px;color:#C9A96E;font-weight:500">/10★</span>'):'';
+  return '<div style="border-radius:16px;overflow:hidden;box-shadow:0 4px 14px rgba(21,41,74,.15)">'
+    +'<div style="background:linear-gradient(160deg,#0F1B33,#1A3358);padding:26px 20px 18px;text-align:center">'
+    +(cPhoto?'<img src="'+esc(cPhoto)+'" style="width:68px;height:68px;border-radius:50%;object-fit:cover;margin:0 auto 10px;display:block;border:2px solid rgba(201,169,110,.5)">':'<div style="width:68px;height:68px;border-radius:50%;background:rgba(201,169,110,.18);border:2px solid rgba(201,169,110,.5);color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;margin:0 auto 10px">'+esc((cName||'?').charAt(0))+'</div>')
+    +'<div style="font-size:17px;font-weight:800;color:#fff">'+esc(cName)+(cTitle?' <span style="font-size:13px;font-weight:500;color:#C9A96E">'+esc(cTitle)+'</span>':'')+'</div>'
+    +(cCompany?'<div style="font-size:11.5px;color:#8FA0C2;margin-top:3px">'+esc(cCompany)+'</div>':'')
+    +((cStats.years||cStats.clients||cStats.rating)?'<div style="display:flex;gap:2px;margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)">'+stat(cStats.years,'년','경력')+stat(cStats.clients?Number(cStats.clients).toLocaleString():'','명','고객 수')+(cStats.rating?'<div style="flex:1;text-align:center"><div style="font-size:17px;font-weight:800;color:#fff">'+ratingTxt+'</div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">만족도</div></div>':'')+'</div>':'')
+    +'</div>'
+    +(P.testimonial?'<div style="background:#F7F8FA;padding:14px 18px;border-bottom:1px solid #EEF0F4"><div style="font-size:10.5px;font-weight:800;color:#5F5E5A;margin-bottom:5px">✓ 실제 고객 후기</div><div style="font-size:12.5px;color:#33415C;line-height:1.6">"'+esc(P.testimonial.content||'')+'"</div><div style="font-size:10.5px;color:#8B93AE;margin-top:5px">— '+esc(P.testimonial.author||'고객')+(P.testimonial.authorMeta?' ('+esc(P.testimonial.authorMeta)+')':'')+'</div></div>':'')
+    +(P.certifications.length?'<div style="background:#fff;padding:14px 18px 4px;border-bottom:1px solid #EEF0F4"><div style="display:flex;flex-wrap:wrap;gap:6px">'+P.certifications.map(c=>'<span style="font-size:11px;font-weight:700;color:#8a6a1f;background:#FFF8E7;border:1px solid #E0C36B;padding:3px 10px;border-radius:99px">'+esc(c)+'</span>').join('')+'</div><div style="height:10px"></div></div>':'')
+    +(cBio?'<div style="background:#fff;padding:14px 18px;font-size:12.5px;color:#33415C;line-height:1.6;border-bottom:1px solid #EEF0F4">"'+esc(cBio)+'"</div>':'')
+    +(cCapability?'<div style="background:#fff;padding:16px 18px 18px"><div style="font-size:11px;font-weight:800;color:#8a6a1f;background:#FFF8E7;display:inline-block;padding:3px 9px;border-radius:99px;margin-bottom:8px">💪 컨설팅 역량</div><div style="font-size:12.5px;color:#33415C;line-height:1.7;white-space:pre-wrap">'+esc(cCapability)+'</div></div>':'')
+    +(P.naverUrl?'<a href="'+esc(P.naverUrl)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;border-top:1px solid #EEF0F4;text-decoration:none"><div style="width:36px;height:36px;background:#03C75A;display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="color:#fff;font-size:16px;font-weight:900">N</span></div><div style="flex:1;padding:0 12px;font-size:11.5px;font-weight:500;color:#141B2D;background:#fff">네이버 경영컨설턴트 프로필 보기</div></a>':'')
+    +((P.homeUrl||P.expertUrl)?'<div style="display:flex;gap:8px;background:#F7F8FA;padding:12px 14px">'
+      +(P.homeUrl?'<a href="'+esc(P.homeUrl)+'" target="_blank" rel="noopener" style="flex:1;text-align:center;background:#15294A;color:#C9A96E;border-radius:9px;padding:10px;font-size:11.5px;font-weight:700;text-decoration:none">🏠 내 홈페이지</a>':'')
+      +(P.expertUrl?'<a href="'+esc(P.expertUrl)+'" target="_blank" rel="noopener" style="flex:1;text-align:center;background:#fff;border:1px solid #D8DEE9;color:#33415C;border-radius:9px;padding:10px;font-size:11.5px;font-weight:700;text-decoration:none">전문위원 홈페이지</a>':'')
+      +'</div>':'')
+    +'</div>';
+}
+function insShowConsultantIntro(){
+  const body=ccBuildConsultantCard()
+    +'<button id="insConsultantBack" type="button" style="width:100%;background:#15294A;border:0;border-radius:12px;padding:13px;font-size:13.5px;font-weight:700;color:#fff;cursor:pointer;margin-top:14px">돌아가기</button>';
+  insShell(body);
+  document.getElementById('insConsultantBack').onclick=()=>insRenderShare();
+}
+async function insSubmitShare(){
+  const name=(document.getElementById('insShareName')?.value||'').trim();
+  const phone=(document.getElementById('insSharePhone')?.value||'').replace(/\D/g,'');
+  const p1=document.getElementById('insConsentPersonal')?.checked;
+  const p2=document.getElementById('insConsentCredit')?.checked;
+  const p3=document.getElementById('insConsentConsultant')?.checked;
+  if(name.length<1||name.length>20){toast('이름을 확인해주세요','warning');return;}
+  if(!/^010\d{8}$/.test(phone)){toast('휴대폰 번호 11자리를 정확히 입력해주세요','warning');return;}
+  if(!p1||!p2||!p3){toast('개인정보·개인(신용)정보 처리 및 담당 컨설턴트 제공 동의가 필요합니다','warning');return;}
+  const btn=document.getElementById('insShareBtn');btn.disabled=true;btn.textContent='전달 중...';
+  try{
+    const reqId=gid();
+    const consultantName=fcData?.name||consultantData?.name||loginId||'담당 컨설턴트';
+    await setDoc(doc(db,'fc_consultation_requests',reqId),{
+      reqId, fcAuthUid:fcUid, fcLoginId:loginId,
+      source:'insurance_portfolio', requestType:'insurancePortfolio', requestTypeLabel:'내 보험 정리 공유',
+      name, phone,
+      policies:_insRows.map(r=>({company:r.company,product:r.product,policyNo:r.policyNo,status:r.status,expiry:r.expiry,insured:r.insured||'본인',premium:r.premium||'',rider:r.rider||'',note:r.note||''})),
+      policyCount:_insRows.length,
+      consentPersonal:true, consentCredit:true, consentConsultantAccess:true,
+      consentVersion:INS_CONSENT_VERSION, consentAt:serverTimestamp(),
+      consentNotice:{purpose:'보험 포트폴리오 확인 및 맞춤 상담 준비', recipient:consultantName,
+        retention:LC_RETENTION_TEXT,
+        operator:'(주)KFPC — 상담 요청 데이터는 (주)KFPC가 운영하는 시스템에 암호화 저장되며, 운영사는 상담 내용을 열람하지 않습니다.',
+        withdrawal:'담당 컨설턴트에게 동의 철회 및 삭제를 요청할 수 있습니다.'},
+      lifeProgress:'received', status:'new', memo:'', lastResponseAt:null,
+      createdAt:serverTimestamp(), updatedAt:serverTimestamp()
+    });
+    document.getElementById('insM')?.remove();
+    toast('담당 컨설턴트에게 전달했어요','info');
+  }catch(err){
+    console.error('insurance share',err);
+    toast('전달하지 못했어요: '+err.message,'error');
+    btn.disabled=false;btn.textContent='담당 컨설턴트에게 공유하기';
+  }
 }
 /* ── 📖 자산관리 이용가이드 (프리미엄 · 최초 1회 자동, 버튼 상시) ── */
 function ccaGuideSheet(){
