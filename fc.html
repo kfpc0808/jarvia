@@ -2204,6 +2204,7 @@ async function init(){
         try{const _need=((fcData&&fcData.loginId)||'').toLowerCase();if(_need&&fcData.loginIdLower!==_need){updateDoc(doc(db,'users',fcUid),{loginIdLower:_need}).catch(()=>{});}}catch(_e){}
         loadFcAdminSection();
         fcNotifyStart();
+        try{insMergeByParam();}catch(_e){}   /* ★ [2026-08-09] 마이페이지 "고객 선택해 저장" 딥링크 수신 */
         try{ccInjectVaultZone();}catch(_e){} // ★ 컨설턴트 소유자뷰: 나만의 보관함 렌더 (본인만 — 관문이 방문자 차단)
         const _eb=$('ownerEditBtn'); if(_eb)_eb.style.display='inline-flex';
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
@@ -3434,6 +3435,40 @@ function insWireAdminDetail(r,reqId){
   if(r.source!=='insurance_portfolio')return;
   const btn=$('insMergeBtn');if(!btn)return;
   btn.onclick=()=>insMergeToCustomer(r);
+}
+/* ★ [2026-08-09] 마이페이지에서 "고객 선택해 저장"으로 넘어온 딥링크 처리 —
+   ?insmerge=<요청ID>&tgt=<고객ID|new>. 본인(fcAuthUid) 요청만 허용, 선택 고객에 증권번호 중복 제외 병합. */
+async function insMergeByParam(){
+  const reqId=params.get('insmerge');if(!reqId)return;
+  if(!isOwnerView||!currentUser)return;
+  const tgt=params.get('tgt')||'new';
+  try{
+    const snap=await getDoc(doc(db,'fc_consultation_requests',reqId));
+    if(!snap.exists()){toast('공유 요청을 찾을 수 없습니다','warning');return;}
+    const r=snap.data();
+    if(r.fcAuthUid!==currentUser.uid){toast('본인 요청만 저장할 수 있습니다','warning');return;}
+    if(r.source!=='insurance_portfolio'||!Array.isArray(r.policies)||!r.policies.length){toast('보험 공유 요청이 아닙니다','warning');return;}
+    await new Promise(res=>{try{window.__mpcEnsureCustomers(function(){res();});}catch(_e){res();}});
+    const policies=r.policies.map(p=>({...p}));
+    let target=(tgt!=='new')?customers.find(c=>c.id===tgt):null;
+    if(tgt!=='new'&&!target){toast('선택한 고객을 이 기기에서 찾지 못해 새 고객으로 등록합니다','warn');}
+    if(target){
+      const exist=new Set((target.insurancePortfolio||[]).map(p=>p&&p.policyNo).filter(Boolean));
+      const add=policies.filter(p=>!p.policyNo||!exist.has(p.policyNo));
+      target.insurancePortfolio=(target.insurancePortfolio||[]).concat(add);
+      target.createdAt=Date.now();
+      await custPut(target);
+      toast('\''+(target.name||'고객')+'\' 보험 '+add.length+'건을 병합했어요'+(policies.length-add.length?' (중복 '+(policies.length-add.length)+'건 제외)':''),'info');
+    }else{
+      target={id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),name:r.name||'',phone:r.phone||'',birthUnknown:true,insurancePortfolio:policies,createdAt:Date.now()};
+      customers.push(target);
+      await custPut(target);
+      toast('새 고객 \''+(r.name||'-')+'\'(으)로 보험 '+policies.length+'건을 저장했어요','info');
+    }
+    mpcGdPush();
+    myPlacesOpen();
+    setTimeout(()=>{try{forceCustTab();}catch(_e){}setTimeout(()=>{try{openCustForm(target);}catch(_e){}},150);},200);
+  }catch(e){console.error('insMergeByParam',e);toast('저장에 실패했어요: '+e.message,'error');}
 }
 async function insMergeToCustomer(r){
   const btn=$('insMergeBtn');if(btn){btn.disabled=true;btn.textContent='저장 중...';}

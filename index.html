@@ -14177,6 +14177,7 @@ function _fcrRenderList(filter){
     const tc = textColor[r.status] || '#5A6484';
     const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
     const dateBadge = _fcrDateBadge(r);   // ★ 내 날짜 자료 요청 배지 (2026-08-01)
+    const insBadge = (r.source==='insurance_portfolio') ? '<span style="font-size:10px;padding:2px 8px;background:#15294A;color:#C9A96E;border-radius:8px;font-weight:800">🛡️ 보험공유 '+(Number(r.policyCount)||((r.policies||[]).length))+'건</span>' : '';   /* ★ [2026-08-09] 내 보험 정리 공유 배지 */
     const tags = (r.fields || []).slice(0, 3).map(f =>
       '<span style="font-size:10px;padding:2px 7px;background:#EEF4FF;color:#1B3A6B;border-radius:8px;font-weight:600">' + _fcrEsc(_fcrFieldLabels[f] || f) + '</span>'
     ).join('');
@@ -14190,7 +14191,7 @@ function _fcrRenderList(filter){
       + '<div class="fcrPhone" style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">'
         + ((!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인' : _fcrEsc(_fcrFmtPhone(r.phone)))
         + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + insBadge + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
   }).join('');
   _fcrFillPhones(arr);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
@@ -14264,6 +14265,65 @@ function _fcrQuizBadge(r){
   const L = _fcrQuizLabels[r.quizType] || _fcrQuizLabels.coverage;
   return '<span style="font-size:10px;padding:2px 7px;background:#FFF4DC;color:#A68B4B;border:0.5px solid #C9A96E;border-radius:8px;font-weight:800">' + L.icon + ' ' + L.name + ' ' + (Number(r.quizScore)||0) + '점</span>';
 }
+/* ★ [2026-08-09] 내 보험 정리 공유 상세 섹션 — fc.html insReqSection과 짝 (데이터 동일·톤은 마이페이지 라이트) */
+function _fcrInsSection(r){
+  if(r.source !== 'insurance_portfolio') return '';
+  const P = Array.isArray(r.policies) ? r.policies : [];
+  const th = k => '<th style="padding:5px 8px;text-align:left;font-weight:700;color:#fff;white-space:nowrap">'+k+'</th>';
+  const td = (v,extra) => '<td style="padding:5px 8px;border-bottom:1px solid #EEF0F4;white-space:nowrap;'+(extra||'')+'">'+_fcrEsc(v==null?'':String(v))+'</td>';
+  const rows = P.map((p,i) =>
+    '<tr style="background:'+(i%2?'#FBFAF7':'#fff')+'">'
+    + td(p.company) + td(p.product)
+    + td(p.policyNo,'background:#FFF8E7;color:#8a6a1f;font-family:ui-monospace,Menlo,monospace')
+    + td(p.status) + td(p.expiry||'해당없음') + td(p.insured||'본인') + td(p.premium||'-')
+    + '</tr>').join('');
+  const consent = (r.consentPersonal&&r.consentCredit&&r.consentConsultantAccess)
+    ? '<div style="font-size:10px;color:#059669;margin-top:7px">✓ 개인정보·신용정보·컨설턴트 제공 동의 완료'+(r.consentVersion?' · '+_fcrEsc(r.consentVersion):'')+'</div>' : '';
+  return '<div style="margin-bottom:12px;background:linear-gradient(135deg,#FFFDF8,#FFF8E7);border:1px solid #C9A96E;border-radius:10px;padding:12px 13px">'
+    + '<div style="font-size:11px;font-weight:800;color:#A68B4B;margin-bottom:8px">🛡️ 내 보험 정리 공유 · 총 '+P.length+'건</div>'
+    + (P.length
+       ? '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10.5px;width:100%"><tr style="background:#15294A">'
+         + th('보험사')+th('상품명')+'<th style="padding:5px 8px;text-align:left;font-weight:700;color:#C9A96E;white-space:nowrap">증권번호</th>'+th('상태')+th('만기일')+th('피보험자')+th('월보험료')
+         + '</tr>'+rows+'</table></div>'
+       : '<div style="font-size:11px;color:#B4B2A9">보험 데이터 없음</div>')
+    + consent
+    + '<div id="fcr-ins-merge" style="margin-top:9px"></div>'
+    + '<button type="button" onclick="fcrInsMergeOpen(\''+_fcrEsc(r.id)+'\')" style="margin-top:9px;width:100%;padding:10px;background:#15294A;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">📋 고객 선택해 저장</button>'
+    + '</div>';
+}
+/* ★ [2026-08-09] 보험 공유 → 업데이트할 고객을 컨설턴트가 직접 선택.
+   마이페이지는 고객 DB 읽기 전용(7679행 원칙)이므로 실제 병합·저장은 fc.html(고객입력)에 딜링크로 위임한다. */
+window.fcrInsMergeOpen=async function(reqId){
+  const box=document.getElementById('fcr-ins-merge');if(!box)return;
+  box.innerHTML='<div style="font-size:11px;color:#8B93AE;padding:6px 0">고객 목록 불러오는 중…</div>';
+  const r=(_fcrAllRequests||[]).find(x=>x.id===reqId);
+  if(!r){box.innerHTML='<div style="font-size:11px;color:#C0392B">요청 정보를 찾지 못했습니다</div>';return;}
+  try{if(!jvMcIdx)await jvMcRead();}catch(_e){}
+  const list=jvMcIdx?Object.values(jvMcIdx):[];
+  const seen=new Set();const opts=[];
+  list.forEach(c=>{if(!c||!c.id||seen.has(c.id))return;seen.add(c.id);opts.push(c);});
+  opts.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'));
+  const reqPhone=String(r.phone||'').replace(/\D/g,'');
+  let autoId='';
+  if(reqPhone){const hit=opts.find(c=>String(c.phone||'').replace(/\D/g,'')===reqPhone);if(hit)autoId=hit.id;}
+  if(!autoId&&r.name){const hits=opts.filter(c=>(c.name||'')===r.name);if(hits.length===1)autoId=hits[0].id;}
+  const optHtml=['<option value="new">➕ 새 고객으로 등록 ('+_fcrEsc(r.name||'-')+')</option>']
+    .concat(opts.map(c=>'<option value="'+_fcrEsc(c.id)+'"'+(c.id===autoId?' selected':'')+'>'+_fcrEsc(c.name||'이름없음')+(c.phone?' · '+_fcrEsc(c.phone):'')+'</option>')).join('');
+  box.innerHTML='<div style="background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:10px">'
+    +'<div style="font-size:10.5px;font-weight:700;color:#6B7280;margin-bottom:6px">업데이트할 고객 선택'+(autoId?' <span style="color:#059669">· 연락처/이름 자동 매칭됨</span>':'')+'</div>'
+    +'<select id="fcr-ins-tgt" style="width:100%;padding:9px 10px;border:1px solid #D1D5DB;border-radius:7px;font-size:12px;font-family:inherit;box-sizing:border-box">'+optHtml+'</select>'
+    +'<div style="font-size:10px;color:#8B93AE;margin-top:6px;line-height:1.55">선택한 고객의 보험 포트폴리오에 병합됩니다(증권번호 중복 제외). 저장은 고객입력 화면에서 자동 실행됩니다.</div>'
+    +'<button type="button" onclick="fcrInsMergeGo(\''+_fcrEsc(reqId)+'\')" style="margin-top:8px;width:100%;padding:9px;background:linear-gradient(135deg,#1B3A6B,#2D5DAE);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">이 고객에 저장 진행 →</button>'
+    +'</div>';
+};
+window.fcrInsMergeGo=function(reqId){
+  const sel=document.getElementById('fcr-ins-tgt');
+  const tgt=(sel&&sel.value)||'new';
+  const lid=(meData&&meData.loginId)||'';
+  if(!lid){toast('로그인 정보를 확인할 수 없습니다','warning');return;}
+  toast('고객입력 화면에서 저장을 진행합니다…','info');
+  setTimeout(function(){location.href='./fc.html?fc='+encodeURIComponent(lid)+'&insmerge='+encodeURIComponent(reqId)+'&tgt='+encodeURIComponent(tgt);},500);
+};
 function _fcrQuizSection(r){
   if(r.source !== 'quiz') return '';
   const L = _fcrQuizLabels[r.quizType] || _fcrQuizLabels.coverage;
@@ -14359,6 +14419,7 @@ window.openFcRequestDetail = async function(reqId){
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">관심 분야' + otherTxt + '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' + (tags || '<span style="color:#B4B2A9;font-size:11px">-</span>') + '</div></div>'
+    + _fcrInsSection(r)   /* ★ [2026-08-09] 보험 공유 상세 */
     + _fcrQuizSection(r)
     + (r.quizLogId ? '<div id="fcr-ai-box"></div>' : '')
     + messageBlock
