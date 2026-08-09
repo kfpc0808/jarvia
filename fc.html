@@ -3455,12 +3455,16 @@ async function insMergeByParam(){
     let target=(tgt!=='new')?customers.find(c=>c.id===tgt):null;
     if(tgt!=='new'&&!target){toast('선택한 고객을 이 기기에서 찾지 못해 새 고객으로 등록합니다','warn');}
     if(target){
-      const exist=new Set((target.insurancePortfolio||[]).map(p=>p&&p.policyNo).filter(Boolean));
-      const add=policies.filter(p=>!p.policyNo||!exist.has(p.policyNo));
-      target.insurancePortfolio=(target.insurancePortfolio||[]).concat(add);
+      /* ★ [2026-08-09 개선] 동일 증권번호는 최신 공유분으로 교체(계약일 등 새 필드 갱신), 새 번호는 추가 — 기존 '중복 건너뛰기'는 구버전 데이터가 영구 잔존하는 문제 */
+      const incoming=new Map(policies.filter(p=>p&&p.policyNo).map(p=>[p.policyNo,p]));
+      const kept=(target.insurancePortfolio||[]).map(p=>(p&&p.policyNo&&incoming.has(p.policyNo))?(incoming.get(p.policyNo)):p);
+      const keptNos=new Set(kept.map(p=>p&&p.policyNo).filter(Boolean));
+      const added=policies.filter(p=>!p.policyNo||!keptNos.has(p.policyNo));
+      const updated=policies.length-added.length;
+      target.insurancePortfolio=kept.concat(added);
       target.createdAt=Date.now();
       await custPut(target);
-      toast('\''+(target.name||'고객')+'\' 보험 '+add.length+'건을 병합했어요'+(policies.length-add.length?' (중복 '+(policies.length-add.length)+'건 제외)':''),'info');
+      toast('\''+(target.name||'고객')+'\' 보험 반영: 신규 '+added.length+'건'+(updated?' · 갱신 '+updated+'건':''),'info');
     }else{
       target={id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),name:r.name||'',phone:r.phone||'',birthUnknown:true,insurancePortfolio:policies,createdAt:Date.now()};
       customers.push(target);
