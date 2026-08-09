@@ -3442,7 +3442,7 @@ async function insMergeByParam(){
   const reqId=params.get('insmerge');if(!reqId)return;
   if(!isOwnerView||!currentUser)return;
   const tgt=params.get('tgt')||'new';
-  /* ★ 재실행 방지 — 새로고침 시 병합이 반복되지 않도록 URL에서 딥링크 파라미터 즉시 제거 (특히 tgt=new의 고객 중복 생성 차단) */
+  /* ★ 재실행 방지 — 새로고침 시 병합이 반복되지 않도록 URL에서 딜링크 파라미터 즉시 제거 */
   try{const _u=new URL(location.href);_u.searchParams.delete('insmerge');_u.searchParams.delete('tgt');history.replaceState({},'',_u.pathname+(_u.searchParams.toString()?'?'+_u.searchParams.toString():''));}catch(_e){}
   try{
     const snap=await getDoc(doc(db,'fc_consultation_requests',reqId));
@@ -3450,12 +3450,14 @@ async function insMergeByParam(){
     const r=snap.data();
     if(r.fcAuthUid!==currentUser.uid){toast('본인 요청만 저장할 수 있습니다','warning');return;}
     if(r.source!=='insurance_portfolio'||!Array.isArray(r.policies)||!r.policies.length){toast('보험 공유 요청이 아닙니다','warning');return;}
-    await new Promise(res=>{try{window.__mpcEnsureCustomers(function(){res();});}catch(_e){res();}});
+    /* ★ [2026-08-09] 클로저 브리지 경유 — customers/custPut 직접 참조는 스코프 밖이라 실패했던 문제 수정 */
+    const list=await new Promise(res=>{try{window.__mpcEnsureCustomers(function(a){res(a||[]);});}catch(_e){res([]);}});
+    if(!window.__mpcCustPut){toast('고객 저장 모듈이 준비되지 않았어요. 새로고침 후 다시 시도해 주세요','warning');return;}
     const policies=r.policies.map(p=>({...p}));
-    let target=(tgt!=='new')?customers.find(c=>c.id===tgt):null;
+    let target=(tgt!=='new')?list.find(c=>c&&c.id===tgt):null;
     if(tgt!=='new'&&!target){toast('선택한 고객을 이 기기에서 찾지 못해 새 고객으로 등록합니다','warn');}
     if(target){
-      /* ★ [2026-08-09 개선] 동일 증권번호는 최신 공유분으로 교체(계약일 등 새 필드 갱신), 새 번호는 추가 — 기존 '중복 건너뛰기'는 구버전 데이터가 영구 잔존하는 문제 */
+      /* 동일 증권번호는 최신 공유분으로 교체, 새 번호는 추가 */
       const incoming=new Map(policies.filter(p=>p&&p.policyNo).map(p=>[p.policyNo,p]));
       const kept=(target.insurancePortfolio||[]).map(p=>(p&&p.policyNo&&incoming.has(p.policyNo))?(incoming.get(p.policyNo)):p);
       const keptNos=new Set(kept.map(p=>p&&p.policyNo).filter(Boolean));
@@ -3463,42 +3465,44 @@ async function insMergeByParam(){
       const updated=policies.length-added.length;
       target.insurancePortfolio=kept.concat(added);
       target.createdAt=Date.now();
-      await custPut(target);
+      await window.__mpcCustPut(target);
       toast('\''+(target.name||'고객')+'\' 보험 반영: 신규 '+added.length+'건'+(updated?' · 갱신 '+updated+'건':''),'info');
     }else{
       target={id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),name:r.name||'',phone:r.phone||'',birthUnknown:true,insurancePortfolio:policies,createdAt:Date.now()};
-      customers.push(target);
-      await custPut(target);
+      list.push(target);   /* 동일 참조 배열이므로 클로저 원본에 반영 */
+      await window.__mpcCustPut(target);
       toast('새 고객 \''+(r.name||'-')+'\'(으)로 보험 '+policies.length+'건을 저장했어요','info');
     }
-    mpcGdPush();
-    myPlacesOpen();
-    setTimeout(()=>{try{forceCustTab();}catch(_e){}setTimeout(()=>{try{openCustForm(target);}catch(_e){}},150);},200);
+    window.__mpcGdPushNow&&window.__mpcGdPushNow();
+    window.myPlacesOpen&&window.myPlacesOpen();
+    setTimeout(()=>{window.__mpcForceCustTab&&window.__mpcForceCustTab();setTimeout(()=>{window.__mpcOpenCustForm&&window.__mpcOpenCustForm(target);},180);},220);
   }catch(e){console.error('insMergeByParam',e);toast('저장에 실패했어요: '+e.message,'error');}
 }
 async function insMergeToCustomer(r){
   const btn=$('insMergeBtn');if(btn){btn.disabled=true;btn.textContent='저장 중...';}
   try{
-    await new Promise(res=>{try{window.__mpcEnsureCustomers(function(){res();});}catch(_e){res();}});
+    /* ★ [2026-08-09] 클로저 브리지 경유로 수정 — customers/custPut/mpcGdPush 직접 참조는 모듈 스코프에서 닿지 않아 병합이 조용히 실패하던 문제 */
+    const list=await new Promise(res=>{try{window.__mpcEnsureCustomers(function(a){res(a||[]);});}catch(_e){res([]);}});
+    if(!window.__mpcCustPut){toast('고객 저장 모듈이 준비되지 않았어요. 새로고침 후 다시 시도해 주세요','warning');if(btn){btn.disabled=false;btn.textContent='📋 내 고객 정보로 저장하고 상세 보기';}return;}
     const phoneDigits=(r.phone||'').replace(/\D/g,'');
     let target=null;
-    if(phoneDigits)target=customers.find(c=>c.phone&&c.phone.replace(/\D/g,'')===phoneDigits);
-    if(!target&&r.name){const hits=customers.filter(c=>(c.name||'')===r.name);if(hits.length===1)target=hits[0];}
+    if(phoneDigits)target=list.find(c=>c&&c.phone&&c.phone.replace(/\D/g,'')===phoneDigits);
+    if(!target&&r.name){const hits=list.filter(c=>c&&(c.name||'')===r.name);if(hits.length===1)target=hits[0];}
     const policies=(r.policies||[]).map(p=>({...p}));
     if(target){
       target.insurancePortfolio=policies;
       target.createdAt=Date.now();
-      await custPut(target);
+      await window.__mpcCustPut(target);
     }else{
       target={id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),name:r.name||'',phone:r.phone||'',birthUnknown:true,insurancePortfolio:policies,createdAt:Date.now()};
-      customers.push(target);
-      await custPut(target);
+      list.push(target);
+      await window.__mpcCustPut(target);
     }
-    mpcGdPush();
+    window.__mpcGdPushNow&&window.__mpcGdPushNow();
     toast('내 고객 정보로 저장했어요','info');
     $('requestDetailModal').classList.remove('active');
-    myPlacesOpen();
-    setTimeout(()=>{try{forceCustTab();}catch(_e){}setTimeout(()=>{try{openCustForm(target);}catch(_e){}},150);},150);
+    window.myPlacesOpen&&window.myPlacesOpen();
+    setTimeout(()=>{window.__mpcForceCustTab&&window.__mpcForceCustTab();setTimeout(()=>{window.__mpcOpenCustForm&&window.__mpcOpenCustForm(target);},150);},150);
   }catch(e){
     console.error('insMergeToCustomer',e);
     toast('저장에 실패했어요: '+e.message,'error');
@@ -10737,6 +10741,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     }catch(_e){cb&&cb(false,'fail');}
   };
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
+  /* ★ [2026-08-09] 보험 공유 병합용 쓰기 브리지 — customers·custPut·mpcGdPush·openCustForm·forceCustTab이 클로저 내부라
+     모듈 스크립트의 insMergeByParam/insMergeToCustomer가 접근 불가하던 문제 해결. 배열은 동일 참조라 push가 원본에 반영됨 */
+  window.__mpcCustomersRef=function(){return customers;};
+  window.__mpcCustPut=function(o){return custPut(o);};
+  window.__mpcGdPushNow=function(){try{mpcGdPush();}catch(_e){}};
+  window.__mpcOpenCustForm=function(c){try{openCustForm(c);}catch(_e){}};
+  window.__mpcForceCustTab=function(){try{forceCustTab();}catch(_e){}};
   /* ★ [2026-07-24] 고객입력 화면(엑셀·붙여넣기) 진입 브리지.
      ⚠️ 기존 고객 목록이 로드되지 않은 채 엑셀을 올리면 전건이 신규로 등록돼 대량 중복이 생긴다.
      반드시 기기 로드 → 드라이브 동기화까지 마친 뒤에만 업로드 화면을 연다. */
