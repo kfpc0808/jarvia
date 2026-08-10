@@ -375,13 +375,18 @@ function renderSection(sec){
   const cfg=sectionMap[sec];
   if(!cfg)return;
   
+  /* ★ [2026-08-10 분리 구조] 컨센서스 탭: 오늘자 클릭 로드 블록을 타임라인 위에 상시 표시.
+     접힌 버튼만 노출(자동 펼침 없음) — 클릭 시 임베드 우선 → Firestore morning_consensus/{오늘} 실시간 조회.
+     아카이브 타임라인(과거 임베드분)은 기존 그대로 아래에 유지. */
+  const _mcToday=(sec==='consensus')?`<div id="mcTodayWrap" style="margin-bottom:16px"><button type="button" id="mcTodayBtn" onclick="mcLoadToday()" style="width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid rgba(201,160,92,.45);border-radius:10px;padding:13px 16px;cursor:pointer;text-align:left"><span style="font-size:15px">🧭</span><span style="font-size:13.5px;font-weight:800;color:var(--navy,#1E2226)">오늘의 모닝 컨센서스</span><span style="margin-left:auto;font-size:11px;font-weight:700;color:#96701F;white-space:nowrap">탭하여 보기 ▾</span></button><div style="text-align:right;margin-top:6px"><a href="./consensus.html" style="font-size:11px;font-weight:700;color:#96701F;text-decoration:none">전체 아카이브 보기 →</a></div></div>`:'';
+  
   const filtered=allReports.filter(r=>r[cfg.key]);
   if(!filtered.length){
-    document.getElementById('main').innerHTML=`<div class="empty"><div class="empty-icon">${cfg.icon}</div><p>${cfg.title} 데이터가 없습니다.</p></div>`;
+    document.getElementById('main').innerHTML=_mcToday+`<div class="empty"><div class="empty-icon">${cfg.icon}</div><p>${cfg.title} 데이터가 없습니다.</p></div>`;
     return;
   }
   
-  let html=`<div class="sec-timeline">`;
+  let html=_mcToday+`<div class="sec-timeline">`;
   for(const r of filtered){
     html+=`<div class="sec-item">
       <div class="si-date">${cfg.icon} ${esc(r.date||r.fileDate)} <span>${cfg.title}</span></div>
@@ -409,6 +414,34 @@ function renderConsensusArc(mc){
   if(c.consultTip) h+=`<div style="margin-top:8px;padding:9px 12px;border-radius:8px;background:var(--accent-glow);border-left:3px solid var(--accent);font-size:12px;line-height:1.7">💡 <b>상담 활용 Tip</b> · ${esc(c.consultTip)}</div>`;
   return h;
 }
+
+/* ★ [2026-08-10] 오늘자 컨센서스 클릭 로드 — 임베드 우선 → Firestore 실시간 조회(javia-db) → 집계 중 안내 */
+window.mcLoadToday=async function(){
+  const box=document.getElementById('mcTodayWrap');
+  if(!box)return;
+  const btn=document.getElementById('mcTodayBtn');
+  if(btn){btn.disabled=true;const lb=btn.querySelector('span:last-child');if(lb)lb.textContent='불러오는 중…';}
+  const _k=new Date(Date.now()+9*3600*1000);
+  const fd=`${_k.getUTCFullYear()}${String(_k.getUTCMonth()+1).padStart(2,'0')}${String(_k.getUTCDate()).padStart(2,'0')}`;
+  const pending=()=>{
+    box.innerHTML=`<div style="background:#fff;border:1.5px dashed rgba(201,160,92,.45);border-radius:10px;padding:15px;text-align:center"><div style="font-size:13px;font-weight:700;color:var(--navy,#1E2226);margin-bottom:4px">🧭 증권가 조간 리서치 집계 중입니다</div><div style="font-size:11.5px;color:var(--text-sub,#8A9098);margin-bottom:10px">오전 중 이 자리에 게시됩니다.</div><button type="button" onclick="mcTodayRetry()" style="background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;border:none;border-radius:7px;padding:7px 20px;font-size:12px;font-weight:700;cursor:pointer">다시 확인</button></div>`;
+  };
+  try{
+    const todayRep=allReports.find(r=>(r.fileDate||r.id)===fd);
+    let mc=(todayRep&&todayRep.morningConsensus)||null;
+    if(!(mc&&mc.ko)){
+      const snap=await getDoc(doc(db,'morning_consensus',fd));
+      if(snap.exists()&&snap.data().status==='done')mc=snap.data();
+    }
+    if(mc&&mc.ko){
+      box.innerHTML=`<div style="background:#fff;border:1px solid var(--border-lt,#F0F3F6);border-radius:10px;padding:14px 15px"><div style="font-size:12px;font-weight:800;color:#96701F;margin-bottom:9px">🧭 오늘의 모닝 컨센서스</div>${renderConsensusArc(mc)}</div><div style="text-align:right;margin-top:6px"><a href="./consensus.html" style="font-size:11px;font-weight:700;color:#96701F;text-decoration:none">전체 아카이브 보기 →</a></div>`;
+      return;
+    }
+    pending();
+  }catch(e){console.warn('[MC] 오늘자 조회 실패:',e);pending();}
+};
+/* 다시 확인 — 즉시 재조회 */
+window.mcTodayRetry=function(){window.mcLoadToday();};
 
 function renderMarket(data){
   const inds=data.indicators||[];

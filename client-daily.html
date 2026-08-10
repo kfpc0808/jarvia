@@ -2305,11 +2305,17 @@ function renderIndicators(d){
   </div>`;
 }
 
-/* ═══ ★ 모닝 컨센서스 (2026-08 신설) — 고객용 렌더 ═══
-   consultantDR 체인에서 consultTip이 제거된 데이터(morningConsensus)를 렌더.
-   경제지표 바로 아래 상시 노출(비아코디언 wrap → 타일 내비 미포함). 음성 미제공. */
+/* ═══ ★ 모닝 컨센서스 (2026-08 신설 → 2026-08-10 분리 구조: 클릭 로드) ═══
+   접힌 버튼만 상시 노출(자동 펼침 없음). 클릭 시 임베드(reportData.morningConsensus) 우선,
+   없으면 Firestore morning_consensus/{오늘 YYYYMMDD} 실시간 조회(status done만 렌더).
+   집계 전이면 안내 + 다시 확인 버튼. 디자인(펼침 후)은 기존 렌더 무변경. */
 function renderConsensus(d){
-  const mc=d.morningConsensus;
+  return `<div class="wrap" id="mcSecWrap"><button type="button" id="mcLoadBtn" onclick="mcLoad()" style="width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid rgba(201,160,92,.4);border-radius:12px;padding:14px 16px;cursor:pointer;box-shadow:0 2px 12px rgba(20,23,25,.06);text-align:left"><span style="font-size:16px">🧭</span><span style="font-size:14.5px;font-weight:800;color:#1E2226">모닝 컨센서스</span><span style="font-size:11px;font-weight:600;color:#8A9098">증권가 다수 의견</span><span style="margin-left:auto;font-size:11.5px;font-weight:700;color:#96701F;white-space:nowrap">탭하여 보기 ▾</span></button></div>`;
+}
+
+/* 고객용 본문 렌더 — consultantDR 체인에서 consultTip이 제거된 데이터(mc)를 렌더.
+   음성 미제공. (consultTip은 여기서 미출력 — B2B2C 정책) */
+function renderConsensusBody(mc){
   if(!mc||!mc.ko) return '';
   const c=mc.ko, meta=c.meta||{}, N=mc.totalFirms||meta.totalFirms||0;
   const tagSt=t=>({neutral:'background:#EEF1F4;color:#565D66',caution:'background:rgba(243,156,18,.12);color:#B8770B',positive:'background:rgba(39,174,96,.1);color:#1E8A4C',negative:'background:rgba(46,111,216,.1);color:#2E6FD8'}[t]||'background:#EEF1F4;color:#565D66');
@@ -2374,11 +2380,38 @@ function renderConsensus(d){
 
   b+=`<div style="margin-top:14px;padding-top:11px;border-top:1px dashed #E1E8EE"><div style="font-size:10.5px;color:#8A9098;line-height:1.65">※ 본 내용은 각 증권사가 공개 발행한 아침 리서치 자료의 공통 의견을 AI가 정보 제공 목적으로 집계·재구성한 것입니다. 증권사명은 해당 의견을 제시한 곳을 표시하며 원문 인용이 아니고, '미언급'은 반대가 아니라 그 주제를 다루지 않았다는 뜻입니다. 특정 종목의 매수·매도 추천이 아니며, 투자 판단과 책임은 투자자 본인에게 있습니다.</div></div>`;
 
-  return `<div class="wrap">
-    <div class="sec-divider"><div class="sec-num" style="background:linear-gradient(135deg,#C9A05C,#96701F)">★</div><div class="sec-divider-text">모닝 컨센서스 <span style="font-size:11px;font-weight:600;color:#8A9098">전문가 다수 의견</span></div></div>
-    <div style="background:#fff;border:1px solid #F0F3F6;border-radius:12px;padding:16px 15px;box-shadow:0 2px 12px rgba(20,23,25,.06)">${b}</div>
-  </div>`;
+  return `<div class="sec-divider"><div class="sec-num" style="background:linear-gradient(135deg,#C9A05C,#96701F)">★</div><div class="sec-divider-text">모닝 컨센서스 <span style="font-size:11px;font-weight:600;color:#8A9098">전문가 다수 의견</span></div></div>
+    <div style="background:#fff;border:1px solid #F0F3F6;border-radius:12px;padding:16px 15px;box-shadow:0 2px 12px rgba(20,23,25,.06)">${b}</div>`;
 }
+
+/* ★ [2026-08-10] 클릭 로드 핸들러 — 임베드 우선 → Firestore 실시간 조회(javia-db) → 집계 중 안내 */
+window.mcLoad=async function(){
+  const box=document.getElementById('mcSecWrap');
+  if(!box)return;
+  const btn=document.getElementById('mcLoadBtn');
+  if(btn){btn.disabled=true;const lb=btn.querySelector('span:last-child');if(lb)lb.textContent='불러오는 중…';}
+  const pending=()=>{
+    box.innerHTML=`<div style="background:#fff;border:1.5px dashed rgba(201,160,92,.4);border-radius:12px;padding:16px;text-align:center"><div style="font-size:15px;margin-bottom:6px">🧭</div><div style="font-size:13px;font-weight:700;color:#1E2226;margin-bottom:4px">증권가 조간 리서치 집계 중입니다</div><div style="font-size:12px;color:#8A9098;line-height:1.7;margin-bottom:11px">오전 중 이 자리에 게시됩니다.</div><button type="button" onclick="mcRetry()" style="background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;border:none;border-radius:8px;padding:8px 22px;font-size:12.5px;font-weight:700;cursor:pointer">다시 확인</button></div>`;
+  };
+  try{
+    let mc=(typeof reportData!=='undefined'&&reportData&&reportData.morningConsensus)||null;
+    if(!(mc&&mc.ko)){
+      const _k=new Date(Date.now()+9*3600*1000);
+      const fd=`${_k.getUTCFullYear()}${String(_k.getUTCMonth()+1).padStart(2,'0')}${String(_k.getUTCDate()).padStart(2,'0')}`;
+      const snap=await getDoc(doc(db,'morning_consensus',fd));
+      if(snap.exists()&&snap.data().status==='done')mc=snap.data();
+    }
+    if(mc&&mc.ko){box.innerHTML=renderConsensusBody(mc);return;}
+    pending();
+  }catch(e){console.warn('[MC] 조회 실패:',e);pending();}
+};
+/* 다시 확인 — 셸 버튼 복원 후 즉시 재조회 */
+window.mcRetry=function(){
+  const box=document.getElementById('mcSecWrap');
+  if(!box)return;
+  box.innerHTML=`<button type="button" id="mcLoadBtn" onclick="mcLoad()" style="width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid rgba(201,160,92,.4);border-radius:12px;padding:14px 16px;cursor:pointer;box-shadow:0 2px 12px rgba(20,23,25,.06);text-align:left"><span style="font-size:16px">🧭</span><span style="font-size:14.5px;font-weight:800;color:#1E2226">모닝 컨센서스</span><span style="font-size:11px;font-weight:600;color:#8A9098">증권가 다수 의견</span><span style="margin-left:auto;font-size:11.5px;font-weight:700;color:#96701F;white-space:nowrap">탭하여 보기 ▾</span></button>`;
+  window.mcLoad();
+};
 
 /* ★ [2026-08] 컨센서스 블록 배타 아코디언 — 하나 펼치면 나머지 자동 접힘 */
 document.addEventListener('click',e=>{const sm=e.target.closest('details.mc-blk>summary');if(!sm)return;const d0=sm.parentElement;setTimeout(()=>{if(d0.open)document.querySelectorAll('details.mc-blk[open]').forEach(o=>{if(o!==d0)o.open=false;});},0);});
