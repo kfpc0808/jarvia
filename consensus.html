@@ -142,6 +142,8 @@ a{color:inherit}
 .mc-fbrow .fbd{font-size:10px;font-weight:700;border-radius:4px;padding:1px 6px;white-space:nowrap;align-self:center}
 .fbd-up{color:#1E8A4C;background:rgba(39,174,96,.1)}.fbd-neutral{color:#565D66;background:#EEF1F4}.fbd-down{color:#2E6FD8;background:rgba(46,111,216,.1)}
 .mc-fbrow .fbt{flex:1;color:#3A4148}
+.mc-fbrow.nc .fbf{color:#AEB6BE;font-weight:600}
+.mc-fbrow.nc .fbt{color:#AEB6BE;font-style:normal;font-size:11.5px}
 .mc-bd{padding-top:10px}
 .mc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
 .mc-gcard{background:var(--bg-section);border:1px solid var(--border-lt);border-radius:var(--radius-sm);padding:13px 15px}
@@ -327,10 +329,15 @@ function renderConsensus(mc){
   /* ★ [2026-08-10] 증권사별 의견 보기 — firmBriefs에서 해당 섹션 필드만 추출해 접이식 표시 */
   const dirBadge=dv=>({up:'<span class="fbd fbd-up">상승</span>',neutral:'<span class="fbd fbd-neutral">중립</span>',down:'<span class="fbd fbd-down">하락</span>'}[dv]||'');
   const firmBriefsFold=(field,withDir)=>{
-    const fbs=(d.firmBriefs||[]).filter(x=>x&&x[field]);
-    if(!fbs.length)return'';
-    return `<details class="mc-firms-fold"><summary><span class="ff-cara">▶</span>증권사별 의견 보기 <span style="font-weight:600;color:var(--text-sub)">(${fbs.length}개사 · 판단 재료)</span></summary>`+
-      fbs.map(x=>`<div class="mc-fbrow"><span class="fbf">${esc(x.firm)}</span>${withDir?dirBadge(x.direction):''}<span class="fbt">${esc(x[field])}</span></div>`).join('')+`</details>`;
+    /* ★ [2026-08-10] 전원 표시: firmList 순서대로 N개사 모두 — 미커버 회사도 '다루지 않음' 회색 행으로 명시 (미언급도 판단 재료) */
+    const byFirm={};(d.firmBriefs||[]).forEach(x=>{if(x&&x.firm)byFirm[x.firm]=x;});
+    const firms=mc.firmList||Object.keys(byFirm);
+    if(!firms.length)return'';
+    const covered=firms.filter(f=>byFirm[f]&&byFirm[f][field]).length;
+    return `<details class="mc-firms-fold"><summary><span class="ff-cara">▶</span>증권사별 의견 보기 <span style="font-weight:600;color:var(--text-sub)">(${firms.length}개사 전체 · 이 주제 언급 ${covered}곳)</span></summary>`+
+      firms.map(f=>{const x=byFirm[f]||{};const v=x[field];
+        return v?`<div class="mc-fbrow"><span class="fbf">${esc(f)}</span>${withDir?dirBadge(x.direction):''}<span class="fbt">${esc(v)}</span></div>`
+                :`<div class="mc-fbrow nc"><span class="fbf">${esc(f)}</span><span class="fbt">이 주제는 다루지 않음</span></div>`;}).join('')+`</details>`;
   };
   const easyBox=g=>{
     if(!g||!g.length)return'';
@@ -406,6 +413,13 @@ async function captureReport(){
       onclone:doc=>{
         const a2=doc.getElementById('capArea');if(a2){a2.style.width='1000px';a2.style.maxWidth='1000px';}
         doc.querySelectorAll('details.mc-blk').forEach(el=>el.setAttribute('open',''));   /* 접힘 상태와 무관하게 전 블록 펼쳐 완결형 이미지 */
+        /* ★ [2026-08-10] 각사 의견·증권사 칩: html2canvas가 열린 details를 겹쳐 그리는 문제 회피 —
+           사용자가 펼쳐둔 것은 정적 div로 변환해 캡처에 포함, 접혀 있던 것은 캡처에서 제외 */
+        doc.querySelectorAll('details.mc-firms-fold, details.mc-fold').forEach(el=>{
+          if(el.open){const div=doc.createElement('div');div.className=el.className+' as-div';div.innerHTML=el.innerHTML;el.replaceWith(div);}
+          else el.remove();
+        });
+        doc.querySelectorAll('.as-div > summary').forEach(sm=>{const p=doc.createElement('div');p.style.cssText='padding:9px 2px 3px;font-size:12px;font-weight:800;color:#96701F';p.textContent=sm.textContent;sm.replaceWith(p);});
         doc.querySelectorAll('.mc-tip, .mc-cara, .mc-hint, .mc-arr').forEach(el=>el.remove());   /* 컨설턴트 팁·접기 UI 부속 미포함 (일치/반대/미언급 수치는 유지) */
       }
     });
