@@ -218,7 +218,6 @@ a{color:inherit}
     <button class="nav-btn" id="btnNext" onclick="navMove(-1)" title="다음 영업일">›</button>
     <button class="cap-btn" id="btnCap" onclick="captureReport()" title="이미지로 저장">📷 <span class="cap-tx">이미지 저장</span></button>
     <button class="cap-btn" id="btnPdf" onclick="downloadPdf()" title="PDF로 저장 (A4)">📄 <span class="cap-tx">PDF</span></button>
-    <button class="cap-btn" id="btnCard" onclick="editFcCard()" title="저장물 하단 명함(소속·직함·성명·연락처) 수정">✏️</button>
   </div>
 </div>
 
@@ -478,6 +477,15 @@ async function buildReportCanvas(){
     scale:2,backgroundColor:'#FFFFFF',useCORS:true,logging:false,windowWidth:1100,   /* ★ [2026-08] 어떤 기기에서 저장해도 PC형 레이아웃으로 캡처 */
     onclone:doc=>{
       const a2=doc.getElementById('capArea');if(a2){a2.style.width='1000px';a2.style.maxWidth='1000px';}
+      /* ★ [2026-08-10] 저장물 상단 제목·발행일 헤더 — 화면의 날짜는 nav-bar(캡처 영역 밖)에 있어 이미지·PDF에 날짜가 빠지던 문제 해결 */
+      if(a2){
+        const f=fmtDate(r);
+        const hd=doc.createElement('div');
+        hd.style.cssText='display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:2px 2px 14px;margin-bottom:18px;border-bottom:2px solid #C9A05C';
+        hd.innerHTML='<div style="font-size:19px;font-weight:800;color:#1E2226;letter-spacing:-.3px">🧭 모닝 컨센서스 <span style="font-size:11px;font-weight:700;color:#96701F;letter-spacing:.6px">MORNING CONSENSUS</span></div>'
+          +'<div style="font-size:14.5px;font-weight:800;color:#1E2226;white-space:nowrap">'+esc(f.main)+'</div>';
+        a2.insertBefore(hd,a2.firstChild);
+      }
       doc.querySelectorAll('details.mc-blk').forEach(el=>el.setAttribute('open',''));   /* 접힘 상태와 무관하게 전 블록 펼쳐 완결형 이미지 */
       /* ★ [2026-08-10] 각사 의견·증권사 칩: html2canvas가 열린 details를 겹쳐 그리는 문제 회피 —
          사용자가 펼쳐둔 것은 정적 div로 변환해 캡처에 포함, 접혀 있던 것은 캡처에서 제외 */
@@ -532,9 +540,26 @@ async function downloadPdf(){
     const pdf=new JS({orientation:'portrait',unit:'mm',format:'a4'});
     const MARGIN=8, pw=210-MARGIN*2, ph=297-MARGIN*2;                       // 인쇄 여백 8mm
     const imgWpx=canvas.width, pageHpx=Math.floor(imgWpx*(ph/pw));          // 한 페이지에 들어갈 원본 px 높이
+    /* ★ [2026-08-10] 스마트 페이지 분할 — 페이지 경계에서 위로 최대 35% 범위를 스캔해
+       "완전한 흰색 가로줄"(블록 사이 여백, 카드 배경 #FFF)을 찾아 그 지점에서 자른다.
+       카드·문단·해설박스 중간이 싹둑 잘리던 문제 해결. 흰 줄이 없으면 기존처럼 기계적 자름(안전망). */
+    const srcCtx=canvas.getContext('2d',{willReadFrequently:true});
+    const isWhiteRow=y=>{
+      const row=srcCtx.getImageData(0,y,imgWpx,1).data;
+      for(let x=0;x<imgWpx*4;x+=16){                                        // 매 4px 샘플(점선 테두리도 검출)
+        if(row[x]<250||row[x+1]<250||row[x+2]<250)return false;
+      }
+      return true;
+    };
+    const findCut=yEnd=>{
+      const yMin=yEnd-Math.floor(pageHpx*0.35);
+      for(let y=yEnd;y>yMin;y-=2){if(isWhiteRow(y))return y;}
+      return yEnd;                                                          // 흰 줄 없음 → 기계적 자름
+    };
     let y=0,page=0;
     while(y<canvas.height){
-      const sliceH=Math.min(pageHpx,canvas.height-y);
+      let sliceH=Math.min(pageHpx,canvas.height-y);
+      if(y+sliceH<canvas.height)sliceH=findCut(y+sliceH)-y;                 // 마지막 페이지는 탐색 불필요
       const c2=document.createElement('canvas');
       c2.width=imgWpx;c2.height=sliceH;
       const ctx=c2.getContext('2d');
