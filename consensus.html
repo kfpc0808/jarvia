@@ -217,6 +217,8 @@ a{color:inherit}
     </div>
     <button class="nav-btn" id="btnNext" onclick="navMove(-1)" title="다음 영업일">›</button>
     <button class="cap-btn" id="btnCap" onclick="captureReport()" title="이미지로 저장">📷 <span class="cap-tx">이미지 저장</span></button>
+    <button class="cap-btn" id="btnPdf" onclick="downloadPdf()" title="PDF로 저장 (A4)">📄 <span class="cap-tx">PDF</span></button>
+    <button class="cap-btn" id="btnCard" onclick="editFcCard()" title="저장물 하단 명함(소속·직함·성명·연락처) 수정">✏️</button>
   </div>
 </div>
 
@@ -227,10 +229,11 @@ a{color:inherit}
 <div class="cap-toast" id="capToast">이미지를 저장했습니다</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,collection,getDocs,query,orderBy,limit}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,collection,getDocs,query,orderBy,limit,doc,getDoc}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
 const app=initializeApp(FC);
@@ -372,6 +375,13 @@ function renderConsensus(mc){
     +`<li><span class="bn-no">5</span><span class="bn-tx">오늘 증권가의 시각 분포를 파악하고 스스로 투자 스탠스를 정립하시라는 취지이며, <b>최종 판단은 독자의 몫</b>입니다.</span></li>`
     +`<li><span class="bn-no">6</span><span class="bn-tx">게시 전 모든 문장은 <b>서로 다른 3사 AI의 교차 검증</b>을 통과합니다.</span></li>`
     +`</ol><div class="mc-firms"><b style="color:var(--navy)">오늘의 분석 대상 ${N}개사</b> · ${(mc.firmList||[]).map(esc).join(' · ')}</div></div>`;
+  /* ★ [2026-08-10] 전일 마감 리뷰 — 8개사 리서치의 전일 시황 종합 (prevDayRecap 도입 이후 발행분만 표시) */
+  if(d.prevDayRecap&&d.prevDayRecap.full){
+    b+=`<div style="background:#fff;border:1.5px solid #C9A05C;border-radius:14px;padding:15px 17px;margin-bottom:14px;box-shadow:0 3px 12px rgba(201,160,92,.12)">`
+      +`<div style="font-size:13.5px;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:7px;margin-bottom:9px">📈 전일 마감 리뷰 <span style="font-size:10.5px;font-weight:700;color:#96701F;background:var(--gold-bg,#FBF7EE);border:1px solid rgba(201,160,92,.35);border-radius:5px;padding:2px 7px">${N}개사 리서치 종합</span></div>`
+      +`<div style="font-size:12.5px;color:var(--text,#33393F);line-height:1.8;word-break:keep-all">${esc(d.prevDayRecap.full)}</div>`
+      +`</div>`;
+  }
   b+=`<div class="mc-strip"><div><div class="lb">오늘의 시장 온도</div><div class="vl">${esc(meta.overallTemp||'')}</div></div><div><div class="lb">오늘의 방향 분포</div><div class="vl">${esc(meta.overallDirection||'')}</div></div><div><div class="lb">일치도</div><div class="vl" style="font-family:var(--font-mono)">${meta.overallAgree||0}<span style="font-size:11px;color:rgba(255,255,255,.6)"> / ${N}개사</span></div></div><div class="vr"><div class="ok"><span>✓</span> 3중 교차검증 통과</div><div class="tm">집계 완료 ${esc(mc.collectedAt||'')} · ${N}개사</div></div></div>`;
 
   const ol=d.outlook||{};
@@ -421,30 +431,78 @@ function renderConsensus(mc){
 
 /* ── 📷 이미지 저장 (html2canvas · ★ B2B2C: 상담 Tip은 캡처에서 제외) ── */
 let capturing=false;
-async function captureReport(){
-  if(capturing)return;
+
+/* ★ [2026-08-10] 명함 푸터 — C안: consultants 프로필 자동 로드 → 실패 시 수동 입력(localStorage) */
+let fcProfile=null;   // {name,company,title,phone}
+async function loadFcProfile(u){
+  try{
+    const us=await getDoc(doc(db,'users',u.uid));
+    const lid=us.exists()?(us.data().loginId||''):'';
+    if(lid){
+      const cs=await getDoc(doc(db,'consultants',lid));
+      if(cs.exists()){
+        const c=cs.data();
+        const p={name:c.name||'',company:c.company||'',title:c.title||'',phone:c.phone||c.mobile||c.tel||''};
+        if(p.name){fcProfile=p;try{localStorage.setItem('mc_card',JSON.stringify(p));}catch(_e){}return;}
+      }
+    }
+  }catch(e){console.warn('[profile]',e.message);}
+  try{const s=localStorage.getItem('mc_card');if(s)fcProfile=JSON.parse(s);}catch(_e){}
+}
+function editFcCard(){
+  const p=fcProfile||{name:'',company:'',title:'',phone:''};
+  const name=prompt('성명 (이미지·PDF 하단 명함에 표시됩니다)',p.name);if(name===null)return;
+  const company=prompt('소속사',p.company);if(company===null)return;
+  const title=prompt('직함',p.title);if(title===null)return;
+  const phone=prompt('연락처',p.phone);if(phone===null)return;
+  fcProfile={name:name.trim(),company:company.trim(),title:title.trim(),phone:phone.trim()};
+  try{localStorage.setItem('mc_card',JSON.stringify(fcProfile));}catch(_e){}
+  alert('저장되었습니다. 이후 이미지·PDF 저장 시 하단에 표시됩니다.');
+}
+function cardFooterHTML(){
+  if(!fcProfile||!fcProfile.name)return'';
+  const sub=[fcProfile.company,fcProfile.title].filter(Boolean).join(' · ');
+  return `<div id="mcCardFooter" style="margin-top:22px;padding:16px 6px 4px;border-top:2px solid #C9A05C;display:flex;align-items:center;justify-content:space-between;gap:14px">`
+    +`<div><span style="font-size:16px;font-weight:800;color:#1E2226;letter-spacing:-.2px">${esc(fcProfile.name)}</span>`
+    +(sub?`<span style="font-size:12.5px;font-weight:600;color:#96701F;margin-left:10px">${esc(sub)}</span>`:``)+`</div>`
+    +(fcProfile.phone?`<div style="font-size:13px;font-weight:700;color:#1E2226;white-space:nowrap">📞 ${esc(fcProfile.phone)}</div>`:``)
+    +`</div>`;
+}
+
+/* 공용 캔버스 생성 — 이미지/PDF가 동일 렌더 파이프라인 사용 (명함 푸터 포함) */
+async function buildReportCanvas(){
   const area=document.getElementById('capArea');
   const r=archive[curIdx];
-  if(!area||!r||typeof html2canvas==='undefined')return;
+  if(!area||!r||typeof html2canvas==='undefined')return null;
+  return await html2canvas(area,{
+    scale:2,backgroundColor:'#FFFFFF',useCORS:true,logging:false,windowWidth:1100,   /* ★ [2026-08] 어떤 기기에서 저장해도 PC형 레이아웃으로 캡처 */
+    onclone:doc=>{
+      const a2=doc.getElementById('capArea');if(a2){a2.style.width='1000px';a2.style.maxWidth='1000px';}
+      doc.querySelectorAll('details.mc-blk').forEach(el=>el.setAttribute('open',''));   /* 접힘 상태와 무관하게 전 블록 펼쳐 완결형 이미지 */
+      /* ★ [2026-08-10] 각사 의견·증권사 칩: html2canvas가 열린 details를 겹쳐 그리는 문제 회피 —
+         사용자가 펼쳐둔 것은 정적 div로 변환해 캡처에 포함, 접혀 있던 것은 캡처에서 제외 */
+      doc.querySelectorAll('details.mc-firms-fold, details.mc-fold').forEach(el=>{
+        if(el.open){const div=doc.createElement('div');div.className=el.className+' as-div';div.innerHTML=el.innerHTML;el.replaceWith(div);}
+        else el.remove();
+      });
+      doc.querySelectorAll('.as-div > summary').forEach(sm=>{const p=doc.createElement('div');p.style.cssText='padding:9px 2px 3px;font-size:12px;font-weight:800;color:#96701F';p.textContent=sm.textContent;sm.replaceWith(p);});
+      doc.querySelectorAll('.mc-tip, .mc-cara, .mc-hint, .mc-arr').forEach(el=>el.remove());   /* 컨설턴트 팁·접기 UI 부속 미포함 (일치/반대/미언급 수치는 유지) */
+      /* ★ [2026-08-10] 명함 푸터 삽입 (프로필 있을 때만) */
+      const ft=cardFooterHTML();
+      if(ft&&a2){const w=doc.createElement('div');w.innerHTML=ft;a2.appendChild(w.firstChild);}
+    }
+  });
+}
+
+async function captureReport(){
+  if(capturing)return;
+  const r=archive[curIdx];if(!r)return;
   capturing=true;
   const btn=document.getElementById('btnCap');
   btn.disabled=true;
   try{
-    const canvas=await html2canvas(area,{
-      scale:2,backgroundColor:'#FFFFFF',useCORS:true,logging:false,windowWidth:1100,   /* ★ [2026-08] 어떤 기기에서 저장해도 PC형 레이아웃으로 캡처 */
-      onclone:doc=>{
-        const a2=doc.getElementById('capArea');if(a2){a2.style.width='1000px';a2.style.maxWidth='1000px';}
-        doc.querySelectorAll('details.mc-blk').forEach(el=>el.setAttribute('open',''));   /* 접힘 상태와 무관하게 전 블록 펼쳐 완결형 이미지 */
-        /* ★ [2026-08-10] 각사 의견·증권사 칩: html2canvas가 열린 details를 겹쳐 그리는 문제 회피 —
-           사용자가 펼쳐둔 것은 정적 div로 변환해 캡처에 포함, 접혀 있던 것은 캡처에서 제외 */
-        doc.querySelectorAll('details.mc-firms-fold, details.mc-fold').forEach(el=>{
-          if(el.open){const div=doc.createElement('div');div.className=el.className+' as-div';div.innerHTML=el.innerHTML;el.replaceWith(div);}
-          else el.remove();
-        });
-        doc.querySelectorAll('.as-div > summary').forEach(sm=>{const p=doc.createElement('div');p.style.cssText='padding:9px 2px 3px;font-size:12px;font-weight:800;color:#96701F';p.textContent=sm.textContent;sm.replaceWith(p);});
-        doc.querySelectorAll('.mc-tip, .mc-cara, .mc-hint, .mc-arr').forEach(el=>el.remove());   /* 컨설턴트 팁·접기 UI 부속 미포함 (일치/반대/미언급 수치는 유지) */
-      }
-    });
+    const canvas=await buildReportCanvas();
+    if(!canvas)throw new Error('canvas null');
     const a=document.createElement('a');
     a.download=`모닝컨센서스_${fmtDate(r).dash}.png`;
     a.href=canvas.toDataURL('image/png');
@@ -459,16 +517,57 @@ async function captureReport(){
   }
 }
 
+/* ★ [2026-08-10] 📄 PDF 저장 — A4 세로(210×297mm), 긴 내용 자동 페이지 분할, 명함 푸터 포함 */
+async function downloadPdf(){
+  if(capturing)return;
+  const r=archive[curIdx];if(!r)return;
+  const JS=(window.jspdf&&window.jspdf.jsPDF);
+  if(!JS){alert('PDF 모듈을 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.');return;}
+  capturing=true;
+  const btn=document.getElementById('btnPdf');
+  btn.disabled=true;
+  try{
+    const canvas=await buildReportCanvas();
+    if(!canvas)throw new Error('canvas null');
+    const pdf=new JS({orientation:'portrait',unit:'mm',format:'a4'});
+    const MARGIN=8, pw=210-MARGIN*2, ph=297-MARGIN*2;                       // 인쇄 여백 8mm
+    const imgWpx=canvas.width, pageHpx=Math.floor(imgWpx*(ph/pw));          // 한 페이지에 들어갈 원본 px 높이
+    let y=0,page=0;
+    while(y<canvas.height){
+      const sliceH=Math.min(pageHpx,canvas.height-y);
+      const c2=document.createElement('canvas');
+      c2.width=imgWpx;c2.height=sliceH;
+      const ctx=c2.getContext('2d');
+      ctx.fillStyle='#FFFFFF';ctx.fillRect(0,0,imgWpx,sliceH);
+      ctx.drawImage(canvas,0,y,imgWpx,sliceH,0,0,imgWpx,sliceH);
+      if(page>0)pdf.addPage();
+      pdf.addImage(c2.toDataURL('image/jpeg',0.92),'JPEG',MARGIN,MARGIN,pw,sliceH*(pw/imgWpx));
+      y+=sliceH;page++;
+    }
+    pdf.save(`모닝컨센서스_${fmtDate(r).dash}.pdf`);
+    const t=document.getElementById('capToast');
+    t.style.display='block';setTimeout(()=>{t.style.display='none';},2200);
+  }catch(e){
+    console.error('pdf error:',e);
+    alert('PDF 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+  }finally{
+    capturing=false;btn.disabled=false;
+  }
+}
+
 /* onclick 핸들러 window 등록 (module scope) */
 window.navMove=navMove;
 window.toggleDateList=toggleDateList;
 window.selectDate=selectDate;
 window.captureReport=captureReport;
+window.downloadPdf=downloadPdf;
+window.editFcCard=editFcCard;
 
 /* ── 인증 확인 후 로드 (daily-report.html과 동일 정책: 로그인 회원 전 등급 열람) ── */
 onAuthStateChanged(auth,async u=>{
   if(u){
     try{sessionStorage.removeItem('_mcAutoReload');}catch(_e){}
+    loadFcProfile(u);   /* ★ [2026-08-10] 명함 프로필 로드 (비차단 — 캡처 전까지만 완료되면 됨) */
     loadArchive();
   }else{
     /* 오탐 방어: 순간적 null이면 복원 유예 → 로그인 이력 있으면 1회 자동 새로고침 */
