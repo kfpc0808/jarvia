@@ -1067,6 +1067,10 @@ body{
   이 페이지의 열람 기록은 담당 컨설턴트의 고객 관리 목적으로 활용되며, 이 기기에 표시 설정이 저장됩니다.
   <a href="https://jarvia.co.kr/privacy" target="_blank" rel="noopener" style="text-decoration:underline">개인정보처리방침</a>
 </div>
+<!-- ── 열람기록 미동의 상태 — 재진입 링크 (2026-08-11) ── -->
+<div id="jvConsentOff" class="report-footer" style="display:none;padding:14px 20px 10px;text-align:center">
+  <a href="#" onclick="jvConsentReopen();return false" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#8A8677;text-decoration:none;border:1px solid #E0D9C4;border-radius:20px;padding:7px 14px;background:#FBF8F0"><i class="ti ti-settings" style="font-size:14px"></i>맞춤 정보 설정<span style="color:#B0AA97">· 꺼짐</span></a>
+</div>
 
 
 <div class="photo-overlay" id="photoOverlay" onclick="closePhotoOverlay()">
@@ -1096,6 +1100,20 @@ body{
 [ 마이페이지 → 고객리포트프로필 ]에서
 정보를 등록하시면 본인 정보로 표시됩니다.</div>
     <button class="sp-modal-close" onclick="closeSampleNotice()">확인</button>
+  </div>
+</div>
+
+<!-- ═══ 열람기록 동의 팝업 (Level 2 — 2026-08-11) ═══ -->
+<div class="sp-modal-bg" id="jvConsentModal">
+  <div class="sp-modal">
+    <div class="sp-modal-avatar"><span style="font-size:30px">🔔</span></div>
+    <div class="sp-modal-name">맞춤 정보 제공 안내</div>
+    <div class="sp-modal-body">회원님의 관심사에 맞는 정보를 더 잘 전해드리기 위해, 리포트 열람 여부와 관심 있게 보신 콘텐츠가 담당 컨설턴트에게 전달됩니다.
+
+동의하지 않으셔도 리포트는 계속 보실 수 있어요.
+이 경우 열람 기록은 전달되지 않습니다.</div>
+    <button class="sp-modal-close" onclick="jvConsentAgree()">동의하고 보기</button>
+    <button type="button" onclick="jvConsentDecline()" style="display:block;width:100%;background:none;border:none;margin-top:8px;padding:8px;font-size:13px;color:#A39E8E;cursor:pointer">동의하지 않고 보기</button>
   </div>
 </div>
 
@@ -1172,14 +1190,58 @@ window.jvTrack=function(t,id){if(!fcId)return;_jvQ.push(id?{t:t,id:id}:{t:t});};
 function jvFlush(){
   if(!fcId||!_jvQ.length)return;
   const ev=_jvQ.splice(0);
-  try{navigator.sendBeacon(JV_EP,new Blob([JSON.stringify({fcLoginId:fcId,viewerKey:_jvVK,isNew:_jvNew,clientId:(_jvOwner?undefined:(_jvCID||undefined)),page:'daily',events:ev})],{type:'text/plain'}));}catch(e){}
+  /* ★ [2026-08-11] 동의 게이트 — 동의('y')일 때만 clientId 귀속, 그 외(거부·미정)는 익명 집계만 */
+  try{navigator.sendBeacon(JV_EP,new Blob([JSON.stringify({fcLoginId:fcId,viewerKey:_jvVK,isNew:_jvNew,clientId:((_jvOwner||_jvConsent!=='y')?undefined:(_jvCID||undefined)),page:'daily',events:ev})],{type:'text/plain'}));}catch(e){}
 }
 window.jvFlush=jvFlush; /* ★ 오늘의 선택 즉시 전송용 (2026-07-17) */
 window.addEventListener('pagehide',jvFlush);
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')jvFlush();});
 window.jvTrack('daily_visit',fileDate);
-// 고객 식별 토큰으로 추적 중일 때만 열람기록 고지 노출 (컨설턴트 본인 뷰 제외)
-_jvOwnerP.then(function(_o){try{if(_jvCID&&!_o){const _n=document.getElementById('jvNotice');if(_n)_n.style.display='block';}}catch(e){}});
+/* ── 열람기록 동의 상태 (Level 2 — 2026-08-11) ──────────────────────────
+   'y'=동의(clientId 귀속 추적) / 'n'=거부(익명 집계만) / ''=미정(익명 집계만)
+   로컬: localStorage jv_consent = { "<fcId>_<clientId>": "y"|"n" }
+   서버: fc_client_consents/{fcId}_{clientId} — create-only(최초 동의 시각 보존)
+   분기: 동의→jvNotice 고지 / 거부→jvConsentOff 재진입링크 / 미정→서버확인 후 팝업 */
+let _jvConsent='';
+function _jvCKey(){return fcId+'_'+_jvCID;}
+function _jvCLoad(){try{const m=JSON.parse(localStorage.getItem('jv_consent')||'{}')||{};const v=m[_jvCKey()];return (v==='y'||v==='n')?v:'';}catch(e){return '';}}
+function _jvCSave(v){try{const m=JSON.parse(localStorage.getItem('jv_consent')||'{}')||{};m[_jvCKey()]=v;localStorage.setItem('jv_consent',JSON.stringify(m));}catch(e){}}
+function _jvUiConsented(){try{const n=document.getElementById('jvNotice');if(n)n.style.display='block';const f=document.getElementById('jvConsentOff');if(f)f.style.display='none';}catch(e){}}
+function _jvUiDeclined(){try{const n=document.getElementById('jvNotice');if(n)n.style.display='none';const f=document.getElementById('jvConsentOff');if(f)f.style.display='block';}catch(e){}}
+window.jvConsentReopen=function(){try{const m=document.getElementById('jvConsentModal');if(m)m.classList.add('active');}catch(e){}};
+window.jvConsentAgree=async function(){
+  _jvConsent='y';_jvCSave('y');
+  try{document.getElementById('jvConsentModal').classList.remove('active');}catch(e){}
+  _jvUiConsented();
+  try{
+    await setDoc(doc(db,'fc_client_consents',_jvCKey()),{
+      fcLoginId:fcId,clientId:_jvCID,agreedAt:serverTimestamp(),
+      viewerKey:String(_jvVK||'').slice(0,64),ua:String(navigator.userAgent||'').slice(0,200)
+    });
+  }catch(e){} /* 문서 기존재(create-only 거부) 또는 일시 오류 — 로컬 동의 유지 */
+};
+window.jvConsentDecline=function(){
+  _jvConsent='n';_jvCSave('n');
+  /* ★ [2026-08-11] viewerKey 회전 — 거부 이전 clientId 귀속 로그와 기기 키 연결고리 절단(재식별 방지) */
+  try{_jvVK=Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem('jv_vk',_jvVK);_jvNew=true;}catch(e){}
+  try{document.getElementById('jvConsentModal').classList.remove('active');}catch(e){}
+  _jvUiDeclined();
+};
+// 고객 식별 토큰 방문(컨설턴트 본인 뷰 제외): 동의 상태별 분기 (2026-08-11)
+_jvOwnerP.then(async function(_o){
+  try{
+    if(!_jvCID||_o)return;
+    _jvConsent=_jvCLoad();
+    if(_jvConsent==='y'){_jvUiConsented();return;}
+    if(_jvConsent==='n'){_jvUiDeclined();return;}
+    /* 미정 — 기기 변경 대비: 서버 동의 문서 존재 시 재동의 없이 복원 */
+    try{
+      const s=await getDoc(doc(db,'fc_client_consents',_jvCKey()));
+      if(s.exists()){_jvConsent='y';_jvCSave('y');_jvUiConsented();return;}
+    }catch(e){}
+    window.jvConsentReopen();
+  }catch(e){}
+});
 
 // ═══ Global State ═══
 let fcData=null;
