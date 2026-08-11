@@ -1125,7 +1125,7 @@ import{getAuth,onAuthStateChanged,signInAnonymously}from'https://www.gstatic.com
 /* ★ 자가진단 AI 진단문·파일전송 이식분에 필요한 모듈 (2026-07-24 누락 보완)
    — qzDiag 미정의로 AI 솔루션이 표시되지 않던 문제 수정 */
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
-import{getStorage,ref as storageRef,uploadBytes,getBlob,deleteObject}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+import{getStorage,ref as storageRef,uploadBytes,getBlob,deleteObject,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
 const app=initializeApp(FC);
@@ -2997,6 +2997,8 @@ window.scrollToCta=function(){/* CTA 카드 삭제(2026-07-16)로 무해화 */};
 
 // ═══ Photo Overlay ═══
 window.openPhotoOverlay=function(){
+  /* ★ [2026-08-12] 소유자(컨설턴트 본인 로그인): 탭 = 사진 즉시 교체 / 고객: 기존 확대 보기 */
+  if(_jvOwner){cdPhotoPick();return;}
   const fc=fcData;if(!fc)return;
   const wrap=document.getElementById('photoOvalWrap');
   if(fc.photoUrl){
@@ -3010,6 +3012,37 @@ window.openPhotoOverlay=function(){
 window.closePhotoOverlay=function(){
   document.getElementById('photoOverlay').classList.remove('show');
 };
+/* ★ [2026-08-12] 소유자 사진 즉시 교체 — index 마이페이지와 동일 계약(512정사각 JPEG → consultants photoUrl) */
+function cdSquare512(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{try{const s=Math.min(img.width,img.height);const cv=document.createElement('canvas');cv.width=512;cv.height=512;cv.getContext('2d').drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,512,512);cv.toBlob(b=>b?res(b):rej(new Error('변환 실패')),'image/jpeg',.85);}catch(e){rej(e);}};img.onerror=()=>{try{URL.revokeObjectURL(img.src);}catch(_e){}rej(new Error('이미지 읽기 실패'));};const _u=URL.createObjectURL(file);img.src=_u;setTimeout(()=>{try{URL.revokeObjectURL(_u);}catch(_e){}},30000);});}
+function cdPhotoPick(){
+  const i=document.createElement('input');i.type='file';i.accept='image/*';
+  i.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';
+  i.onchange=async()=>{const f=i.files&&i.files[0];try{if(f)await cdPhotoUpload(f);}finally{try{i.remove();}catch(_e){}}};
+  document.body.appendChild(i);   /* ★ 인앱 브라우저(카톡 등) 호환 — DOM 미부착 input은 click이 무시될 수 있음 */
+  i.click();
+  setTimeout(()=>{try{i.remove();}catch(_e){}},120000);   /* 미선택 이탈 시 정리 */
+}
+async function cdPhotoUpload(file){
+  const u=auth.currentUser;
+  if(!u||u.isAnonymous){showToast('로그인 후 이용할 수 있습니다.');return;}
+  if(file.size>10*1024*1024){showToast('사진 크기는 10MB 이하로 해주세요.');return;}
+  try{
+    showToast('사진 업로드 중…');
+    const blob=await cdSquare512(file);
+    const sr=storageRef(storage,'consultants/'+u.uid+'/profile.jpg');
+    await uploadBytes(sr,blob,{contentType:'image/jpeg'});
+    const url=await getDownloadURL(sr);
+    await setDoc(doc(db,'consultants',fcId),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});
+    if(u.uid!==fcId){await setDoc(doc(db,'consultants',u.uid),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});}
+    if(fcData)fcData.photoUrl=url;
+    const av=document.getElementById('fcAvatar');
+    if(av)av.innerHTML='<img src="'+esc(url)+'" alt="">';
+    showToast('프로필 사진이 변경되었습니다.');
+  }catch(e){
+    /* 소유자가 아닌 로그인 사용자는 규칙이 쓰기를 거부 — 정직하게 안내 */
+    showToast('사진 변경 실패: '+(e&&e.code==='permission-denied'?'본인 채널에서만 가능합니다':(e.message||'오류')));
+  }
+}
 
 // ═══ Util ═══
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):'';}

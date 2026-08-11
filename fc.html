@@ -1251,7 +1251,7 @@ import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-ap
 import{getAuth,onAuthStateChanged,signInAnonymously,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,orderBy,limit,startAfter,getDocs,addDoc,onSnapshot,serverTimestamp,increment,getCountFromServer}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
-import{getStorage,ref as storageRef,getBlob,deleteObject,uploadBytes}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+import{getStorage,ref as storageRef,getBlob,deleteObject,uploadBytes,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
 const app=initializeApp(FC);
@@ -2221,6 +2221,9 @@ async function init(){
         /* ★ [2026-08-11] 🏠 메인 버튼(소유자 전용) — 새 창으로 열려온 경우 창 닫기(원래 메인이 드러남),
            직접 진입이라 닫기가 차단되면 250ms 후 메인으로 이동. 고객 화면에는 미표시(B2B2C 브랜드 격리). */
         const _hb=$('ownerHomeBtn'); if(_hb){_hb.style.display='inline-flex';_hb.onclick=function(){try{window.close();}catch(_e){}setTimeout(function(){try{location.href='https://jarvia.co.kr/index.html';}catch(_e){}},250);};}
+        /* ★ [2026-08-12] 소유자: 헤더 아바타 탭 = 사진 즉시 교체 */
+        __ccOwnerPhoto=true;
+        const _pav=$('avatar'); if(_pav){_pav.style.cursor='pointer';_pav.title='사진 변경';_pav.onclick=function(){window.ccPhotoPick();};}
         const _mb=$('manualBtn'); if(_mb)_mb.style.display='inline-flex';
         // 📇 고객 알림·등록 패널 바인딩 (2026-06-11)
         const _odb=$('ownerDotsBtn'); if(_odb){_odb.style.display='flex';_odb.onclick=openOwnerPanel;}
@@ -9321,7 +9324,7 @@ function ccBuildConsultantCard(){
     +topLinks
     +'</div>'
     +'<div style="display:flex;align-items:center;gap:15px;margin-top:12px'+(hasStats?'':';padding-bottom:18px')+'">'
-    +(cPhoto?'<img src="'+esc(cPhoto)+'" style="width:62px;height:62px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1.5px solid rgba(201,169,110,.55)">':'<div style="width:62px;height:62px;border-radius:50%;background:rgba(201,169,110,.14);border:1.5px solid rgba(201,169,110,.55);color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;flex-shrink:0">'+esc((cName||'?').charAt(0))+'</div>')
+    +(cPhoto?'<img src="'+esc(cPhoto)+'" '+(__ccOwnerPhoto?'onclick="ccPhotoPick()" title="사진 변경" ':'')+'style="width:62px;height:62px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1.5px solid rgba(201,169,110,.55)'+(__ccOwnerPhoto?';cursor:pointer':'')+'">':'<div '+(__ccOwnerPhoto?'onclick="ccPhotoPick()" title="사진 변경" ':'')+'style="width:62px;height:62px;border-radius:50%;background:rgba(201,169,110,.14);border:1.5px solid rgba(201,169,110,.55);color:#C9A96E;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;flex-shrink:0'+(__ccOwnerPhoto?';cursor:pointer':'')+'">'+esc((cName||'?').charAt(0))+'</div>')
     +'<div style="flex:1;min-width:0"><div style="font-size:21px;font-weight:800;color:#fff;letter-spacing:.5px">'+esc(cName)+'</div>'
     +'<div style="font-size:12px;color:#C9A96E;margin-top:4px">'+(cTitle?esc(cTitle):'')+(cTitle&&cCompany?'<span style="color:rgba(255,255,255,.28);padding:0 4px">|</span>':'')+(cCompany?'<span style="color:#8FA0C2">'+esc(cCompany)+'</span>':'')+'</div></div>'
     +'</div>'
@@ -9363,6 +9366,37 @@ window.ccCardShareLink=function(){
 /* ★ [2026-08-08] 진입 파라미터 처리 — ?card=1: 소개카드 단독 화면 · ?consult=1: 재무진단 폼 자동 오픈.
    고객 채널(_ccSlug)에서는 미적용. 데이터 로딩 완료 직후 1회 호출. */
 /* ★ [2026-08-09] 소개카드 오버레이 — ?card=1 진입과 헤더 🪪 소개카드 버튼이 공용 사용 */
+/* ★ [2026-08-12] 소유자 사진 즉시 교체 — 헤더 아바타·소개카드 탭 → 업로드(512정사각 JPEG, index 마이페이지와 동일 계약) */
+let __ccOwnerPhoto=false;
+function ccSquare512(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{try{const s=Math.min(img.width,img.height);const cv=document.createElement('canvas');cv.width=512;cv.height=512;cv.getContext('2d').drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,512,512);cv.toBlob(b=>b?res(b):rej(new Error('변환 실패')),'image/jpeg',.85);}catch(e){rej(e);}};img.onerror=()=>{try{URL.revokeObjectURL(img.src);}catch(_e){}rej(new Error('이미지 읽기 실패'));};const _u=URL.createObjectURL(file);img.src=_u;setTimeout(()=>{try{URL.revokeObjectURL(_u);}catch(_e){}},30000);});}
+window.ccPhotoPick=function(){
+  const i=document.createElement('input');i.type='file';i.accept='image/*';
+  i.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';
+  i.onchange=async()=>{const f=i.files&&i.files[0];try{if(f)await ccPhotoUpload(f);}finally{try{i.remove();}catch(_e){}}};
+  document.body.appendChild(i);   /* ★ 인앱 브라우저(카톡 등) 호환 — DOM 미부착 input은 click이 무시될 수 있음 */
+  i.click();
+  setTimeout(()=>{try{i.remove();}catch(_e){}},120000);   /* 미선택 이탈 시 정리 */
+};
+async function ccPhotoUpload(file){
+  const u=auth.currentUser;
+  if(!u||u.isAnonymous){toast('로그인 후 이용할 수 있습니다','warning');return;}
+  if(file.size>10*1024*1024){toast('사진 크기는 10MB 이하로 해주세요','error');return;}
+  try{
+    toast('사진 업로드 중…');
+    const blob=await ccSquare512(file);
+    const sr=storageRef(storage,'consultants/'+u.uid+'/profile.jpg');
+    await uploadBytes(sr,blob,{contentType:'image/jpeg'});
+    const url=await getDownloadURL(sr);
+    await setDoc(doc(db,'consultants',loginId),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});
+    if(u.uid!==loginId){await setDoc(doc(db,'consultants',u.uid),{photoUrl:url,photoSquare:true,updatedAt:serverTimestamp()},{merge:true});}
+    if(consultantData)consultantData.photoUrl=url;
+    if(fcData)fcData.photoUrl=url;
+    const av=$('avatar');
+    if(av){av.innerHTML='';const im=document.createElement('img');im.src=url;av.appendChild(im);}
+    if(document.getElementById('ccCardOv'))ccCardShowOverlay();   /* 열려있는 소개카드 즉시 갱신 */
+    toast('프로필 사진이 변경되었습니다','success');
+  }catch(e){toast('사진 변경 실패: '+(e&&e.code==='permission-denied'?'본인 채널에서만 가능합니다':(e.message||'오류')),'error');}
+}
 /* ★ [2026-08-11] ?ret=1 — 고객용 HTML 파일에서 새 탭으로 진입한 경우: 오버레이 닫기 = 탭 닫기(리포트 파일로 복귀).
    탭 닫기가 차단되면 뒤로가기, 그마저 불가하면 오버레이만 제거(일반 동작) 폴백. */
 window.__ccRetClose=function(){
