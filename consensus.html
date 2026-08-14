@@ -241,13 +241,81 @@ details.mc-banner[open] .bn-hint{display:none}
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,collection,getDocs,query,orderBy,limit,doc,getDoc}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,collection,getDocs,query,where,orderBy,limit,doc,getDoc,runTransaction,serverTimestamp,Timestamp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';   /* ★ [2026-08-14] 유료화 — where·트랜잭션 추가 */
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
 const app=initializeApp(FC);
 const auth=getAuth(app);
 setPersistence(auth,browserLocalPersistence).catch(()=>{});   /* 메인(index.html)과 동일 저장 방식 — 없으면 로그인 정보를 못 읽음 */
 const db=getFirestore(app,'javia-db');
+
+/* ═══ [2026-08-14] 모닝 컨센서스 유료화 게이트 — index.html의 유료화 블록과 쌍(정책 변경 시 함께 수정) ═══
+   · 멤버십 6롤 무료 · 발행보류(fallback) 무료 · 일반회원 1,000원/건(포인트 우선), 결제 일자는 당일 자정까지 재열람 무료
+   · 직접 URL 진입 우회 차단: 본문 렌더 전 이 게이트를 반드시 통과 */
+const MC_PRICE=1000;
+const MC_MEMBER_ROLES=['admin','jarvia_member','jarvia_inner','inner_circle','con_homepage','branch_manager'];
+let mcUid=null,mcRole='',mcBal=0,mcPoint=0;
+const mcPaid={};          /* {날짜ID:true} — 이 세션에서 확인된 유효 결제 */
+const fmtN=n=>Number(n||0).toLocaleString('ko-KR');
+async function mcLoadRole(uid){
+  try{const us=await getDoc(doc(db,'users',uid));if(us.exists()){const d=us.data();mcRole=d.role||'';mcBal=d.balance||0;mcPoint=d.point||0;}}catch(e){console.warn('role 조회 실패',e);}
+}
+const mcIsMember=()=>MC_MEMBER_ROLES.includes(mcRole);
+async function mcCheckPaid(dateId){
+  if(mcPaid[dateId])return true;
+  try{
+    const snap=await getDocs(query(collection(db,'view_logs'),where('userId','==',mcUid),where('contentId','==','consensus:'+dateId)));
+    const now=Date.now();
+    if(snap.docs.some(d=>{const ex=d.data().expiresAt;return ex&&ex.toMillis()>now;})){mcPaid[dateId]=true;return true;}
+  }catch(e){console.warn('결제기록 조회 실패',e);}
+  return false;
+}
+async function mcCharge(dateId){   /* index.html _mcCharge와 동일 로직 */
+  const uRef=doc(db,'users',mcUid);
+  return runTransaction(db,async tx=>{
+    const uDoc=await tx.get(uRef);
+    if(!uDoc.exists())throw new Error('데이터 오류');
+    const ud=uDoc.data();
+    if(((ud.point||0)+(ud.balance||0))<MC_PRICE)throw new Error('INSUFFICIENT_BALANCE');
+    const pointUsed=Math.min(ud.point||0,MC_PRICE),balUsed=MC_PRICE-pointUsed;
+    const np=(ud.point||0)-pointUsed,nb=(ud.balance||0)-balUsed;
+    const eod=new Date();eod.setHours(23,59,59,999);
+    const gid=()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9);
+    const txId=gid(),logId=gid(),paidAt=Timestamp.fromDate(new Date()),expiresAt=Timestamp.fromDate(eod);
+    tx.update(uRef,{balance:nb,point:np,updatedAt:serverTimestamp()});
+    tx.set(doc(db,'transactions',txId),{txId,userId:mcUid,type:'spend',amount:-MC_PRICE,pointUsed,balanceUsed:balUsed,balanceAfter:nb,pointAfter:np,refType:'consensus',refId:dateId,createdAt:serverTimestamp()});
+    tx.set(doc(db,'view_logs',logId),{logId,userId:mcUid,contentId:'consensus:'+dateId,price:MC_PRICE,txId,paidAt,expiresAt,createdAt:serverTimestamp()});
+    return{pointUsed,balUsed,balance:nb,point:np};
+  });
+}
+function mcPaywall(r,f){   /* 미결제 일자 잠금 카드 */
+  return `<div class="report-card"><div class="fallback-card"><div class="fi">🔒</div>
+    <div class="ft">${f.main} 컨센서스 열람권이 필요합니다</div>
+    <div class="fx">일반회원은 <b>1,000원/건</b>(포인트 우선 차감)으로 열람하실 수 있습니다.<br>
+    결제한 일자는 <b>오늘 하루(자정까지) 재열람 무료</b>이며, 다른 일자 선택 시 별도 결제됩니다.<br>
+    <span style="color:#96701F;font-weight:700">★ 무료 재열람은 오늘까지이니 열람 후 캡처·다운로드로 반드시 저장해 두세요.</span></div>
+    <button onclick="mcPayView('${r.id}')" style="margin-top:16px;border:none;border-radius:10px;background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;font-size:14px;font-weight:800;cursor:pointer;font-family:var(--font);padding:12px 28px">1,000원 결제하고 보기</button>
+    <div style="margin-top:12px;font-size:11px;color:var(--text-sub)">멤버십(자비아·이너서클·컨설턴트홈·지사장)은 무료 — <a href="./index.html" style="color:var(--accent)">멤버십 안내</a></div>
+    </div></div>`;
+}
+window.mcPayView=async function(dateId){
+  try{
+    if((mcPoint+mcBal)<MC_PRICE){
+      if(confirm('잔액이 부족합니다.\n\n현재 잔액: '+fmtN(mcBal)+'원 / 포인트: '+fmtN(mcPoint)+'P\n모닝 컨센서스는 1,000원/건입니다.\n\n충전 화면으로 이동하시겠습니까?'))location.href='./index.html?action=charge';
+      return;
+    }
+    const pu=Math.min(mcPoint,MC_PRICE),bu=MC_PRICE-pu;
+    const ok=confirm('모닝 컨센서스 열람권 결제\n\n· 결제 금액: 1,000원 (포인트 '+fmtN(pu)+'P + 잔액 '+fmtN(bu)+'원)\n· 대상 일자: '+dateId+'\n· 결제한 일자는 오늘 하루(자정까지) 재열람 무료\n· 다른 일자 선택 시 1,000원이 별도 결제됩니다\n\n★ 무료 재열람은 오늘까지이니, 열람 후 캡처·다운로드로 반드시 저장해 두세요.\n\n결제하시겠습니까?');
+    if(!ok)return;
+    const r=await mcCharge(dateId);
+    mcPaid[dateId]=true;mcPoint=r.point;mcBal=r.balance;
+    alert('💰 1,000원 차감 (포인트 '+fmtN(r.pointUsed)+'P + 잔액 '+fmtN(r.balUsed)+'원)\n남은 포인트: '+fmtN(r.point)+'P | 잔액: '+fmtN(r.balance)+'원');
+    show();
+  }catch(err){
+    if(err.message==='INSUFFICIENT_BALANCE'){if(confirm('잔액이 부족합니다. 충전 화면으로 이동하시겠습니까?'))location.href='./index.html?action=charge';}
+    else alert('결제 처리 중 오류: '+err.message);
+  }
+};
 
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):'';}
 
@@ -298,7 +366,26 @@ function show(){
   document.getElementById('btnNext').disabled=curIdx<=0;
   document.getElementById('btnCap').disabled=!(r.status==='done'&&r.ko);
   renderDateList();
-  document.getElementById('main').innerHTML=`<div class="report-card" id="capArea">${renderConsensus(r)}</div>`;
+  /* ★ [2026-08-14] 유료화 게이트 — 멤버십·발행보류는 무료, 일반회원은 결제(당일 유효) 확인 후 렌더 */
+  const _free=mcIsMember()||r.status==='fallback'||!r.ko;
+  if(_free||mcPaid[r.id]){
+    document.getElementById('main').innerHTML=`<div class="report-card" id="capArea">${renderConsensus(r)}</div>`;
+    const _dl=!(r.status==='done'&&r.ko);
+    document.getElementById('btnCap').disabled=_dl;
+    if(document.getElementById('btnPdf'))document.getElementById('btnPdf').disabled=_dl;
+    if(document.getElementById('btnHtml'))document.getElementById('btnHtml').disabled=_dl;
+  }else{
+    const _f=fmtDate(r),_ck=r.id;
+    document.getElementById('btnCap').disabled=true;   /* 미결제 상태 캡처·PDF·고객용HTML 전부 차단 */
+    if(document.getElementById('btnPdf'))document.getElementById('btnPdf').disabled=true;
+    if(document.getElementById('btnHtml'))document.getElementById('btnHtml').disabled=true;
+    document.getElementById('main').innerHTML='<div class="report-card"><div class="skel"></div></div>';
+    mcCheckPaid(_ck).then(paid=>{
+      if(archive[curIdx]&&archive[curIdx].id!==_ck)return;   /* 확인 중 날짜 이동 시 무시 */
+      if(paid){show();return;}
+      document.getElementById('main').innerHTML=mcPaywall(r,_f);
+    });
+  }
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function navMove(dir){   /* dir: 1=이전(과거), -1=다음(최신) */
@@ -669,6 +756,7 @@ window.editFcCard=editFcCard;
 onAuthStateChanged(auth,async u=>{
   if(u){
     try{sessionStorage.removeItem('_mcAutoReload');}catch(_e){}
+    mcUid=u.uid;await mcLoadRole(u.uid);   /* ★ [2026-08-14] 유료화 — 역할·잔액 로드(게이트 판정용, 렌더 전 필수) */
     loadFcProfile(u);   /* ★ [2026-08-10] 명함 프로필 로드 (비차단 — 캡처 전까지만 완료되면 됨) */
     loadArchive();
   }else{
