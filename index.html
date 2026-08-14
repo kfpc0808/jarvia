@@ -5056,6 +5056,7 @@ async function doRegister(e){
   if(pw.length<6)return toast('비밀번호는 6자 이상이어야 합니다.','error');
   if(!$('rg-terms').checked||!$('rg-privacy').checked)return toast('약관에 모두 동의해야 합니다.','error');
   if($('rg-sms-verified').value!=='Y')return toast('연락처 인증을 완료해주세요.','error');
+  let _suCred=null,_suIdLock=false,_suPhLock=false,_suDone=false;   /* ★ [2026-08-14] 가입 진행 추적 — 미완료 시 전체 회수용 */
   try{
     toast('가입 처리 중...');
     /* ★ 2026-08-04: 대소문자 무시 중복체크 — loginIdLower 우선, 미백필 기존회원 대비 원문 폴백 */
@@ -5075,19 +5076,19 @@ async function doRegister(e){
       }catch(_phErr){console.warn('재가입 확인 실패(가입 계속):',_phErr);}
     }
     window.__signupCardFlow=true;   /* ★ 가입 카드등록 흐름 시작 — onAuthStateChanged 자동이동 억제 (모든 종료 경로에서 해제) */
-    const cred=await createUserWithEmailAndPassword(auth,email,pw);
+    const cred=await createUserWithEmailAndPassword(auth,email,pw);_suCred=cred;
     // ★ 원자적 중복 잠금 (아이디·연락처) — 계정 생성 직후 인증 컨텍스트에서 실행.
     //    문서ID 유일성으로 완전 동시요청도 하나만 성공(race 원천 차단). 실패 시 롤백.
     const _nphone=String(phone||'').replace(/[^0-9]/g,'');
     try{
-      await setDoc(doc(db,'uniq_loginid',loginId.toLowerCase()),{uid:cred.user.uid,createdAt:serverTimestamp()});   /* ★ 2026-08-04: 잠금 문서ID 소문자 통일 (대소문자 무시 중복방지) */
+      await setDoc(doc(db,'uniq_loginid',loginId.toLowerCase()),{uid:cred.user.uid,createdAt:serverTimestamp()});_suIdLock=true;   /* ★ 2026-08-04: 잠금 문서ID 소문자 통일 (대소문자 무시 중복방지) */
     }catch(_le){
       try{await cred.user.delete();}catch(_){}                 // 롤백: 방금 만든 Auth 삭제
       window.__signupCardFlow=false;
       return toast('이미 사용 중인 아이디입니다.','error');
     }
     try{
-      if(_nphone&&_nphone!=='01091198211')await setDoc(doc(db,'uniq_phone',_nphone),{uid:cred.user.uid,createdAt:serverTimestamp()});   /* 010-9119-8211 테스트 예외: 연락처 중복 허용 */
+      if(_nphone&&_nphone!=='01091198211'){await setDoc(doc(db,'uniq_phone',_nphone),{uid:cred.user.uid,createdAt:serverTimestamp()});_suPhLock=true;}   /* 010-9119-8211 테스트 예외: 연락처 중복 허용 */
     }catch(_pe){
       try{await deleteDoc(doc(db,'uniq_loginid',loginId.toLowerCase()));}catch(_){}  // 롤백: 아이디 잠금 해제
       try{await cred.user.delete();}catch(_){}                          // 롤백: Auth 삭제
@@ -5135,7 +5136,9 @@ async function doRegister(e){
         lastLoginAt:serverTimestamp(),
         createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
       });
+      _suDone=true;   /* ★ [2026-08-14] 가입 핵심 저장 완료 — 이후 예외에는 절대 회수하지 않음 */
     }catch(_ue){
+      console.error('[가입] users 문서 생성 실패 — 전체 롤백 실행:',_ue);   /* ★ [2026-08-14] 원인 진단 로그 */
       // users 문서 생성 실패 → 잠금·계정 롤백 후 중단
       try{await deleteDoc(doc(db,'uniq_loginid',loginId.toLowerCase()));}catch(_){}
       if(_nphone){try{await deleteDoc(doc(db,'uniq_phone',_nphone));}catch(_){}}
@@ -5158,6 +5161,15 @@ async function doRegister(e){
     }
   }catch(err){
     window.__signupCardFlow=false;
+    console.error('[가입] 처리 중 예외:',err);   /* ★ [2026-08-14] 원인 진단 로그 */
+    /* ★ [2026-08-14] 미완료 가입 전체 회수 — users 저장 완료(_suDone) 전에 예외로 빠지면
+       그동안 만든 잠금·계정을 모두 삭제해 시도 전 상태로 되돌린다 (완료 후 예외에는 절대 삭제 금지) */
+    if(_suCred&&!_suDone){
+      const _np=String(phone||'').replace(/[^0-9]/g,'');
+      if(_suIdLock){try{await deleteDoc(doc(db,'uniq_loginid',loginId.toLowerCase()));}catch(_){}}
+      if(_suPhLock&&_np){try{await deleteDoc(doc(db,'uniq_phone',_np));}catch(_){}}
+      try{await _suCred.user.delete();}catch(_){}
+    }
     if(err.code==='auth/email-already-in-use')toast('이미 사용 중인 이메일입니다.','error');
     else toast('가입 실패: '+err.message,'error');
   }
