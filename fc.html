@@ -2864,14 +2864,8 @@ function setupContactButtons(){
     else{const ta=document.createElement('textarea');ta.value=window._ccShareUrl||url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.','info');}
   });
 
-  // ─── 하단 바: 재무진단 버튼 → 신청 폼 열기/스크롤 (기존 scrollToFormBtn 로직 재사용) ───
-  const diagBtn=$('barDiagnosisBtn');
-  if(diagBtn)diagBtn.addEventListener('click',()=>{
-    const fa=$('formArea');
-    const isOpen=fa&&fa.style.display!=='none';
-    if(!isOpen){const sb=$('scrollToFormBtn');if(sb)sb.click();}
-    else if(fa){fa.scrollIntoView({behavior:'smooth',block:'start'});}
-  });
+  /* ★ [2026-08-15] 하단 바 재무진단 버튼 제거 — 본문 중앙의 '재무진단 신청' 카드로 진입한다.
+     하단은 미팅예약(openBookingForm)으로 교체되었다. */
 
   // ─── 하단 바: 홈페이지 버튼 — FC 전용 채널 + 컨설턴트 홈페이지(버튼1) 등록 시에만 노출 (2026-07-28) ───
   //   데이터: users/{uid}.channelData.customButtons[0] — 관리자 회원상세 '컨설턴트 홈페이지'
@@ -9385,6 +9379,224 @@ window.ccCardShareLink=function(){
   if(navigator.clipboard){navigator.clipboard.writeText(link).then(()=>toast('소개카드 링크가 복사되었습니다. 카톡·문자에 붙여넣어 전달하세요.','info')).catch(()=>toast(link,'info'));}
   else{const ta=document.createElement('textarea');ta.value=link;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('소개카드 링크가 복사되었습니다. 카톡·문자에 붙여넣어 전달하세요.','info');}
 };
+/* ═══════════════════════════════════════════════════════════════
+   ★ [2026-08-15] 미팅 예약 — 고객이 희망 일시를 남기면 컨설턴트가 확정한다.
+     · 저장은 기존 fc_consultation_requests 확장 (source:'meeting')
+       → 알림 트리거·30일 연락처 삭제 스케줄러가 그대로 적용된다.
+     · 진입: 하단바 미팅예약 버튼 · ?booking=1 (소개카드에서 진입)
+   ═══════════════════════════════════════════════════════════════ */
+const BK_CONSENT_VERSION = 'booking-2026-08-v1';
+const BK_RETENTION_TEXT = '휴대폰 번호는 접수일부터 30일이 지나면 자동으로 삭제됩니다. 이름·요청내용·처리이력은 상담 처리 완료일부터 1년간 보관합니다. 고객이 그 전에 동의를 철회하면 지체 없이 파기하며, 관계 법령상 보존 의무가 있는 정보는 해당 법정기간만 별도 보관합니다.';
+const BK_TYPES = [
+  { k: 'finance', t: '재무 상담' },
+  { k: 'coverage', t: '보장 점검' },
+  { k: 'etc', t: '기타' },
+];
+const BK_PLACES = [
+  { k: 'visit', t: '방문' },
+  { k: 'phone', t: '전화' },
+  { k: 'video', t: '화상' },
+];
+let bkState = { type: 'finance', place: 'visit', times: ['', '', ''] };
+
+/* 오늘부터 30일 뒤까지 — 과거·너무 먼 날짜 선택 방지 */
+function bkDateRange() {
+  const k = new Date(Date.now() + 9 * 3600000);
+  const min = k.toISOString().slice(0, 10);
+  const max = new Date(k.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+  return { min, max };
+}
+
+function bkChip(list, cur, fn) {
+  return list.map(x =>
+    `<button type="button" onclick="${fn}('${x.k}')" style="flex:1;padding:10px 0;border-radius:9px;font-family:inherit;font-size:12.5px;cursor:pointer;`
+    + (x.k === cur
+      ? 'border:2px solid var(--gold);background:#FBF5E9;color:#96701F;font-weight:800'
+      : 'border:1px solid var(--border);background:#fff;color:var(--text-sub);font-weight:600')
+    + `">${x.t}</button>`
+  ).join('');
+}
+
+window.bkSetType = function (k) { bkState.type = k; bkRender(); };
+window.bkSetPlace = function (k) { bkState.place = k; bkRender(); };
+
+function bkRender() {
+  const box = document.getElementById('bkBody');
+  if (!box) return;
+  const r = bkDateRange();
+  const rows = [0, 1, 2].map(i =>
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+       <span style="font-size:11px;color:var(--text-mute);min-width:34px;flex:none">${i + 1}순위</span>
+       <input type="datetime-local" id="bkTime${i}" value="${bkState.times[i] || ''}" min="${r.min}T00:00" max="${r.max}T23:59"
+         onchange="bkState.times[${i}]=this.value"
+         style="flex:1;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--text)">
+     </div>`
+  ).join('');
+
+  box.innerHTML =
+    `<div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:7px">어떤 상담을 원하시나요</div>
+     <div style="display:flex;gap:6px;margin-bottom:15px">${bkChip(BK_TYPES, bkState.type, 'bkSetType')}</div>
+
+     <div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:7px">희망 일시 <span style="font-weight:600;color:var(--text-mute)">— 1순위는 필수, 여러 개면 조율이 쉽습니다</span></div>
+     ${rows}
+
+     <div style="font-size:12px;color:var(--text-sub);font-weight:700;margin:15px 0 7px">어떻게 만날까요</div>
+     <div style="display:flex;gap:6px;margin-bottom:15px">${bkChip(BK_PLACES, bkState.place, 'bkSetPlace')}</div>
+
+     <div style="display:flex;gap:8px;margin-bottom:13px">
+       <div style="flex:1;min-width:0">
+         <div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:6px">이름</div>
+         <input id="bkName" maxlength="20" placeholder="홍길동" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:13px">
+       </div>
+       <div style="flex:1.3;min-width:0">
+         <div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:6px">연락처</div>
+         <input id="bkPhone" inputmode="numeric" maxlength="13" placeholder="01012345678" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:13px">
+       </div>
+     </div>
+
+     <div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:6px">남기실 말씀 <span style="font-weight:600;color:var(--text-mute)">(선택)</span></div>
+     <textarea id="bkNote" maxlength="300" rows="2" placeholder="상담 시 미리 알아두면 좋을 내용을 적어주세요" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:12.5px;resize:vertical;margin-bottom:14px"></textarea>
+
+     <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:16px">
+       <input type="checkbox" id="bkConsent" style="width:17px;height:17px;flex:none;margin-top:1px;accent-color:#15294A">
+       <span style="font-size:11.5px;color:var(--text-sub);line-height:1.65">
+         개인정보 수집·이용에 동의합니다. <span style="color:var(--gold-dark);text-decoration:underline;cursor:pointer" onclick="event.preventDefault();bkShowNotice()">전문 보기</span><br>
+         <span style="color:var(--text-mute)">연락처는 접수일부터 30일 뒤 자동 삭제됩니다.</span>
+       </span>
+     </label>
+
+     <button type="button" id="bkSubmitBtn" onclick="bkSubmit()" style="width:100%;padding:13px;border:none;border-radius:11px;background:#15294A;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer">예약 신청하기</button>
+     <div id="bkErr" style="display:none;margin-top:9px;font-size:12px;color:var(--danger);text-align:center"></div>`;
+}
+
+window.bkShowNotice = function () {
+  const nm = (fcData && fcData.name) || (typeof consultantData !== 'undefined' && consultantData && consultantData.name) || loginId || '담당 컨설턴트';
+  alert('[개인정보 수집·이용 동의]\n\n'
+    + '1. 수집 항목\n이름, 휴대폰, 희망 일시, 상담 방식, 남기신 말씀\n\n'
+    + '2. 수집 목적\n미팅 예약 접수 및 일정 안내\n\n'
+    + '3. 제공받는 자\n' + nm + ' 컨설턴트 — 일정 확인 및 연락\n\n'
+    + '4. 보유 기간\n' + BK_RETENTION_TEXT + '\n\n'
+    + '동의를 거부하실 수 있으나, 동의가 없으면 예약 접수가 제한됩니다.');
+};
+
+function bkErr(msg) {
+  const e = document.getElementById('bkErr');
+  if (e) { e.textContent = msg; e.style.display = 'block'; }
+}
+
+window.bkSubmit = async function () {
+  const name = (document.getElementById('bkName').value || '').trim();
+  const phone = (document.getElementById('bkPhone').value || '').replace(/\D/g, '');
+  const note = (document.getElementById('bkNote').value || '').trim().slice(0, 300);
+  const agree = !!document.getElementById('bkConsent').checked;
+  const times = bkState.times.filter(Boolean);
+
+  if (name.length < 1 || name.length > 20) { bkErr('이름을 확인해 주세요'); return; }
+  if (!/^010\d{8}$/.test(phone)) { bkErr('휴대폰 번호 11자리를 정확히 입력해 주세요'); return; }
+  if (!times.length) { bkErr('희망 일시를 1개 이상 선택해 주세요'); return; }
+  if (!agree) { bkErr('개인정보 수집·이용 동의가 필요합니다'); return; }
+
+  const btn = document.getElementById('bkSubmitBtn');
+  btn.disabled = true; btn.textContent = '전송 중…';
+  try {
+    await lcEnsureAnonAuth();
+    const consultantName = (fcData && fcData.name) || (typeof consultantData !== 'undefined' && consultantData && consultantData.name) || loginId || '담당 컨설턴트';
+    const typeLabel = (BK_TYPES.find(x => x.k === bkState.type) || {}).t || '상담';
+    const placeLabel = (BK_PLACES.find(x => x.k === bkState.place) || {}).t || '방문';
+    const reqId = gid();
+    const _ref = (params.get('ref') || '').trim();
+
+    await setDoc(doc(db, 'fc_consultation_requests', reqId), {
+      reqId,
+      referredBy: /^[A-Za-z0-9_-]{1,40}$/.test(_ref) ? _ref : null,
+      fcAuthUid: fcUid, fcLoginId: loginId,
+      source: 'meeting', requestType: 'meeting', requestTypeLabel: '미팅 예약',
+      name, phone, email: null, ageGroup: null, assetGroup: null,
+      fields: [bkState.type], fieldOther: null,
+      message: note || null,
+      preferredTimes: times,
+      meetingType: bkState.type, meetingTypeLabel: typeLabel,
+      meetingPlace: bkState.place, meetingPlaceLabel: placeLabel,
+      placeDetail: null,
+      bookingStatus: 'pending', confirmedTime: null, confirmedAt: null,
+      consentRequired: true, consentPersonal: true,
+      consentVersion: BK_CONSENT_VERSION, consentAt: serverTimestamp(),
+      consentNotice: {
+        purpose: '미팅 예약 접수 및 일정 안내',
+        items: '이름, 휴대폰, 희망 일시, 상담 방식, 남기신 말씀',
+        recipient: consultantName,
+        recipientPurpose: '일정 확인 및 연락',
+        retention: BK_RETENTION_TEXT,
+        refusal: '동의를 거부할 수 있으나 동의가 없으면 예약 접수가 제한됩니다.',
+        withdrawal: '담당 컨설턴트에게 동의 철회 및 삭제를 요청할 수 있습니다.',
+        operator: '(주)KFPC — 예약 데이터는 (주)KFPC가 운영하는 시스템에 암호화 저장되며, 운영사는 상담 내용을 열람하지 않습니다.',
+      },
+      consentMarketing: false,
+      status: 'new', memo: '', lastResponseAt: null,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    bkRenderSuccess(consultantName, times);
+  } catch (e) {
+    console.error('[booking]', e);
+    bkErr('예약을 보내지 못했습니다: ' + (e.message || '오류'));
+    btn.disabled = false; btn.textContent = '예약 신청하기';
+  }
+};
+
+function bkFmtTime(v) {
+  try {
+    const d = new Date(v);
+    const w = ['일', '월', '화', '수', '목', '금', '토'][d.getDay()];
+    const h = d.getHours();
+    return `${d.getMonth() + 1}월 ${d.getDate()}일 (${w}) ${h < 12 ? '오전' : '오후'} ${h % 12 || 12}시` + (d.getMinutes() ? ` ${d.getMinutes()}분` : '');
+  } catch (_e) { return v; }
+}
+
+function bkRenderSuccess(nm, times) {
+  const box = document.getElementById('bkBody');
+  if (!box) return;
+  box.innerHTML =
+    `<div style="text-align:center;padding:24px 6px">
+       <div style="font-size:38px;line-height:1;margin-bottom:12px">📅</div>
+       <div style="font-size:17px;font-weight:900;color:var(--navy);margin-bottom:7px">예약 신청이 접수되었습니다</div>
+       <div style="font-size:12.5px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
+         ${esc(nm)} 컨설턴트가 일정을 확인한 뒤<br>연락드리겠습니다.
+       </div>
+       <div style="background:#F7F8FA;border-radius:11px;padding:13px;text-align:left;font-size:12.5px;color:var(--text);line-height:1.9">
+         ${times.map((t, i) => `<div><span style="color:var(--text-mute);font-size:11px">${i + 1}순위</span> ${esc(bkFmtTime(t))}</div>`).join('')}
+       </div>
+       <button type="button" onclick="closeBookingForm()" style="width:100%;margin-top:16px;padding:12px;border:1px solid var(--border);border-radius:11px;background:#fff;color:var(--text-sub);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">닫기</button>
+     </div>`;
+}
+
+window.openBookingForm = function () {
+  if (document.getElementById('bkOv')) return;
+  const nm = (fcData && fcData.name) || (typeof consultantData !== 'undefined' && consultantData && consultantData.name) || loginId || '담당 컨설턴트';
+  const ov = document.createElement('div');
+  ov.id = 'bkOv';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:1300;background:rgba(15,27,51,.55);display:flex;align-items:flex-end;justify-content:center;font-family:inherit';
+  ov.innerHTML =
+    `<div style="width:100%;max-width:480px;max-height:92vh;overflow-y:auto;background:#fff;border-radius:18px 18px 0 0;padding:18px 18px calc(20px + env(safe-area-inset-bottom))">
+       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+         <div style="font-size:16px;font-weight:900;color:var(--navy)">상담 예약</div>
+         <button type="button" onclick="closeBookingForm()" aria-label="닫기" style="border:none;background:none;font-size:22px;line-height:1;color:var(--text-mute);cursor:pointer;padding:0 2px">×</button>
+       </div>
+       <div style="font-size:12px;color:var(--text-sub);line-height:1.6;margin-bottom:15px">희망하시는 시간을 알려주시면 ${esc(nm)} 컨설턴트가 확인 후 안내드립니다.</div>
+       <div id="bkBody"></div>
+     </div>`;
+  ov.addEventListener('click', e => { if (e.target === ov) closeBookingForm(); });
+  document.body.appendChild(ov);
+  document.body.style.overflow = 'hidden';
+  bkState = { type: 'finance', place: 'visit', times: ['', '', ''] };
+  bkRender();
+};
+
+window.closeBookingForm = function () {
+  const ov = document.getElementById('bkOv');
+  if (ov) ov.remove();
+  document.body.style.overflow = '';
+};
+
 /* ★ [2026-08-08] 진입 파라미터 처리 — ?card=1: 소개카드 단독 화면 · ?consult=1: 재무진단 폼 자동 오픈.
    고객 채널(_ccSlug)에서는 미적용. 데이터 로딩 완료 직후 1회 호출. */
 /* ★ [2026-08-09] 소개카드 오버레이 — ?card=1 진입과 헤더 🪪 소개카드 버튼이 공용 사용 */
@@ -9500,6 +9712,15 @@ function ccCardEntryCheck(){
         let _ct=0;const _cTry=()=>{if(!ccConsultOverlay()&&++_ct<10)setTimeout(_cTry,300);};
         setTimeout(_cTry,300);
       }
+    }
+    /* ★ [2026-08-15] ?booking=1 — 소개카드 '미팅예약'에서 진입. 채널 로딩을 기다렸다 폼을 연다 */
+    if(params.get('booking')==='1'){
+      let _bt=0;
+      const _bTry=()=>{
+        if(typeof window.openBookingForm==='function'){ window.openBookingForm(); return; }
+        if(++_bt<10) setTimeout(_bTry,300);
+      };
+      setTimeout(_bTry,300);
     }
     if(params.get('card')!=='1')return;
     ccCardShowOverlay();
@@ -10295,13 +10516,13 @@ init();
   </div>
 </div>
 
-<!-- ─── 하단 고정 액션 바 (공유·문자·홈추가·재무진단) — 2026-05 ─── -->
+<!-- ─── 하단 고정 액션 바 (공유·홈페이지·계산기·보안채팅·미팅예약) — 2026-05, 2026-08-15 미팅예약 추가 ─── -->
 <div id="fcBottomBar" class="fcBottomBar fcBottomBar--off">
   <a class="fcBarBtn" id="kakaoShareBtn"><span class="fcBarBtn-ic"><i class="ti ti-share-2"></i></span><span class="fcBarBtn-tx">공유</span></a>
   <a class="fcBarBtn" id="barHomeBtn" target="_blank" rel="noopener" style="display:none"><span class="fcBarBtn-ic"><i class="ti ti-home"></i></span><span class="fcBarBtn-tx">홈페이지</span></a>
   <button class="fcBarBtn" id="barCalcBtn" type="button"><span class="fcBarBtn-ic"><i class="ti ti-calculator"></i></span><span class="fcBarBtn-tx">계산기</span></button>
   <button class="fcBarBtn" id="barChatBtn" type="button" onclick="openSecureChat()"><span class="fcBarBtn-ic"><i class="ti ti-shield-lock"></i></span><span class="fcBarBtn-tx">보안채팅</span></button>
-  <button class="fcBarBtn fcBarBtn--gold" id="barDiagnosisBtn" type="button"><span class="fcBarBtn-ic"><i class="ti ti-clipboard-text"></i></span><span class="fcBarBtn-tx">재무진단</span></button>
+  <button class="fcBarBtn fcBarBtn--gold" id="barBookingBtn" type="button" onclick="openBookingForm()"><span class="fcBarBtn-ic"><i class="ti ti-calendar-plus"></i></span><span class="fcBarBtn-tx">미팅예약</span></button>   <!-- ★ [2026-08-15] 재무진단은 본문 중앙 카드로 진입 — 하단은 미팅예약으로 교체 -->
 </div>
 <!-- ════════════════ 🔒 보안채팅 (SS채팅 — P2P 휘발성) 2026-07 ════════════════ -->
 <div id="scOverlay" style="position:fixed;inset:0;z-index:1260;background:#F4F6FA;display:none;flex-direction:column;max-width:480px;margin:0 auto;font-family:inherit">

@@ -11060,6 +11060,7 @@ function jvcbBuild(P){
     +(phoneClean?'<a href="sms:'+phoneClean+'" style="'+cellSt+';'+cellDiv+'">'+cell('💬','문자')+'</a>':'')
     +'<a href="'+esc(P.homeUrl)+'?consult=1" target="_blank" rel="noopener" style="'+cellSt+';'+cellDiv+'">'+cell('🤝','재무상담')+'</a>'
     +'<a href="'+dailyUrl+'" target="_blank" rel="noopener" style="'+cellSt+';'+cellDiv+'">'+cell('📋','고객리포트')+'</a>'
+    +'<a href="'+esc(P.homeUrl)+'?booking=1" target="_blank" rel="noopener" style="'+cellSt+';'+cellDiv+'">'+cell('📅','미팅예약')+'</a>'   /* ★ [2026-08-15] 미팅예약 — 고객 홈페이지의 예약 폼으로 진입 */
     +'<a onclick="jvcbCopyLink();return false" href="'+esc(cardShareUrl)+'" style="'+cellSt+'">'+cell('🔗','공유')+'</a>'
     +'</div>';
   return '<div style="border-radius:16px;overflow:hidden;box-shadow:0 4px 14px rgba(21,41,74,.15)">'
@@ -14633,6 +14634,14 @@ function _fcrRenderList(filter){
     const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
     const dateBadge = _fcrDateBadge(r);   // ★ 내 날짜 자료 요청 배지 (2026-08-01)
     const insBadge = (r.source==='insurance_portfolio') ? '<span style="font-size:10px;padding:2px 8px;background:#15294A;color:#C9A96E;border-radius:8px;font-weight:800">🛡️ 보험공유 '+(Number(r.policyCount)||((r.policies||[]).length))+'건</span>' : '';   /* ★ [2026-08-09] 내 보험 정리 공유 배지 */
+    /* ★ [2026-08-15] 미팅예약 배지 — 확정 전이면 강조해 처리 필요를 알린다 */
+    const bkBadge = (r.source==='meeting')
+      ? ((r.bookingStatus==='confirmed')
+          ? '<span style="font-size:10px;padding:2px 8px;background:#F0FDF4;color:#059669;border-radius:8px;font-weight:800">📅 일정확정</span>'
+          : (r.bookingStatus==='rejected')
+            ? '<span style="font-size:10px;padding:2px 8px;background:#F4F5F8;color:#8B93AE;border-radius:8px;font-weight:700">📅 거절</span>'
+            : '<span style="font-size:10px;padding:2px 8px;background:#FEF3C7;color:#B45309;border-radius:8px;font-weight:800">📅 확정 대기</span>')
+      : '';
     const tags = (r.fields || []).slice(0, 3).map(f =>
       '<span style="font-size:10px;padding:2px 7px;background:#EEF4FF;color:#1B3A6B;border-radius:8px;font-weight:600">' + _fcrEsc(_fcrFieldLabels[f] || f) + '</span>'
     ).join('');
@@ -14646,7 +14655,7 @@ function _fcrRenderList(filter){
       + '<div class="fcrPhone" style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">'
         + ((!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인' : _fcrEsc(_fcrFmtPhone(r.phone)))
         + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + insBadge + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + bkBadge + insBadge + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
   }).join('');
   _fcrFillPhones(arr);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
@@ -14828,6 +14837,131 @@ function _fcrAiHtml(ai1,ai2){
   }
   h+='</div>';return h;
 }
+/* ═══════════════════════════════════════════════════════════════
+   ★ [2026-08-15] 미팅예약 확정 — 고객이 남긴 희망 일시 중 하나를 골라 확정한다.
+     · 예약도 fc_consultation_requests에 저장되므로 이 목록에 함께 표시된다.
+     · 확정하면 고객에게 안내가 발송된다(마이파트너 채널 승인 후 동작).
+   ═══════════════════════════════════════════════════════════════ */
+let _bkPick = {};   /* reqId → 선택한 희망일시 (확정 전 임시) */
+
+function _fcrFmtBookTime(v){
+  try{
+    const d = new Date(v);
+    if(isNaN(d.getTime())) return String(v);
+    const w = ['일','월','화','수','목','금','토'][d.getDay()];
+    const h = d.getHours();
+    return (d.getMonth()+1)+'월 '+d.getDate()+'일 ('+w+') '+(h<12?'오전':'오후')+' '+(h%12||12)+'시'+(d.getMinutes()?' '+d.getMinutes()+'분':'');
+  }catch(_e){ return String(v); }
+}
+
+window.bkPickTime = function(reqId, idx, v){
+  _bkPick[reqId] = v;
+  document.querySelectorAll('[data-bkpick="'+reqId+'"]').forEach(function(el){
+    const on = el.getAttribute('data-idx') === String(idx);
+    el.style.border = on ? '2px solid #1B3A6B' : '0.5px solid #DFE2EA';
+    el.style.background = on ? '#EEF4FF' : '#fff';
+    const dot = el.querySelector('.bkDot');
+    if(dot){ dot.style.background = on ? '#1B3A6B' : 'transparent'; dot.style.borderColor = on ? '#1B3A6B' : '#B4B2A9'; }
+  });
+};
+
+window.bkConfirm = async function(reqId){
+  const r = _fcrAllRequests.find(x => x.id === reqId);
+  if(!r) return;
+  const times = Array.isArray(r.preferredTimes) ? r.preferredTimes : [];
+  const pick = _bkPick[reqId] || (times.length === 1 ? times[0] : '');
+  if(!pick){ if(typeof toast==='function') toast('확정할 일시를 선택해 주세요','warning'); return; }
+  const place = (($('bkPlaceInput') && $('bkPlaceInput').value) || '').trim().slice(0,100);
+  if(!confirm('이 일정으로 확정할까요?\n\n'+_fcrFmtBookTime(pick)+(place?'\n장소: '+place:'')+'\n\n확정하면 고객에게 안내가 발송됩니다. (20P 차감)')) return;
+  const btn = $('bkConfirmBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '확정 중…'; }
+  try{
+    await updateDoc(doc(db,'fc_consultation_requests',reqId),{
+      bookingStatus:'confirmed',
+      confirmedTime: pick,
+      placeDetail: place || null,
+      confirmedAt: serverTimestamp(),
+      status: 'contacting',
+      updatedAt: serverTimestamp(),
+    });
+    if(typeof toast==='function') toast('일정을 확정했습니다','success');
+    if(typeof closeM==='function') closeM('mdl-fcr-detail');
+  }catch(e){
+    console.warn('[booking-confirm]', e.message);
+    if(typeof toast==='function') toast('확정하지 못했습니다: '+e.message,'error');
+    if(btn){ btn.disabled = false; btn.textContent = '일정 확정하기'; }
+  }
+};
+
+window.bkReject = async function(reqId){
+  if(!confirm('이 예약을 거절할까요?\n\n고객에게 자동 안내는 발송되지 않습니다. 직접 연락해 주세요.')) return;
+  try{
+    await updateDoc(doc(db,'fc_consultation_requests',reqId),{
+      bookingStatus:'rejected', updatedAt: serverTimestamp(),
+    });
+    if(typeof toast==='function') toast('거절 처리했습니다','success');
+    if(typeof closeM==='function') closeM('mdl-fcr-detail');
+  }catch(e){
+    if(typeof toast==='function') toast('처리하지 못했습니다: '+e.message,'error');
+  }
+};
+
+/* 상세 모달의 미팅예약 섹션 — 예약 건일 때만 렌더 */
+function _fcrBookingSection(r){
+  if(!r || r.source !== 'meeting') return '';
+  const times = Array.isArray(r.preferredTimes) ? r.preferredTimes : [];
+  const st = r.bookingStatus || 'pending';
+
+  const head = '<div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">미팅 예약</div>';
+  const info = '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">'
+    + '<span style="font-size:10px;padding:2px 8px;background:#EEF4FF;color:#1B3A6B;border-radius:8px;font-weight:700">'+_fcrEsc(r.meetingTypeLabel||'상담')+'</span>'
+    + '<span style="font-size:10px;padding:2px 8px;background:#F0FDF4;color:#059669;border-radius:8px;font-weight:700">'+_fcrEsc(r.meetingPlaceLabel||'방문')+'</span>'
+    + '</div>';
+
+  if(st === 'confirmed'){
+    return '<div style="margin-bottom:12px">'+head
+      + '<div style="background:#F0FDF4;border:1px solid #A7F3D0;border-radius:8px;padding:11px 13px">'
+      + '<div style="font-size:12px;font-weight:800;color:#059669;margin-bottom:4px">✓ 확정됨</div>'
+      + '<div style="font-size:12.5px;color:#2C3E50;font-weight:700">'+_fcrEsc(_fcrFmtBookTime(r.confirmedTime))+'</div>'
+      + (r.placeDetail?'<div style="font-size:11px;color:#5A6484;margin-top:3px">'+_fcrEsc(r.placeDetail)+'</div>':'')
+      + '</div></div>';
+  }
+  if(st === 'rejected'){
+    return '<div style="margin-bottom:12px">'+head
+      + '<div style="background:#F7F8FA;border:0.5px solid #E1E8EE;border-radius:8px;padding:11px 13px;font-size:12px;color:#8B93AE">거절 처리된 예약입니다</div>'
+      + '</div>';
+  }
+
+  if(!times.length){
+    return '<div style="margin-bottom:12px">'+head+info
+      + '<div style="font-size:11px;color:#8B93AE">희망 일시가 없습니다. 고객에게 직접 연락해 주세요.</div></div>';
+  }
+
+  const rows = times.map(function(t,i){
+    const on = (times.length === 1 && i === 0);
+    if(on) _bkPick[r.id] = t;
+    return '<div data-bkpick="'+_fcrEsc(r.id)+'" data-idx="'+i+'" onclick="bkPickTime(\''+_fcrEsc(r.id)+'\','+i+',\''+_fcrEsc(t)+'\')" '
+      + 'style="display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:6px;'
+      + 'border:'+(on?'2px solid #1B3A6B':'0.5px solid #DFE2EA')+';background:'+(on?'#EEF4FF':'#fff')+'">'
+      + '<span class="bkDot" style="width:13px;height:13px;border-radius:50%;border:2px solid '+(on?'#1B3A6B':'#B4B2A9')+';background:'+(on?'#1B3A6B':'transparent')+';flex:none;box-shadow:inset 0 0 0 2px #fff"></span>'
+      + '<span style="font-size:12.5px;color:#2C3E50;font-weight:700;flex:1">'+_fcrEsc(_fcrFmtBookTime(t))+'</span>'
+      + '<span style="font-size:10px;color:#8B93AE">'+(i+1)+'순위</span>'
+      + '</div>';
+  }).join('');
+
+  return '<div style="margin-bottom:12px">'+head+info
+    + '<div style="font-size:11px;color:#5A6484;margin-bottom:7px">희망 일시 중 하나를 선택하세요</div>'
+    + rows
+    + '<div style="margin-top:9px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">장소 <span style="font-weight:600;color:#B4B2A9">(선택)</span></div>'
+    + '<input id="bkPlaceInput" maxlength="100" placeholder="강남역 스타벅스 2층" value="'+_fcrEsc(r.placeDetail||'')+'" style="width:100%;box-sizing:border-box;padding:9px 11px;border:0.5px solid #DFE2EA;border-radius:7px;font-size:11.5px;font-family:inherit"></div>'
+    + '<div style="display:flex;gap:6px;margin-top:10px">'
+    + '<button onclick="bkReject(\''+_fcrEsc(r.id)+'\')" style="padding:10px 16px;background:#fff;color:#8B93AE;border:0.5px solid #DFE2EA;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">거절</button>'
+    + '<button id="bkConfirmBtn" onclick="bkConfirm(\''+_fcrEsc(r.id)+'\')" style="flex:1;padding:10px;background:#1B3A6B;color:#fff;border:none;border-radius:8px;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit">일정 확정하기</button>'
+    + '</div>'
+    + '<div style="font-size:10px;color:#B4B2A9;text-align:center;margin-top:7px">확정하시면 고객에게 안내가 발송됩니다 · 20P 차감</div>'
+    + '</div>';
+}
+
 window.openFcRequestDetail = async function(reqId){
   const r = _fcrAllRequests.find(x => x.id === reqId);
   if(!r){
@@ -14876,6 +15010,7 @@ window.openFcRequestDetail = async function(reqId){
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">관심 분야' + otherTxt + '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' + (tags || '<span style="color:#B4B2A9;font-size:11px">-</span>') + '</div></div>'
+    + _fcrBookingSection(r)   /* ★ [2026-08-15] 미팅예약 — 희망일시 선택·확정 */
     + _fcrInsSection(r)   /* ★ [2026-08-09] 보험 공유 상세 */
     + _fcrQuizSection(r)
     + (r.quizLogId ? '<div id="fcr-ai-box"></div>' : '')
