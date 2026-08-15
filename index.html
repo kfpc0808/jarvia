@@ -2073,7 +2073,7 @@
   <div class="container">
     <h1 class="pg-title">마이페이지</h1>
     <div class="tabs">
-      <button class="tab active" data-t="mp-info" onclick="mpTab(this)">내 정보</button>
+      <button class="tab active" data-t="mp-info" onclick="mpTab(this)">내정보/충전설정</button>
       <button class="tab" data-t="mp-card" onclick="mpTab(this)">카드정보</button>
       <button class="tab" data-t="mp-active" onclick="mpTab(this)">이용가능 콘텐츠</button>
       <button class="tab" data-t="mp-usage" onclick="mpTab(this)">이용 내역</button>
@@ -5036,7 +5036,11 @@ function acDirty(){
 async function acToggleClick(){
   if(!_acState.loaded)return;
   const next=!_acState.enabled;
-  if(next&&!_acState.hasCard){toast('결제 카드를 먼저 등록해 주세요','error');return;}
+  if(next&&!_acState.hasCard){
+    /* ★ [2026-08-16] 카드 미등록 시 등록으로 안내 → 등록 완료 후 자동충전 설정 이어가기 */
+    if(confirm('자동충전을 사용하시려면 결제 카드 등록이 필요합니다.\n\n지금 카드정보 화면에서 등록하시겠습니까?\n등록이 끝나면 자동충전 설정을 이어서 진행합니다.')){window._acPendingAC=true;mpGoCard();}
+    return;
+  }
   _acState.enabled=next;acPaint();
   if(next){acDirty();toast('충전 기준과 금액을 확인한 뒤 저장해 주세요');}
   else await acSave(true);
@@ -5083,6 +5087,20 @@ async function ppToggleClick(){
 }
 
 function mpGoCard(){const t=document.querySelector('#pg-mypage .tab[data-t="mp-card"]');if(t)mpTab(t);}
+
+/* ★ [2026-08-16] 카드 등록 완료 후 자동충전 설정 이어가기 — acToggleClick에서 넘어온 경우만 동작 */
+async function _acResumeAfterCard(){
+  if(!window._acPendingAC)return;
+  window._acPendingAC=false;
+  try{await loadPointSettings();}catch(_e){}   /* hasCard 등 서버 상태 재조회 */
+  const t=document.querySelector('#pg-mypage .tab[data-t="mp-info"]');if(t)mpTab(t);
+  if(!_acState.hasCard){toast('카드 상태를 불러오지 못했습니다. 자동충전 설정을 다시 확인해 주세요','error');return;}
+  if(_acState.enabled)return;                  /* 이미 켜져 있으면 그대로 둔다 */
+  const ok=confirm('카드 등록이 완료되었습니다.\n\n이어서 자동충전을 켤까요?\n\n· 잔액이 '+_acFmt(_acState.threshold)+'원 이하가 되면\n· '+_acFmt(_acState.chargeAmount)+'원을 자동으로 충전합니다\n\n하루 1회, 월 5회까지만 충전됩니다.');
+  if(!ok)return;
+  _acState.enabled=true;acPaint();
+  await acSave();
+}
 
 /* ★ [2026-08-15] 저장 진행 중 페이지 이탈 경고 — 결제 설정이 중간에 끊기는 것을 막는다 */
 window.addEventListener('beforeunload',function(e){
@@ -5135,7 +5153,7 @@ window.doRegisterCard=async function(btn){
   try{
     const fn=httpsCallable(functions,'innopayIssueBillKey');
     const r=await fn({buyerName:(meData&&meData.name)||'',buyerEmail:(meData&&meData.email)||'',buyerHp:(meData&&meData.phone)||'',cardNum,expMonth,expYear,cardPwd,idNum});
-    if(r.data&&r.data.success){toast('카드가 등록되었습니다.','success');await loadCard();}
+    if(r.data&&r.data.success){toast('카드가 등록되었습니다.','success');await loadCard();await _acResumeAfterCard();}   /* ★ [2026-08-16] 자동충전 이어가기 */
     else{toast((r.data&&r.data.error)||'카드 등록에 실패했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
   }catch(e){console.error('카드 등록 오류:',e);toast('카드 등록 처리 중 오류가 발생했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
 };
