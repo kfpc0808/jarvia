@@ -2131,7 +2131,7 @@
               <div style="display:flex;justify-content:space-between"><span>결제 카드</span><span id="acCard" style="color:#141B2D;font-weight:600">—</span></div>
               <div style="display:flex;justify-content:space-between"><span>이번 달 충전</span><span id="acUsed" style="color:#141B2D;font-weight:600">0회 / 최대 5회</span></div>
             </div>
-            <button type="button" id="acSaveBtn" onclick="acSave()" class="btn" style="width:100%;margin-top:10px;display:none">설정 저장</button>
+            <div id="acSaveHint" style="display:none;margin-top:9px;font-size:12px;color:#B42318;line-height:1.6">저장하지 못했습니다. 다시 선택해 주세요.</div>
           </div>
           <div id="acNoCard" class="hidden" style="background:#FFF4F4;border:1px solid #F3C2C2;border-radius:8px;padding:11px 13px;font-size:12.5px;color:#B42318;line-height:1.7">
             자동충전을 사용하시려면 <b>결제 카드 등록</b>이 필요합니다.
@@ -4959,6 +4959,7 @@ window.maybeShowCardNotice=maybeShowCardNotice;window.cardNoticeLater=cardNotice
    ═══════════════════════════════════════════════════════════════ */
 let _acState={enabled:false,threshold:10000,chargeAmount:30000,hasCard:false,loaded:false};
 let _ppState={enabled:false,point:0,fee:50000};
+let _acSaving=false;   /* 저장 진행 중 — 페이지 이탈 경고용 */
 
 function _acFmt(n){return (Number(n)||0).toLocaleString('ko-KR');}
 
@@ -5012,7 +5013,25 @@ function ppPaint(){
   else{box.style.background='#FFF8E7';box.style.color='#8B6914';box.innerHTML='포인트가 부족해 이번 달은 <b>카드로 결제</b>됩니다. (50,000P 이상 · 이용료 전액 필요)';}
 }
 
-function acDirty(){const b=$('acSaveBtn');if(b)b.style.display='block';}
+/* ★ [2026-08-15] 금액 변경 즉시 확인 후 저장 — 저장 버튼을 놓쳐 설정이 반영되지 않는 것을 막는다.
+   취소하면 이전 값으로 되돌린다. */
+function acDirty(){
+  const th=parseInt($('acThreshold').value,10), am=parseInt($('acAmount').value,10);
+  if(am<th){
+    alert('충전 금액은 기준 금액 이상이어야 합니다.\n\n기준보다 적게 충전하면 충전 직후에도 잔액이 기준에 미달해 충전이 반복됩니다.');
+    $('acThreshold').value=_acState.threshold;$('acAmount').value=_acState.chargeAmount;
+    return;
+  }
+  if(th===_acState.threshold&&am===_acState.chargeAmount)return;   /* 변화 없음 */
+  const cnt=Math.floor(am/20);
+  const ok=confirm('자동충전 설정을 이렇게 변경할까요?\n\n'
+    +'· 잔액이 '+_acFmt(th)+'원 이하가 되면\n'
+    +'· '+_acFmt(am)+'원을 자동으로 충전합니다\n\n'
+    +'충전 1회로 알림톡 약 '+_acFmt(cnt)+'건을 보낼 수 있습니다.\n'
+    +'하루 1회, 월 5회까지만 충전됩니다.');
+  if(!ok){ $('acThreshold').value=_acState.threshold;$('acAmount').value=_acState.chargeAmount;return; }
+  acSave();
+}
 
 async function acToggleClick(){
   if(!_acState.loaded)return;
@@ -5026,17 +5045,27 @@ async function acToggleClick(){
 async function acSave(silent){
   const th=parseInt($('acThreshold').value,10), am=parseInt($('acAmount').value,10);
   if(_acState.enabled&&am<th){toast('충전 금액은 기준 금액 이상이어야 합니다','error');return;}
-  const btn=$('acSaveBtn');if(btn){btn.disabled=true;btn.textContent='저장 중…';}
+  const prevTh=_acState.threshold, prevAm=_acState.chargeAmount, prevOn=_acState.enabled;
+  const hint=$('acSaveHint');if(hint)hint.style.display='none';
+  _acSaving=true;
   try{
     const r=await httpsCallable(functions,'saveAutoChargeSetting')({enabled:_acState.enabled,threshold:th,chargeAmount:am});
     const d=r&&r.data||{};
-    if(!d.success){toast(d.error||'저장하지 못했습니다','error');_acState.enabled=!_acState.enabled;acPaint();return;}
+    if(!d.success){
+      /* 실패 — 화면을 이전 값으로 되돌려 실제 설정과 어긋나지 않게 한다 */
+      _acState.enabled=prevOn;_acState.threshold=prevTh;_acState.chargeAmount=prevAm;
+      $('acThreshold').value=prevTh;$('acAmount').value=prevAm;acPaint();
+      if(hint){hint.textContent=d.error||'저장하지 못했습니다. 다시 선택해 주세요.';hint.style.display='block';}
+      toast(d.error||'저장하지 못했습니다','error');return;
+    }
     _acState.threshold=th;_acState.chargeAmount=am;
-    if(btn)btn.style.display='none';
-    if(!silent)toast(_acState.enabled?'자동충전을 켰습니다':'자동충전을 껐습니다','success');
-    else toast('자동충전을 껐습니다','success');
-  }catch(e){toast('저장 실패: '+e.message,'error');}
-  finally{if(btn){btn.disabled=false;btn.textContent='설정 저장';}}
+    toast(_acState.enabled?'자동충전 설정을 저장했습니다':'자동충전을 껐습니다','success');
+  }catch(e){
+    _acState.enabled=prevOn;_acState.threshold=prevTh;_acState.chargeAmount=prevAm;
+    $('acThreshold').value=prevTh;$('acAmount').value=prevAm;acPaint();
+    if(hint){hint.textContent='저장 실패: '+e.message;hint.style.display='block';}
+    toast('저장 실패: '+e.message,'error');
+  }finally{_acSaving=false;}
 }
 
 async function ppToggleClick(){
@@ -5054,6 +5083,12 @@ async function ppToggleClick(){
 }
 
 function mpGoCard(){const t=document.querySelector('#pg-mypage .tab[data-t="mp-card"]');if(t)mpTab(t);}
+
+/* ★ [2026-08-15] 저장 진행 중 페이지 이탈 경고 — 결제 설정이 중간에 끊기는 것을 막는다 */
+window.addEventListener('beforeunload',function(e){
+  if(!_acSaving)return;
+  e.preventDefault();e.returnValue='';
+});
 
 window.acToggleClick=acToggleClick;window.acSave=acSave;window.acDirty=acDirty;
 window.ppToggleClick=ppToggleClick;window.mpGoCard=mpGoCard;window.loadPointSettings=loadPointSettings;
