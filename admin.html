@@ -1873,6 +1873,23 @@
         </div>
         <div id="sms-sel-list" style="display:flex;gap:6px;flex-wrap:wrap;max-height:180px;overflow-y:auto"></div>
       </div>
+      <!-- ═══ [2026-08-15] 문자 템플릿 저장·수정·삭제 ═══ -->
+      <div class="form-box" style="margin-top:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <label style="font-weight:600;font-size:14px">💾 저장된 메시지 <span id="smstpl-count" style="color:var(--primary);font-weight:500"></span></label>
+          <button class="btn btn-sm" onclick="smsTplNew()">＋ 새로 저장</button>
+          <span style="font-size:12px;color:var(--text-lt)">저장된 항목을 클릭하면 아래 메시지 내용에 채워집니다.</span>
+        </div>
+        <div id="smstpl-edit" class="hidden" style="background:#F8FAFC;border:1px solid var(--border-lt);border-radius:8px;padding:12px;margin-bottom:10px">
+          <input id="smstpl-title" placeholder="제목 (예: 멤버십 업그레이드 안내)" maxlength="60" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);box-sizing:border-box;margin-bottom:8px">
+          <textarea id="smstpl-body" rows="4" placeholder="메시지 내용을 입력하세요..." style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);resize:vertical;box-sizing:border-box"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-sm" onclick="smsTplSave()">저장</button>
+            <button class="btn btn-sm btn-sec" onclick="smsTplCancel()">취소</button>
+          </div>
+        </div>
+        <div id="smstpl-list" style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto"></div>
+      </div>
       <div class="form-box" style="margin-top:12px">
         <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">메시지 내용</label>
         <textarea id="sms-msg" rows="5" oninput="updateSmsCost()" placeholder="문자 내용을 입력하세요..." style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:var(--font);resize:vertical;box-sizing:border-box"></textarea>
@@ -11305,6 +11322,7 @@ async function loadSmsMembers(){
     _smsMembers.push({uid:d.id,name:u.name||'',loginId:u.loginId||'',role:u.role||'free_user',phone:u.phone||''});
   });
   renderSmsMembers();
+  loadSmsTemplates();   // ★ [2026-08-15] 저장된 메시지 목록 로드 (비차단)
 }
 
 function _smsFiltered(){
@@ -11446,6 +11464,104 @@ function renderSmsSelected(){
 function removeSmsSel(uid){
   _smsSel.delete(uid);
   renderSmsMembers();   // 본 목록 체크박스·전체선택 상태 동기화 (updateSmsCount 포함)
+}
+
+// ═══════════════════════════════════════════════════
+//  [2026-08-15] 문자 메시지 템플릿 — 저장·수정·삭제
+//   Firestore: sms_templates/{id} { title, body, createdAt, updatedAt, createdBy }
+// ═══════════════════════════════════════════════════
+let _smsTpl=[], _smsTplEditId=null;
+
+async function loadSmsTemplates(){
+  try{
+    const snap=await getDocs(query(collection(db,'sms_templates'),orderBy('updatedAt','desc')));
+    _smsTpl=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    // orderBy 인덱스 미생성 등 실패 시 정렬 없이 재조회
+    try{const s2=await getDocs(collection(db,'sms_templates'));_smsTpl=s2.docs.map(d=>({id:d.id,...d.data()}));}
+    catch(e2){console.warn('템플릿 조회 실패',e2);_smsTpl=[];}
+  }
+  renderSmsTemplates();
+}
+
+function renderSmsTemplates(){
+  const box=$('smstpl-list');if(!box)return;
+  $('smstpl-count').textContent=_smsTpl.length?`(${_smsTpl.length}건)`:'';
+  if(!_smsTpl.length){box.innerHTML='<div style="padding:14px;text-align:center;color:var(--text-lt);font-size:13px">저장된 메시지가 없습니다. [＋ 새로 저장]으로 자주 쓰는 문구를 등록하세요.</div>';return;}
+  box.innerHTML=_smsTpl.map(t=>{
+    const preview=(t.body||'').replace(/\n/g,' ').slice(0,60);
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border:1px solid var(--border-lt);border-radius:7px;background:#fff">
+      <div style="flex:1;min-width:0;cursor:pointer" onclick="smsTplApply('${t.id}')" title="클릭하면 메시지 내용에 채워집니다">
+        <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:2px">${esc(t.title||'(제목 없음)')}</div>
+        <div style="font-size:12px;color:var(--text-lt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}${(t.body||'').length>60?'…':''}</div>
+      </div>
+      <button class="btn btn-sm btn-sec" style="flex-shrink:0" onclick="smsTplEdit('${t.id}')">수정</button>
+      <button class="btn btn-sm btn-danger" style="flex-shrink:0" onclick="smsTplDelete('${t.id}')">삭제</button>
+    </div>`;
+  }).join('');
+}
+
+function smsTplNew(){
+  _smsTplEditId=null;
+  $('smstpl-title').value='';
+  $('smstpl-body').value=($('sms-msg').value||'').trim();   // 작성 중인 내용이 있으면 그대로 가져옴
+  $('smstpl-edit').classList.remove('hidden');
+  $('smstpl-title').focus();
+}
+
+function smsTplEdit(id){
+  const t=_smsTpl.find(x=>x.id===id);if(!t)return;
+  _smsTplEditId=id;
+  $('smstpl-title').value=t.title||'';
+  $('smstpl-body').value=t.body||'';
+  $('smstpl-edit').classList.remove('hidden');
+  $('smstpl-title').focus();
+}
+
+function smsTplCancel(){
+  _smsTplEditId=null;
+  $('smstpl-edit').classList.add('hidden');
+  $('smstpl-title').value='';$('smstpl-body').value='';
+}
+
+async function smsTplSave(){
+  const title=($('smstpl-title').value||'').trim();
+  const body=($('smstpl-body').value||'').trim();
+  if(!title)return toast('제목을 입력하세요.','error');
+  if(!body)return toast('메시지 내용을 입력하세요.','error');
+  try{
+    if(_smsTplEditId){
+      await updateDoc(doc(db,'sms_templates',_smsTplEditId),{title,body,updatedAt:serverTimestamp()});
+      toast('수정 완료','success');
+    }else{
+      const id='tpl_'+Date.now().toString(36)+Math.random().toString(36).substr(2,5);
+      await setDoc(doc(db,'sms_templates',id),{title,body,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:admData?.name||''});
+      toast('저장 완료','success');
+    }
+    smsTplCancel();
+    await loadSmsTemplates();
+  }catch(e){toast('저장 실패: '+e.message,'error');}
+}
+
+async function smsTplDelete(id){
+  const t=_smsTpl.find(x=>x.id===id);if(!t)return;
+  if(!confirm(`"${t.title||'(제목 없음)'}" 를 삭제하시겠습니까?\n되돌릴 수 없습니다.`))return;
+  try{
+    await deleteDoc(doc(db,'sms_templates',id));
+    if(_smsTplEditId===id)smsTplCancel();
+    toast('삭제 완료','success');
+    await loadSmsTemplates();
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
+}
+
+function smsTplApply(id){
+  const t=_smsTpl.find(x=>x.id===id);if(!t)return;
+  const cur=($('sms-msg').value||'').trim();
+  if(cur && !confirm('작성 중인 메시지 내용이 있습니다. 저장된 메시지로 바꾸시겠습니까?'))return;
+  $('sms-msg').value=t.body||'';
+  updateSmsCost();
+  $('sms-msg').focus();
+  toast('메시지 내용에 적용했습니다.','success');
 }
 
 function clearSmsSel(){
@@ -11626,6 +11742,7 @@ async function resendSmsFails(){
 }
 
 window.loadSmsMembers=loadSmsMembers;window.renderSmsMembers=renderSmsMembers;window.toggleSmsAll=toggleSmsAll;window.updateSmsCount=updateSmsCount;window.updateSmsCost=updateSmsCost;window.doSendAdminSMS=doSendAdminSMS;window.loadSmsLogs=loadSmsLogs;window.showSmsLogDetail=showSmsLogDetail;window.closeSmsLogDetail=closeSmsLogDetail;window.resendSmsFails=resendSmsFails;window.smsFilterChanged=smsFilterChanged;window.smsSort=smsSort;window.smsSetPageSize=smsSetPageSize;window.smsGotoPage=smsGotoPage;window.onSmsRowChk=onSmsRowChk;window.addSmsManualPhone=addSmsManualPhone;window.removeSmsManual=removeSmsManual;window.renderSmsManual=renderSmsManual;window.renderSmsSelected=renderSmsSelected;window.removeSmsSel=removeSmsSel;window.clearSmsSel=clearSmsSel;
+window.loadSmsTemplates=loadSmsTemplates;window.smsTplNew=smsTplNew;window.smsTplEdit=smsTplEdit;window.smsTplCancel=smsTplCancel;window.smsTplSave=smsTplSave;window.smsTplDelete=smsTplDelete;window.smsTplApply=smsTplApply;
 
 // ═══════════════════════════════════════════════════
 //  📋 시스템 활동 로그
