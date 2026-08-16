@@ -403,6 +403,8 @@
       <p style="color:#666;margin-bottom:16px">회원 화면의 「이용 도우미」에 노출되는 항목입니다. 항목 본문은 AI 답변의 근거가 되고, FAQ는 AI 호출 없이 저장된 답변이 바로 표시됩니다.</p>
       <button class="btn" onclick="showHTF()">항목 등록</button>
       <button class="btn btn-sec" onclick="seedHelpFull()" style="margin-left:6px">본문·FAQ 일괄 반영(61건)</button>
+      <button class="btn btn-sec" onclick="helpTtsAll()" style="margin-left:6px">FAQ 음성 일괄 생성</button>
+      <div id="hp-tts-log" style="display:none;margin-top:10px;padding:10px 12px;background:#F7F9FC;border-radius:8px;font-size:13px;color:#3D4761;line-height:1.7"></div>
       <div class="form-box hidden mt" id="htf-area">
         <input type="hidden" id="htf-id">
         <div class="fr">
@@ -7052,6 +7054,36 @@ async function seedHelpFull(){
   toast('갱신 '+upd+'건 / 신규 '+ins+'건'+(fail?' / 실패 '+fail+'건':''),fail?'error':'success');
   loadHelpTopics();
 }
+let _ttsStop=false;
+async function helpTtsAll(){
+  const tgt=_htList.filter(t=>(t.faqs||[]).length);
+  const total=tgt.reduce((n,t)=>n+(t.faqs||[]).length,0);
+  if(!tgt.length){toast('FAQ가 있는 항목이 없습니다.','warning');return;}
+  if(!confirm('FAQ 음성을 일괄 생성할까요?\n\n· 대상 '+tgt.length+'개 항목 / FAQ '+total+'건\n· 이미 만들어진 음성은 건너뜁니다.\n· 10~20분 걸릴 수 있으니 창을 닫지 마세요.'))return;
+  _ttsStop=false;
+  const box=$('hp-tts-log');box.style.display='';
+  let made=0,kept=0,failed=0,done=0;
+  const t0=Date.now();
+  for(const t of tgt){
+    if(_ttsStop)break;
+    done++;
+    box.innerHTML='<b>진행 '+done+' / '+tgt.length+'</b> — '+esc(t.title||'')+
+      '<br>신규 '+made+'건 · 유지 '+kept+'건'+(failed?' · 실패 '+failed+'건':'')+
+      ' <button class="btn btn-sm btn-danger" onclick="_ttsStop=true" style="margin-left:8px">중단</button>';
+    try{
+      const fn=httpsCallable(functions,'helpTtsSync');
+      const r=await fn({topicId:t.topicId});
+      const d=r.data||{};
+      if(d.success){made+=(d.made||0);kept+=(d.kept||0);failed+=(d.failed||0);}
+      else{failed+=(t.faqs||[]).length;console.error('음성 실패',t.title,d.error);}
+    }catch(e){failed+=(t.faqs||[]).length;console.error('음성 실패',t.title,e&&e.message);}
+  }
+  const sec=Math.round((Date.now()-t0)/1000);
+  box.innerHTML='<b>'+(_ttsStop?'중단됨':'완료')+'</b> — 신규 '+made+'건 · 유지 '+kept+'건'+(failed?' · <span style="color:#C0392B">실패 '+failed+'건</span>':'')+' · '+sec+'초 소요';
+  toast((_ttsStop?'중단':'완료')+' · 신규 '+made+'건 / 유지 '+kept+'건'+(failed?' / 실패 '+failed+'건':''),failed?'error':'success');
+  loadHelpTopics();
+}
+window.helpTtsAll=helpTtsAll;
 window.seedHelpFull=seedHelpFull;
 window.showHTF=showHTF;window.loadHelpTopics=loadHelpTopics;window.renderHelpTopics=renderHelpTopics;window.saveHelpTopic=saveHelpTopic;window.editHelpTopic=editHelpTopic;window.toggleHelpTopic=toggleHelpTopic;window.delHelpTopic=delHelpTopic;window.htAddFaq=htAddFaq;window.htCountLen=htCountLen;
 window.showVGF=showVGF;window.loadVideoGuideAdm=loadVideoGuideAdm;window.renderVideoGuideAdm=renderVideoGuideAdm;window.saveVideoGuide=saveVideoGuide;window.editVideoGuide=editVideoGuide;window.toggleVideoGuide=toggleVideoGuide;window.delVideoGuide=delVideoGuide;
