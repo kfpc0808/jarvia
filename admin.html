@@ -401,6 +401,11 @@
     </div>
     <div id="p-help" class="panel hidden"><h2>도우미 관리</h2>
       <p style="color:#666;margin-bottom:16px">회원 화면의 「이용 도우미」에 노출되는 항목입니다. 항목 본문은 AI 답변의 근거가 되고, FAQ는 AI 호출 없이 저장된 답변이 바로 표시됩니다.</p>
+      <div class="toolbar" style="margin-bottom:14px;gap:0;border-bottom:2px solid var(--border)">
+        <button class="btn btn-sm ht-tab on" data-t="list" onclick="htTab('list')" style="border-radius:8px 8px 0 0;border-bottom:none">항목 관리</button>
+        <button class="btn btn-sm btn-sec ht-tab" data-t="qry" onclick="htTab('qry')" style="border-radius:8px 8px 0 0;border-bottom:none;margin-left:4px">회원 질문 내역</button>
+      </div>
+      <div id="ht-pane-list">
       <button class="btn" onclick="showHTF()">항목 등록</button>
       <button class="btn btn-sec" onclick="helpTtsAll()" style="margin-left:6px">FAQ 음성 일괄 생성</button>
       <div id="hp-tts-log" style="display:none;margin-top:10px;padding:10px 12px;background:#F7F9FC;border-radius:8px;font-size:13px;color:#3D4761;line-height:1.7"></div>
@@ -422,6 +427,13 @@
       </div>
       <div class="toolbar mt"><input id="ht-search" placeholder="제목/키워드/본문 검색..." oninput="renderHelpTopics()"> <select id="ht-cat-filter" onchange="renderHelpTopics()"><option value="">카테고리 전체</option><option value="start">🚀 시작하기</option><option value="pay">💳 결제·정산</option><option value="content">🗞️ 콘텐츠</option><option value="client">👥 고객관리</option><option value="channel">📱 내 채널</option><option value="tools">🧰 전문도구</option><option value="etc">✨ 기타</option></select></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No.</th><th style="width:60px">순서</th><th>카테고리</th><th>제목</th><th style="width:70px">본문</th><th style="width:56px">FAQ</th><th style="width:60px">음성</th><th style="width:56px">영상</th><th>노출</th><th>수정일</th><th>관리</th></tr></thead><tbody id="tb-help"></tbody></table></div>
+      </div>
+      <div id="ht-pane-qry" class="hidden">
+        <p style="color:#666;margin-bottom:14px">회원이 FAQ에서 답을 찾지 못하고 직접 물어본 질문입니다. 반복되는 질문은 FAQ로 등록하시면 AI 호출 없이 즉시 답변됩니다.</p>
+        <div class="toolbar"><input id="hq-search" placeholder="질문 내용 검색..." oninput="renderHelpQueries()"> <select id="hq-topic" onchange="renderHelpQueries()"><option value="">전체 항목</option></select> <select id="hq-mode" onchange="renderHelpQueries()"><option value="group">같은 질문 묶어보기</option><option value="all">전체 시간순</option></select> <button class="btn btn-sm btn-sec" onclick="loadHelpQueries(true)">새로고침</button></div>
+        <div id="hq-stat" style="font-size:13px;color:#666;margin:10px 0"></div>
+        <div class="tbl-wrap"><table class="tbl"><thead id="th-hq"></thead><tbody id="tb-hq"></tbody></table></div>
+      </div>
     </div>
     <div id="p-terms" class="panel hidden"><h2>약관 관리</h2><div class="tabs"><button class="tab active" onclick="loadTermEdit('terms_of_service',this)">이용약관</button><button class="tab" onclick="loadTermEdit('privacy_policy',this)">개인정보처리방침</button></div><form onsubmit="saveTerm(event)"><input type="hidden" id="te-type" value="terms_of_service"><div class="fg"><textarea id="te-body" rows="15" style="font-family:monospace"></textarea></div><button type="submit" class="btn">저장</button></form></div>
     <div id="p-chargeopt" class="panel hidden"><h2>충전 금액 설정</h2><div class="toolbar"><input id="co-paid" type="number" placeholder="결제금액(원)" style="min-width:0;flex:1"><input id="co-credit" type="number" placeholder="충전크레딧(원)" style="min-width:0;flex:1"><input id="co-label" placeholder="표시텍스트" style="min-width:0;flex:1"><button class="btn" onclick="addChargeOpt()">추가</button></div><div class="tbl-wrap"><table class="tbl mt"><thead><tr><th>결제금액</th><th>충전크레딧</th><th>표시</th><th>정렬</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-copts"></tbody></table></div></div>
@@ -7066,6 +7078,88 @@ async function helpTtsAll(){
   loadHelpTopics();
 }
 window.helpTtsAll=helpTtsAll;
+/* ─── 회원 질문 내역 ─── */
+let _hqList=[],_hqLoaded=false;
+function htTab(t){
+  document.querySelectorAll('.ht-tab').forEach(b=>{
+    const on=b.dataset.t===t;
+    b.classList.toggle('on',on);
+    b.classList.toggle('btn-sec',!on);
+  });
+  $('ht-pane-list').classList.toggle('hidden',t!=='list');
+  $('ht-pane-qry').classList.toggle('hidden',t!=='qry');
+  if(t==='qry')loadHelpQueries();
+}
+async function loadHelpQueries(force){
+  if(_hqLoaded&&!force){renderHelpQueries();return;}
+  $('hq-stat').textContent='불러오는 중...';
+  try{
+    const snap=await getDocs(query(collection(db,'help_queries'),orderBy('createdAt','desc'),limit(2000)));
+    _hqList=snap.docs.map(d=>d.data());
+    _hqLoaded=true;
+  }catch(e){
+    $('hq-stat').innerHTML='<span style="color:#C0392B">불러오기 실패: '+esc(e.message)+'</span>';
+    console.error('help_queries',e);return;
+  }
+  const sel=$('hq-topic');
+  const cur=sel.value;
+  const ids=[...new Set(_hqList.map(q=>q.topicId))];
+  sel.innerHTML='<option value="">전체 항목</option>'+ids.map(id=>{
+    const t=_htList.find(x=>x.topicId===id);
+    return '<option value="'+esc(id)+'">'+esc(t?t.title:'(삭제된 항목)')+'</option>';
+  }).join('');
+  sel.value=cur;
+  renderHelpQueries();
+}
+function hqTitle(id){const t=_htList.find(x=>x.topicId===id);return t?t.title:'(삭제된 항목)';}
+function renderHelpQueries(){
+  const kw=($('hq-search').value||'').trim().toLowerCase();
+  const tid=$('hq-topic').value;
+  const mode=$('hq-mode').value;
+  let list=_hqList.slice();
+  if(tid)list=list.filter(q=>q.topicId===tid);
+  if(kw)list=list.filter(q=>(q.question||'').toLowerCase().includes(kw));
+  $('hq-stat').innerHTML='총 <b>'+_hqList.length+'</b>건 수집'+(list.length!==_hqList.length?' · 조건 일치 <b>'+list.length+'</b>건':'');
+  if(!list.length){
+    $('th-hq').innerHTML='';
+    $('tb-hq').innerHTML='<tr><td style="text-align:center;color:#999;padding:24px">질문 내역이 없습니다</td></tr>';
+    return;
+  }
+  if(mode==='group'){
+    const m=new Map();
+    list.forEach(q=>{
+      const k=(q.topicId||'')+'|'+String(q.question||'').replace(/\s+/g,' ').trim().toLowerCase();
+      const e=m.get(k);
+      const ts=q.createdAt&&q.createdAt.toDate?q.createdAt.toDate():null;
+      if(e){e.n++;if(ts&&(!e.last||ts>e.last))e.last=ts;}
+      else m.set(k,{n:1,topicId:q.topicId,question:q.question,last:ts});
+    });
+    const rows=[...m.values()].sort((a,b)=>b.n-a.n||((b.last||0)-(a.last||0)));
+    $('th-hq').innerHTML='<tr><th style="width:40px">No.</th><th style="width:70px">횟수</th><th style="width:190px">항목</th><th>질문</th><th style="width:130px">최근</th><th style="width:110px">관리</th></tr>';
+    $('tb-hq').innerHTML=rows.map((r,i)=>
+      '<tr><td>'+(i+1)+'</td><td>'+(r.n>1?'<span class="st-active">'+r.n+'회</span>':'1회')+'</td><td>'+esc(hqTitle(r.topicId))+'</td><td>'+esc(r.question||'')+'</td><td>'+(r.last?r.last.toLocaleDateString('ko-KR'):'-')+'</td><td><button class="btn btn-sm" onclick="hqToFaq(\''+esc(r.topicId)+'\',\''+esc(String(r.question||'').replace(/'/g,"\\'"))+'\')">FAQ 등록</button></td></tr>'
+    ).join('');
+  }else{
+    $('th-hq').innerHTML='<tr><th style="width:40px">No.</th><th style="width:150px">일시</th><th style="width:190px">항목</th><th>질문</th><th style="width:110px">관리</th></tr>';
+    $('tb-hq').innerHTML=list.slice(0,500).map((q,i)=>
+      '<tr><td>'+(i+1)+'</td><td>'+fdatetime(q.createdAt)+'</td><td>'+esc(hqTitle(q.topicId))+'</td><td>'+esc(q.question||'')+'</td><td><button class="btn btn-sm" onclick="hqToFaq(\''+esc(q.topicId)+'\',\''+esc(String(q.question||'').replace(/'/g,"\\'"))+'\')">FAQ 등록</button></td></tr>'
+    ).join('');
+  }
+}
+function hqToFaq(tid,q){
+  const t=_htList.find(x=>x.topicId===tid);
+  if(!t){toast('해당 항목을 찾을 수 없습니다.','error');return;}
+  htTab('list');
+  editHelpTopic(tid);
+  setTimeout(()=>{
+    htAddFaq(q,'');
+    const rows=$('htf-faqs').querySelectorAll('.ht-faq');
+    const last=rows[rows.length-1];
+    if(last){last.scrollIntoView({behavior:'smooth',block:'center'});const a=last.querySelector('.ht-a');if(a)a.focus();}
+    toast('질문을 FAQ에 추가했습니다. 답변을 입력하고 저장하세요.','success');
+  },200);
+}
+window.htTab=htTab;window.loadHelpQueries=loadHelpQueries;window.renderHelpQueries=renderHelpQueries;window.hqToFaq=hqToFaq;
 window.showHTF=showHTF;window.loadHelpTopics=loadHelpTopics;window.renderHelpTopics=renderHelpTopics;window.saveHelpTopic=saveHelpTopic;window.editHelpTopic=editHelpTopic;window.toggleHelpTopic=toggleHelpTopic;window.delHelpTopic=delHelpTopic;window.htAddFaq=htAddFaq;window.htCountLen=htCountLen;
 window.showVGF=showVGF;window.loadVideoGuideAdm=loadVideoGuideAdm;window.renderVideoGuideAdm=renderVideoGuideAdm;window.saveVideoGuide=saveVideoGuide;window.editVideoGuide=editVideoGuide;window.toggleVideoGuide=toggleVideoGuide;window.delVideoGuide=delVideoGuide;
 window.loadChargeOpts=loadChargeOpts;window.addChargeOpt=addChargeOpt;window.toggleCO=toggleCO;window.delCO=delCO;
