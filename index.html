@@ -4827,7 +4827,7 @@ function hpOpen(){
 function hpClose(){
   $('hpOv').classList.remove('on');$('hpPanel').classList.remove('on');
   document.body.style.overflow='';
-  hpStopVoice();hpStopTTS();
+  hpStopTTS();
 }
 function hpBack(){ if(_hpCur){hpHome();} }
 
@@ -4896,6 +4896,9 @@ function hpRenderTopic(){
       h+='<div class="hp-row" onclick="hpFaq('+i+')"><span class="hp-row-t">'+esc(f.q)+'</span><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></div>';
     });
   }
+  if(t.videoIds&&t.videoIds.length){
+    h+='<div style="margin-top:14px">'+hpVidCards(t.videoIds).replace('class="hp-vid"','class="hp-vid" style="border-top:none;padding-top:0"')+'</div>';
+  }
   h+='<div id="hp-thread" style="padding-top:14px"></div>';
   $('hp-body').innerHTML=h;
   hpRenderThread();
@@ -4907,9 +4910,10 @@ function hpRenderThread(){
   _hpMsgs.forEach((m,i)=>{
     if(m.r==='u')h+='<div class="hp-msg-u">'+esc(m.t)+'</div>';
     else{
-      h+='<div class="hp-msg-a"><div class="hp-msg-a-t">'+esc(m.t)+'</div>'+hpVidCards(m.v)+
+      h+='<div class="hp-msg-a"><div class="hp-msg-a-t">'+esc(m.t)+'</div>'+
          '<div class="hp-acts"><button class="hp-act" onclick="hpSpeak('+i+',this)"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>듣기</button>'+
-         '<button class="hp-act" onclick="hpCopy('+i+')"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>복사</button></div></div>';
+         '<button class="hp-act" onclick="hpCopy('+i+')"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>복사</button></div>'+
+         hpVidCards(m.v)+'</div>';
     }
   });
   if(_hpBusy)h+='<div class="hp-msg-a"><div class="hp-load"><i></i><i></i><i></i></div></div>';
@@ -4920,7 +4924,7 @@ function hpRenderThread(){
 function hpFaq(i){
   const f=(_hpCur&&_hpCur.faqs&&_hpCur.faqs[i]);if(!f)return;
   _hpMsgs.push({r:'u',t:f.q});
-  _hpMsgs.push({r:'a',t:f.a,v:_hpCur.videoIds||[],au:f.audioUrl||''});
+  _hpMsgs.push({r:'a',t:f.a,v:[],au:f.audioUrl||''});
   hpRenderThread();
 }
 
@@ -4938,7 +4942,13 @@ async function hpAsk(){
     else _hpMsgs.push({r:'a',t:d.error||'답변을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.',v:[]});
   }catch(e){
     _hpBusy=false;
-    _hpMsgs.push({r:'a',t:'연결에 실패했습니다. 잠시 후 다시 시도해 주세요.',v:[]});
+    const cd=(e&&e.code)||'';
+    let msg='연결에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+    if(cd.indexOf('not-found')>=0)msg='답변 기능이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.';
+    else if(cd.indexOf('unauthenticated')>=0)msg='로그인이 필요합니다. 다시 로그인해 주세요.';
+    else if(cd.indexOf('deadline')>=0)msg='응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.';
+    console.warn('[helpAsk]',cd,e&&e.message);
+    _hpMsgs.push({r:'a',t:msg,v:[]});
   }
   hpRenderThread();
 }
@@ -4978,19 +4988,6 @@ function hpSpeakBrowser(txt,btn){
   btn.classList.add('on');window.speechSynthesis.speak(u);
 }
 
-function hpStopVoice(){try{if(_hpRec)_hpRec.stop();}catch(_){}_hpRec=null;const b=$('hp-mic');if(b)b.classList.remove('rec');}
-function hpVoice(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){toast('이 브라우저는 음성 입력을 지원하지 않습니다.','warning');return;}
-  if(_hpRec){hpStopVoice();return;}
-  const r=new SR();r.lang='ko-KR';r.interimResults=true;r.continuous=false;
-  const el=$('hp-in');const base=el.value;
-  r.onresult=e=>{let s='';for(let i=e.resultIndex;i<e.results.length;i++)s+=e.results[i][0].transcript;el.value=(base?base+' ':'')+s;hpGrow(el);};
-  r.onend=()=>{hpStopVoice();};
-  r.onerror=()=>{hpStopVoice();};
-  _hpRec=r;$('hp-mic').classList.add('rec');r.start();
-}
-
 function hpPlay(vid){
   const v=_hpVids.find(x=>x.videoId===vid);if(!v)return;
   const src='https://player.vimeo.com/video/'+encodeURIComponent(v.vimeoId||'')+(v.vimeoHash?'?h='+encodeURIComponent(v.vimeoHash):'');
@@ -5009,7 +5006,7 @@ function hpFabToggle(){
 
 window.hpOpen=hpOpen;window.hpClose=hpClose;window.hpBack=hpBack;window.hpSetCat=hpSetCat;
 window.hpFilter=hpFilter;window.hpTopic=hpTopic;window.hpFaq=hpFaq;window.hpAsk=hpAsk;
-window.hpCopy=hpCopy;window.hpSpeak=hpSpeak;window.hpVoice=hpVoice;window.hpPlay=hpPlay;
+window.hpCopy=hpCopy;window.hpSpeak=hpSpeak;window.hpPlay=hpPlay;
 window.hpGrow=hpGrow;window.hpFabToggle=hpFabToggle;
 
 document.addEventListener('keydown',e=>{
@@ -16868,10 +16865,8 @@ window.goCorpReport=goCorpReport;
 .hp-ft{flex-shrink:0;background:#fff;border-top:1px solid #EDEFF3;padding:10px 14px calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:flex-end;gap:8px}
 .hp-ft textarea{flex:1;background:#F4F6FA;border:none;border-radius:19px;padding:10px 15px;font-size:16px;color:#141B2D;font-family:var(--font);resize:none;outline:none;max-height:88px;line-height:1.5}
 .hp-ft textarea::placeholder{font-size:13.5px;color:#9BA3B4}
-.hp-mic,.hp-send{width:36px;height:36px;border-radius:50%;background:#0F1E38;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
-.hp-mic svg,.hp-send svg{width:17px;height:17px;stroke:#C9A96E;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.hp-mic.rec{background:#C0392B}
-.hp-mic.rec svg{stroke:#fff}
+.hp-send{width:36px;height:36px;border-radius:50%;background:#0F1E38;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.hp-send svg{width:17px;height:17px;stroke:#C9A96E;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .hp-empty{text-align:center;color:#A0A7B8;font-size:13px;padding:34px 12px;line-height:1.7}
 .hp-load{display:flex;gap:4px;padding:4px 0}
 .hp-load i{width:6px;height:6px;border-radius:50%;background:#C4C9D4;animation:hpB 1.2s infinite}
@@ -16911,9 +16906,6 @@ window.goCorpReport=goCorpReport;
   <div class="hp-bd" id="hp-body"></div>
   <div class="hp-ft" id="hp-foot" style="display:none">
     <textarea id="hp-in" rows="1" placeholder="직접 물어보세요" oninput="hpGrow(this)"></textarea>
-    <button class="hp-mic" id="hp-mic" onclick="hpVoice()" aria-label="음성 입력">
-      <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>
-    </button>
     <button class="hp-send" onclick="hpAsk()" aria-label="보내기">
       <svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
     </button>
