@@ -4798,6 +4798,211 @@ const fdatetime=t=>{if(!t)return'-';const d=t.toDate?t.toDate():new Date(t);retu
 const esc=s=>{if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;};
 const THIRTY_DAYS=30*24*60*60*1000;
 
+/* ═══ 이용 도움말 (help_topics) — 2026-08-16 ═══ */
+const HP_CATS={start:'시작하기',pay:'결제·정산',content:'콘텐츠',client:'고객관리',channel:'내 채널',tools:'전문도구',etc:'기타'};
+let _hpList=[],_hpVids=[],_hpCat='',_hpCur=null,_hpMsgs=[],_hpBusy=false,_hpRec=null,_hpLoaded=false;
+
+function hpGrow(t){t.style.height='auto';t.style.height=Math.min(t.scrollHeight,88)+'px';}
+
+async function hpLoad(){
+  if(_hpLoaded)return;
+  try{
+    const s=await getDocs(collection(db,'help_topics'));
+    _hpList=s.docs.map(d=>d.data()).filter(t=>t.isActive!==false)
+      .sort((a,b)=>(a.order||0)-(b.order||0));
+    _hpLoaded=true;
+  }catch(e){console.warn('help_topics 로드 실패',e);}
+  try{
+    const v=await getDocs(collection(db,'guide_videos'));
+    _hpVids=v.docs.map(d=>d.data()).filter(x=>x.isActive!==false);
+  }catch(_e){}
+}
+
+function hpOpen(){
+  $('hpOv').classList.add('on');$('hpPanel').classList.add('on');
+  document.body.style.overflow='hidden';
+  hpHome();
+  hpLoad().then(()=>{if(!_hpCur)hpHome();});
+}
+function hpClose(){
+  $('hpOv').classList.remove('on');$('hpPanel').classList.remove('on');
+  document.body.style.overflow='';
+  hpStopVoice();hpStopTTS();
+}
+function hpBack(){ if(_hpCur){hpHome();} }
+
+function hpHome(){
+  _hpCur=null;_hpMsgs=[];
+  $('hp-title').textContent='이용 도움말';
+  $('hp-back').style.display='none';
+  $('hp-schwrap').style.display='';
+  $('hp-foot').style.display='none';
+  $('hp-q').value='';
+  hpRenderList();
+}
+
+function hpRenderList(){
+  const kw=($('hp-q').value||'').trim().toLowerCase();
+  let list=_hpList.slice();
+  if(_hpCat)list=list.filter(t=>t.category===_hpCat);
+  if(kw)list=list.filter(t=>(t.title||'').toLowerCase().includes(kw)||(t.keywords||'').toLowerCase().includes(kw)||(t.body||'').toLowerCase().includes(kw));
+  const cats=[...new Set(_hpList.map(t=>t.category))].filter(c=>HP_CATS[c]);
+  let h='<div class="hp-chips"><button class="hp-chip'+(_hpCat?'':' on')+'" onclick="hpSetCat(\'\')">전체</button>';
+  cats.forEach(c=>{h+='<button class="hp-chip'+(_hpCat===c?' on':'')+'" onclick="hpSetCat(\''+c+'\')">'+esc(HP_CATS[c])+'</button>';});
+  h+='</div>';
+  if(!_hpList.length){h+='<div class="hp-empty">도움말을 불러오는 중입니다…</div>';}
+  else if(!list.length){h+='<div class="hp-empty">찾으시는 내용이 없습니다.<br>다른 단어로 검색해 보세요.</div>';}
+  else{
+    h+='<div class="hp-lbl">'+(kw||_hpCat?'검색 결과 '+list.length+'건':'무엇을 도와드릴까요')+'</div>';
+    list.forEach(t=>{
+      h+='<div class="hp-row" onclick="hpTopic(\''+t.topicId+'\')"><span class="hp-row-t">'+esc(t.title||'')+'</span><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></div>';
+    });
+  }
+  $('hp-body').innerHTML=h;
+  $('hp-body').scrollTop=0;
+}
+function hpSetCat(c){_hpCat=c;hpRenderList();}
+function hpFilter(){ if(!_hpCur)hpRenderList(); }
+
+function hpTopic(id){
+  const t=_hpList.find(x=>x.topicId===id);if(!t)return;
+  _hpCur=t;_hpMsgs=[];
+  $('hp-title').textContent=t.title||'';
+  $('hp-back').style.display='';
+  $('hp-schwrap').style.display='none';
+  $('hp-foot').style.display='';
+  hpRenderTopic();
+}
+
+function hpVidCards(ids){
+  if(!ids||!ids.length)return '';
+  const vs=ids.map(i=>_hpVids.find(v=>v.videoId===i)).filter(Boolean);
+  if(!vs.length)return '';
+  let h='<div class="hp-vid"><div class="hp-vid-l">관련 가이드 영상</div>';
+  vs.forEach(v=>{
+    h+='<div class="hp-vid-c" onclick="hpPlay(\''+v.videoId+'\')"><div class="hp-vid-th"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div><div class="hp-vid-x"><div class="hp-vid-t">'+esc(v.title||'')+'</div><div class="hp-vid-s">'+esc(v.duration||'')+'</div></div></div>';
+  });
+  return h+'</div>';
+}
+
+function hpRenderTopic(){
+  const t=_hpCur;if(!t)return;
+  let h='';
+  if(t.body)h+='<div class="hp-sum">'+esc(t.body.split('\n\n')[0])+'</div>';
+  const fq=t.faqs||[];
+  if(fq.length){
+    h+='<div class="hp-lbl">자주 묻는 질문</div>';
+    fq.forEach((f,i)=>{
+      h+='<div class="hp-row" onclick="hpFaq('+i+')"><span class="hp-row-t">'+esc(f.q)+'</span><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></div>';
+    });
+  }
+  h+='<div id="hp-thread" style="padding-top:14px"></div>';
+  $('hp-body').innerHTML=h;
+  hpRenderThread();
+}
+
+function hpRenderThread(){
+  const el=$('hp-thread');if(!el)return;
+  let h='';
+  _hpMsgs.forEach((m,i)=>{
+    if(m.r==='u')h+='<div class="hp-msg-u">'+esc(m.t)+'</div>';
+    else{
+      h+='<div class="hp-msg-a"><div class="hp-msg-a-t">'+esc(m.t)+'</div>'+hpVidCards(m.v)+
+         '<div class="hp-acts"><button class="hp-act" onclick="hpSpeak('+i+',this)"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>듣기</button>'+
+         '<button class="hp-act" onclick="hpCopy('+i+')"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>복사</button></div></div>';
+    }
+  });
+  if(_hpBusy)h+='<div class="hp-msg-a"><div class="hp-load"><i></i><i></i><i></i></div></div>';
+  el.innerHTML=h;
+  if(_hpMsgs.length||_hpBusy)$('hp-body').scrollTop=$('hp-body').scrollHeight;
+}
+
+function hpFaq(i){
+  const f=(_hpCur&&_hpCur.faqs&&_hpCur.faqs[i]);if(!f)return;
+  _hpMsgs.push({r:'u',t:f.q});
+  _hpMsgs.push({r:'a',t:f.a,v:_hpCur.videoIds||[]});
+  hpRenderThread();
+}
+
+async function hpAsk(){
+  const el=$('hp-in');const q=(el.value||'').trim();
+  if(!q||_hpBusy||!_hpCur)return;
+  el.value='';el.style.height='auto';
+  _hpMsgs.push({r:'u',t:q});_hpBusy=true;hpRenderThread();
+  try{
+    const fn=httpsCallable(functions,'helpAsk');
+    const r=await fn({topicId:_hpCur.topicId,question:q,history:_hpMsgs.slice(-6).map(m=>({role:m.r==='u'?'user':'assistant',content:m.t}))});
+    const d=r.data||{};
+    _hpBusy=false;
+    if(d.success)_hpMsgs.push({r:'a',t:d.answer,v:d.videoIds||[]});
+    else _hpMsgs.push({r:'a',t:d.error||'답변을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.',v:[]});
+  }catch(e){
+    _hpBusy=false;
+    _hpMsgs.push({r:'a',t:'연결에 실패했습니다. 잠시 후 다시 시도해 주세요.',v:[]});
+  }
+  hpRenderThread();
+}
+
+function hpCopy(i){
+  const m=_hpMsgs[i];if(!m)return;
+  if(navigator.clipboard)navigator.clipboard.writeText(m.t).then(()=>toast('복사되었습니다.','success')).catch(()=>{});
+  else{const ta=document.createElement('textarea');ta.value=m.t;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('복사되었습니다.','success');}
+}
+
+let _hpTTS=null;
+function hpStopTTS(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(_){}_hpTTS=null;document.querySelectorAll('.hp-act.on').forEach(b=>b.classList.remove('on'));}
+function hpSpeak(i,btn){
+  const m=_hpMsgs[i];if(!m)return;
+  if(!window.speechSynthesis){toast('이 기기에서는 음성 재생을 지원하지 않습니다.','warning');return;}
+  if(btn.classList.contains('on')){hpStopTTS();return;}
+  hpStopTTS();
+  const u=new SpeechSynthesisUtterance(m.t);u.lang='ko-KR';u.rate=1.05;
+  u.onend=()=>{btn.classList.remove('on');};
+  u.onerror=()=>{btn.classList.remove('on');};
+  btn.classList.add('on');_hpTTS=u;window.speechSynthesis.speak(u);
+}
+
+function hpStopVoice(){try{if(_hpRec)_hpRec.stop();}catch(_){}_hpRec=null;const b=$('hp-mic');if(b)b.classList.remove('rec');}
+function hpVoice(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){toast('이 브라우저는 음성 입력을 지원하지 않습니다.','warning');return;}
+  if(_hpRec){hpStopVoice();return;}
+  const r=new SR();r.lang='ko-KR';r.interimResults=true;r.continuous=false;
+  const el=$('hp-in');const base=el.value;
+  r.onresult=e=>{let s='';for(let i=e.resultIndex;i<e.results.length;i++)s+=e.results[i][0].transcript;el.value=(base?base+' ':'')+s;hpGrow(el);};
+  r.onend=()=>{hpStopVoice();};
+  r.onerror=()=>{hpStopVoice();};
+  _hpRec=r;$('hp-mic').classList.add('rec');r.start();
+}
+
+function hpPlay(vid){
+  const v=_hpVids.find(x=>x.videoId===vid);if(!v)return;
+  const src='https://player.vimeo.com/video/'+encodeURIComponent(v.vimeoId||'')+(v.vimeoHash?'?h='+encodeURIComponent(v.vimeoHash):'');
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(8,14,26,.88);z-index:9900;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML='<div style="width:min(900px,94vw);background:#0b1726;border-radius:16px;overflow:hidden"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px"><span style="color:#fff;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(v.title||'')+'</span><span style="color:#8FA0BC;font-size:20px;cursor:pointer;padding:0 4px" data-x>&times;</span></div><div style="width:100%;aspect-ratio:16/9;background:#000"><iframe src="'+src+'" style="width:100%;height:100%;border:0" allow="autoplay;fullscreen;picture-in-picture" allowfullscreen></iframe></div></div>';
+  ov.addEventListener('click',e=>{if(e.target===ov||e.target.hasAttribute('data-x'))ov.remove();});
+  document.body.appendChild(ov);
+}
+
+function hpFabToggle(){
+  const f=$('hpFab');if(!f)return;
+  const onMain=$('pg-main')&&!$('pg-main').classList.contains('hidden');
+  f.classList.toggle('on',!!(me&&onMain));
+}
+
+window.hpOpen=hpOpen;window.hpClose=hpClose;window.hpBack=hpBack;window.hpSetCat=hpSetCat;
+window.hpFilter=hpFilter;window.hpTopic=hpTopic;window.hpFaq=hpFaq;window.hpAsk=hpAsk;
+window.hpCopy=hpCopy;window.hpSpeak=hpSpeak;window.hpVoice=hpVoice;window.hpPlay=hpPlay;
+window.hpGrow=hpGrow;window.hpFabToggle=hpFabToggle;
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&$('hpPanel')&&$('hpPanel').classList.contains('on')){
+    if(_hpCur)hpBack();else hpClose();
+  }
+});
+
+
 // ── 이용기간 체크 ──
 let isExpired=false;
 function checkExpiry(){
@@ -4874,7 +5079,7 @@ const PAGES=['landing','login','register','resetpw','main','mypage','partnership
 function toggleMobMenu(){const m=$('mob-menu'),b=$('mob-menu-backdrop');if(m.classList.contains('open')){closeMobMenu();}else{m.classList.add('open');b.classList.add('show');}}
 function closeMobMenu(){$('mob-menu').classList.remove('open');$('mob-menu-backdrop').classList.remove('show');}
 function logoClick(){if(!me){if(localStorage.getItem('jarvia_subdomain')){nav('landing');}else{nav('login');}return;}nav('main');}
-function nav(p){if(p==='login'&&!me&&localStorage.getItem('jarvia_subdomain')){p='landing';}PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-'+p).classList.remove('hidden');closeMobMenu();if($('site-footer'))$('site-footer').classList.remove('hidden');if(window._lqUpdate)window._lqUpdate(!(me&&meData)?null:((meData.loginId==='gildong'||meData.loginId==='admin'||meData.role==='admin')?'hq':(meData.isDistributor===true?'dist':null)));if($('calc-banner'))$('calc-banner').classList.toggle('hidden',p!=='main');window.scrollTo(0,0);if(p==='landing'){$('notice-ticker').classList.add('hidden');document.body.classList.remove('has-ticker');}if(p==='main'){loadMain();loadTicker();}if(p==='login'){try{var _lid=localStorage.getItem('jarvia_last_id');if(_lid&&$('li-id')&&!$('li-id').value)$('li-id').value=_lid;}catch(_){}if(localStorage.getItem('jarvia_subdomain')){$('notice-ticker').classList.add('hidden');document.body.classList.remove('has-ticker');}else{loadTicker();}}if(p==='mypage')loadMyPage();if(p==='notices')loadNotices();if(p==='partnership'){const gf=$('pt-guest-fields');if(gf)gf.style.display=window.me?'none':'';}if(p==='pptgen'){loadPptGenHistory();checkInProgressJob();}}
+function nav(p){if(p==='login'&&!me&&localStorage.getItem('jarvia_subdomain')){p='landing';}PAGES.forEach(x=>{const el=$('pg-'+x);if(el)el.classList.add('hidden');});$('pg-'+p).classList.remove('hidden');closeMobMenu();if($('site-footer'))$('site-footer').classList.remove('hidden');if(window._lqUpdate)window._lqUpdate(!(me&&meData)?null:((meData.loginId==='gildong'||meData.loginId==='admin'||meData.role==='admin')?'hq':(meData.isDistributor===true?'dist':null)));if($('calc-banner'))$('calc-banner').classList.toggle('hidden',p!=='main');if(window.hpFabToggle)hpFabToggle();window.scrollTo(0,0);if(p==='landing'){$('notice-ticker').classList.add('hidden');document.body.classList.remove('has-ticker');}if(p==='main'){loadMain();loadTicker();}if(p==='login'){try{var _lid=localStorage.getItem('jarvia_last_id');if(_lid&&$('li-id')&&!$('li-id').value)$('li-id').value=_lid;}catch(_){}if(localStorage.getItem('jarvia_subdomain')){$('notice-ticker').classList.add('hidden');document.body.classList.remove('has-ticker');}else{loadTicker();}}if(p==='mypage')loadMyPage();if(p==='notices')loadNotices();if(p==='partnership'){const gf=$('pt-guest-fields');if(gf)gf.style.display=window.me?'none':'';}if(p==='pptgen'){loadPptGenHistory();checkInProgressJob();}}
 /* ★ 접속통계: 서비스 진입 로그 공통 헬퍼 (기존 service_logs 패턴 준용) */
 function logSvc(service){if(!window.me)return;try{const _svId=gid();setDoc(doc(db,'service_logs',_svId),{logId:_svId,userId:me.uid,userName:(window.meData&&meData.name)||'',service:service,createdAt:serverTimestamp()}).catch(function(){});}catch(e){}}
 window.logSvc=logSvc;
@@ -16588,5 +16793,116 @@ window.goCorpReport=goCorpReport;
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&pop.classList.contains('on')&&window.closeSemPopup)window.closeSemPopup();});
 })();
 </script>
+<!-- ═══════════════════════════════════════════════════
+     이용 도움말 (help_topics) — 2026-08-16
+     플로팅 버튼 + 전체화면/사이드 패널 + FAQ + AI 질문
+     ═══════════════════════════════════════════════════ -->
+<style>
+#hpFab{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom,0px));width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#E8C57A,#C9A96E);border:none;display:none;align-items:center;justify-content:center;cursor:pointer;z-index:9500;box-shadow:0 4px 16px rgba(201,169,110,.5);transition:transform .18s ease,box-shadow .18s ease}
+#hpFab:hover{transform:scale(1.06);box-shadow:0 6px 20px rgba(201,169,110,.65)}
+#hpFab:active{transform:scale(.96)}
+#hpFab.on{display:flex}
+#hpFab svg{width:25px;height:25px;stroke:#2A1E08;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#hpOv{position:fixed;inset:0;background:rgba(10,18,32,.45);z-index:9600;opacity:0;pointer-events:none;transition:opacity .22s ease}
+#hpOv.on{opacity:1;pointer-events:auto}
+#hpPanel{position:fixed;right:0;top:0;bottom:0;width:400px;max-width:100vw;background:#fff;z-index:9700;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .28s cubic-bezier(.32,.72,0,1);box-shadow:-8px 0 32px rgba(15,30,56,.18)}
+#hpPanel.on{transform:translateX(0)}
+.hp-hd{background:#0F1E38;padding:14px 16px 15px;flex-shrink:0;padding-top:calc(14px + env(safe-area-inset-top,0px))}
+.hp-hd-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;min-height:24px}
+.hp-hd-tt{color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;min-width:0}
+.hp-hd-tt span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hp-ic{background:none;border:none;color:#8FA0BC;cursor:pointer;padding:2px;display:flex;align-items:center;flex-shrink:0}
+.hp-ic:hover{color:#fff}
+.hp-ic svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hp-sch{background:rgba(255,255,255,.1);border-radius:9px;padding:0 12px;display:flex;align-items:center;gap:8px}
+.hp-sch svg{width:15px;height:15px;stroke:#8FA0BC;fill:none;stroke-width:2;flex-shrink:0}
+.hp-sch input{flex:1;background:none;border:none;outline:none;color:#fff;font-size:16px;padding:9px 0;font-family:var(--font)}
+.hp-sch input::placeholder{color:#8FA0BC;font-size:13px}
+.hp-bd{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px}
+.hp-chips{display:flex;gap:6px;padding:12px 0 4px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.hp-chips::-webkit-scrollbar{display:none}
+.hp-chip{font-size:11.5px;padding:5px 12px;border-radius:14px;background:#F2F4F7;color:#5A6484;white-space:nowrap;cursor:pointer;border:none;font-family:var(--font)}
+.hp-chip.on{background:#0F1E38;color:#fff}
+.hp-lbl{font-size:10.5px;color:#A0A7B8;letter-spacing:.5px;margin:12px 0 2px}
+.hp-row{border-bottom:1px solid #F0F1F4;padding:13px 2px;display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer}
+.hp-row:last-child{border-bottom:none}
+.hp-row:active{background:#FAFBFD}
+.hp-row-t{font-size:14px;color:#141B2D;line-height:1.4}
+.hp-row svg{width:15px;height:15px;stroke:#C4C9D4;fill:none;stroke-width:2;flex-shrink:0}
+.hp-sum{background:#F7F9FC;border-radius:9px;padding:12px 13px;font-size:13px;color:#3D4761;line-height:1.7;margin:12px 0 4px}
+.hp-msg-u{background:#0F1E38;color:#fff;font-size:13.5px;padding:10px 13px;border-radius:15px 15px 4px 15px;margin:0 0 12px 15%;line-height:1.6;word-break:break-word}
+.hp-msg-a{background:#F7F9FC;border-radius:4px 15px 15px 15px;padding:12px 14px;margin-bottom:12px}
+.hp-msg-a-t{font-size:13.5px;line-height:1.8;color:#1B2438;white-space:pre-wrap;word-break:break-word}
+.hp-vid{border-top:1px solid #E6EAF1;margin-top:11px;padding-top:10px}
+.hp-vid-l{font-size:10px;color:#A0A7B8;letter-spacing:.5px;margin-bottom:7px}
+.hp-vid-c{display:flex;gap:9px;align-items:center;background:#fff;border-radius:9px;padding:8px 9px;cursor:pointer;margin-bottom:5px}
+.hp-vid-c:last-child{margin-bottom:0}
+.hp-vid-th{width:40px;height:27px;border-radius:5px;background:#0F1E38;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hp-vid-th svg{width:13px;height:13px;fill:#C9A96E;stroke:none}
+.hp-vid-x{flex:1;min-width:0}
+.hp-vid-t{font-size:12px;color:#141B2D;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hp-vid-s{font-size:10px;color:#A0A7B8;margin-top:1px}
+.hp-acts{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
+.hp-act{font-size:11.5px;padding:6px 12px;border-radius:15px;border:1px solid #E6EAF1;background:#fff;color:#3D4761;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:var(--font)}
+.hp-act:active{background:#F4F6FA}
+.hp-act svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.hp-act.on{border-color:#C9A96E;color:#8A6B22;background:#FDF8EE}
+.hp-sugs{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.hp-sug{font-size:12px;padding:6px 12px;border:1px solid #E6EAF1;border-radius:15px;color:#3D4761;background:#fff;cursor:pointer;font-family:var(--font)}
+.hp-ft{flex-shrink:0;background:#fff;border-top:1px solid #EDEFF3;padding:10px 14px calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:flex-end;gap:8px}
+.hp-ft textarea{flex:1;background:#F4F6FA;border:none;border-radius:19px;padding:10px 15px;font-size:16px;color:#141B2D;font-family:var(--font);resize:none;outline:none;max-height:88px;line-height:1.5}
+.hp-ft textarea::placeholder{font-size:13.5px;color:#9BA3B4}
+.hp-mic,.hp-send{width:36px;height:36px;border-radius:50%;background:#0F1E38;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.hp-mic svg,.hp-send svg{width:17px;height:17px;stroke:#C9A96E;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hp-mic.rec{background:#C0392B}
+.hp-mic.rec svg{stroke:#fff}
+.hp-empty{text-align:center;color:#A0A7B8;font-size:13px;padding:34px 12px;line-height:1.7}
+.hp-load{display:flex;gap:4px;padding:4px 0}
+.hp-load i{width:6px;height:6px;border-radius:50%;background:#C4C9D4;animation:hpB 1.2s infinite}
+.hp-load i:nth-child(2){animation-delay:.2s}
+.hp-load i:nth-child(3){animation-delay:.4s}
+@keyframes hpB{0%,60%,100%{opacity:.3}30%{opacity:1}}
+@media(max-width:640px){
+  #hpPanel{width:100vw;border-radius:0}
+  #hpFab{right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));width:50px;height:50px}
+}
+</style>
+
+<button id="hpFab" onclick="hpOpen()" aria-label="이용 도움말">
+  <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/><path d="M9.9 9a2.2 2.2 0 0 1 4.2.7c0 1.5-2.2 2.2-2.2 2.2"/><path d="M12 15.5h.01"/></svg>
+</button>
+
+<div id="hpOv" onclick="hpClose()"></div>
+
+<div id="hpPanel" role="dialog" aria-label="이용 도움말">
+  <div class="hp-hd">
+    <div class="hp-hd-top">
+      <div class="hp-hd-tt">
+        <button class="hp-ic" id="hp-back" onclick="hpBack()" style="display:none" aria-label="뒤로">
+          <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <span id="hp-title">이용 도움말</span>
+      </div>
+      <button class="hp-ic" onclick="hpClose()" aria-label="닫기">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="hp-sch" id="hp-schwrap">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="hp-q" type="search" placeholder="궁금한 내용을 검색하세요" oninput="hpFilter()" autocomplete="off">
+    </div>
+  </div>
+  <div class="hp-bd" id="hp-body"></div>
+  <div class="hp-ft" id="hp-foot" style="display:none">
+    <textarea id="hp-in" rows="1" placeholder="직접 물어보세요" oninput="hpGrow(this)"></textarea>
+    <button class="hp-mic" id="hp-mic" onclick="hpVoice()" aria-label="음성 입력">
+      <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>
+    </button>
+    <button class="hp-send" onclick="hpAsk()" aria-label="보내기">
+      <svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+    </button>
+  </div>
+</div>
+
 </body>
 </html>
