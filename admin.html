@@ -206,6 +206,7 @@
     <a class="sn" data-p="p-role-history" onclick="goPanel(this)">📜 유형변경이력</a>
     <a class="sn" data-p="p-ai-usage" onclick="goPanel(this)">🤖 AI 사용현황</a>
     <a class="sn" data-p="p-point-ledger" onclick="goPanel(this)">💳 회원 차감내역</a>
+    <a class="sn" data-p="p-send-history" onclick="goPanel(this)">📨 알림 발송이력</a>
     <a class="sn" data-p="p-daily-report" onclick="goPanel(this)">📋 Daily Report</a>
     <a class="sn" data-p="p-client-dr" onclick="goPanel(this)">📬 고객 데일리리포트</a>
     <a class="sn" data-p="p-premium-report" onclick="goPanel(this)">📄 특급보고서</a>
@@ -718,6 +719,39 @@
       </tr></thead><tbody id="tb-role-history"></tbody></table></div>
       <div id="rh-pagination" style="display:flex;gap:4px;justify-content:center;margin-top:12px"></div>
     </div>
+    <!-- ★ [2026-08-16] 알림 발송이력 — send_history 기반. 성공·문자대체·차단까지 전 건 파악 -->
+    <div id="p-send-history" class="panel hidden"><h2>알림 발송이력</h2>
+      <div class="toolbar">
+        <label>기간:</label><input id="sh-from" type="date"> ~ <input id="sh-to" type="date">
+        <input id="sh-q" placeholder="회원명 · 아이디 검색" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:150px">
+        <select id="sh-tpl" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="">전체 유형</option></select>
+        <select id="sh-st" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <option value="">전체 상태</option><option value="sent">성공</option><option value="fallback">문자 대체</option><option value="failed">실패</option><option value="blocked">잔액부족 차단</option>
+        </select>
+        <button class="btn" onclick="shLoad()">조회</button>
+        <button class="btn btn-sec" onclick="shCsv()">CSV 다운로드</button>
+        <button class="btn btn-sec" onclick="shRange('today')">오늘</button>
+        <button class="btn btn-sec" onclick="shRange('week')">이번주</button>
+        <button class="btn btn-sec" onclick="shRange('month')">당월</button>
+        <button class="btn btn-sec" onclick="shRange('prev')">전월</button>
+      </div>
+      <div id="sh-summary" class="dash-row mt"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap">
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="btn btn-sm" id="sh-vb-day" onclick="shView('day')">일자별</button>
+          <button class="btn btn-sm btn-sec" id="sh-vb-member" onclick="shView('member')">회원별</button>
+          <button class="btn btn-sm btn-sec" id="sh-vb-tpl" onclick="shView('tpl')">유형별</button>
+          <button class="btn btn-sm btn-sec" id="sh-vb-detail" onclick="shView('detail')">건별 상세</button>
+        </div>
+        <select id="sh-per" onchange="shPage(1)" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <option value="50">50개씩</option><option value="100" selected>100개씩</option><option value="200">200개씩</option>
+        </select>
+        <span id="sh-info" style="font-size:13px;color:var(--text-lt)"></span>
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><thead id="sh-head"></thead><tbody id="sh-body"></tbody></table></div>
+      <div id="sh-pager" style="display:flex;gap:4px;justify-content:center;margin-top:10px;flex-wrap:wrap"></div>
+    </div>
+
     <!-- ★ [2026-08-16] 회원 차감내역 — transactions 원장 기반. 언제·누가·무슨 건·얼마·포인트/잔액 구분 -->
     <div id="p-point-ledger" class="panel hidden"><h2>회원 차감내역</h2>
       <div class="toolbar">
@@ -2911,7 +2945,7 @@ function goPanel(el){
   document.querySelectorAll('.sn').forEach(a=>a.classList.remove('active'));el.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(el.dataset.p).classList.remove('hidden');
   document.querySelector('.sidebar').classList.remove('show');
-  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-withdrawn':loadWithdrawn,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-trial-req':loadTrialReqs,'p-morning-reading':loadMorningReading,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-video-guide':loadVideoGuideAdm,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-reviews':loadReviewAdmin,'p-distributors':loadDistributors,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-seminar':loadSeminar,'p-pptgen':loadPptGenAdmin,'p-hq-clients':loadHqClients,'p-membership':loadMembership,'p-recurring':loadRecurring,'p-billing-history':loadBillingHistory,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-case-report':loadCaseReports,'p-monthly-report':mrInit,'p-master-guide':loadMasterGuides,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':()=>{loadMedicalWeekly();startMwAutoRefresh?.();},'p-hospital-db':loadHospitalDb,'p-new-hospital':loadNewHospital,'p-billing-mgmt':bmLoad,'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-error-mon':loadErrorMon,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash,'p-client-registry':loadClientRegistry,'p-access-stats':()=>{initAsDates();loadAccessStats();},'p-ai-proposal-stats':loadAiProposalStats,'p-ceo-report-stats':loadCeoReportStats,'p-corp-report-stats':loadCorpReportStats,'p-legal-refs':loadLegalRefs,'p-biz-signals':loadBizSignals,'p-ai-usage':auInit,'p-point-ledger':plInit};   /* ★ [2026-08-16] 회원 차감내역 */
+  const ld={'p-dash':loadDash,'p-members':loadMembers,'p-withdrawn':loadWithdrawn,'p-admins':loadAdmins,'p-contents':loadConts,'p-cats':loadCats,'p-pays':loadPaysAll,'p-logs':()=>{initLogDates();loadLogsAll();},'p-props':loadProps,'p-trial-req':loadTrialReqs,'p-morning-reading':loadMorningReading,'p-notices':loadNoticesAdm,'p-guide':loadGuide,'p-video-guide':loadVideoGuideAdm,'p-terms':()=>loadTermEdit('terms_of_service'),'p-chargeopt':loadChargeOpts,'p-thumbs':loadThumbs,'p-referral-set':loadRefSet,'p-referral-status':loadRefStatus,'p-reviews':loadReviewAdmin,'p-distributors':loadDistributors,'p-upcoming':loadUpcomingAdm,'p-popups':loadPopups,'p-seminar':loadSeminar,'p-pptgen':loadPptGenAdmin,'p-hq-clients':loadHqClients,'p-membership':loadMembership,'p-recurring':loadRecurring,'p-billing-history':loadBillingHistory,'p-role-history':loadRoleHistory,'p-daily-report':loadDailyReports,'p-client-dr':loadClientDailyReports,'p-premium-report':loadPremiumReports,'p-case-report':loadCaseReports,'p-monthly-report':mrInit,'p-master-guide':loadMasterGuides,'p-weekly-lecture':loadWeeklyLectures,'p-tax-weekly':loadTaxWeeklyTopics,'p-medical-weekly':()=>{loadMedicalWeekly();startMwAutoRefresh?.();},'p-hospital-db':loadHospitalDb,'p-new-hospital':loadNewHospital,'p-billing-mgmt':bmLoad,'p-sms':()=>{loadSmsMembers();loadSmsLogs();},'p-syslog':loadSysLog,'p-error-mon':loadErrorMon,'p-kakao-notify':loadKakaoSettings,'p-finance-dash':loadFinanceDash,'p-client-registry':loadClientRegistry,'p-access-stats':()=>{initAsDates();loadAccessStats();},'p-ai-proposal-stats':loadAiProposalStats,'p-ceo-report-stats':loadCeoReportStats,'p-corp-report-stats':loadCorpReportStats,'p-legal-refs':loadLegalRefs,'p-biz-signals':loadBizSignals,'p-ai-usage':auInit,'p-point-ledger':plInit,'p-send-history':shInit};   /* ★ [2026-08-16] 회원 차감내역 */
   if(ld[el.dataset.p])ld[el.dataset.p]();
 }
 
@@ -2927,6 +2961,162 @@ function auKstNow(){return new Date(Date.now()+9*3600*1000);}
    포인트/잔액 중 무엇에서 차감됐는지 전부 보여준다.
    건별 상세 / 회원별 집계 / 월별 집계 3뷰 + CSV.
    ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   ★ [2026-08-16] 알림 발송이력 (p-send-history)
+   send_history 기반 — 차감이 남지 않는 실패·차단 건까지 전수 파악.
+   일자별 / 회원별 / 유형별 / 건별 4뷰 + CSV.
+   ═══════════════════════════════════════════════════════════════ */
+let _shRows=[], _shUsers={}, _shView='day', _shPage=1, _shInited=false, _shCapped=false;
+const SH_ST={sent:'성공',fallback:'문자 대체',failed:'실패',blocked:'잔액부족 차단'};
+const SH_STC={sent:'#177A56',fallback:'#0C447C',failed:'#B42318',blocked:'#8B6914'};
+const shYmd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+function shInit(){ if(_shInited)return; _shInited=true; shRange('month'); }
+function shRange(k){
+  const n=new Date(Date.now()+9*3600*1000);
+  let f,t;
+  if(k==='today'){ f=new Date(n.getFullYear(),n.getMonth(),n.getDate()); t=new Date(f); }
+  else if(k==='week'){ t=new Date(n.getFullYear(),n.getMonth(),n.getDate()); f=new Date(t); f.setDate(f.getDate()-6); }
+  else if(k==='prev'){ f=new Date(n.getFullYear(),n.getMonth()-1,1); t=new Date(n.getFullYear(),n.getMonth(),0); }
+  else { f=new Date(n.getFullYear(),n.getMonth(),1); t=new Date(n.getFullYear(),n.getMonth(),n.getDate()); }
+  $('sh-from').value=shYmd(f); $('sh-to').value=shYmd(t);
+  shLoad();
+}
+function shView(v){
+  _shView=v; _shPage=1;
+  [['day','sh-vb-day'],['member','sh-vb-member'],['tpl','sh-vb-tpl'],['detail','sh-vb-detail']].forEach(([k,id])=>{
+    const b=$(id); if(b) b.className='btn btn-sm'+(k===v?'':' btn-sec');
+  });
+  shRender();
+}
+async function shLoad(){
+  const body=$('sh-body'); if(body) body.innerHTML='<tr><td colspan="8" class="tc">불러오는 중…</td></tr>';
+  const from=$('sh-from').value, to=$('sh-to').value;
+  const fMs=from?new Date(from+'T00:00:00+09:00').getTime():0;
+  const tMs=to?new Date(to+'T23:59:59+09:00').getTime():Date.now()+864e5;
+  try{
+    if(!Object.keys(_shUsers).length){
+      const us=await getDocs(collection(db,'users'));
+      us.docs.forEach(d=>{const u=d.data();_shUsers[d.id]={name:u.name||'',loginId:u.loginId||''};});
+    }
+    let arr=[];
+    try{ const s=await getDocs(query(collection(db,'send_history'),orderBy('createdAt','desc'),limit(3000))); arr=s.docs; }
+    catch(e){ const s2=await getDocs(collection(db,'send_history')); arr=s2.docs; }
+    _shCapped=(arr.length>=3000);
+    _shRows=arr.map(d=>d.data())
+      .filter(r=>{const ms=r.createdAt?.toMillis?.()??0; return ms>=fMs&&ms<=tMs;})
+      .map(r=>{
+        const u=_shUsers[r.consultantUid]||{};
+        return { ms:r.createdAt?.toMillis?.()??0, uid:r.consultantUid||'',
+          name:u.name||'(미상)', loginId:u.loginId||'',
+          tplKey:r.tplKey||'', tplName:r.tplName||(r.tplKey||'기타'),
+          channel:r.channel||'', status:r.status||'', billing:r.billing||'',
+          cost:Number(r.cost)||0, reason:r.reason||'' };
+      })
+      .sort((a,b)=>b.ms-a.ms);
+    /* 유형 필터 옵션 자동 구성 */
+    const sel=$('sh-tpl'), cur=sel.value;
+    const names={}; _shRows.forEach(r=>{ if(r.tplKey) names[r.tplKey]=r.tplName; });
+    sel.innerHTML='<option value="">전체 유형</option>'+Object.keys(names).sort().map(k=>'<option value="'+k+'">'+esc(names[k])+'</option>').join('');
+    sel.value=cur;
+    _shPage=1; shRender();
+  }catch(e){
+    console.error('[send-history]',e);
+    if(body) body.innerHTML='<tr><td colspan="8" class="tc" style="color:var(--danger)">불러오지 못했습니다: '+esc(e.message||'오류')+'</td></tr>';
+  }
+}
+function shFiltered(){
+  const q=($('sh-q').value||'').trim().toLowerCase();
+  const tp=$('sh-tpl').value||'', st=$('sh-st').value||'';
+  return _shRows.filter(r=>(!tp||r.tplKey===tp)&&(!st||r.status===st)&&
+    (!q||r.name.toLowerCase().includes(q)||r.loginId.toLowerCase().includes(q)));
+}
+function shBadge(s){ return '<span style="font-size:11px;font-weight:700;color:'+(SH_STC[s]||'#5A6484')+'">'+(SH_ST[s]||s||'-')+'</span>'; }
+function shRender(){
+  const rows=shFiltered();
+  const n=k=>rows.filter(r=>r.status===k).length;
+  const cost=rows.reduce((s,r)=>s+r.cost,0);
+  const users=new Set(rows.filter(r=>r.uid).map(r=>r.uid)).size;
+  const card=(t,v,u,c)=>'<div class="dash-c"'+(c?' style="border-left-color:'+c+'"':'')+'><span>'+t+'</span><strong>'+v+'</strong>'+(u?'<em>'+u+'</em>':'')+'</div>';
+  $('sh-summary').innerHTML=card('총 발송',fmt(rows.length),'건')
+    +card('성공(알림톡)',fmt(n('sent')),'건',SH_STC.sent)
+    +card('문자 대체',fmt(n('fallback')),'건',SH_STC.fallback)
+    +card('실패',fmt(n('failed')),'건',SH_STC.failed)
+    +card('잔액부족 차단',fmt(n('blocked')),'건',SH_STC.blocked)
+    +card('발송 회원',fmt(users),'명')
+    +card('총 차감',fmt(cost),'P')
+    +(_shCapped?card('조회 한도','최근 3,000건','기간을 좁혀 주세요','#B42318'):'');
+
+  if(_shView==='day'){
+    const m={};
+    rows.forEach(r=>{const d=new Date(r.ms+9*3600*1000);const k=d.toISOString().slice(0,10);
+      (m[k]=m[k]||{cnt:0,sent:0,fb:0,fail:0,blk:0,cost:0,u:new Set()});
+      m[k].cnt++; m[k].cost+=r.cost; if(r.uid)m[k].u.add(r.uid);
+      if(r.status==='sent')m[k].sent++; else if(r.status==='fallback')m[k].fb++;
+      else if(r.status==='failed')m[k].fail++; else if(r.status==='blocked')m[k].blk++;});
+    const keys=Object.keys(m).sort().reverse();
+    $('sh-head').innerHTML='<tr><th>날짜</th><th>총 발송</th><th>알림톡</th><th>문자 대체</th><th>실패</th><th>차단</th><th>발송 회원</th><th>차감</th></tr>';
+    $('sh-body').innerHTML=keys.length?keys.map(k=>'<tr><td><b>'+k+'</b></td><td>'+fmt(m[k].cnt)+'건</td><td>'+fmt(m[k].sent)+'</td><td>'+fmt(m[k].fb)+'</td><td>'+fmt(m[k].fail)+'</td><td>'+(m[k].blk?'<b style="color:'+SH_STC.blocked+'">'+fmt(m[k].blk)+'</b>':'0')+'</td><td>'+fmt(m[k].u.size)+'명</td><td>'+fmt(m[k].cost)+'P</td></tr>').join(''):'<tr><td colspan="8" class="tc">발송 이력이 없습니다.</td></tr>';
+    $('sh-info').textContent=keys.length+'일'; $('sh-pager').innerHTML=''; return;
+  }
+  if(_shView==='member'){
+    const m={};
+    rows.forEach(r=>{const k=r.uid||'-';
+      (m[k]=m[k]||{name:r.name,loginId:r.loginId,cnt:0,sent:0,fb:0,fail:0,blk:0,cost:0,tpl:{}});
+      m[k].cnt++; m[k].cost+=r.cost; m[k].tpl[r.tplName]=(m[k].tpl[r.tplName]||0)+1;
+      if(r.status==='sent')m[k].sent++; else if(r.status==='fallback')m[k].fb++;
+      else if(r.status==='failed')m[k].fail++; else if(r.status==='blocked')m[k].blk++;});
+    const list=Object.values(m).sort((a,b)=>b.cnt-a.cnt);
+    $('sh-head').innerHTML='<tr><th>회원</th><th>아이디</th><th>총 발송</th><th>알림톡</th><th>문자 대체</th><th>차단</th><th>주요 유형</th><th>차감</th></tr>';
+    $('sh-body').innerHTML=list.length?list.map(x=>{
+      const top=Object.entries(x.tpl).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([k,v])=>esc(k)+' '+v).join(', ');
+      return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.loginId)+'</td><td><b>'+fmt(x.cnt)+'건</b></td><td>'+fmt(x.sent)+'</td><td>'+fmt(x.fb)+'</td><td>'+(x.blk?'<b style="color:'+SH_STC.blocked+'">'+fmt(x.blk)+'</b>':'0')+'</td><td style="font-size:12px">'+top+'</td><td>'+fmt(x.cost)+'P</td></tr>';
+    }).join(''):'<tr><td colspan="8" class="tc">발송 이력이 없습니다.</td></tr>';
+    $('sh-info').textContent='회원 '+list.length+'명'; $('sh-pager').innerHTML=''; return;
+  }
+  if(_shView==='tpl'){
+    const m={};
+    rows.forEach(r=>{const k=r.tplName||'기타';
+      (m[k]=m[k]||{cnt:0,sent:0,fb:0,blk:0,cost:0,billing:r.billing});
+      m[k].cnt++; m[k].cost+=r.cost;
+      if(r.status==='sent')m[k].sent++; else if(r.status==='fallback')m[k].fb++; else if(r.status==='blocked')m[k].blk++;});
+    const list=Object.entries(m).sort((a,b)=>b[1].cnt-a[1].cnt);
+    const tot=rows.length||1;
+    $('sh-head').innerHTML='<tr><th>알림 유형</th><th>건수</th><th>비중</th><th>알림톡</th><th>문자 대체</th><th>차단</th><th>부담</th><th>차감</th></tr>';
+    $('sh-body').innerHTML=list.length?list.map(([k,v])=>'<tr><td><b>'+esc(k)+'</b></td><td>'+fmt(v.cnt)+'건</td><td>'+Math.round(v.cnt/tot*100)+'%</td><td>'+fmt(v.sent)+'</td><td>'+fmt(v.fb)+'</td><td>'+(v.blk?'<b style="color:'+SH_STC.blocked+'">'+fmt(v.blk)+'</b>':'0')+'</td><td>'+(v.billing==='company'?'본사':'회원')+'</td><td>'+fmt(v.cost)+'P</td></tr>').join(''):'<tr><td colspan="8" class="tc">발송 이력이 없습니다.</td></tr>';
+    $('sh-info').textContent='유형 '+list.length+'종'; $('sh-pager').innerHTML=''; return;
+  }
+  $('sh-head').innerHTML='<tr><th>일시</th><th>회원</th><th>아이디</th><th>알림 유형</th><th>채널</th><th>상태</th><th>부담</th><th>차감</th></tr>';
+  shPage(_shPage);
+}
+function shPage(p){
+  const rows=shFiltered();
+  const per=parseInt($('sh-per').value||'100',10);
+  const pages=Math.max(1,Math.ceil(rows.length/per));
+  _shPage=Math.min(Math.max(1,p),pages);
+  const sl=rows.slice((_shPage-1)*per,_shPage*per);
+  const ch={alimtalk:'알림톡',sms:'문자',none:'-'};
+  $('sh-body').innerHTML=sl.length?sl.map(r=>'<tr><td style="white-space:nowrap">'+new Date(r.ms).toLocaleString('ko-KR')+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.loginId)+'</td><td>'+esc(r.tplName)+'</td><td>'+(ch[r.channel]||r.channel||'-')+'</td><td>'+shBadge(r.status)+(r.reason?' <span style="font-size:11px;color:var(--text-lt)">('+esc(r.reason)+')</span>':'')+'</td><td>'+(r.billing==='company'?'본사':'회원')+'</td><td>'+(r.cost?fmt(r.cost)+'P':'-')+'</td></tr>').join(''):'<tr><td colspan="8" class="tc">발송 이력이 없습니다.</td></tr>';
+  $('sh-info').textContent='전체 '+fmt(rows.length)+'건 · '+_shPage+'/'+pages+'페이지';
+  let ph=''; const s=Math.max(1,_shPage-4), e=Math.min(pages,s+9);
+  if(_shPage>1) ph+='<button class="btn btn-sm btn-sec" onclick="shPage('+(_shPage-1)+')">이전</button>';
+  for(let i=s;i<=e;i++) ph+='<button class="btn btn-sm'+(i===_shPage?'':' btn-sec')+'" onclick="shPage('+i+')">'+i+'</button>';
+  if(_shPage<pages) ph+='<button class="btn btn-sm btn-sec" onclick="shPage('+(_shPage+1)+')">다음</button>';
+  $('sh-pager').innerHTML=pages>1?ph:'';
+}
+function shCsv(){
+  const rows=shFiltered();
+  if(!rows.length){alert('내려받을 이력이 없습니다.');return;}
+  const ch={alimtalk:'알림톡',sms:'문자',none:'-'};
+  const head=['일시','회원명','아이디','알림유형','채널','상태','부담','차감(P)','사유'];
+  const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const body=rows.map(r=>[new Date(r.ms).toLocaleString('ko-KR'),r.name,r.loginId,r.tplName,ch[r.channel]||r.channel,SH_ST[r.status]||r.status,(r.billing==='company'?'본사':'회원'),r.cost,r.reason].map(q).join(','));
+  const csv='\uFEFF'+[head.map(q).join(',')].concat(body).join('\r\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+  const a=document.createElement('a');
+  a.href=url; a.download='알림발송이력_'+($('sh-from').value||'')+'_'+($('sh-to').value||'')+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 let _plRows=[], _plUsers={}, _plView='detail', _plPage=1, _plInited=false, _plCapped=false;
 const PL_LABEL={alimtalk:'고객 알림 발송',sms:'문자 발송',content:'콘텐츠',consensus:'모닝컨센서스',
   ai_chat:'AI 비서',ai_proposal:'AI 제안서',ai_proposal_slide:'슬라이드 추가',
