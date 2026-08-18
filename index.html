@@ -2145,6 +2145,31 @@
       <!-- ═══ [2026-08-15] 포인트 자동충전 · 멤버십 이용료 포인트 결제 설정 ═══ -->
       <div id="ptset-wrap" class="hidden" style="margin-top:12px">
 
+        <!-- ═══ [2026-08-18] 알림톡·문자 사용 설정 (옵트인 · 기본 미사용) ═══ -->
+        <div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">
+            <div style="display:flex;align-items:center;gap:7px;min-width:0">
+              <span style="font-size:17px">📮</span>
+              <span style="font-size:15px;font-weight:800;color:#141B2D">알림톡·문자 알림 사용</span>
+            </div>
+            <button type="button" id="aoToggle" onclick="aoToggleClick()" aria-label="알림톡 사용 켜기/끄기" style="flex-shrink:0;width:48px;height:27px;border-radius:14px;border:0;background:#D1D5DB;position:relative;cursor:pointer;transition:background .18s;padding:0">
+              <span id="aoKnob" style="position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:left .18s"></span>
+            </button>
+          </div>
+          <p style="font-size:12.5px;color:#5A6484;margin:0 0 10px;line-height:1.6">고객이 상담·진단·예약을 신청하면 알림톡(승인 전에는 문자)으로 알려드립니다.</p>
+          <div id="aoStatus" style="border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.7"></div>
+          <details style="background:#F8FAFC;border-radius:8px;padding:10px 12px;margin-top:9px">
+            <summary style="cursor:pointer;list-style:none;font-size:12.5px;font-weight:700;color:#5A6484">ℹ️ 요금과 동작 안내 ▾</summary>
+            <div style="font-size:12px;color:#5A6484;line-height:1.9;margin-top:8px;padding-top:8px;border-top:1px solid #E5E7EB">
+              · 알림 1건마다 <b>20P</b>(장문 문자 50P)가 보유 포인트·잔액에서 차감됩니다.<br>
+              · 사용을 켠 회원에게만 발송됩니다. 끄면 <b>즉시 모든 알림이 중단</b>되고 포인트 차감도 없습니다.<br>
+              · 잔액이 발송 단가에 미치지 못하면 <b>어떤 경우에도 발송되지 않습니다.</b><br>
+              · 멤버십 <b>결제 실패 안내</b>는 결제 통지이므로 사용 여부와 무관하게 발송됩니다.<br>
+              · 사용을 끄면 발송용 <b>포인트 자동충전도 함께 꺼집니다.</b>
+            </div>
+          </details>
+        </div>
+
         <div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-bottom:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">
             <div style="display:flex;align-items:center;gap:7px;min-width:0">
@@ -5270,6 +5295,7 @@ window.maybeShowCardNotice=maybeShowCardNotice;window.cardNoticeLater=cardNotice
      · 충전액은 기준액 이상이어야 한다 — 아니면 충전 직후에도 기준 미달이라 반복된다
    ═══════════════════════════════════════════════════════════════ */
 let _acState={enabled:false,threshold:10000,chargeAmount:30000,monthlyCap:60000,monthAmount:0,thresholds:[5000,10000,30000,50000],capMult:{},hasCard:false,loaded:false};   /* ★ [2026-08-18] 월 한도 금액 도입 */
+let _aoState={enabled:false,loaded:false};   /* ★ [2026-08-18] 알림톡 사용(옵트인) — 기본 미사용 */
 let _ppState={enabled:false,point:0,fee:50000};
 let _acSaving=false;   /* 저장 진행 중 — 페이지 이탈 경고용 */
 
@@ -5290,6 +5316,7 @@ async function loadPointSettings(){
               monthlyCap:d.monthlyCap||0,monthAmount:Number(d.monthAmount)||0,
               thresholds:ths,amounts:amts,capMult:opts.capMult||{},hasCard:!!d.hasCard,loaded:true};
     if(!_acState.monthlyCap)_acState.monthlyCap=acCapOpts(_acState.chargeAmount)[0];
+    _aoState={enabled:d.alimtalkOptIn===true,loaded:true};aoPaint();   /* ★ [2026-08-18] 옵트인 상태 */
     $('acThreshold').innerHTML=ths.map(v=>`<option value="${v}"${v===_acState.threshold?' selected':''}>${_acFmt(v)}원</option>`).join('');
 
     $('acCard').textContent=d.hasCard?((d.cardName||'')+' '+(d.cardMasked||'')).trim():'미등록';
@@ -5303,6 +5330,39 @@ async function loadPointSettings(){
     _ppState={enabled:ud.payWithPoint===true,point:Number(ud.point)||0,fee:(ud.monthlyFee!=null?parseInt(ud.monthlyFee,10):50000)};
     ppPaint();
   }catch(e){console.warn('[포인트설정]',e.message);wrap.classList.add('hidden');}
+}
+
+/* ═══ [2026-08-18] 알림톡·문자 사용(옵트인) 토글 ═══
+   · 기본 미사용. 켤 때 과금(건당 20P) 동의를 confirm으로 받는다.
+   · 끄면 서버가 자동충전도 함께 끈다 → 화면 상태를 재조회 없이 맞춘다. */
+function aoPaint(){
+  const on=_aoState.enabled, tg=$('aoToggle'), kn=$('aoKnob'), st=$('aoStatus');
+  if(tg){tg.style.background=on?'#15294A':'#D1D5DB';}
+  if(kn){kn.style.left=on?'24px':'3px';}
+  if(st){
+    if(on){st.style.background='#E9F7EF';st.style.color='#177A56';st.innerHTML='✓ 사용 중 — 고객 요청이 오면 알림톡·문자로 알려드립니다. (건당 20P 차감)';}
+    else{st.style.background='#F8FAFC';st.style.color='#5A6484';st.innerHTML='현재 <b>사용 안 함</b> — 고객 요청은 마이페이지 <b>고객 요청</b> 탭에서만 확인할 수 있으며, 알림 관련 포인트 차감이 없습니다.';}
+  }
+}
+async function aoToggleClick(){
+  if(!_aoState.loaded)return;
+  const next=!_aoState.enabled;
+  if(next){
+    const ok=confirm('알림톡·문자 알림을 사용할까요?\n\n· 고객이 상담·진단·생활변화·보험공유·미팅예약·보안채팅을 신청하면 즉시 알려드립니다\n· 알림 1건마다 20P(장문 문자 50P)가 차감됩니다\n· 잔액이 부족하면 발송되지 않습니다\n· 언제든 끌 수 있습니다');
+    if(!ok)return;
+  }else{
+    const ok=confirm('알림톡·문자 알림을 끌까요?\n\n· 고객 요청 알림이 즉시 중단됩니다 (마이페이지 고객 요청 탭에서는 계속 확인 가능)\n· 발송용 포인트 자동충전도 함께 꺼집니다');
+    if(!ok)return;
+  }
+  const prev=_aoState.enabled;
+  _aoState.enabled=next;aoPaint();
+  try{
+    const r=await httpsCallable(functions,'setAlimtalkOptIn')({enabled:next});
+    const d=r&&r.data||{};
+    if(!d.success){_aoState.enabled=prev;aoPaint();toast(d.error||'저장하지 못했습니다','error');return;}
+    if(d.autoChargeOff){_acState.enabled=false;acPaint();}   /* 서버가 자동충전을 껐으면 화면도 반영 */
+    toast(next?'알림톡·문자 알림을 켰습니다':'알림톡·문자 알림을 껐습니다','success');
+  }catch(e){_aoState.enabled=prev;aoPaint();toast('저장 실패: '+e.message,'error');}
 }
 
 function acPaint(){
@@ -5415,6 +5475,10 @@ function acDirty(){
 async function acToggleClick(){
   if(!_acState.loaded)return;
   const next=!_acState.enabled;
+  if(next&&!_aoState.enabled){   /* ★ [2026-08-18] 자동충전은 발송용 — 알림톡 사용이 선행돼야 한다 */
+    toast('알림톡·문자 알림을 먼저 켜주세요. 자동충전은 고객 알림 발송용 기능입니다','warning');
+    return;
+  }
   if(next&&!_acState.hasCard){
     /* ★ [2026-08-16] 카드 미등록 시 등록으로 안내 → 등록 완료 후 자동충전 설정 이어가기 */
     if(confirm('자동충전을 사용하시려면 결제 카드 등록이 필요합니다.\n\n지금 카드정보 화면에서 등록하시겠습니까?\n등록이 끝나면 자동충전 설정을 이어서 진행합니다.')){window._acPendingAC=true;mpGoCard();}
@@ -5486,7 +5550,7 @@ window.addEventListener('beforeunload',function(e){
   e.preventDefault();e.returnValue='';
 });
 
-window.acToggleClick=acToggleClick;window.acSave=acSave;window.acDirty=acDirty;window.acPickUnit=acPickUnit;window.acPickCap=acPickCap;
+window.acToggleClick=acToggleClick;window.acSave=acSave;window.acDirty=acDirty;window.acPickUnit=acPickUnit;window.acPickCap=acPickCap;window.aoToggleClick=aoToggleClick;
 window.ppToggleClick=ppToggleClick;window.mpGoCard=mpGoCard;window.loadPointSettings=loadPointSettings;
 
 function mpTab(btn){btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('#pg-mypage .tp').forEach(t=>t.classList.add('hidden'));$(btn.dataset.t).classList.remove('hidden');if(btn.dataset.t==='mp-card')loadCard();if(btn.dataset.t==='mp-active')loadActiveContents();if(btn.dataset.t==='mp-usage')loadUsage();if(btn.dataset.t==='mp-pptgen')loadMpPptGen();if(btn.dataset.t==='mp-charge')loadChargeHistory();if(btn.dataset.t==='mp-fav')loadFavorites();if(btn.dataset.t==='mp-curation')loadCuration();if(btn.dataset.t==='mp-referral')loadReferrals();if(btn.dataset.t==='mp-client-profile')loadClientProfile();if(btn.dataset.t==='mp-channel'){loadChannelData();loadClientProfile();}if(btn.dataset.t==='mp-fc-requests')loadFcRequests();if(btn.dataset.t==='mp-fc-clients')loadFcClients();if(btn.dataset.t==='mp-fc-views')loadFcViews();}
