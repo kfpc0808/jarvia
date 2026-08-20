@@ -181,7 +181,7 @@ details.mc-banner[open] .bn-hint{display:none}
 .mc-tip{margin-top:16px;padding:12px 15px;border-radius:var(--radius-sm);background:var(--accent-glow);border-left:3px solid var(--accent);font-size:12.5px;color:var(--navy);line-height:1.75}
 .mc-fb{font-size:12.5px;color:var(--text-sub);padding:10px 14px;background:var(--bg-section);border-radius:var(--radius-sm)}
 /* ★ [2026-08-20] 읽기 가이드 "오늘 이런 분께 도움이 됩니다" — 리포트 최상단 진입 안내.
-   details가 아닌 div로 구성 → 고객용 내보내기(buildCustomerHtml)에 항상 포함된다. */
+   details가 아닌 div로 구성 → 고객 열람 모드(?v=1)에서도 항상 표시된다. */
 .mg-card{border-radius:16px;overflow:hidden;margin-bottom:14px;box-shadow:0 4px 18px rgba(21,41,74,.13);border:1px solid rgba(201,160,92,.35)}
 .mg-hd{background:linear-gradient(135deg,#15294A,#22406E);padding:14px 16px 13px;position:relative}
 .mg-hd::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:linear-gradient(90deg,#96701F,#E3C893,#96701F)}
@@ -247,7 +247,6 @@ details.mc-banner[open] .bn-hint{display:none}
       <div class="date-list" id="dateList"></div>
     </div>
     <button class="nav-btn" id="btnNext" onclick="navMove(-1)" title="다음 영업일">›</button>
-    <button class="cap-btn" id="btnHtml" onclick="downloadCustomerHtml()" title="고객에게 보내는 HTML 파일 저장 (상담 Tip 제외 · 명함 헤더 포함)" style="border-color:#C9A05C;background:#FBF5E9;color:#96701F;font-weight:700">👥 <span class="cap-tx">고객용 HTML</span></button>
     <button class="cap-btn" id="btnShare" onclick="copyShareLink()" title="고객에게 보낼 링크 복사 — 카톡에 붙여넣으면 카드로 표시되고, 열람 여부가 기록됩니다" style="border-color:#1B5E9E;background:#EEF5FC;color:#14548F;font-weight:700">🔗 <span class="cap-tx">링크 복사</span></button>
   </div>
 </div>
@@ -361,7 +360,7 @@ async function loadArchive(){
     if(!archive.length){
       document.getElementById('dateMain').innerHTML='발행 이력 없음';
       document.getElementById('main').innerHTML='<div class="empty"><div class="empty-icon">🧭</div><p>아직 발행된 모닝 컨센서스가 없습니다.<br>매 영업일 오전 9시 전후에 발행됩니다.</p></div>';
-      document.getElementById('btnHtml').disabled=true;
+      _setShareDisabled(true);
       return;
     }
     curIdx=0;
@@ -400,7 +399,7 @@ function show(){
   document.getElementById('dateSub').textContent=curIdx===0?'최신 발행분':`${curIdx} 영업일 전`;
   document.getElementById('btnPrev').disabled=curIdx>=archive.length-1;
   document.getElementById('btnNext').disabled=curIdx<=0;
-  document.getElementById('btnHtml').disabled=!(r.status==='done'&&r.ko);
+  _setShareDisabled(!(r.status==='done'&&r.ko));
   renderDateList();
   /* ★ [2026-08-14] 유료화 게이트 — 멤버십·발행보류는 무료, 일반회원은 결제(당일 유효) 확인 후 렌더 */
   const _free=mcIsMember()||r.status==='fallback'||!r.ko;
@@ -409,10 +408,10 @@ function show(){
       ? (mcvTopHTML()+`<div class="report-card" id="capArea">${renderConsensus(r)}</div>`+(cardFooterHTML()||''))
       : `<div class="report-card" id="capArea">${renderConsensus(r)}</div>`;
     const _dl=!(r.status==='done'&&r.ko);
-    if(document.getElementById('btnHtml'))document.getElementById('btnHtml').disabled=_dl;
+    _setShareDisabled(_dl);
   }else{
     const _f=fmtDate(r),_ck=r.id;
-    if(document.getElementById('btnHtml'))document.getElementById('btnHtml').disabled=true;   /* 미결제 상태 고객용HTML 차단 */
+    _setShareDisabled(true);   /* 미결제 상태 — 아래 _setShareDisabled 정책 스위치 참조 */
     document.getElementById('main').innerHTML='<div class="report-card"><div class="skel"></div></div>';
     mcCheckPaid(_ck).then(paid=>{
       if(archive[curIdx]&&archive[curIdx].id!==_ck)return;   /* 확인 중 날짜 이동 시 무시 */
@@ -577,6 +576,18 @@ function renderConsensus(mc){
 
 /* ★ [2026-08-10] 명함 푸터 — C안: consultants 프로필 자동 로드 → 실패 시 수동 입력(localStorage) */
 let fcProfile=null;   // {name,company,title,phone,loginId}
+/* ★ [2026-08-20] 공유 버튼 활성/비활성 스위치.
+   고객용 HTML 저장 버튼을 삭제하면서 기존 게이트 대상(btnHtml)이 사라져,
+   발행이력 없음·미결제·미로그인 3개 제어를 이 함수 한 곳으로 모았다.
+   현재 GATE_SHARE=false — 링크 복사는 막지 않는다(무동작).
+   ※ 결제 연동 여부는 담당자 결정 대기. 링크 복사도 게이트하려면 true 로만 바꾸면 된다. */
+const GATE_SHARE = false;
+function _setShareDisabled(v){
+  if(!GATE_SHARE) return;
+  const b = document.getElementById('btnShare');
+  if(b) b.disabled = !!v;
+}
+
 /* ★ [2026-08-15] 고객 열람 모드 — ?v=1&fc={loginId}
    컨설턴트가 복사한 링크로 고객이 들어온 경우. 로그인·결제 없이 열람만 가능하며,
    상담 Tip·저장 버튼 등 컨설턴트 전용 요소는 감춘다. */
@@ -603,7 +614,7 @@ async function loadFcProfileByLoginId(lid){
   return false;
 }
 
-/* ★ [2026-08-15] 고객 화면 상단 — 다운로드 파일(buildCustomerHtml)과 동일한 명함·헤더 구성.
+/* ★ [2026-08-15] 고객 화면 상단 — 컨설턴트 명함·헤더 구성.
    두 경로의 결과물이 어긋나지 않도록 같은 마크업·스타일을 쓴다. */
 function mcvTopHTML(){
   let top='';
@@ -677,75 +688,6 @@ function cardFooterHTML(){
     +`</div>`;
 }
 
-/* ═══ 👥 [2026-08-11] 고객용 HTML 내보내기 — 독립 실행형 파일 (B2B2C: 자비아 흔적 제로) ═══
-   · 캡처 파이프라인(onclone)과 동일 정제: 전 블록 펼침, 접힘 details 정리, 상담 Tip 제외, 명함 푸터 포함
-   · 상단: 컨설턴트 명함 헤더 + (채널 ID 설정 시) 소개카드·재무상담 버튼
-   · 고객용 명칭은 '모닝 브리핑'으로 중립화, 파일명도 동일 */
-function buildCustomerHtml(){
-  const area=document.getElementById('capArea');
-  const r=archive[curIdx];
-  if(!area||!r)return null;
-  const c=area.cloneNode(true);
-  c.removeAttribute('id');
-  c.querySelectorAll('details.mc-blk').forEach(el=>el.setAttribute('open',''));
-  c.querySelectorAll('details.mc-fold').forEach(el=>{
-    const sm=el.querySelector('summary');
-    const div=document.createElement('div');div.className=el.className+' as-div';
-    div.innerHTML=el.open?el.innerHTML:(sm?sm.innerHTML:'');
-    el.replaceWith(div);
-  });
-  c.querySelectorAll('.as-div > summary').forEach(sm=>{const p=document.createElement('div');p.style.cssText='padding:9px 2px 3px;font-size:12px;font-weight:800;color:#96701F';p.textContent=sm.textContent;sm.replaceWith(p);});
-  c.querySelectorAll('.mc-tip, .mc-cara, .mc-hint, .mc-arr').forEach(el=>el.remove());
-  const f=fmtDate(r);
-  const hd='<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:2px 2px 14px;margin-bottom:18px;border-bottom:2px solid #C9A05C"><div style="font-size:19px;font-weight:800;color:#1E2226;letter-spacing:-.3px">🧭 모닝 브리핑</div><div style="font-size:14.5px;font-weight:800;color:#1E2226;white-space:nowrap">'+esc(f.main)+'</div></div>';
-  let top='';
-  if(fcProfile&&fcProfile.name){
-    const sub=[fcProfile.title,fcProfile.company].filter(Boolean).join(' · ');
-    let btns='';
-    const lid=(fcProfile.loginId||'').trim();
-    if(lid){
-      const eid=encodeURIComponent(lid);
-      /* ★ [2026-08-11] 우측 세로 2단 + 새 탭(리포트 파일 탭 보존) + ret=1(채널 오버레이 X → 탭 닫고 리포트 복귀)
-         소개카드도 채널 직행(/@id?card=1) — ogProxy(/card) 경유 시 ret 파라미터가 유실되어 복귀 불가했던 문제 수정 */
-      btns='<div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">'
-        +'<a href="https://jarvia.co.kr/@'+eid+'?card=1&ret=1" target="_blank" rel="noopener" style="border:1px solid rgba(201,169,110,.55);background:rgba(201,169,110,.15);color:#E8D5AC;border-radius:999px;padding:6px 12px;font-size:11px;font-weight:700;text-decoration:none;white-space:nowrap;text-align:center">👤 소개카드</a>'
-        +'<a href="https://jarvia.co.kr/@'+eid+'?consult=1&ret=1" target="_blank" rel="noopener" style="background:#C9A05C;color:#15294A;border-radius:999px;padding:6px 12px;font-size:11px;font-weight:800;text-decoration:none;white-space:nowrap;text-align:center">🤝 재무상담</a></div>';   /* ★ [2026-08-16] 미팅예약 필 제거 — 소개카드 내부에 미팅예약이 있어 중복 */
-    }
-    top='<div style="background:linear-gradient(135deg,#15294A,#1E3A66);padding:12px 16px;border-radius:14px;margin-bottom:16px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><div style="min-width:0"><div style="font-size:16px;font-weight:800;color:#fff">'+esc(fcProfile.name)+(sub?' <span style="font-size:11.5px;font-weight:600;color:#C9A96E">'+esc(sub)+'</span>':'')+'</div>'+(fcProfile.phone?'<div style="font-size:11px;margin-top:2px"><a href="tel:'+esc(fcProfile.phone.replace(/[^0-9+]/g,''))+'" style="color:#AEB8CC;text-decoration:none">📞 '+esc(fcProfile.phone)+'</a></div>':'')+'</div>'+btns+'</div></div>';
-  }
-  const ft=cardFooterHTML();
-  let css='';document.querySelectorAll('style').forEach(s=>{css+=s.textContent+'\n';});
-  css=css.replace(/\/\*[\s\S]*?\*\//g,'');   /* 주석 제거 — 파일 경량화 + 내부 표기 비노출 */
-  const body='<div style="max-width:1000px;margin:0 auto;background:#fff;padding:18px 18px 26px;border-radius:14px;box-shadow:0 4px 22px rgba(30,34,38,.08)">'+top+hd+c.innerHTML+(ft||'')+'</div>';
-  return '<!DOCTYPE html>\n<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>모닝 브리핑 '+esc(f.dash)+'</title><style>'+css+'\nbody{background:#F1EEE6;margin:0;padding:14px}\ndetails>summary{pointer-events:none;list-style:none}\ndetails>summary::-webkit-details-marker{display:none}\ndetails.mc-banner>summary{pointer-events:auto;cursor:pointer}\n</style></head><body>'+body+'</body></html>';
-}
-function downloadCustomerHtml(){
-  const r=archive[curIdx];if(!r){alert('발행분이 없습니다.');return;}
-  if(!fcProfile||!fcProfile.name){
-    if(confirm('명함이 설정되어 있지 않습니다.\n파일 상단에 성명·연락처·상담 버튼이 표시되도록 먼저 설정할까요?')){editFcCard();}
-  }else if(!(fcProfile.loginId||'').trim()){
-    /* ★ [2026-08-11] 기존 명함 사용자 — 신규 항목(채널 ID) 미입력 시 소개카드·재무상담 버튼이 빠진 채 나가는 구멍 안내 */
-    if(confirm('채널 ID가 설정되어 있지 않아 파일에 소개카드·재무상담 버튼이 빠집니다.\n지금 설정할까요? (명함 설정 마지막 항목)')){editFcCard();}
-  }
-  const html=buildCustomerHtml();
-  if(!html){alert('파일 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.');return;}
-  /* ★ B2B2C 최종 안전망 — 도메인(jarvia.co.kr)은 링크용 허용, 브랜드 문자열은 검출 시 저장 중단 */
-  if(/JARVIA|자비아/i.test(html.replace(/jarvia\.co\.kr/gi,''))){alert('내부 브랜드 문구가 감지되어 저장을 중단했습니다. 관리자에게 문의해 주세요.');return;}
-  const blob=new Blob(['\ufeff'+html],{type:'text/html;charset=utf-8'});
-  const a=document.createElement('a');
-  a.download='모닝브리핑_'+fmtDate(r).dash+'.html';
-  a.href=URL.createObjectURL(blob);
-  a.click();
-  setTimeout(()=>{try{URL.revokeObjectURL(a.href);}catch(_e){}},4000);
-  const t=document.getElementById('capToast');
-  if(t){t.style.display='block';setTimeout(()=>{t.style.display='none';},2200);}
-}
-
-/* ★ [2026-08-15] 고객 공유 링크 복사 — OG 프록시 경유
-   · 카톡에 붙여넣으면 이미지 카드로 표시되고, 주소창에 jarvia 도메인이 노출되지 않는다.
-   · 링크로 들어온 고객은 이 화면의 고객 열람 모드(?v=1)를 보게 된다 — 다운로드 없이
-     같은 리포트가 그대로 열리고, 상단 명함과 소개카드·재무상담 버튼, 열람 추적이 함께 동작한다.
-   · 채널 ID(loginId)가 없으면 어느 컨설턴트의 링크인지 알 수 없어 복사할 수 없다. */
 function copyShareLink(){
   const lid=(fcProfile&&fcProfile.loginId||'').trim();
   if(!lid){
@@ -777,7 +719,6 @@ function fallbackCopy(text,cb){
 window.navMove=navMove;
 window.toggleDateList=toggleDateList;
 window.selectDate=selectDate;
-window.downloadCustomerHtml=downloadCustomerHtml;   /* ★ [2026-08-11] 모듈 스코프 — 고객용 HTML 버튼(inline onclick)용 등록 누락 보정 */
 window.copyShareLink=copyShareLink;   /* ★ [2026-08-15] 링크 복사 버튼(inline onclick)용 — 모듈 스코프라 window 등록 필수 */
 window.editFcCard=editFcCard;
 
@@ -807,7 +748,7 @@ onAuthStateChanged(auth,async u=>{
     }
     document.getElementById('main').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><p>로그인이 필요합니다.<br><a href="./index.html" style="color:var(--accent)">메인으로 이동</a></p></div>';
     document.getElementById('dateMain').textContent='—';
-    document.getElementById('btnHtml').disabled=true;
+    _setShareDisabled(true);
   }
 });
 </script>
