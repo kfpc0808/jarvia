@@ -2164,7 +2164,7 @@
       <button class="tab" data-t="mp-fc-views" onclick="mpTab(this)" id="tab-fc-views" style="display:none">📊 열람 현황</button>
     </div>
     <div id="mp-info" class="tp">
-      <div class="bal-card"><span>충전 잔액</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" onclick="openCharge()">충전하기</button></div>
+      <div class="bal-card"><span>충전 잔액</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" id="mp-charge-btn" onclick="openCharge()">충전하기</button></div>
       <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
       <!-- ═══ [2026-08-15] 포인트 자동충전 · 멤버십 이용료 포인트 결제 설정 ═══ -->
       <div id="ptset-wrap" class="hidden" style="margin-top:12px">
@@ -2398,7 +2398,7 @@
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>생성일</th><th>제목</th><th>유형</th><th>상태</th><th>비용</th><th>다운로드</th><th>삭제</th></tr></thead><tbody id="tb-pptgen"></tbody></table></div>
     </div>
-    <div id="mp-charge" class="tp hidden"><div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn-accent" onclick="openCharge()">＋ 충전하기</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>결제금액</th><th>충전액</th><th>잔액</th><th>상태</th></tr></thead><tbody id="tb-charges"></tbody></table></div></div>
+    <div id="mp-charge" class="tp hidden"><div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn-accent" id="mp-charge-btn2" onclick="openCharge()">＋ 충전하기</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>날짜</th><th>결제금액</th><th>충전액</th><th>잔액</th><th>상태</th></tr></thead><tbody id="tb-charges"></tbody></table></div></div>
     <div id="mp-fav" class="tp hidden"><div id="fav-grid" class="grid"></div><div id="no-fav" class="empty hidden">메인화면 콘텐츠의 썸네일을 누르면 나오는 '상세모달' 하단에 있는 '즐겨찾기'를 클릭하시면 이곳에 해당 콘텐츠가 자동으로 업로드 됩니다.</div></div>
 
     <!-- ▼ 고객리포트 큐레이션 -->
@@ -6010,7 +6010,15 @@ async function doLogout(manual){
   try{if(window.SmsCore&&typeof SmsCore.clearAll==='function')await SmsCore.clearAll();}catch(_e){}
   await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
-function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
+function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';
+  /* ★ [2026-08-20] 기간제는 충전 경로가 없으므로 '충전' 안내와 클릭 커서를 노출하지 않는다 */
+  const _fu=jvIsFreeUser(meData);const _tx='💰 '+s+' | '+p+(_fu?'':' | 충전');
+  if($('hdr-balance')){$('hdr-balance').textContent=_tx;$('hdr-balance').style.cursor=_fu?'default':'pointer';}
+  if($('mob-balance')){$('mob-balance').textContent=_tx;$('mob-balance').style.cursor=_fu?'default':'pointer';}
+  /* 마이페이지 충전 버튼도 함께 숨긴다(충전 내역 탭 자체는 지급 이력 확인용으로 남긴다) */
+  if($('mp-charge-btn'))$('mp-charge-btn').style.display=_fu?'none':'';
+  if($('mp-charge-btn2'))$('mp-charge-btn2').style.display=_fu?'none':'';
+  checkExpiry();}
 /* ═══ ★ [2026-08-20] 자비아(기간제) free_user 공통 처리 ═══
    · jvFreeExpired      : 기간제이면서 이용기간이 지났는지 (다른 등급은 항상 false)
    · jvNormalizeFreeRole: 화면 권한 판정용으로만 role 을 jarvia_member 로 승격.
@@ -7650,6 +7658,14 @@ async function _setupCardChargeBtn(){
   }catch(e){cb.style.display='none';}
 }
 async function openCharge(){
+  /* ★ [2026-08-20] 자비아(기간제)는 충전 불가.
+     임시 체험 계정이라 기간 종료 시 계정과 함께 잔액이 사라져 환불 분쟁이 된다.
+     무료 제공분(AI비서 월30회·CEO리포트 10건·제안서 4건)까지만 이용한다.
+     입구 한 곳만 막으면 잔액부족 안내 등 호출 지점 15곳이 모두 차단된다. */
+  if(jvIsFreeUser(meData)){
+    alert('자비아(기간제) 회원은 무료 제공분까지 이용하실 수 있습니다.\n\n계속 이용하시려면 담당자에게 문의해 주세요.');
+    return;
+  }
   await _setupCardChargeBtn();
   try{
     let snap;try{snap=await getDocs(query(collection(db,'charge_options'),where('isActive','==',true),orderBy('sortOrder')));}catch(e){snap=await getDocs(collection(db,'charge_options'));snap={docs:snap.docs.filter(d=>d.data().isActive===true).sort((a,b)=>(a.data().sortOrder||0)-(b.data().sortOrder||0))};}
