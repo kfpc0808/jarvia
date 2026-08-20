@@ -1143,6 +1143,27 @@
   </div>
 </div>
 
+<!-- ★ [2026-08-20] 자비아(기간제) 이용기간·자료삭제 사전 고지 — free_user 에게만 표시.
+     기간 종료 시 고객정보를 포함한 자료가 삭제되므로 미리 알리고 백업을 안내한다.
+     D-7 이내에는 '오늘 하루 보지 않기'를 제공하지 않고 매번 표시한다. -->
+<div id="mdl-free-notice" class="modal hidden">
+  <div class="mdl-bg" onclick="closeFreeNotice()"></div>
+  <div class="mdl-box" style="max-width:430px">
+    <div style="text-align:center;padding:26px 24px 20px">
+      <div id="fn-icon" style="font-size:38px;line-height:1;margin-bottom:12px">⏳</div>
+      <h3 id="fn-title" style="font-size:18px;font-weight:800;color:var(--text);margin-bottom:14px;letter-spacing:-.3px">이용 기간 안내</h3>
+      <div id="fn-body" style="font-size:14px;line-height:1.85;color:var(--text-lt);word-break:keep-all"></div>
+      <div style="margin-top:14px;padding:11px 13px;background:#FFF8E1;border:1px solid #F5E0A3;border-radius:9px;font-size:13px;line-height:1.7;color:#8A6B23;word-break:keep-all">
+        중요한 자료는 <b>기간 종료 전에 내려받아</b> 보관해 주세요.
+      </div>
+      <label id="fn-today-wrap" style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:16px;font-size:13px;color:var(--text-lt);cursor:pointer;user-select:none">
+        <input type="checkbox" id="fn-today" style="width:15px;height:15px;cursor:pointer"> 오늘 하루 보지 않기
+      </label>
+      <button class="btn" style="width:100%;margin-top:16px" onclick="closeFreeNotice()">확인</button>
+    </div>
+  </div>
+</div>
+
 <div id="mdl-login-prompt" class="modal hidden">
   <div class="mdl-bg" onclick="closeM('mdl-login-prompt')"></div>
   <div class="mdl-box" style="max-width:400px;text-align:center;padding:40px">
@@ -5248,7 +5269,10 @@ async function maybeShowCardNotice(){
   try{
     if(!me||!meData)return;
     if(meData.role==='admin')return;
-    const _cardTargetRoles=['jarvia_member'];   /* ★ [2026-08-06] 카드등록 팝업은 오직 자비아멤버십(jarvia_member)에만 표시 */
+    /* ★ [2026-08-20] 기간제는 결제 대상이 아니므로 카드등록 안내를 띄우지 않는다.
+     (권한 정규화로 role 이 jarvia_member 로 보이므로 realRole 로 판정해야 한다) */
+  if(jvIsFreeUser(meData)) return;
+  const _cardTargetRoles=['jarvia_member'];   /* ★ [2026-08-06] 카드등록 팝업은 오직 자비아멤버십(jarvia_member)에만 표시 */
     if(!_cardTargetRoles.includes(meData.role))return;
     /* ★ [2026-08-06] 연납회원 — 정기결제 시작월 도래 전에는 카드등록 팝업 표시 안 함 (admin·서버 판정과 동일 규칙) */
     if(meData.annualPrepaid===true){
@@ -5987,7 +6011,89 @@ async function doLogout(manual){
   await signOut(auth);me=null;window.me=null;meData=null;sessionStorage.clear();}
 
 function updateBal(){if(!meData)return;const s=fmt(meData.balance||0)+'원';const p=fmt(meData.point||0)+'P';if($('hdr-balance'))$('hdr-balance').textContent='💰 '+s+' | '+p+' | 충전';if($('mob-balance'))$('mob-balance').textContent='💰 '+s+' | '+p+' | 충전';checkExpiry();}
-async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();updateBal();checkExpiry();}}
+/* ═══ ★ [2026-08-20] 자비아(기간제) free_user 공통 처리 ═══
+   · jvFreeExpired      : 기간제이면서 이용기간이 지났는지 (다른 등급은 항상 false)
+   · jvNormalizeFreeRole: 화면 권한 판정용으로만 role 을 jarvia_member 로 승격.
+                          원본은 realRole 에 보관하며 Firestore 값은 바꾸지 않는다. */
+function jvFreeExpired(d){
+  try{
+    if(!d) return false;
+    if((d.realRole||d.role)!=='free_user') return false;
+    if(!d.expiresAt || d.expiresAt==='unlimited') return false;
+    const exp=d.expiresAt.toDate?d.expiresAt.toDate():new Date(d.expiresAt);
+    if(isNaN(exp.getTime())) return false;   /* 값이 깨져 있으면 차단하지 않는다(오차단 방지) */
+    return exp < new Date();
+  }catch(_e){ return false; }
+}
+function jvNormalizeFreeRole(d){
+  if(d && d.role==='free_user'){ d.realRole='free_user'; d.role='jarvia_member'; }
+  return d;
+}
+function jvIsFreeUser(d){ return !!(d && (d.realRole||d.role)==='free_user'); }
+function jvFreeExpiryText(d){
+  try{
+    if(!d||!d.expiresAt||d.expiresAt==='unlimited') return '';
+    const e=d.expiresAt.toDate?d.expiresAt.toDate():new Date(d.expiresAt);
+    if(isNaN(e.getTime())) return '';
+    return e.getFullYear()+'. '+(e.getMonth()+1)+'. '+e.getDate()+'.';
+  }catch(_e){ return ''; }
+}
+function jvFreeDaysLeft(d){
+  try{
+    if(!d||!d.expiresAt||d.expiresAt==='unlimited') return null;
+    const e=d.expiresAt.toDate?d.expiresAt.toDate():new Date(d.expiresAt);
+    if(isNaN(e.getTime())) return null;
+    return Math.ceil((e-new Date())/86400000);
+  }catch(_e){ return null; }
+}
+window.jvIsFreeUser=jvIsFreeUser;
+
+/* ★ [2026-08-20] 기간 안내 팝업 — free_user 에게만, 하루 1회.
+   D-7 이내에는 '오늘 하루 보지 않기'를 숨기고 매번 표시한다(마지막 주는 반드시 보게 한다).
+   force=true 면 저장값과 무관하게 즉시 표시(고객 기능 진입 시 사용). */
+function showFreeNotice(force){
+  try{
+    if(!jvIsFreeUser(meData)) return false;
+    const el=document.getElementById('mdl-free-notice');
+    if(!el || !el.classList.contains('hidden')) return false;
+    const left=jvFreeDaysLeft(meData);
+    const urgent=(left!==null && left<=7);
+    const key='jv_freeNotice_'+((me&&me.uid)||'x');
+    const today=new Date().toISOString().slice(0,10);
+    if(!force && !urgent){ try{ if(localStorage.getItem(key)===today) return false; }catch(_e){} }
+
+    const dateTx=jvFreeExpiryText(meData);
+    const icon=document.getElementById('fn-icon');
+    const ttl =document.getElementById('fn-title');
+    const body=document.getElementById('fn-body');
+    const wrap=document.getElementById('fn-today-wrap');
+    if(icon) icon.textContent = urgent ? '⚠️' : '⏳';
+    if(ttl){ ttl.textContent = urgent ? ('이용 종료 '+(left<=0?'임박':('D-'+left))) : '이용 기간 안내';
+             ttl.style.color = urgent ? 'var(--danger)' : 'var(--text)'; }
+    if(body){
+      body.innerHTML = '회원님은 <b>자비아(기간제)</b> 회원입니다.<br>'
+        + (dateTx ? ('이용 기간은 <b'+(urgent?' style="color:var(--danger)"':'')+'>'+dateTx+'까지</b>이며,<br>') : '')
+        + '기간이 종료되면 <b>등록하신 고객정보를 포함한 모든 자료</b>가<br>삭제되며 복구할 수 없습니다.';
+    }
+    if(wrap) wrap.style.display = urgent ? 'none' : '';
+    const cb=document.getElementById('fn-today'); if(cb) cb.checked=false;
+    openM('mdl-free-notice');
+    return true;
+  }catch(_e){ return false; }
+}
+function closeFreeNotice(){
+  try{
+    const cb=document.getElementById('fn-today');
+    if(cb && cb.checked){
+      localStorage.setItem('jv_freeNotice_'+((me&&me.uid)||'x'), new Date().toISOString().slice(0,10));
+    }
+  }catch(_e){}
+  closeM('mdl-free-notice');
+}
+window.showFreeNotice=showFreeNotice;
+window.closeFreeNotice=closeFreeNotice;
+
+async function refreshMe(){if(!me)return;const d=await getDoc(doc(db,'users',me.uid));if(d.exists()){meData=d.data();jvNormalizeFreeRole(meData);window.meData=meData;updateBal();checkExpiry();}}   /* ★ [2026-08-20] 재조회 시 정규화 누락 시 기간제 권한이 원상복귀되므로 동일 처리 */
 
 // ===== 단체계정: 로고/잔액 적용 =====
 let _groupMasterData = null;
@@ -6189,6 +6295,20 @@ onAuthStateChanged(auth,async u=>{
     if(d&&d.exists()){
       meData=d.data();window.meData=meData;
       if(meData.status==='suspended'){toast('정지된 계정입니다.','error');doLogout();return;}
+      /* ★ [2026-08-20] 자비아(기간제) 이용기간 종료 — 로그인 자체 차단.
+         ※ role==='free_user' 조건 필수: jarvia_member·jarvia_report·inner_circle 은 등급 전환 시
+           expiresAt 이 삭제되지 않아(admin.html 등급변경 로직) 과거 만료일이 남아 있을 수 있다.
+           조건 없이 expiresAt 만 보면 정기결제 회원이 로그인 불가가 된다. */
+      if(jvFreeExpired(meData)){
+        toast('이용 기간이 종료된 계정입니다.','error');
+        doLogout();return;
+      }
+      /* ★ [2026-08-20] 기간제는 화면 권한 판정에서 자비아멤버십과 동일 취급.
+         DB 의 실제 role 은 free_user 그대로 — 관리자·통계·정산에는 영향 없음.
+         realRole 은 표시·결제 예외 판정에 쓴다. (반드시 위 만료검사 이후) */
+      jvNormalizeFreeRole(meData);
+      /* 기간 안내: 로그인 직후 1회(하루 1회). 렌더 완료 후 표시 */
+      if(jvIsFreeUser(meData)) setTimeout(function(){try{showFreeNotice(false);}catch(_e){}},900);
       try{localStorage.setItem('jarvia_hasLogin','1');}catch(_e){}   /* ★ [2026-07-21] 로그아웃 오탐 방어용 로그인 이력 */
       try{sessionStorage.removeItem('_authAutoReload');}catch(_e){}  /* ★ [2026-07-27] 오탐 자동복구 가드 해제 — 재발 시 다시 1회 복구 가능 */
       // ── 단일 세션(중복 로그인 차단): 로그인 확인 + 같은 브라우저 탭 허용 ──
@@ -6234,7 +6354,7 @@ onAuthStateChanged(auth,async u=>{
       }else if(meData.groupMasterId){
         _displayName=meData.name+'님'; // 하위계정은 applyGroupSettings에서 갱신
       }else{
-        _displayName=meData.name+'님 ('+(_roleMap[meData.role]||meData.role)+')';
+        _displayName=meData.name+'님 ('+(_roleMap[meData.realRole||meData.role]||meData.role)+')';
       }
       if($('hdr-name'))$('hdr-name').textContent=_displayName;
       if($('mob-name'))$('mob-name').textContent=_displayName;
@@ -6259,7 +6379,7 @@ onAuthStateChanged(auth,async u=>{
               company:meData.company||'',
               title:meData.title||'',
               phone:meData.phone||'',
-              role:meData.role,
+              role:(meData.realRole||meData.role),   /* ★ [2026-08-20] 화면 정규화값(jarvia_member)이 아닌 실제 등급을 기록 */
               createdAt:serverTimestamp(),
               updatedAt:serverTimestamp()
             });
@@ -6833,7 +6953,7 @@ async function showDetail(cid){
     const _isSampleNow=cid===_sampleCid;
     const _freeLabels={admin:'관리자 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',free_user:'자비아(기간제) 무료'};
     const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
-    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`:(_isSampleNow?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:'');
+    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.realRole||meData.role]}</span>`:(_isSampleNow?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:'');
     const _btnSuffix=(_isFreeRole||_isSampleNow)?'(무료)':'(2,000원)';
     let twActions=`<div class="closing-actions">
       <div class="cd-notice" style="background:#E8F0FE;border-left-color:#1A5276">📚 택스컨설팅위클리 — 국세청 예규 기반 세무 상담 시나리오</div>
@@ -6867,7 +6987,7 @@ async function showDetail(cid){
     const _mgSampleC=allContents.find(x=>x.type==='master_guide'&&(x.title||'').trim()===MG_FREE_SAMPLE_TITLE);
     const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
     const _freeLabels={admin:'관리자 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',free_user:'자비아(기간제) 무료'};
-    const _priceLabel=_isMgSample?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:(_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`:'');
+    const _priceLabel=_isMgSample?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:(_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.realRole||meData.role]}</span>`:'');
     const _btnSuffix=(_isMgSample||_isFreeRole)?'(무료)':'(2,000원)';
     let mgActions=`<div class="closing-actions">
       <div class="cr-value-box" style="display:flex;gap:11px;align-items:flex-start;background:#0F2440;border-radius:10px;padding:16px 18px;margin-bottom:14px"><span style="color:#C9A84C;font-size:14px;line-height:1.65;flex-shrink:0">◆</span><span style="font-size:13.5px;line-height:1.65;color:#e8edf5;word-break:keep-all">JARVIA 마스터가이드는 한 주제를 개념→법령→계산→상담화법→종합사례까지 끝까지 파고드는 <b style="font-weight:600;color:#E5C97A">컨설턴트 학습용 주제별 참고서</b>입니다. 3중 AI 교차검증을 거쳐 매주 화·수 발행됩니다.</span></div>
@@ -6896,7 +7016,7 @@ async function showDetail(cid){
     const _isFreeRole=me&&meData&&(meData.role==='admin'||meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager'||meData.role==='free_user');
     const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
     const _freeLabels={admin:'관리자 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',free_user:'자비아(기간제) 무료'};
-    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`:'';
+    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.realRole||meData.role]}</span>`:'';
     const _btnSuffix=_isFreeRole?'(무료)':'(2,000원)';
     let crActions=`<div class="closing-actions">
       <div class="cr-value-box" style="display:flex;gap:11px;align-items:flex-start;background:#0F2440;border-radius:10px;padding:16px 18px;margin-bottom:14px"><span style="color:#C9A84C;font-size:14px;line-height:1.65;flex-shrink:0">◆</span><span style="font-size:13.5px;line-height:1.65;color:#e8edf5;word-break:keep-all">이 Report는 각 사례의 핵심 페인포인트를 정확히 짚어, 고객이 <b style="font-weight:600;color:#E5C97A">보험계약·법인 컨설팅의 필요성을 스스로 납득</b>하도록 정교하게 구성했습니다. 클로징의 마지막 한 걸음을 위한 고품격 자료입니다.</span></div>
@@ -6929,7 +7049,7 @@ async function showDetail(cid){
     const _isSampleNow=c.topicId==='med_053';
     const _freeLabels={admin:'관리자 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',free_user:'자비아(기간제) 무료'};
     const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
-    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`:(_isSampleNow?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:'');
+    const _priceLabel=_isFreeRole?`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.realRole||meData.role]}</span>`:(_isSampleNow?`<span style="${_ptStyle};background:#FFF8E1;color:#8B6914;border:1px solid #D4A03C">🆓 무료 샘플</span>`:'');
     const _btnSuffix=(_isFreeRole||_isSampleNow)?'(무료)':'(2,000원)';
     let mwActions=`<div class="closing-actions">
       <div class="cd-notice" style="background:#FEF2F2;border-left-color:#DC2626">🏥 병의원 컨설팅 — 의사·의료법인 세무·재무 컨설턴트 학습 자료</div>
@@ -7036,7 +7156,7 @@ async function showDetail(cid){
   const _freeLabels={admin:'관리자 무료',free_user:'이용기간 내 무료',jarvia_member:'JARVIA멤버십 무료',jarvia_inner:'자비아멤버십(이너서클) 무료',inner_circle:'이너서클멤버십 무료',con_homepage:'컨설턴트홈페이지 회원 무료',branch_manager:'지사장 무료',jarvia_report:'리포트회원 무료'};
   const _ptStyle='display:inline-block;padding:4px 10px;border-radius:6px;font-size:13px;font-weight:600;margin-left:10px;vertical-align:middle';
   let _priceLabel='';
-  if(me&&meData){if(_isGrp)_priceLabel=`<span style="${_ptStyle};${_grpCanView?'background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9':'background:#FFEBEE;color:#C62828;border:1px solid #FFCDD2'}">${_grpCanView?'✓ 단체회원 무료':'열람 권한 없음'}</span>`;else if(_freeLabels[meData.role])_priceLabel=`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.role]}</span>`;}
+  if(me&&meData){if(_isGrp)_priceLabel=`<span style="${_ptStyle};${_grpCanView?'background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9':'background:#FFEBEE;color:#C62828;border:1px solid #FFCDD2'}">${_grpCanView?'✓ 단체회원 무료':'열람 권한 없음'}</span>`;else if(_freeLabels[meData.role])_priceLabel=`<span style="${_ptStyle};background:#E8F5E9;color:#2E7D32;border:1px solid #C8E6C9">✓ ${_freeLabels[meData.realRole||meData.role]}</span>`;}
   $('detail-inner').innerHTML=`<div class="cd">${fmtBadge}<h2>${esc(c.title)}</h2><div class="cd-meta">${typeBadge(c.type)}${subLabel} ${cat?`<span class="cd-cat">${esc(cat.name)}</span>`:''} <span class="cd-date">업데이트: ${fdate(c.updatedAt)}</span></div><div class="cd-price">${fmt(c.price)}원${_priceLabel}</div><p class="cd-summary">${esc(c.summary||'')}</p>${actionsHTML}${relatedHTML}</div>`;
   openM('mdl-detail');$('detail-inner').scrollTop=0;const mb=$('mdl-detail').querySelector('.mdl-box');if(mb)mb.scrollTop=0;
 }
@@ -16722,7 +16842,9 @@ window.addEventListener('load', ()=>{ _actWhenReady(handleClientReportAction); }
   window.jmOpenChannel=function(feature){try{
     if(!window.me){if(typeof window.openM==='function')window.openM('mdl-login-prompt');return;}
     /* ★ [2026-07-23] 정규회원 전용 게이트 — 음성 고객입력·AI 비서·고객 지도 (admin·gildong 예외) */
-    var _chRoles=['admin','jarvia_member','jarvia_inner','inner_circle','con_homepage','branch_manager'];
+    /* ★ [2026-08-20] 기간제 회원이 고객 기능에 진입할 때 자료 삭제 사전 고지 (하루 1회) */
+  try{ if(window.jvIsFreeUser&&window.jvIsFreeUser(window.meData)&&window.showFreeNotice) window.showFreeNotice(false); }catch(_e){}
+  var _chRoles=['admin','jarvia_member','jarvia_inner','inner_circle','con_homepage','branch_manager'];
     var _chOk=window.meData&&(_chRoles.indexOf(window.meData.role)>=0||window.meData.loginId==='gildong');
     if(!_chOk){var _chNames={voice:'고객입력은',ai:'AI 비서는',map:'고객 지도는'};if(typeof window.toast==='function')window.toast((_chNames[feature]||'이 기능은')+' 멤버십회원 전용서비스입니다','warning');return;}
     var lid=(window.meData&&window.meData.loginId)||'';
