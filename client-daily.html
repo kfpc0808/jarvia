@@ -481,21 +481,6 @@ body{
 .share-btn-platform{background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;border:1px solid rgba(168,139,75,.4)}
 .share-btn svg{width:15px;height:15px;flex-shrink:0}
 
-/* ═══ Archive ═══ */
-.archive-section{margin:32px 0 10px}
-.archive-title{font-size:16px;font-weight:800;color:var(--ink);margin-bottom:14px;display:flex;align-items:center;gap:8px;letter-spacing:-.2px}
-.archive-list{display:flex;gap:8px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:4px;margin:0 -20px;padding-left:20px;padding-right:20px}
-.archive-btn{
-  padding:9px 18px;border-radius:12px;background:var(--bg-card);
-  border:1px solid var(--border);font-size:13px;font-weight:600;
-  color:var(--ink-mid);cursor:pointer;font-family:var(--font);
-  transition:all .15s var(--ease);text-decoration:none;display:inline-block;
-  box-shadow:var(--shadow-sm);white-space:nowrap;flex-shrink:0;
-}
-.archive-btn:hover{border-color:var(--accent-bright);color:var(--accent-bright);background:var(--accent-lt)}
-.archive-btn.current{background:var(--accent);color:#fff;border-color:var(--accent);animation:archivePulse 2.5s ease-in-out infinite;position:relative;box-shadow:0 2px 12px rgba(20,23,25,.2)}
-.archive-list::-webkit-scrollbar{display:none}
-
 /* ═══ Footer ═══ */
 /* ═══ Back to Top ═══ */
 #btnTop{
@@ -507,10 +492,6 @@ body{
 }
 #btnTop:hover{transform:translateY(-2px);background:var(--accent-bright);box-shadow:0 6px 24px rgba(20,23,25,.35)}
 #btnTop svg{width:20px;height:20px}
-@keyframes archivePulse{
-  0%,100%{box-shadow:0 0 0 0 rgba(20,23,25,.3);transform:scale(1)}
-  50%{box-shadow:0 0 0 7px rgba(20,23,25,.0);transform:scale(1.04)}
-}
 .report-footer{text-align:center;padding:24px 0 80px;font-size:11px;color:var(--ink-sub);line-height:1.6}
 .report-footer a{color:var(--ink-lt);text-decoration:none}
 .report-footer .brand{font-family:var(--font-d);font-weight:700;font-size:12px;color:var(--ink-lt);letter-spacing:.5px;margin-bottom:4px}
@@ -1027,17 +1008,6 @@ body{
     </div>
   </div>
 
-  <!-- Archive -->
-  <div class="wrap">
-    <div class="archive-section" id="archiveSection" style="display:none">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div class="archive-title" style="margin-bottom:0">📚 지난 브리핑 보기</div>
-        <a id="archiveLink" href="#" style="font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap">전체 아카이브 →</a>
-      </div>
-      <div class="archive-list" id="archiveList"></div>
-    </div>
-  </div>
-
   <!-- Footer removed -->
   <div id="naverBarWrap" style="display:none" class="wrap naver-bar-wrap">
     <a class="naver-bar" id="naverBarLink" href="#" target="_blank">
@@ -1142,6 +1112,17 @@ const deleteLifeChangeRequestFn=httpsCallable(fns,'deleteLifeChangeRequest');
 const params=new URLSearchParams(location.search);
 const fcId=params.get('fc')||'';
 const dateParam=params.get('d')||'';
+/* ★ [2026-08-22] 데일리 링크 게이트 파라미터 ─────────────────────────────
+   k    : 서명 키 <b36날짜>.<서명10자> — 서버(dailyShareKey)만 발급·검증 가능
+   _cSig: 서명 검증용 고객ID — 키가 봉인한 값은 URL의 c 그대로여야 하므로
+          localStorage 복원값(_jvCID)이 아니라 URL 원본만 쓴다 */
+const keyParam=(params.get('k')||'').trim();
+const _cSig=(function(){const v=(params.get('c')||'').trim();return /^[A-Za-z0-9_-]{1,40}$/.test(v)?v:'';})();
+/* 발효일: 이 날(KST)부터 서명 없는 링크는 잠금 화면. 킬스위치 겸용 —
+   문제 발생 시 이 값을 미래 날짜로 바꿔 배포하면 게이트가 즉시 풀린다.
+   컨센서스 MC_KEY_FROM(consensus.html '20260821')과 동일 패턴. */
+const DAILY_KEY_FROM='20260824';
+const DAILY_GRACE_DAYS=7;   // 서명 링크 유예 — 발송일부터 7일까지 열람 허용
 
 // ── Level 2: 고객 식별 토큰 (c) — FC별 맵으로 저장해 링크 없이 재방문해도 귀속 유지 (2026-06-13) ──
 let _jvCID='';
@@ -1176,7 +1157,7 @@ function getTodayKST(){
   const kst=new Date(now.getTime()+9*60*60*1000);
   return kst.getUTCFullYear()+String(kst.getUTCMonth()+1).padStart(2,'0')+String(kst.getUTCDate()).padStart(2,'0');
 }
-const fileDate=dateParam||getTodayKST();
+let fileDate=dateParam||getTodayKST();   /* ★ [2026-08-22] const→let — 게이트가 서명 키의 발행일로 고정(cdGatePass) */
 // ── 열람 비콘 (Phase 2) — fc 파라미터 있을 때만 동작 (2026-06-11) ──
 const JV_EP='https://asia-northeast3-jarvia-platform.cloudfunctions.net/logView';
 let _jvQ=[],_jvVK=null,_jvNew=false;
@@ -1249,7 +1230,7 @@ let reportData=null;
 let prevIndicators=null; // ★ 전일 경제지표 (전일비 표시용)
 let spData=null; // ★ 컨설턴트 카톡 공유 설정 (fc_share_profiles)
 
-function _renderReport(){renderDateHero();renderAudio();renderShortClip();renderSections();renderCTA();}
+function _renderReport(){renderDateHero();renderAudio();renderShortClip();renderSections();renderCTA();try{cdFrozenUI();}catch(_e){}}
 // ═══ Main Init ═══
 /* ═══════════════════════════════════════════════════════════════════════
    내 날짜 (MY DATES) — 상령일·만기 개인 알림          [2026-08-01 추가]
@@ -1497,6 +1478,170 @@ window.mdOpenSheet  = mdOpenSheet;
 window.mdCloseSheet = mdCloseSheet;
 window.mdRequest    = mdRequest;
 
+/* ═══ ★ [2026-08-22] 데일리 링크 게이트 ═══════════════════════════════════
+   서명 키(k) 해석 → 리포트 날짜 고정 → 유예(7일) → 만료·무효 잠금.
+   · 키 유효: 키에 봉인된 발행일의 리포트만 열린다(북마크 재방문 시 그날 화면 유지).
+     발행일 ≠ 오늘이면 '지난 브리핑' 배너 + 하단 요청 카드(cdFrozenUI).
+   · 키 없음: DAILY_KEY_FROM 전에는 기존 동작(오늘자). 이후에는 컨설턴트 로그인만 통과.
+   · resolve 서버 장애: 잠그지 않고 통과(페일오픈) — 일시 장애가 전 고객 차단으로
+     번지지 않게 한다. 위조 키는 장애가 아니라 success:false 응답이므로 정상 잠금. */
+function _cdYmdDiff(a,b){   /* b-a 일수 (YYYYMMDD) */
+  try{
+    const p=s=>Date.UTC(+String(s).slice(0,4),+String(s).slice(4,6)-1,+String(s).slice(6,8));
+    return Math.round((p(b)-p(a))/86400000);
+  }catch(_e){return 0;}
+}
+async function cdGatePass(){
+  try{
+    const today=getTodayKST();
+    if(keyParam){
+      let r=null;
+      try{ r=await httpsCallable(fns,'dailyShareKey')({mode:'resolve',fc:fcId,key:keyParam,cid:_cSig}); }
+      catch(e){ console.warn('[gate] resolve 장애 — 페일오픈:',e&&e.message); return true; }
+      const fd=(r&&r.data&&r.data.success)?String(r.data.fileDate||''):'';
+      if(!/^\d{8}$/.test(fd)){ await cdShowLocked('invalid'); return false; }
+      if(_cdYmdDiff(fd,today)>DAILY_GRACE_DAYS){ await cdShowLocked('expired'); return false; }
+      fileDate=fd;   /* 날짜 고정 — d 파라미터·오늘 날짜보다 키가 우선 */
+      try{_jvQ.forEach(ev=>{if(ev&&ev.t==='daily_visit')ev.id=fileDate;});}catch(_e){}   /* 열람 비콘 날짜 보정 */
+      if(fd!==today)window._cdFrozen=fd;
+      return true;
+    }
+    if(today<DAILY_KEY_FROM)return true;    /* 발효 전 — 구형 링크 그대로 동작 */
+    if(await _jvOwnerP)return true;         /* 컨설턴트 본인(로그인) — 항상 통과 */
+    await cdShowLocked(dateParam?'expired':'nokey');
+    return false;
+  }catch(e){ console.warn('[gate] 오류 — 페일오픈:',e&&e.message); return true; }
+}
+/* ── 잠금 화면 ── */
+let _cdLockFc=null;
+async function _cdLoadLockFc(){
+  if(_cdLockFc)return _cdLockFc;
+  try{const s=await getDoc(doc(db,'consultants',fcId));if(s.exists())_cdLockFc=s.data();}catch(_e){}
+  return _cdLockFc||{};
+}
+async function cdShowLocked(kind){
+  window._cdLockedView=true;   /* 자동 팝업(오늘의 선택 등) 억제 플래그 */
+  const f=await _cdLoadLockFc();
+  const nm=(f&&f.name)||'담당 컨설턴트', co=(f&&f.company)||'';
+  const T=(kind==='invalid')
+    ? ['유효하지 않은 링크예요','링크가 손상되었거나 잘못 전달되었습니다.']
+    : ['링크 유효기간이 지났어요','리포트 링크는 받으신 날부터 '+DAILY_GRACE_DAYS+'일간 열어보실 수 있습니다.'];
+  try{document.getElementById('mainContent').style.display='none';}catch(_e){}
+  try{document.getElementById('errorState').style.display='none';}catch(_e){}
+  const el=document.getElementById('loadingState');if(!el)return;
+  el.style.display='flex';
+  el.innerHTML='<div style="max-width:340px;margin:0 auto;text-align:center;padding:0 20px">'
+    +'<div style="font-size:34px">🔒</div>'
+    +'<div style="margin-top:14px;font-size:18px;font-weight:800;color:var(--ink)">'+T[0]+'</div>'
+    +'<div style="margin-top:8px;font-size:13px;color:var(--ink-lt);line-height:1.7">'+T[1]+'</div>'
+    +'<div style="margin-top:20px;display:flex;align-items:center;gap:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:11px 12px;text-align:left">'
+    +'<div style="width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">'+esc(nm.slice(0,1))+'</div>'
+    +'<div style="min-width:0"><div style="font-size:13.5px;font-weight:700;color:var(--ink)">'+esc(nm)+'</div>'+(co?'<div style="font-size:11px;color:var(--ink-sub)">'+esc(co)+'</div>':'')+'</div></div>'
+    +'<button type="button" onclick="cdReqOpen()" style="margin-top:14px;width:100%;border:none;border-radius:10px;background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;font-size:14.5px;font-weight:800;cursor:pointer;font-family:var(--font);padding:13px">오늘 일자 리포트 요청하기</button>'
+    +'<div style="margin-top:10px;font-size:11px;color:var(--ink-sub);line-height:1.6">요청하시면 담당 컨설턴트에게 바로 전달됩니다</div>'
+    +'</div>';
+}
+/* ── 오늘 일자 리포트 요청 시트 — 고객 폰에서 직접 문자 발송(번호 미수집), 실패 시 번호 복사 폴백 ── */
+window.cdReqOpen=async function(){
+  const f=await _cdLoadLockFc();
+  const nm=(f&&f.name)||'담당 컨설턴트';
+  let ov=document.getElementById('cdReqOv');
+  if(ov){ov.style.display='flex';return;}
+  ov=document.createElement('div');ov.id='cdReqOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:99998;background:rgba(20,23,25,.5);display:flex;align-items:flex-end;justify-content:center';
+  ov.addEventListener('click',function(e){if(e.target===ov)ov.style.display='none';});
+  ov.innerHTML='<div style="width:100%;max-width:480px;background:#fff;border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom));font-family:var(--font)" id="cdReqBox">'
+    +'<div style="width:36px;height:4px;background:var(--border);border-radius:99px;margin:0 auto 14px"></div>'
+    +'<div style="font-size:15.5px;font-weight:800;color:var(--ink)">오늘 일자 리포트 요청</div>'
+    +'<div style="margin-top:6px;font-size:12.5px;color:var(--ink-lt);line-height:1.65">성함을 남기고 문자를 보내시면 '+esc(nm)+' 컨설턴트가 바로 보내드립니다.</div>'
+    +'<input id="cdReqName" type="text" maxlength="20" placeholder="성함" style="margin-top:12px;width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:9px;padding:11px 12px;font-size:14px;font-family:var(--font);background:var(--bg)">'
+    +'<div id="cdReqErr" style="display:none;margin-top:6px;font-size:11.5px;color:#C0392B"></div>'
+    +'<button type="button" onclick="cdReqSend()" style="margin-top:11px;width:100%;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:800;cursor:pointer;font-family:var(--font);padding:13px">💬 문자로 요청 보내기</button>'
+    +'<div style="margin-top:10px;background:var(--bg-warm);border-radius:8px;padding:9px 11px;font-size:10.5px;color:var(--ink-mid);line-height:1.7">성함은 리포트 발송 목적으로만 사용되며, 연락처는 별도로 수집하지 않습니다. 문자는 고객님 휴대폰에서 직접 발송됩니다.</div>'
+    +'</div>';
+  document.body.appendChild(ov);
+};
+window.cdReqSend=async function(){
+  const inp=document.getElementById('cdReqName');
+  const name=((inp&&inp.value)||'').trim();
+  const err=document.getElementById('cdReqErr');
+  if(name.length<1||name.length>20){if(err){err.textContent='성함을 확인해주세요 (1~20자)';err.style.display='block';}return;}
+  if(err)err.style.display='none';
+  const f=await _cdLoadLockFc();
+  const phone=String((f&&(f.phone||f.mobile||f.tel))||'').replace(/[^0-9+]/g,'');
+  /* 요청 기록 — 컨설턴트 앱 노출용. 1일 1회, 실패해도 문자 발송은 계속(고객 흐름 우선) */
+  try{
+    const today=getTodayKST(), lk='cd_req_'+fcId;
+    if(localStorage.getItem(lk)!==today){
+      await lcEnsureAnonAuth();
+      await cdRequireFcUid();   /* 보안규칙이 fcAuthUid 문자열을 요구 — 확보 실패 시 기록만 생략(문자는 계속) */
+      const reqId=gid();
+      await setDoc(doc(db,'daily_report_requests',reqId),{
+        reqId,fcAuthUid:_cdFcUid,fcLoginId:fcId,cid:_jvCID||null,name,
+        source:window._cdFrozen?'frozen':'locked',viewedDate:window._cdFrozen||null,
+        status:'new',createdAt:serverTimestamp()
+      });
+      localStorage.setItem(lk,today);
+    }
+  }catch(e){console.warn('[req] 기록 실패(문자는 계속):',e&&e.message);}
+  const body='안녕하세요, '+name+'입니다.\n오늘 일자 리포트 부탁드립니다.';
+  if(phone){
+    const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+    try{ location.href='sms:'+phone+(ios?'&body=':'?body=')+encodeURIComponent(body); }catch(_e){}
+  }
+  cdReqFallback(phone,body);   /* 카톡 인앱 등 sms: 차단 환경 대비 — 번호 복사 안내를 항상 함께 표시 */
+};
+function cdReqFallback(phone,body){
+  const box=document.getElementById('cdReqBox');if(!box)return;
+  const cp=function(t,m){
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>toast(m,'success')).catch(()=>{});}
+    else{try{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast(m,'success');}catch(_e){}}
+  };
+  window._cdReqCopyPhone=function(){cp(phone,'번호가 복사되었습니다 — 문자앱에 붙여넣어 보내주세요');};
+  window._cdReqCopyBody=function(){cp(body,'요청 문구가 복사되었습니다');};
+  box.innerHTML='<div style="width:36px;height:4px;background:var(--border);border-radius:99px;margin:0 auto 14px"></div>'
+    +'<div style="font-size:15.5px;font-weight:800;color:var(--ink)">문자앱이 열리지 않았다면</div>'
+    +'<div style="margin-top:6px;font-size:12.5px;color:var(--ink-lt);line-height:1.7">'+(phone?'아래 번호로 직접 보내주세요.':'담당 컨설턴트에게 아시는 연락처로 아래 문구를 보내주세요.')+'</div>'
+    +(phone?'<div style="margin-top:12px;display:flex;align-items:center;gap:8px;background:var(--bg-warm);border-radius:9px;padding:11px 12px"><div style="flex:1;font-size:15px;font-weight:800;color:var(--ink);letter-spacing:.3px">'+esc(phone)+'</div><button type="button" onclick="_cdReqCopyPhone()" style="border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font);padding:8px 14px">번호 복사</button></div>':'')
+    +'<button type="button" onclick="_cdReqCopyBody()" style="margin-top:10px;width:100%;border:1px solid var(--border);border-radius:9px;background:#fff;color:var(--ink-mid);font-size:12.5px;font-weight:700;cursor:pointer;font-family:var(--font);padding:11px">요청 문구 복사</button>'
+    +'<button type="button" onclick="document.getElementById(\'cdReqOv\').style.display=\'none\'" style="margin-top:8px;width:100%;border:none;border-radius:9px;background:var(--bg-warm);color:var(--ink-sub);font-size:12.5px;font-weight:700;cursor:pointer;font-family:var(--font);padding:11px">닫기</button>';
+}
+/* ── 지난 브리핑 표시(유예 7일 내 재방문) — 배너 + 하단 요청 카드 ── */
+function cdFrozenUI(){
+  if(!window._cdFrozen||document.getElementById('cdFrozenBn'))return;
+  const fd=String(window._cdFrozen);
+  const label=Number(fd.slice(4,6))+'/'+Number(fd.slice(6,8));
+  const mc=document.getElementById('mainContent');if(!mc)return;
+  const nm=(fcData&&fcData.name)||'담당';
+  const bn=document.createElement('div');bn.id='cdFrozenBn';
+  bn.innerHTML='<div class="wrap" style="padding-top:12px"><div style="display:flex;gap:8px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:11px;padding:10px 12px"><span style="flex-shrink:0">🕓</span><div style="font-size:12.5px;color:#412402;line-height:1.6;font-weight:700">'+label+'에 받으신 브리핑입니다<div style="font-size:11px;color:#854F0B;font-weight:600;margin-top:2px">시장 상황은 매일 달라집니다</div></div></div></div>';
+  mc.insertBefore(bn,mc.firstChild);
+  const card=document.createElement('div');card.id='cdFrozenCard';
+  card.innerHTML='<div class="wrap" style="padding-bottom:18px"><div style="background:var(--accent);border-radius:13px;padding:15px 14px"><div style="font-size:13px;color:#fff;line-height:1.65;font-weight:700">오늘 일자 리포트는<br>'+esc(nm)+' 컨설턴트가 보내드립니다</div><button type="button" onclick="cdReqOpen()" style="margin-top:11px;width:100%;border:none;border-radius:9px;background:linear-gradient(135deg,#C9A05C,#96701F);color:#fff;font-size:13.5px;font-weight:800;cursor:pointer;font-family:var(--font);padding:12px">오늘 일자 리포트 요청하기</button></div></div>';
+  mc.appendChild(card);
+}
+/* ── 공유 링크 서명 전달 — 컨설턴트: 오늘 키 선발급 / 고객: 받은 키 그대로 전달(친구 추천 유지) ── */
+let _cdTodayKey='';
+function cdPrefetchTodayKey(){
+  try{
+    httpsCallable(fns,'dailyShareKey')({mode:'make',fileDate:getTodayKST(),cid:''})
+      .then(r=>{if(r&&r.data&&r.data.success)_cdTodayKey=String(r.data.key||'');})
+      .catch(()=>{});
+  }catch(_e){}
+}
+_jvOwnerP.then(o=>{if(o)cdPrefetchTodayKey();});
+function cdShareGuard(){
+  if(getTodayKST()<DAILY_KEY_FROM)return true;   /* 발효 전 — 서명 없이도 유효 */
+  if(_jvOwner&&!_cdTodayKey){cdPrefetchTodayKey();showToast('공유 링크를 준비 중입니다 — 잠시 후 다시 눌러주세요');return false;}
+  return true;
+}
+function cdShareQS(){
+  let q='fc='+encodeURIComponent(fcId);
+  if(_jvOwner&&_cdTodayKey){q+='&k='+encodeURIComponent(_cdTodayKey);}
+  else if(keyParam){q+='&k='+encodeURIComponent(keyParam);if(_cSig)q+='&c='+encodeURIComponent(_cSig);}
+  return q;
+}
+
 async function init(){
   try{
     // fc 파라미터 필수
@@ -1504,6 +1649,10 @@ async function init(){
       showError('잘못된 접근이에요','링크를 다시 확인해주세요.');
       return;
     }
+
+    /* ★ [2026-08-22] 링크 게이트 — 서명 해석·날짜 고정·유예·잠금. 통과 못 하면 여기서 종료.
+       캐시 표시보다 먼저 실행한다(잠글 링크에 오늘자 캐시가 먼저 번쩍이는 것 방지) */
+    if(!await cdGatePass())return;
 
     // ★ [속도개선 C] 당일 캐시 — 오늘 본 적 있으면 즉시(0초) 표시, 배경에서 최신 확인
     try{
@@ -1625,8 +1774,7 @@ async function init(){
       localStorage.setItem('cdr_cache_'+fcId,JSON.stringify({day:fileDate,fc:fcData,rep:reportData,prev:prevIndicators,sp:spData}));
     }catch(_e){}
 
-    // 4. 아카이브 로드
-    loadArchive();
+    // 4. (삭제) 지난 브리핑 아카이브 — ★ [2026-08-22] 링크 게이트 도입과 함께 제거: 고객이 지난 호를 자유 열람하는 유출 경로였다
 
     // 5. 하단 공유바 표시
     document.getElementById('fcBottomBar').style.display='flex';
@@ -2761,33 +2909,6 @@ function renderWeeklyIssue(d){
   </div>`;
 }
 
-// ═══ Archive ═══
-async function loadArchive(){
-  try{
-    // ★ orderBy만 사용하여 복합 인덱스 불필요 — status 필터는 JS에서 처리
-    const snap=await getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(30)));
-    const published=snap.docs.filter(d=>d.data().status==='published').slice(0,10);
-    if(published.length<=1){return;} // 오늘 1건뿐이면 아카이브 미표시
-    const dates=published.map(d=>{
-      const data=d.data();
-      // "2026년 3월 11일 수요일" → "3/11 수"
-      const fd=data.fileDate||d.id;
-      const raw=data.date||'';
-      const m=raw.match(/(\d+)월\s*(\d+)일.*?([월화수목금토일])/);
-      const label=m?`${m[1]}/${m[2]} ${m[3]}`:fd;
-      return {fd,label};
-    });
-    const el=document.getElementById('archiveList');
-    el.innerHTML=dates.map(d=>{
-      const isCurrent=d.fd===fileDate;
-      return `<a class="archive-btn${isCurrent?' current':''}" href="./client-daily.html?fc=${fcId}&d=${d.fd}">${d.label}</a>`;
-    }).join('');
-    document.getElementById('archiveSection').style.display='block';
-    document.getElementById('archiveLink').href=`./client-archive.html?fc=${fcId}`;
-  }catch(e){
-    console.warn('archive load fail:',e);
-  }
-}
 
 
 // ═══ Subscribe Modal ═══
@@ -2909,19 +3030,24 @@ window.goExpertHome=function(){
 };
 
 // ═══ Share ═══
+/* ★ [2026-08-22] 서명 전달 — 컨설턴트는 오늘 키(선발급), 고객은 받은 키 그대로.
+   발효(DAILY_KEY_FROM) 후 서명 없는 링크는 잠기므로 cdShareGuard 를 먼저 통과해야 한다 */
 window.shareKakao=function(){
+  if(!cdShareGuard())return;
   // 카톡 SDK 카드 대신 OG 링크 복사 (붙여넣기 시 저장 이미지 카드 자동생성 · 자비아 푸터 노출 방지)
-  const url=`https://briefingog-cvmdsjgzxa-du.a.run.app?fc=${encodeURIComponent(fcId)}`;
+  const url='https://briefingog-cvmdsjgzxa-du.a.run.app?'+cdShareQS();
   if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>showToast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.'));}
   else{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.');}
 };
 window.copyLink=function(){
-  const url=`https://jarvia.co.kr/client-daily?fc=${encodeURIComponent(fcId)}`;
+  if(!cdShareGuard())return;
+  const url='https://jarvia.co.kr/client-daily?'+cdShareQS();
   if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>showToast('링크가 복사되었어요!'));}
   else{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('링크가 복사되었어요!');}
 };
 window.referFriend=function(){
-  const url=`https://jarvia.co.kr/client-daily?fc=${encodeURIComponent(fcId)}`;
+  if(!cdShareGuard())return;
+  const url='https://jarvia.co.kr/client-daily?'+cdShareQS();
   const fc=fcData||{};
   const text=`나 매일 아침 금융 소식 받아보고 있는데 진짜 좋아! 한번 봐봐 👉 ${url}`;
   if(navigator.share){
@@ -5373,6 +5499,7 @@ function dcSkip(){
 }
 function dcCanAuto(){
  try{
+  if(window._cdLockedView)return false;   /* ★ [2026-08-22] 링크 게이트 잠금 화면에서는 자동 표시 안 함 */
   if(!new URLSearchParams(location.search).get('fc'))return false;
   var y=dcYmd();
   if(lsGet('dc_doneday','')===y)return false;

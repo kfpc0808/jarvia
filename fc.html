@@ -1471,10 +1471,34 @@ function opMsgTpl(k,n,m,d,p,tone){
   const arr=M[k]||M['만기'];
   return arr[t]||arr[0];
 }
+/* ★ [2026-08-22] 데일리 공유 서명 키 — client-daily 링크 게이트(DAILY_KEY_FROM=20260824) 대응.
+   index.html(fccEnsureDlKey)과 동일 패턴: dailyShareKey(make)로 오늘 날짜+고객ID 봉인 키를 받아
+   링크에 k= 로 싣는다. 빌더는 동기라 당일 캐시에서만 읽고, 없으면 선발급을 걸어둔다. */
+const DAILY_KEY_FROM='20260824';
+let _opDlKeys={},_opDlKeyDay='';
+function _opDlToday(){const k=new Date(Date.now()+9*3600000);return ''+k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');}
+async function opEnsureDlKey(cid){
+  cid=String(cid||'');
+  const t=_opDlToday();
+  if(_opDlKeyDay!==t){_opDlKeys={};_opDlKeyDay=t;}
+  if(_opDlKeys[cid])return _opDlKeys[cid];
+  if(!currentUser)return '';
+  try{
+    const r=await httpsCallable(fns,'dailyShareKey')({mode:'make',fileDate:t,cid:cid});
+    const k=(r&&r.data&&r.data.success)?String(r.data.key||''):'';
+    if(k)_opDlKeys[cid]=k;
+    return k;
+  }catch(e){console.warn('[dlkey] 발급 실패:',e&&e.message);return '';}
+}
+function opDlKeyMissing(){return _opDlToday()>=DAILY_KEY_FROM;}
 function opBuildLink(cid){
   if(!loginId)return 'https://jarvia.co.kr';
   let u='https://briefingog-cvmdsjgzxa-du.a.run.app?fc='+encodeURIComponent(loginId);
   if(cid)u+='&c='+encodeURIComponent(cid);
+  /* ★ [2026-08-22] 서명 키 — 당일 캐시에 있으면 싣고, 없으면 선발급을 걸어 다음 호출부터 반영 */
+  const _t=_opDlToday(),_ck=String(cid||'');
+  if(_opDlKeyDay===_t&&_opDlKeys[_ck])u+='&k='+encodeURIComponent(_opDlKeys[_ck]);
+  else opEnsureDlKey(cid);
   return u;
 }
 function opBuildMsg(k,n,m,d,p,tone,cid){
@@ -1515,7 +1539,7 @@ function opMsgRowClick(e){
     const cid=ed.getAttribute('data-cid')||'';
     const a=act.getAttribute('data-act');
     if(a==='copy-msg')opCopyText(ta.value);
-    else if(a==='copy-link')opCopyText(opBuildLink(cid));
+    else if(a==='copy-link')opEnsureDlKey(cid).then(_k=>{if(!_k&&opDlKeyMissing()){toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요');return;}opCopyText(opBuildLink(cid));});   /* ★ [2026-08-22] 서명 키 확보 후 복사 */
     return;
   }
   const chip=e.target&&e.target.closest?e.target.closest('.op-tone-chip'):null;
@@ -2235,7 +2259,7 @@ async function init(){
         const _oca=$('opCtAddBtn'); if(_oca)_oca.onclick=()=>{if($('opCtRows').children.length<20)opAddCtRow();};
         const _ocr=$('opCtRows'); if(_ocr)_ocr.onclick=(e)=>{const x=e.target&&e.target.closest&&e.target.closest('.op-ct-x');if(x&&_ocr.children.length>1)x.parentElement.remove();};
         const _ofd=$('opFind'); if(_ofd)_ofd.oninput=opRenderFind;
-        const _ofr=$('opFindRes'); if(_ofr)_ofr.onclick=(e)=>{const cp=e.target&&e.target.closest&&e.target.closest('[data-opcopy]');if(cp){const _u=opBuildLink(cp.getAttribute('data-opcopy'));if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(_u).then(()=>toast('링크가 복사되었습니다 — 카톡·문자에 붙여넣으세요')).catch(()=>opCopyText(_u));}else opCopyText(_u);return;}const b=e.target&&e.target.closest&&e.target.closest('[data-opedit]');if(b)opEnterEdit(b.getAttribute('data-opedit'));};
+        const _ofr=$('opFindRes'); if(_ofr)_ofr.onclick=(e)=>{const cp=e.target&&e.target.closest&&e.target.closest('[data-opcopy]');if(cp){const _cid=cp.getAttribute('data-opcopy');opEnsureDlKey(_cid).then(_k=>{if(!_k&&opDlKeyMissing()){toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요');return;}const _u=opBuildLink(_cid);if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(_u).then(()=>toast('링크가 복사되었습니다 — 카톡·문자에 붙여넣으세요')).catch(()=>opCopyText(_u));}else opCopyText(_u);});return;}const b=e.target&&e.target.closest&&e.target.closest('[data-opedit]');if(b)opEnterEdit(b.getAttribute('data-opedit'));};
         const _ocb=$('opCancelBtn'); if(_ocb)_ocb.onclick=opExitEdit;
         const _ovs=$('opVwSeg'); if(_ovs)_ovs.onclick=(e)=>{const b=e.target&&e.target.closest&&e.target.closest('[data-opvw]');if(b)opVwSetMode(b.getAttribute('data-opvw'));};
         const _ovp=$('opVwPrev'); if(_ovp)_ovp.onclick=()=>opVwNavM(-1);
@@ -6482,11 +6506,12 @@ function aiChkGrpRender(g){
 }
 /* ── 💬 AI 카드 문자 컴포저 (2026-07-26): 톤 5종 + 고객용 데일리 리포트 링크 + 폰 발송(SmsCore) ──
    기존 opMsgTpl·opBuildLink·opCopyText 재사용. 소유자 패널의 opMsgRowClick 은 미변경. */
-function aiChkMsgSync(ed){
+async function aiChkMsgSync(ed){   /* ★ [2026-08-22] async — 링크 첨부 전 서명 키 확보 */
   const ta=ed.querySelector('.aichk-msg-ta');if(!ta)return;
   const cid=ed.getAttribute('data-cid')||'';
-  let v=(ta.value||'').replace(/\n*▶ 오늘의 인사이트 보기:[^\n]*/g,'').replace(/\s+$/,'');
   const tog=ed.querySelector('.aichk-link-tog');
+  if(tog&&tog.checked){const _k=await opEnsureDlKey(cid);if(!_k&&opDlKeyMissing()){tog.checked=false;toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요');return;}}
+  let v=(ta.value||'').replace(/\n*▶ 오늘의 인사이트 보기:[^\n]*/g,'').replace(/\s+$/,'');
   if(tog&&tog.checked){const lk=opBuildLink(cid);if(lk)v+='\n\n▶ 오늘의 인사이트 보기: '+lk;}
   ta.value=v;
 }
@@ -6527,7 +6552,7 @@ function aiChkMsg(i,btn){
   Array.prototype.forEach.call(ed.querySelectorAll('[data-act]'),a=>{a.onclick=()=>{
     const act=a.getAttribute('data-act'),ta=ed.querySelector('.aichk-msg-ta');
     if(act==='copy-msg')opCopyText(ta.value);
-    else if(act==='copy-link')opCopyText(opBuildLink(cid));
+    else if(act==='copy-link')opEnsureDlKey(cid).then(_k=>{if(!_k&&opDlKeyMissing()){toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요');return;}opCopyText(opBuildLink(cid));});   /* ★ [2026-08-22] 서명 키 확보 후 복사 */
     else if(act==='sms-send')aiChkSmsSend(it,ta.value);
   };});
 }
