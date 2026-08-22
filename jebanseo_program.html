@@ -1595,7 +1595,7 @@ function makeSlideTb(idx){
   mk('↑','앞으로',()=>slideMove(idx,-1));
   mk('↓','뒤로',()=>slideMove(idx,1));
   mk('⤓','맨 뒤로',()=>slideMoveTo(idx,deck.slides.length-1));
-  mk('＋','이 뒤에 빈 슬라이드 추가',()=>addBlankAt(idx+1)); mk('🗑','이 슬라이드 삭제',()=>delSlideAt(idx));
+  mk('＋','이 뒤에 빈 슬라이드 추가',()=>addBlankAt(idx+1)); mk('🎚','이 장에 맞는 시뮬레이터 추가',()=>openSimPicker(idx)); mk('🗑','이 슬라이드 삭제',()=>delSlideAt(idx));
   return tb;
 }
 function delSlideAt(idx){if(!requireSaved())return;const sl=deck.slides[idx];if(!sl)return;if(deck.slides.length<=1){aiReply('마지막 슬라이드는 삭제할 수 없어요. 내용을 직접 수정하시거나 새 슬라이드를 추가한 뒤 삭제해 주세요.');return;}const tt=String(sl.title||'제목 없음').replace(/<[^>]*>/g,'').slice(0,30);if(!confirm('슬라이드 '+(idx+1)+'번 "'+tt+'"을(를) 삭제할까요?\n삭제 후 되돌릴 수 없습니다.'))return;deck.slides.splice(idx,1);reseq();selectedIdx=Math.min(idx,deck.slides.length-1);renderDeck();scrollToSlide(selectedIdx);flash(selectedIdx);}
@@ -2362,20 +2362,58 @@ function _simModal(){
     document.body.appendChild(ov);ov.addEventListener('click',e=>{if(e.target===ov)closeSimPick();});}
   return ov;
 }
-function openSimPicker(){if(!requireSaved())return;
+/* ★ 시뮬레이터 문맥 추천 (2026-08-22)
+   원칙: 사용자가 시뮬 종류를 공부하지 않아도 되게 한다.
+   ① 카드 제목을 기능명 대신 '고객의 질문'으로 (SIM_Q) — 넣으면 뭐가 되는지 고르기 전에 보임
+   ② 슬라이드 🎚 버튼으로 열면 그 장의 내용과 맞는 후보만 추려서 제시 (결정적 키워드 매칭 — AI 아님)
+   ③ 후보가 없거나 '전체 보기'를 누르면 기존 전체 목록 그대로 (기존 동작 무손상) */
+let _simCtxIdx=null;
+const SIM_Q={
+  yearly:'해마다 얼마나 부족해질까?', full:'조건을 바꾸면 노후가 어떻게 달라질까?',
+  gap:'은퇴 후 매달 얼마가 부족할까?', accum:'월 얼마씩 넣으면 얼마가 될까?', payout:'모은 돈으로 매달 얼마씩 받을까?',
+  cover:'가족에게 필요한 보장은 얼마일까?', termcompare:'종신 대신 정기+투자라면?',
+  criticalillness:'큰 병 진단을 받으면 얼마가 필요할까?', childinsurance:'아이 보장, 얼마면 충분할까?',
+  affordability:'보험료, 소득 대비 적정할까?', medicalexpense:'실손이 없다면 의료비는 얼마나 될까?',
+  tax:'금융소득, 세금이 얼마나 나올까?', estate:'상속세 낼 현금이 준비되어 있을까?'
+};
+const SIM_CTX_KW={
+  yearly:/현금흐름|연도별|해마다/, full:/종합|은퇴\s*설계|노후\s*설계/, gap:/부족|갭|격차|미달/,
+  accum:/적립|납입|모으|복리|쌓/, payout:/수령|인출|개시|받는/,
+  cover:/보장|유족|사망|가족|필요\s*보장/, termcompare:/종신|정기/, criticalillness:/진단|암|중대질병|뇌|심장|3대/,
+  childinsurance:/자녀|어린이|태아/, affordability:/보험료|부담|여력/, medicalexpense:/실손|의료비/,
+  tax:/과세|세금|금융소득|종합과세|절세|세후/, estate:/상속|승계|가업|유동성|납부\s*재원|지분/
+};
+function _simSlideHay(s){return ((s.title||'')+' '+(s.eyebrow||'')+' '+(s.conclusion||'')+' '+(s.content||[]).map(function(c){return (c&&(c.text||c.title||''))||'';}).join(' '));}
+function openSimPicker(ctxIdx){if(!requireSaved())return;
   if(!deck.slides.length){return toast('먼저 자료를 생성해 주세요');}
+  _simCtxIdx=(typeof ctxIdx==='number'&&deck.slides[ctxIdx])?ctxIdx:null;
   renderSimCards();
   _simModal().classList.add('on');
 }
-function renderSimCards(){
+function renderSimCards(showAll){
   const ov=_simModal();ov.querySelector('#sc-head').textContent='🎚 시뮬레이터 추가';
   const list=SIM_PICK[topic]||SIM_PICK['연금설계'];
+  const cmpList=(COMPARE_CATALOG[topic]||[]);
+  // 카드 제목 = 고객의 질문 (SIM_Q 있으면), 기능명은 설명 앞에 굵게 — 문구만 바뀌고 동작은 동일
+  const modeCard=function(it){var q=SIM_Q[it[0]];
+    return '<button class="spcard" data-mode="'+it[0]+'"><div class="spt">'+(q||it[1])+(it[3]?'<span class="spbadge">'+it[3]+'</span>':'')+'</div><div class="sps">'+(q?('<b>'+it[1]+'</b> — '):'')+it[2]+'</div></button>';};
+  const cmpCard=function(c){return '<button class="spcard" data-cmp="'+c.id+'" style="border-color:#5BB98C;background:#f4fbf7"><div class="spt">🔀 '+c.name+'<span class="spbadge" style="background:#5BB98C">비교</span></div><div class="sps">'+c.desc+'</div></button>';};
   var customCard='<button class="spcard" data-mode="__custom" style="border-color:var(--gold);background:#fffdf6"><div class="spt">✨ 직접 구성하기<span class="spbadge">맞춤</span></div><div class="sps">조절할 항목과 보여줄 결과를 직접 골라 나만의 시뮬레이터를 만듭니다.</div></button>';
-  var cmpList=(COMPARE_CATALOG[topic]||[]);
-  var cmpCards=cmpList.map(function(c){return '<button class="spcard" data-cmp="'+c.id+'" style="border-color:#5BB98C;background:#f4fbf7"><div class="spt">🔀 '+c.name+'<span class="spbadge" style="background:#5BB98C">비교</span></div><div class="sps">'+c.desc+'</div></button>';}).join('');
-  ov.querySelector('#simpicklist').innerHTML='<div class="spnote">고객 앞에서 값을 직접 바꿔 보여주는 <b>라이브 위젯</b>입니다. <b>🔀 비교</b>는 한 조건만 바꿔 여러 시나리오를 나란히 보여줍니다.</div>'+
-    cmpCards+customCard+
-    list.map(it=>'<button class="spcard" data-mode="'+it[0]+'"><div class="spt">'+it[1]+(it[3]?'<span class="spbadge">'+it[3]+'</span>':'')+'</div><div class="sps">'+it[2]+'</div></button>').join('');
+  var head='<div class="spnote">고객 앞에서 값을 직접 바꿔 보여주는 <b>라이브 위젯</b>입니다. 고객 확인값으로 미리 채워져 들어갑니다.</div>';
+  var body='';
+  var ctx=(!showAll&&_simCtxIdx!=null&&deck.slides[_simCtxIdx])?deck.slides[_simCtxIdx]:null;
+  if(ctx){
+    var hay=_simSlideHay(ctx);
+    var picks=list.filter(function(it){return SIM_CTX_KW[it[0]]&&SIM_CTX_KW[it[0]].test(hay);}).slice(0,4);
+    var cmpPicks=cmpList.filter(function(c){return (c.kw||[]).some(function(k){return hay.toLowerCase().indexOf(String(k).toLowerCase())>=0;});}).slice(0,Math.max(0,4-picks.length));
+    if(picks.length||cmpPicks.length){
+      head='<div class="spnote">📍 <b>'+(_simCtxIdx+1)+'번 장</b>의 내용에 어울리는 것만 추렸습니다 — 어느 것을 골라도 이 장 <b>바로 뒤</b>에, 고객 확인값으로 채워져 들어갑니다. <button type="button" style="border:0;background:none;color:var(--slate);text-decoration:underline;cursor:pointer;font-family:inherit;font-size:12px;padding:0" onclick="renderSimCards(true)">전체 목록 보기</button></div>';
+      body=cmpPicks.map(cmpCard).join('')+picks.map(modeCard).join('');
+    }else{ _simCtxIdx=_simCtxIdx; /* 후보 없음 → 전체 목록으로, 삽입 위치는 유지 */ }
+  }
+  if(!body) body=cmpList.map(cmpCard).join('')+customCard+list.map(modeCard).join('');
+  else body+=customCard;
+  ov.querySelector('#simpicklist').innerHTML=head+body;
   ov.querySelectorAll('.spcard').forEach(b=>b.onclick=function(){var cmp=b.getAttribute('data-cmp');var m=b.getAttribute('data-mode');if(cmp)addCompareSim(cmp);else if(m==='__custom')showCustomPick();else showSimConfirm(m);});
 }
 function showSimConfirm(mode){
@@ -2403,7 +2441,7 @@ function addSimConfirmed(mode){
   closeSimPick();
   const it=Object.assign({type:'sim',mode:mode,domain:cfg.d},SIM_DEF,simDefaults(),vals);
   const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:title,conclusion:sub||cfg.sub||'슬라이더로 조건을 바꾸면 결과가 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 값을 조절하면 결과가 바로 달라집니다 — 추가 수정 비용 없이 고객 앞에서 시연하실 수 있어요.'};
-  const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🎚 '+title+' 추가됨');
+  const pos=_simInsertPos();deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🎚 '+title+' 추가됨'+SIM_USE_TIP,5200);
 }
 /* ===== ✨ 직접 구성 — 분야별 항목 체크박스로 맞춤 시뮬레이터 (AI 호출 없음·무료) ===== */
 /* 분야별: 조절항목(입력) 후보 + 결과(출력) 후보 + 추천 기본선택. 모두 검증엔진이 계산하는 재료 안에서만. */
@@ -2453,7 +2491,7 @@ function addCustomSim(){if(!requireSaved())return;
   // custom 모드로 생성 — buildCustomSimCfg가 엔진뷰·출력정합을 보장
   const it=Object.assign({type:'sim',mode:'custom',domain:F.dom,d:F.dom,t:title,s:s,o:o},SIM_DEF,simDefaults());
   const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:title,conclusion:'슬라이더로 조건을 바꾸면 결과가 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 값을 조절하면 결과가 바로 달라집니다 — 추가 수정 비용 없이 고객 앞에서 시연하실 수 있어요.'};
-  const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('✨ '+title+' 추가됨');
+  const pos=_simInsertPos();deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('✨ '+title+' 추가됨'+SIM_USE_TIP,5200);
 }
 /* ===== 🧮 계산기 삽입 메뉴 — 슬라이드에 계산기 버튼 넣기 ===== */
 function openCalcPicker(){if(!requireSaved())return;
@@ -2481,7 +2519,7 @@ function addCalcToSlide(cid){if(!requireSaved())return;
   closeSimPick();
   var it={type:'calc',calcId:c.id,name:c.name,url:calcUrl(c)};
   var slide={slideNum:'',region:'body',eyebrow:'계산기',title:c.name,conclusion:'상담 중 버튼을 누르면 계산기가 새 창에서 열립니다 (인터넷 연결 필요).',content:[it],notes:'[컨설턴트 멘트] 이 자리에서 바로 계산해 보여드릴 수 있습니다. 버튼을 누르면 최신 '+c.name+'가 새 창으로 열립니다.'};
-  var pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🧮 '+c.name+' 추가됨');
+  var pos=_simInsertPos();deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🧮 '+c.name+' 추가됨');
 }
 function addCompareSim(cmpId){if(!requireSaved())return;
   var domKo=topic||'연금설계';
@@ -2490,9 +2528,12 @@ function addCompareSim(cmpId){if(!requireSaved())return;
   closeSimPick();
   var it=Object.assign({type:'cmpsim',cmpId:cmpId,d:domEng,t:spec.name},SIM_DEF,simDefaults());
   var slide={slideNum:'',region:'body',eyebrow:'비교 시뮬레이션',title:spec.name,conclusion:spec.desc+' — 슬라이더로 조건을 바꾸면 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 조건을 바꿔가며 "지금과 나중"의 차이를 직접 보여드리세요.'};
-  var pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🔀 '+spec.name+' 추가됨');
+  var pos=_simInsertPos();deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🔀 '+spec.name+' 추가됨'+SIM_USE_TIP,5200);
 }
-function closeSimPick(){const ov=document.getElementById('simpick');if(ov)ov.classList.remove('on');}
+function closeSimPick(){const ov=document.getElementById('simpick');if(ov)ov.classList.remove('on');_simCtxIdx=null;}
+/* ★ 삽입 위치 (2026-08-22): 🎚 슬라이드 버튼으로 열었으면 그 장 바로 뒤, 아니면 종전대로 맨뒤-1 */
+function _simInsertPos(){const p=(_simCtxIdx!=null)?Math.min(deck.slides.length,_simCtxIdx+1):Math.max(1,deck.slides.length-1);_simCtxIdx=null;return p;}
+const SIM_USE_TIP=' — 발표 때 "직접 바꿔보시겠어요?" 하고 화면을 고객 쪽으로 돌려보세요';
 /* ===== 연도별 연금 '표(테이블)' — 계산값으로 직접 생성 · 헤더 포함 · 무료(AI 호출 없음) ===== */
 function openYearTable(){
   if(!deck.slides.length){return toast('먼저 자료를 생성해 주세요');}
@@ -2543,7 +2584,7 @@ function addSim(mode){
   mode=mode||simDefaultMode();const cfg=SIM_MODES[mode];if(!cfg){return toast('알 수 없는 시뮬레이터예요');}
   const it=Object.assign({type:'sim',mode:mode,domain:cfg.d},simDefaults());
   const slide={slideNum:'',region:'body',eyebrow:'시뮬레이션',title:cfg.t,conclusion:cfg.sub||'슬라이더로 조건을 바꾸면 결과가 즉시 재계산됩니다.',content:[it],notes:'[컨설턴트 멘트] 직접 조건을 바꿔보시겠어요? 값을 조절하면 결과가 바로 달라집니다 — 추가 수정 비용 없이 고객 앞에서 시연하실 수 있어요.'};
-  const pos=Math.max(1,deck.slides.length-1);deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🎚 '+cfg.t+' 추가됨');
+  const pos=_simInsertPos();deck.slides.splice(pos,0,slide);reseq();renderDeck();scrollToSlide(pos);flash(pos);toast('🎚 '+cfg.t+' 추가됨'+SIM_USE_TIP,5200);
 }
 /* ★ 컨설턴트 전용 장 이미지 저장 (2026-07-31) — html2canvas 지연 로드(버튼 클릭 시에만), 배지·버튼 제외하고 PNG 다운로드 */
 function jbSaveSlideImage(sl,s){
