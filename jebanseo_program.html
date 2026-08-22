@@ -285,6 +285,12 @@
   .spsave{flex:1;border:none;background:var(--navy);color:#fff;border-radius:10px;padding:13px;font-size:14px;font-weight:800;font-family:inherit;cursor:pointer;}
   .spsave:hover{filter:brightness(1.1);}
   .splater{flex:none;border:1px solid var(--line);background:#fff;color:var(--mute);border-radius:10px;padding:13px 16px;font-size:13px;font-family:inherit;cursor:pointer;}
+  /* ★ 사용 후 의견 — 칩 · 컨텍스트 (2026-08-22) */
+  .fbchips{display:none;flex-wrap:wrap;gap:6px;margin:0 0 11px;}
+  .fbchip{border:1px solid var(--line);background:#fff;color:var(--slate);border-radius:999px;padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;line-height:1.4;}
+  .fbchip:hover{border-color:var(--gold);}
+  .fbchip.on{border-color:var(--gold);background:var(--goldbg);color:var(--gold);font-weight:700;}
+  .fbctx{display:none;margin-top:9px;padding:9px 11px;background:#F6F7FA;border-radius:8px;font-size:11.5px;color:#7A8494;line-height:1.6;}
   .sltb{position:absolute;top:8px;left:8px;display:none;gap:2px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:3px;box-shadow:0 3px 12px rgba(0,0,0,.16);z-index:9;}
   .slide:hover .sltb{display:flex;}
   .sltb button{border:none;background:transparent;cursor:pointer;font-size:13px;width:26px;height:26px;border-radius:5px;color:var(--navy);line-height:1;font-family:inherit;}
@@ -823,15 +829,17 @@
 
 <div class="modal" id="fbmodal">
   <div class="spbox">
-    <div class="sptop">✍ 개선 의견 보내기</div>
+    <div class="sptop" id="fb-top">✍ 개선 의견 보내기</div>
     <div class="spbody" style="text-align:left">
-      <p class="spsub" style="margin:0 0 10px">사용 중 느낀 불편·버그·개선 아이디어를 남겨주세요. 운영자에게 전달됩니다.</p>
+      <p class="spsub" id="fb-lead" style="margin:0 0 10px">사용 중 느낀 불편·버그·개선 아이디어를 남겨주세요. 운영자에게 전달됩니다.</p>
+      <div class="fbchips" id="fb-chips"></div>
       <input id="fb-title" type="text" placeholder="제목 (예: 기업 제안서 표 정렬 개선)" style="width:100%;padding:10px 12px;border:1px solid #ccd;border-radius:8px;font-size:14px;margin-bottom:8px;box-sizing:border-box">
       <textarea id="fb-body" rows="5" placeholder="내용을 자세히 적어주실수록 개선에 도움이 됩니다." style="width:100%;padding:10px 12px;border:1px solid #ccd;border-radius:8px;font-size:14px;box-sizing:border-box;resize:vertical;font-family:inherit"></textarea>
+      <div class="fbctx" id="fb-ctx"></div>
     </div>
     <div class="spbtns">
       <button class="spsave" id="fb-send" onclick="sendFeedback()">보내기</button>
-      <button class="splater" onclick="closeFeedback()">취소</button>
+      <button class="splater" id="fb-cancel" onclick="closeFeedback()">취소</button>
     </div>
   </div>
 </div>
@@ -1471,7 +1479,9 @@ let _deckSaved=true;   // 생성된 덱이 저장(과금)됐는지 — false면 
 // Cloud Function 주소 (jarvia-platform · asia-northeast3). 콘솔의 함수 트리거 URL과 다르면 그 값으로 교체하세요.
 const FUNCTION_URL = "https://asia-northeast3-jarvia-platform.cloudfunctions.net/jebanseoApi";
 const MAIN_URL = "https://jarvia.co.kr"; // ★ 자비아 메인 주소 (필요시 교체)
-function goMain(){ location.href = MAIN_URL; }
+function goMain(){ try{ if(typeof _fbExitAsk==='function' && _fbExitAsk()) return; }catch(_){} _fbGoMainNow(); }
+function _fbGoMainNow(){ location.href = MAIN_URL; }
+let _fbT0 = Date.now();   // ★ 이용 시작 시각 — 사용 후 의견 컨텍스트용 (2026-08-22)
 
 /* ===== 렌더러 ===== */
 function elt(t,c){const e=document.createElement(t);if(c)e.className=c;return e;}
@@ -2620,10 +2630,13 @@ function sanitizeMessageHtml(value){
   return tpl.innerHTML;
 }
 function paint(){const m=document.getElementById('msgs');m.innerHTML='';MSGS.forEach(x=>{const d=elt('div','msg '+x.who+(x.thinking?' typing':''));if(x.thinking){d.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';}else if(x.who==='ai'||x.trustedHtml===true){d.innerHTML=sanitizeMessageHtml(x.html||'');}else{d.textContent=String(x.text!=null?x.text:(x.html||''));}m.appendChild(d);});m.scrollTop=m.scrollHeight;
-  // '지금 바로 생성' 버튼: 인터뷰 중(덱 없음·시작화면 숨김·생각중 아님·재무확인 아님)에만 노출
+  // '지금 바로 생성' 버튼: 채팅 인터뷰 중(덱 없음·시작화면 숨김·생각중 아님·재무확인 아님)에만 노출
+  // ★[2026-08-22] 질문지(qsheet) 진행·확인 단계에서는 숨긴다 — 최종 생성 버튼으로 오인되어
+  //   basisAsk 질문을 건너뛴 채 forceGenerate가 돌던 문제(chosenBasis=null → 정밀 장 누락) 차단
   var _gn=document.getElementById('gennowbar');
   if(_gn){var _st=document.getElementById('start');
-    var _show=(!deck.slides.length)&&(_st&&_st.style.display==='none')&&!MSGS.some(x=>x.thinking)&&!(pendingGen&&/^(financial|qsheet)/.test(String(pendingGen.field||'')));
+    var _qsBusy=(typeof QS!=='undefined')&&/^(loading|form|confirm)$/.test(String(QS&&QS.phase||''));
+    var _show=(!deck.slides.length)&&(_st&&_st.style.display==='none')&&!MSGS.some(x=>x.thinking)&&!_qsBusy&&!(pendingGen&&/^(financial|qsheet)/.test(String(pendingGen.field||'')));
     _gn.style.display=_show?'block':'none';}
 }
 function showThinking(){if(MSGS.some(x=>x.thinking))return;MSGS.push({who:'ai',thinking:true});paint();}
@@ -4712,6 +4725,15 @@ function renderQsheet(){
       QS.followUp.forEach(function(qq,i){h2+=qsCardHtml(qq,i);});
       h2+='</div>';
     }
+    if(!fuActive && _qsNeedBasis()){          // ★ 확인 후 채팅으로 다시 묻지 않도록, 기준 선택을 여기서 받는다 (2026-08-22)
+      if(!QS.basisPick)QS.basisPick='expense';
+      var _bo=[{k:'expense',t:'희망 생활비 기준 (권장)'},{k:'r60',t:'현재 소득의 60%'},{k:'r70',t:'현재 소득의 70%'},{k:'r80',t:'현재 소득의 80%'}];
+      h2+='<div class="qsfu"><div class="fut">필요 노후자금을 어떤 기준으로 계산할까요?</div>'
+        +'<div class="cfsub" style="margin:0 0 9px">선택하지 않으시면 <b>희망 생활비 기준</b>으로 진행합니다.</div>'
+        +'<div class="qchips" id="qsBasisRow" style="display:flex;flex-wrap:wrap;gap:7px">';
+      _bo.forEach(function(o){h2+='<button type="button" class="qchip'+(QS.basisPick===o.k?' sel':'')+'" data-bk="'+o.k+'" onclick="qsPickBasis(\''+o.k+'\')">'+o.t+'</button>';});
+      h2+='</div></div>';
+    }
     body.innerHTML=h2;
     foot.style.display='flex';
     foot.innerHTML='<button type="button" class="cfedit" onclick="editQsheet()">✏ 수정할게요</button>'+
@@ -4720,6 +4742,14 @@ function renderQsheet(){
         :'<button type="button" class="cfyes" onclick="confirmQsheet()">✔ 맞습니다 — 제안서 생성 시작</button>');
     body.scrollTop=0;return;
   }
+}
+function qsPickBasis(k){   // ★ 확인 화면 기준 선택 — 전체 재렌더 금지(스크롤 튐 방지) (2026-08-22)
+  QS.basisPick=k;
+  var w=document.getElementById('qsBasisRow');
+  if(!w){renderQsheet();return;}
+  Array.prototype.forEach.call(w.querySelectorAll('.qchip'),function(b){
+    if(b.getAttribute('data-bk')===k)b.classList.add('sel');else b.classList.remove('sel');
+  });
 }
 function qsChip(id,el){
   var wrap=el.parentNode;
@@ -4814,21 +4844,37 @@ function confirmQsheet(){
   QS.promisesForGen=answered.map(function(qq){return qq.benefit;}).filter(Boolean);
   QS.unknownForGen=(c.confirmItems||[]).filter(function(x){return x.status==='skip';}).map(function(x){return x.label;});
   QS.phase='done';pendingGen=null;closeQsheetModal(false);
+  /* ★[2026-08-22] 필요자금 '기준'을 질문지 확인 화면에서 이미 받았으므로 채팅으로 되묻지 않고 바로 생성한다.
+     (기존: preflightQueue=basisAsk(...) → askNext() 로 채팅에 질문이 1~2개 더 붙어,
+      "자료를 만들게요" 안내와 실제 동작이 어긋나고 사용자가 골드 버튼을 누르게 되던 문제)
+     계산 로직은 그대로 — chosenBasis / collectedParams.replacementRate 만 채워 넣는다.
+     질문지가 뜨지 않은 경로(채팅 인터뷰 폴백, 3199행)는 종전대로 basisAsk를 거친다. */
+  if(!chosenBasis && _qsNeedBasis()){
+    var _bp=QS.basisPick||'expense';
+    var _rm=/^r(\d+)$/.exec(_bp);
+    if(_rm){chosenBasis='income';collectedParams.replacementRate=Number(_rm[1]);rawInput+='\n• 필요자금 기준 → 현재 소득 기준 (사용자 확인값)\n• 목표 소득대체율 → '+Number(_rm[1])+'% (사용자 확인값)';}
+    else{chosenBasis='expense';rawInput+='\n• 필요자금 기준 → 희망 생활비 기준 (사용자 확인값)';}
+  }
   aiReply('답변 확인 완료 ✓ 확인값과 약속드린 구성 그대로 자료를 만들게요.');
-  /* ★[2026-07-29 보완] 기존 흐름의 필요자금 '기준' 선택 게이트를 건너뛰지 않는다.
-     소득·희망 생활비가 둘 다 있으면 basisAsk가 1문항을 큐에 넣고(3033행과 동일 패턴),
-     해당 없으면 askNext가 큐 비어 있음 → 즉시 generate(). 이 게이트를 건너뛰면
-     chosenBasis=null로 명목 축소 계산이 되어 물가반영 필요자금·수령전략 정밀 장이 빠진다. */
-  preflightQueue=basisAsk(rawInput,topic);
-  return askNext();
+  return generate();
 }
 
 /* ===== AI 인터뷰 (먼저 묻기) — 우수한 자료에 필요한 항목 중 빠진 것만 동적으로 질문 ===== */
 let interviewQueue=[];
 let askedQuestions=[];   // 이미 물어본 질문 누적 → 백엔드에 보내 중복질문 방지
+/* ★ 필요자금 기준 판정용 텍스트 (2026-08-22)
+   rawInput에는 질문지 '질문 문구'까지 병합되어, 사용자가 "미반영"으로 답해도
+   '생활비'·'소득' 글자가 남아 basisAsk가 매번 오발동했다. 미반영 줄을 제외해
+   실제 값이 들어온 경우에만 판정한다. */
+function _basisJudgeText(text){
+  return String(text||'').split('\n').filter(function(L){return !/미반영/.test(L);}).join('\n');
+}
+function _qsNeedBasis(){ try{ return basisAsk(rawInput,topic).length>0; }catch(_){ return false; } }
 function basisAsk(text,topic){
   // 필요자금 '기준' 선택 — 소득과 희망 생활비가 둘 다 있어 결과가 갈릴 때만(chosenBasis 플래그)
-  if(topic==='연금설계' && /연봉|연소득|월급|월소득|소득/.test(text||'') && /생활비|라이프스타일|지출/.test(text||'')){
+  if(chosenBasis) return [];                       // ★ 이미 확정됨(질문지에서 선택 등) → 재질문 금지 (2026-08-22)
+  var _t=_basisJudgeText(text);                    // ★ '미반영' 답변 줄 제외 — 질문 문구만 보고 오발동하던 문제 차단
+  if(topic==='연금설계' && /소득/.test(_t) && /생활비|라이프스타일|지출/.test(_t)){
     return [{field:'basis',q:'필요 노후자금을 <b>어떤 기준</b>으로 잡을까요?<br>① <b>희망 생활비</b> 기준 — 고객이 말한 은퇴 후 생활비를 그대로 목표로<br>② <b>현재 소득 기준</b> — 목표 소득대체율을 확인해 계산'
       +chipsHtml([{label:'① 희망 생활비 기준',send:'희망 생활비 기준'},{label:'② 현재 소득 기준',send:'현재 소득 기준'}])}];
   }
@@ -5438,8 +5484,67 @@ async function jbApi(payload,timeoutMs){
   return r;
 }
 // ── 개선 의견(피드백) → 플랫폼(opener)이 partner_proposals에 저장 ──
-function openFeedback(){var t=document.getElementById('fb-title');if(t)t.value='';var b=document.getElementById('fb-body');if(b)b.value='';var m=document.getElementById('fbmodal');if(m)m.classList.add('on');}
-function closeFeedback(){var m=document.getElementById('fbmodal');if(m)m.classList.remove('on');}
+// ★ 사용 후 의견 — 이탈 직전 수집 (2026-08-22)
+var _FB={exit:false,picked:[]};
+var FB_CHIPS=['👍 좋았어요','⏱ 느려요','📊 표가 이상해요','✏️ 톤이 안 맞아요','🐞 오류','💬 문의'];
+var FB_LS_SENT='jb_fb_sent', FB_LS_LATER='jb_fb_later';
+function _fbGet(k){try{return +(localStorage.getItem(k)||0);}catch(_){return 0;}}
+function _fbSet(k){try{localStorage.setItem(k,String(Date.now()));}catch(_){}}
+function _fbCooling(){var D=86400000;if(Date.now()-_fbGet(FB_LS_SENT)<30*D)return true;if(Date.now()-_fbGet(FB_LS_LATER)<7*D)return true;return false;}
+function _fbCtxText(){
+  var mins=Math.max(1,Math.round((Date.now()-_fbT0)/60000));
+  var a=[];try{a.push(topic||'-');}catch(_){}
+  try{a.push(deck.slides.length+'장');}catch(_){}
+  try{a.push(_deckSaved?'저장완료':'미저장');}catch(_){}
+  a.push('이용 '+mins+'분');
+  try{a.push((MEMBER&&MEMBER.tier)||'-');}catch(_){}
+  return a.join(' · ');
+}
+function _fbAutoTitle(){
+  var d=new Date(),mm=('0'+(d.getMonth()+1)).slice(-2),dd=('0'+d.getDate()).slice(-2);
+  var head=_FB.picked.length?_FB.picked.join(', ').replace(/[^\uAC00-\uD7A3a-zA-Z0-9 ,]/g,'').trim():'사용 후 의견';
+  var tp='';try{tp=topic||'';}catch(_){}
+  return (head+' — '+(tp?tp+' · ':'')+mm+'/'+dd).slice(0,200);
+}
+function _fbPaintChips(){
+  var w=document.getElementById('fb-chips');if(!w)return;
+  w.innerHTML='';
+  FB_CHIPS.forEach(function(c){
+    var b=document.createElement('button');b.type='button';b.className='fbchip'+(_FB.picked.indexOf(c)>=0?' on':'');b.textContent=c;
+    b.onclick=function(){var i=_FB.picked.indexOf(c);if(i>=0)_FB.picked.splice(i,1);else _FB.picked.push(c);_fbPaintChips();};
+    w.appendChild(b);
+  });
+}
+function openFeedback(opt){
+  opt=opt||{};_FB.exit=!!opt.exit;_FB.picked=[];
+  var t=document.getElementById('fb-title');if(t){t.value='';t.style.display=_FB.exit?'none':'';}
+  var b=document.getElementById('fb-body');if(b){b.value='';b.placeholder=_FB.exit?'짧게 한 줄이면 충분합니다. (위 항목만 눌러 보내셔도 됩니다)':'내용을 자세히 적어주실수록 개선에 도움이 됩니다.';}
+  var top=document.getElementById('fb-top');if(top)top.textContent=_FB.exit?'🙏 오늘 사용해 보시니 어떠셨나요?':'✍ 개선 의견 보내기';
+  var lead=document.getElementById('fb-lead');if(lead)lead.innerHTML=_FB.exit
+    ?'불편했던 점 · 아쉬웠던 점 · 이런 기능이 있으면 좋겠다 — 주신 의견을 반영해 더 나은 도구로 만들어 드리겠습니다. 함께 만들어 가요.'
+    :'사용 중 느낀 불편·버그·개선 아이디어를 남겨주세요. 운영자에게 전달됩니다.';
+  var ch=document.getElementById('fb-chips');if(ch)ch.style.display=_FB.exit?'flex':'none';
+  var cx=document.getElementById('fb-ctx');
+  if(cx){cx.style.display=_FB.exit?'block':'none';if(_FB.exit)cx.textContent='📎 함께 전달됩니다 — '+_fbCtxText();}
+  var cb=document.getElementById('fb-cancel');if(cb)cb.textContent=_FB.exit?'다음에':'취소';
+  if(_FB.exit)_fbPaintChips();
+  var m=document.getElementById('fbmodal');if(m)m.classList.add('on');
+}
+function closeFeedback(){
+  var m=document.getElementById('fbmodal');if(m)m.classList.remove('on');
+  if(_FB.exit){_FB.exit=false;_fbSet(FB_LS_LATER);_fbGoMainNow();}
+}
+// 🏠 메인 클릭 시 1회만 물어본다 — 생성 이력 없음·쿨다운·opener 없음이면 그냥 통과
+function _fbExitAsk(){
+  try{
+    if(_FB.exit)return false;
+    if(!window.opener)return false;
+    if(!deck.slides.length)return false;
+    if(_fbCooling())return false;
+    openFeedback({exit:true});
+    return true;
+  }catch(_){return false;}
+}
 // ── 개선 의견 → 자비아 메인의 「제휴/제안」 화면으로 연결 (정상 작동 경로 재사용) ──
 function openPartnerProposal(){
   if(!window.opener){ window.open('https://jarvia.co.kr/index.html','_blank'); return; }
@@ -5450,12 +5555,21 @@ function openPartnerProposal(){
 function sendFeedback(){
   var title=(document.getElementById('fb-title').value||'').trim();
   var body=(document.getElementById('fb-body').value||'').trim();
-  if(!title||!body){toast('제목과 내용을 모두 입력해 주세요.');return;}
+  if(_FB.exit){                                  // ★ 이탈 직전 모드 — 제목 자동·칩만으로도 전송 (2026-08-22)
+    if(!title)title=_fbAutoTitle();
+    if(!body&&_FB.picked.length)body=_FB.picked.join(', ');
+    if(!title||!body){toast('한 줄 남겨주시거나 위 항목을 선택해 주세요.');return;}
+    if(_FB.picked.length)body='['+_FB.picked.join('] [')+']\n'+body;
+    body=body+'\n\n────────────\n'+_fbCtxText();
+  }
+  else if(!title||!body){toast('제목과 내용을 모두 입력해 주세요.');return;}
   if(!window.opener){toast('자비아 화면을 통해 열어야 의견을 보낼 수 있어요.');return;}
   var btn=document.getElementById('fb-send');if(btn){btn.disabled=true;btn.textContent='보내는 중…';}
   var reqId='f'+Date.now()+Math.random().toString(36).slice(2,6);var done=false;
   function onMsg(ev){if(!JB_TRUSTED_ORIGINS.has(ev.origin))return;var d=ev&&ev.data;if(!d||d.type!=='jbFeedbackResult'||d.reqId!==reqId)return;done=true;window.removeEventListener('message',onMsg);if(btn){btn.disabled=false;btn.textContent='보내기';}
-    if(d.ok){toast('의견이 전달되었습니다. 감사합니다!');closeFeedback();}
+    if(d.ok){_fbSet(FB_LS_SENT);toast('의견이 전달되었습니다. 감사합니다!');
+      if(_FB.exit){_FB.exit=false;var _m=document.getElementById('fbmodal');if(_m)_m.classList.remove('on');setTimeout(_fbGoMainNow,1200);}
+      else closeFeedback();}
     else if(d.error==='LOGIN_REQUIRED'){toast('자비아에 로그인한 상태에서 이용해 주세요.');}
     else{toast('전송 실패: '+(d.detail||d.error||'알 수 없음'));}
   }
