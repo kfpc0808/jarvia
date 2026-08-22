@@ -3718,7 +3718,7 @@ function finParse(pages,fmt){
   /* 표 제목만으로 페이지를 고르면 오탐한다(연구개발비 표에도 '손익계산서'라는 행이 있다).
      그 표에만 있는 항목을 함께 만족하는 페이지를 고른다. */
   const pick=(...rxs)=>pages.find(p=>rxs.every(r=>r.test(p.text)))||null;
-  let BS,IS;
+  let BS,IS,CFT=null,RST=null;   /* ★ B1 (2026-08-22): 현금흐름표(CF)·이익잉여금처분계산서(RS) */
   if(fmt==='KODATA_WEB'){
     /* 상세 재무상태표(천원)가 여러 쪽에 걸쳐 있다 — '계정명' 헤더가 있는 상세 구간을 찾아 한 장으로 병합.
        (요약표는 '구분' 헤더·백만원이라 단위가 섞이므로 쓰지 않는다) */
@@ -3728,9 +3728,22 @@ function finParse(pages,fmt){
     if(ci<0)ci=Math.min(ii+2,pages.length);
     BS=(bi>=0&&ii>bi)?finConcatPages(pages,bi,ii):null;
     IS=(ii>=0)?finConcatPages(pages,ii,ci):null;
+    /* ★ B1 (2026-08-22): ci(현금흐름표 위치)를 손익 병합의 '울타리'로만 쓰고 표 자체는 버리던 것을 수정.
+       배당금의 지급·자기주식 취득/처분이 이 표에 '실측'으로 명시된다 (모락 실증: 배당 63억·자사주 93.1억 누락 사고).
+       끝 경계는 자본변동표/처분계산서 — 없으면 +3쪽 안전 상한. */
+    if(ci<pages.length&&/현금흐름표/.test((pages[ci]&&pages[ci].text)||'')){
+      let ce=pages.findIndex((p,i)=>i>ci&&/(자본변동표|이익잉여금처분계산서)/.test(p.text));
+      if(ce<0)ce=Math.min(ci+3,pages.length);
+      CFT=finConcatPages(pages,ci,ce);
+    }
+    const rpi=pages.findIndex(p=>/이익잉여금처분계산서/.test(p.text)&&/(계정명|중간배당)/.test(p.text));
+    if(rpi>=0)RST=finConcatPages(pages,rpi,Math.min(rpi+2,pages.length));
   }else{
     BS=pick(/재무상태표/,/자산총계/,/부채총계/,/자본총계/);
     IS=pick(/손익계산서/,/매출액/,/영업이익/,/당기순이익/);
+    /* ★ B1 (2026-08-22): CRETOP 상세본도 현금흐름표·처분계산서가 별도 페이지에 있다 — 행 라벨로 직접 탐색 */
+    CFT=pages.find(p=>/배당금의\s*지급/.test(p.text))||pick(/현금흐름표/,/영업활동으로\s*인한/)||null;
+    RST=pages.find(p=>/이익잉여금처분계산서/.test(p.text)&&/중간배당/.test(p.text))||null;
   }
   const SH=fmt==='NICE'?pick(/주요주주/,/지분율/):pick(/주주현황/,/소유주식수|지분율/);
   /* ★ NICE 3p '01.기업개요'는 우측에 신용등급 박스가 붙은 2단 레이아웃이다.
@@ -3784,6 +3797,11 @@ function finParse(pages,fmt){
     자산총계:ord(finCells(BS,P.자산총계||'자산총계')), 부채총계:ord(finCells(BS,P.부채총계||'부채총계')), 자본총계:ord(finCells(BS,P.자본총계||'자본총계')),
     자본금:ord(finCells(BS,P.자본금)), 이익잉여금:ord(finCells(BS,P.이익잉여금)),
     미처분잉여:ord(finCells(BS,P.미처분잉여)),   /* ★ A1 (2026-07-30): 이익잉여금 총계와 미처분을 분리 — 프롬프트 라벨-값 불일치(총계를 '미처분'으로 표기) 수정. 미검출 시 null → 프롬프트에서 총계 폴백 */
+    /* ★ B1 (2026-08-22): 현금흐름표·처분계산서 실측 — 배당·자사주는 역산(추정)이 아니라 이 값을 1순위로 쓴다 */
+    배당지급:CFT?ord(finCells(CFT,['배당금의 지급','배당금지급'])):null,
+    자사주취득:CFT?ord(finCells(CFT,['자기주식의 취득','자기주식 취득'])):null,
+    자사주처분:CFT?ord(finCells(CFT,['자기주식의 처분','자기주식 처분'])):null,
+    중간배당:RST?ord(finCells(RST,['중간배당액(-)','중간배당액','(중간배당)'])):null,
     단기차입금:ord(finCells(BS,P.단기차입금)), 장기차입금:ord(finCells(BS,P.장기차입금)),
     유동차입:ord(finCells(BS,['(유동차입부채)','유동차입부채'])), 비유동차입:ord(finCells(BS,['(비유동차입부채)','비유동차입부채'])),   /* ★ NICE-IFRS: 유동성장기부채 포함 차입 구분 — KODATA엔 없어 null→기존 폴백 (2026-07-21) */
     사채:ord(finCells(BS,P.사채))||[0,0,0],
@@ -4414,8 +4432,23 @@ function finSignals(D){
     if(D.자본금[0]<D.자본금[1]*0.95)S.push(`자본금 감소(감자 추정): ${pair(D.자본금)}`);
     else if(D.자본금[0]>D.자본금[1]*1.05)S.push(`자본금 증가(증자 추정): ${pair(D.자본금)}`);
   }
-  if(F(D.이익잉여금,0)&&F(D.이익잉여금,1)&&F(D.순이익,0)){
-    const out=(D.이익잉여금[1]+D.순이익[0])-D.이익잉여금[0];   /* 직전잉여금+당기순이익-당기잉여금 = 유출분 역산 */
+  /* ★ B1 (2026-08-22): 배당·자사주 — 현금흐름표 '실측'을 1순위로. 종전에는 잔액 역산으로
+     "약 92.3억 (배당·처분 등 추정)" 한 덩어리 추정 문구만 나가, 배당 63억·자사주 93.1억이라는
+     원문 명시값이 논점으로 승격되지 못했다(모락 실증). 실측 부재(요약형 PDF)면 종전 역산 폴백 유지. */
+  const _dv=F(D.배당지급,0)&&D.배당지급[0]>0?D.배당지급[0]:(F(D.중간배당,0)&&Math.abs(D.중간배당[0])>0?Math.abs(D.중간배당[0]):null);
+  const _tb=Math.max(F(D.자사주취득,0)?D.자사주취득[0]:0,F(D.자사주취득,1)?D.자사주취득[1]:0);
+  const _ts=Math.max(F(D.자사주처분,0)?D.자사주처분[0]:0,F(D.자사주처분,1)?D.자사주처분[1]:0);
+  if(_dv!=null){
+    const pr=(F(D.순이익,0)&&D.순이익[0]>0)?Math.round(_dv/D.순이익[0]*100):null;
+    S.push(`배당 지급 ${fmt(_dv)} — 현금흐름표 실측${pr!=null?`, 지급 기준 배당성향 ${pr}%`:''}${pr!=null&&pr>=100?' · 순이익을 넘는 유출':''}`);
+  }
+  if(_tb>0||_ts>0)
+    S.push(`자기주식 ${_tb>0?`취득 ${fmt(_tb)}`:''}${_tb>0&&_ts>0?' → ':''}${_ts>0?`처분 ${fmt(_ts)}`:''} — 배당·감자와 겹치면 지분 재편(승계 준비) 진행 흔적: 승계 설계 1순위 논점으로 다룰 것`);
+  /* 폴백 발동 조건: '실측이 0'이 아니라 '표를 못 읽음'일 때만 — 배당 0원을 실측했는데
+     "배당·처분 등 추정"이 나가면 오히려 퇴보다 (2026-08-22 단위검증 케이스3에서 발견·수정) */
+  const _cfMeasured=(D.배당지급!=null)||(D.중간배당!=null)||(D.자사주취득!=null)||(D.자사주처분!=null);
+  if(!_cfMeasured&&F(D.이익잉여금,0)&&F(D.이익잉여금,1)&&F(D.순이익,0)){
+    const out=(D.이익잉여금[1]+D.순이익[0])-D.이익잉여금[0];   /* 직전잉여금+당기순이익-당기잉여금 = 유출분 역산 (폴백) */
     if(out>0&&finToEok(out)>=1&&out>=Math.abs(D.순이익[0])*0.15)
       S.push(`이익잉여금 유출 약 ${fmt(out)} (직전 잉여금+당기순이익 대비 역산 — 배당·처분 등 추정)`);
   }
@@ -4442,7 +4475,7 @@ function finSignals(D){
   }
   if(F(D.재고자산,0)&&F(D.재고자산,1)&&D.재고자산[1]>0&&D.재고자산[0]>=D.재고자산[1]*1.5)
     S.push(`재고자산 급증: ${pair(D.재고자산)}`);
-  return S.slice(0,8);
+  return S.slice(0,10);   /* ★ B1: 배당·자사주 신호 추가로 상한 8→10 (2026-08-22) */
 }
 
 /* ★ 최우선 현안 (2026-07-30, 마스터교본 §7 이식): 나열형 → 우선순위형 제안서의 심장.
