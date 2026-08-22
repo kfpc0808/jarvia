@@ -8691,49 +8691,90 @@ function jvMcRead(){
   });
 }
 function jvMcGet(id){return (jvMcIdx&&id&&jvMcIdx[id])||null;}
-/* ═══ ★ [2026-07-28] 마이페이지 드라이브 자동 복원 ═══
+/* ═══ ★ [2026-08-22] 마이페이지 드라이브 자동 동기화 (구 '빈 기기 1회 복원' 확장) ═══
    상세(연락처·주소·메모·extra)는 기기 IndexedDB + 본인 드라이브(AES-GCM, 열쇠는 appData)에만 있다.
-   새 PC에서는 IndexedDB가 비어 "—"만 보이던 문제를, 서버 보관 리프레시 토큰(gdAccessToken)으로
-   팝업 없이 드라이브 백업(고객관리/내고객.safe)을 내려받아 복원한다. 이 기기에 데이터가 있으면
-   건드리지 않는다(복원은 빈 기기 전용 — 병합 충돌 원천 차단). 실패 시 고객입력 유도 안내만 표시. */
-let jvMcRestoreTried=false;
-async function jvMcDriveRestore(){
-  if(jvMcRestoreTried)return false;
-  const lid=(meData&&meData.loginId)||'';if(!me||!lid)return false;   /* ★ [2026-07-30] meData 미로드 시 시도 미소진 — 다음 호출에서 재시도 */
-  jvMcRestoreTried=true;
+   종전에는 IndexedDB가 빈 기기에서만 1회 복원해, 이미 데이터가 있는 기기에는 다른 기기의 수정·삭제가
+   반영되지 않았다(오래된 스냅샷·유령 고객). 이제 고객목록을 열 때마다 드라이브 modifiedTime만 확인해
+   (변경 없으면 다운로드 0) 달라졌을 때만 내려받아 이 기기를 드라이브(정본)와 맞춘다.
+   · 삭제 반영: 평시에는 저장소를 비우고 새로 채워 드라이브와 일치시킨다(유령 고객 제거).
+   · 유실 방지: 이 기기에 미푸시 편집(mpc_dirty)이 남아 있으면 삭제 없이 병합만 한다
+     (fc.html 고객입력이 다음 접속에 드라이브를 따라잡은 뒤 자연히 일치).
+   · 마이페이지는 조회 전용(쓰기 없음)이라 드라이브를 정본으로 덮어도 안전하다. fc.html은 불변. */
+let _jvMcTok=null,_jvMcTokAt=0;   // gdAccessToken 캐시(50분) — 탭 전환마다 콜러블 재호출 방지
+let _jvMcKeys=null;               // vault_key 복호화 열쇠 캐시(세션)
+let _jvMcChkAt=0;                 // 자동 확인 스로틀(60초)
+function _jvMcMtKey(){return 'jv_mc_mt:'+((meData&&meData.loginId)||'');}
+function _jvMcNoteOk(extra){
+  const el=$('fcc-drive-note');if(!el)return;
+  const k=new Date(Date.now()+9*3600000);
+  const hm=String(k.getUTCHours()).padStart(2,'0')+':'+String(k.getUTCMinutes()).padStart(2,'0');
+  el.style.display='block';el.style.color='#0F6E56';
+  el.innerHTML='☁ '+(extra||'최신 상태')+' · 확인 '+hm+' <button type="button" onclick="jvMcSyncNow()" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:7px;cursor:pointer">지금 동기화</button>';
+}
+async function _jvMcToken(){
+  const lid=(meData&&meData.loginId)||'';
+  if(_jvMcTok&&(Date.now()-_jvMcTokAt)<50*60000)return _jvMcTok;
+  let pin='';try{pin=localStorage.getItem('cc_pin_fc:'+lid)||'';}catch(_e){}
+  const tk=await httpsCallable(functions,'gdAccessToken')({slug:'fc:'+lid,pin:pin});
+  const td=(tk&&tk.data)||{};if(!td.ok||!td.accessToken)throw new Error('no-token');
+  _jvMcTok=td.accessToken;_jvMcTokAt=Date.now();
+  return _jvMcTok;
+}
+async function jvMcDriveSync(force){
+  const lid=(meData&&meData.loginId)||'';if(!me||!lid)return false;   /* meData 미로드 시 다음 호출에서 재시도 */
+  if(!force&&(Date.now()-_jvMcChkAt)<60000)return false;   /* 60초 내 재확인 생략 — 수동 버튼(force)은 통과 */
+  _jvMcChkAt=Date.now();
   const el=$('fcc-drive-note');
   const note=(t,c)=>{if(el){el.style.display='block';el.style.color=c||'#1B3A5C';el.innerHTML=t;}};
   try{
-    note('☁ 드라이브에서 고객 상세를 불러오는 중…','#8B93AE');
-    let pin='';try{pin=localStorage.getItem('cc_pin_fc:'+lid)||'';}catch(_e){}
-    const tk=await httpsCallable(functions,'gdAccessToken')({slug:'fc:'+lid,pin:pin});
-    const td=(tk&&tk.data)||{};if(!td.ok||!td.accessToken)throw new Error('no-token');
-    const T=td.accessToken;
+    if(jvMcState!=='ok')note('☁ 드라이브에서 고객 상세를 불러오는 중…','#8B93AE');
+    const T=await _jvMcToken();
     const gapi=async p=>{const r=await fetch('https://www.googleapis.com'+p,{headers:{Authorization:'Bearer '+T}});if(!r.ok)throw new Error('drive-'+r.status);return r;};
-    const kr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='vault_key.v1' and trashed=false")+'&spaces=appDataFolder&orderBy=createdTime&fields=files(id)&pageSize=25')).json();
-    const keys=[];for(const f of (kr.files||[])){try{const kd=await(await gapi('/drive/v3/files/'+f.id+'?alt=media')).json();const raw=Uint8Array.from(atob(kd.k),c=>c.charCodeAt(0));keys.push(await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['decrypt']));}catch(_e){}}
-    if(!keys.length)throw new Error('no-key');
+    /* 1) 메타만 조회 — 마지막 동기화와 같으면 여기서 종료 (파일 다운로드 0) */
     const fr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='내고객.safe' and trashed=false")+'&fields=files(id,modifiedTime)&orderBy=modifiedTime desc&pageSize=1')).json();
     const ff=(fr.files||[])[0];
     if(!ff){note('☁ 드라이브에 고객 백업이 아직 없습니다 — <b>고객입력</b>에서 저장하면 자동 생성됩니다.','#8B6914');return false;}
+    let lastMt='';try{lastMt=localStorage.getItem(_jvMcMtKey())||'';}catch(_e){}
+    if(!force&&jvMcState==='ok'&&ff.modifiedTime===lastMt){_jvMcNoteOk('최신 상태');return false;}
+    /* 2) 복호화 열쇠 (세션 캐시) */
+    if(!_jvMcKeys||!_jvMcKeys.length){
+      const kr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='vault_key.v1' and trashed=false")+'&spaces=appDataFolder&orderBy=createdTime&fields=files(id)&pageSize=25')).json();
+      const keys=[];for(const f of (kr.files||[])){try{const kd=await(await gapi('/drive/v3/files/'+f.id+'?alt=media')).json();const raw=Uint8Array.from(atob(kd.k),c=>c.charCodeAt(0));keys.push(await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['decrypt']));}catch(_e){}}
+      if(!keys.length)throw new Error('no-key');
+      _jvMcKeys=keys;
+    }
+    /* 3) 내려받아 복호화 */
     const bytes=new Uint8Array(await(await gapi('/drive/v3/files/'+ff.id+'?alt=media')).arrayBuffer());
     let plain=null;const iv=bytes.slice(0,12),ct=bytes.slice(12);
-    for(const k of keys){try{plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));break;}catch(_e){}}
+    for(const k of _jvMcKeys){try{plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));break;}catch(_e){}}
     if(!plain)throw new Error('decrypt');
     const obj=JSON.parse(new TextDecoder().decode(plain));const list=(obj&&obj.customers)||[];
     if(!list.length){note('☁ 드라이브 백업이 비어 있습니다.','#8B93AE');return false;}
+    /* 4) 반영 — 평시: clear 후 재적재(삭제까지 반영) / mpc_dirty 잔존: 병합만(유실 방지) */
+    let dirty=false;try{dirty=localStorage.getItem('mpc_dirty')==='1';}catch(_e){}
     await new Promise((res,rej)=>{const rq=indexedDB.open('mycustomers_db',1);
       rq.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('customers'))d.createObjectStore('customers',{keyPath:'id'});};
       rq.onerror=()=>rej(rq.error);
-      rq.onsuccess=()=>{const d=rq.result;try{const tx=d.transaction('customers','readwrite'),st=tx.objectStore('customers');list.forEach(c=>{if(c&&c.id)st.put(c);});tx.oncomplete=()=>{d.close();res();};tx.onerror=()=>{d.close();rej(tx.error);};}catch(e){try{d.close();}catch(_e2){}rej(e);}};});
-    note('☁ 드라이브 동기화됨 — 고객 '+list.length+'명의 상세 정보를 이 기기에 복원했습니다.','#0F6E56');
+      rq.onsuccess=()=>{const d=rq.result;try{const tx=d.transaction('customers','readwrite'),st=tx.objectStore('customers');if(!dirty)st.clear();list.forEach(c=>{if(c&&c.id)st.put(c);});tx.oncomplete=()=>{d.close();res();};tx.onerror=()=>{d.close();rej(tx.error);};}catch(e){try{d.close();}catch(_e2){}rej(e);}};});
+    try{localStorage.setItem(_jvMcMtKey(),ff.modifiedTime||'');}catch(_e){}
+    try{if(window.SmsCore&&SmsCore.mcRefresh)SmsCore.mcRefresh();}catch(_e){}   /* 문자발송 번호 폴백 캐시 갱신 */
+    _jvMcNoteOk('동기화됨 — 고객 '+list.length+'명 상세');
     return true;
   }catch(e){
-    console.warn('[mypage] drive restore:',e&&e.message);
-    note('연락처·주소·메모 등 상세 정보가 이 기기에 아직 없습니다. 드라이브를 연결했다면 <b>고객입력(내 채널)</b>을 한 번 열면 자동 복원되고, 아직 연결 전이면 고객입력에서 드라이브를 연결해 주세요 — 연결 후에는 어느 기기에서든 이 화면에 상세가 자동 표시됩니다. <button type="button" onclick="jvGoFc(\'\')" style="margin-left:6px;padding:5px 12px;font-size:11px;font-weight:800;color:#fff;background:#1B3A5C;border:none;border-radius:7px;cursor:pointer">고객입력 열기 →</button>','#8B6914');
+    console.warn('[mypage] drive sync:',e&&e.message);
+    if(jvMcState==='ok'){   /* 상세가 이미 있는 기기 — 확인 실패만 조용히 알리고 기존 표시는 유지 */
+      note('☁ 드라이브 확인에 실패했습니다 — 지금 표시는 이 기기의 마지막 동기화 기준입니다. <button type="button" onclick="jvMcSyncNow()" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:7px;cursor:pointer">다시 시도</button>','#8B6914');
+    }else{
+      note('연락처·주소·메모 등 상세 정보가 이 기기에 아직 없습니다. 드라이브를 연결했다면 <b>고객입력(내 채널)</b>을 한 번 열면 자동 복원되고, 아직 연결 전이면 고객입력에서 드라이브를 연결해 주세요 — 연결 후에는 어느 기기에서든 이 화면에 상세가 자동 표시됩니다. <button type="button" onclick="jvGoFc(\'\')" style="margin-left:6px;padding:5px 12px;font-size:11px;font-weight:800;color:#fff;background:#1B3A5C;border:none;border-radius:7px;cursor:pointer">고객입력 열기 →</button>','#8B6914');
+    }
     return false;
   }
 }
+window.jvMcSyncNow=async function(){   /* [지금 동기화]·[다시 시도] 버튼 — 스로틀·변경검사 무시하고 강제 동기화 */
+  try{await jvMcDriveSync(true);}catch(_e){}
+  try{await jvMcRead();}catch(_e){}
+  try{window.fccRenderTable();}catch(_e){}
+};
 function jvGoFc(hint){   /* 입력·수정은 '고객입력'에서 — 마이페이지는 조회 전용 */
   try{if(hint)toast(hint,'info');}catch(_e){}
   const lid=(meData&&meData.loginId)||'';
@@ -8744,7 +8785,7 @@ window.jvGoFc=jvGoFc;   /* ★ module 스코프 → 인라인 onclick에서 호�
 let _fccAuthWait=0;
 async function loadFcClients(){
   if($('fcc-ct-rows')&&!$('fcc-ct-rows').children.length)fccCtReset();   // 첫 진입 시 상품 입력행 1개 (★ [2026-07-24] 입력 폼 제거 후 널가드)
-  if(!me||!meData){   /* ★ [2026-07-30] meData(프로필)도 대기 — 드라이브 복원(jvMcDriveRestore)이 loginId를 필요로 함 */
+  if(!me||!meData){   /* ★ [2026-07-30] meData(프로필)도 대기 — 드라이브 동기화(jvMcDriveSync)가 loginId를 필요로 함 */
     // 페이지 진입 직후엔 인증 복원(me·meData 설정) 전일 수 있음 — 최대 8회(약 5.6초) 대기 후 재시도
     if(_fccAuthWait<8){
       _fccAuthWait++;
@@ -8769,7 +8810,7 @@ async function loadFcClients(){
      리스트는 즉시 뜬다. 상세(연락처·주소 등)는 병합 완료 후 재렌더로 채움 (fccRenderTable은 상세 부재 널안전) */
   try{window.fccRenderTable();}catch(e){console.error('fccRenderTable error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="13" class="tc">표시 중 오류가 발생했습니다. <button type="button" onclick="loadFcClients()" style="margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer">다시 시도</button></td></tr>';return;}
   try{await jvMcRead();}catch(_e){}   /* ★ [2026-07-24] FC 채널 상세 병합 (읽기 전용 · 실패해도 기본 표는 표시) */
-  if(jvMcState!=='ok'){try{if(await jvMcDriveRestore()){await jvMcRead();}}catch(_e){}}   /* ★ [2026-07-28] 빈 기기 → 드라이브 무음 복원 → 재판독 */
+  try{if(await jvMcDriveSync(false)){await jvMcRead();}}catch(_e){}   /* ★ [2026-08-22] 항상 드라이브 변경 확인(메타 1회) — 달라졌을 때만 내려받아 재판독. 변경 없으면 다운로드 0 */
   try{window.fccRenderTable();}catch(e){console.error('fccRenderTable(merge) error:',e);}   /* 상세 병합 재렌더 — 실패해도 코어 표는 유지 */
 }
 window.loadFcClients=loadFcClients;   /* ★ [2026-08-11] 재시도 버튼(inline onclick)용 전역 등록 */
