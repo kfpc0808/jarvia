@@ -1539,7 +1539,22 @@ let _fbT0 = Date.now();   // ★ 이용 시작 시각 — 사용 후 의견 컨�
 
 /* ===== 렌더러 ===== */
 function elt(t,c){const e=document.createElement(t);if(c)e.className=c;return e;}
-function renderChart(c){const _cnum=function(v){var n=+String(v).replace(/,/g,'');return (isFinite(n)&&String(v).trim()!=='')?n.toLocaleString():v;};const wrap=elt('div','chart');const W=560,H=185,pl=46,pb=32,pt=16,pr=20,plotH=H-pb-pt,plotW=W-pl-pr,max=Math.max(...c.series.flatMap(s=>s.values),1),ns='http://www.w3.org/2000/svg';
+function renderChart(c){
+  /* ★ 형식 방어 (2026-08-24): AI 생성 chart의 구조 이탈(series·values·labels 누락)이 renderChart에서
+     'reading 0' 예외로 번져 생성·저장 전체를 죽이던 결함 — 구조를 보정하고, 복구 불가면 이 차트만 생략(null). */
+  try{
+    if(!c||typeof c!=='object')return null;
+    if(!Array.isArray(c.series)||!c.series.length){
+      if(Array.isArray(c.values))c.series=[{name:c.name||'',values:c.values}];
+      else if(Array.isArray(c.data))c.series=[{name:c.name||'',values:c.data}];
+      else return null;
+    }
+    c.series=c.series.map(function(s){return Array.isArray(s)?{values:s}:((s&&typeof s==='object')?s:{values:[]});});
+    c.series.forEach(function(s){if(!Array.isArray(s.values))s.values=Array.isArray(s.data)?s.data:[];});
+    if(!c.series.some(function(s){return s.values.length;}))return null;
+    if(!Array.isArray(c.labels))c.labels=c.series[0].values.map(function(_,i){return String(i+1);});
+  }catch(_e){return null;}
+  const _cnum=function(v){var n=+String(v).replace(/,/g,'');return (isFinite(n)&&String(v).trim()!=='')?n.toLocaleString():v;};const wrap=elt('div','chart');const W=560,H=185,pl=46,pb=32,pt=16,pr=20,plotH=H-pb-pt,plotW=W-pl-pr,max=Math.max(...c.series.flatMap(s=>s.values),1),ns='http://www.w3.org/2000/svg';
   const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.setAttribute('width','100%');svg.style.maxWidth='520px';svg.style.display='block';svg.style.margin='0 auto';
   const pal=['#2A4A7F','#B0852B','#C0392B'],y=v=>(H-pb)-(v/max)*plotH;
   if(c.chartType==='donut'){const vals=c.series[0].values,tot=vals.reduce((a,b)=>a+(+b||0),0)||1,cx=W/2,cy=H/2+6,rad=58,sw=26,dpal=['#B0852B','#2A4A7F','#C0392B'];
@@ -1655,10 +1670,10 @@ function renderContent(items,idx){
     if(typeof it==='string'){const _mdt=mdTableToStruct(it);if(_mdt){if(idx!=null)deck.slides[idx].content[k]=_mdt;inner=renderTable(_mdt);kind='blk';}else{const s=_cleanStr(it);if(s===''||s==='notes'||s===':'||s==='notes:')return;inner=elt('div','blt');setRich(inner,s);kind='str';if(idx!=null)mkEditable(inner,v=>{deck.slides[idx].content[k]=v;});}}
     else if(it&&it.type==='text'){align=it.align||'left';inner=elt('div','ftx');setLines(inner,it.text||'');kind='text';if(idx!=null)mkEditable(inner,v=>{deck.slides[idx].content[k].text=v;});}
     else if(it&&it.type==='image'){if(it.free)return;align=it.align||'center';inner=elt('div','fimg');const im=elt('img');im.src=it.src||'';if(it.w)im.style.width=it.w+'%';inner.appendChild(im);kind='image';}
-    else if(it&&it.type==='table'){inner=renderTable(it);kind='blk';}
+    else if(it&&it.type==='table'){try{inner=renderTable(it);}catch(_e){inner=null;}if(!inner)return;kind='blk';}   /* ★ 블록 격리(2026-08-24): 표 1개 불량이 자료 전체를 죽이지 않게 */
     else if(it&&it.type==='card'){inner=renderCards(it);kind='blk';}
     else if(it&&it.type==='stat'){inner=renderStats(it);kind='blk';}
-    else if(it&&it.type==='chart'){inner=renderChart(it);kind='blk';}
+    else if(it&&it.type==='chart'){try{inner=renderChart(it);}catch(_e){inner=null;}if(!inner)return;kind='blk';}   /* ★ 블록 격리(2026-08-24): 차트 1개 불량이 생성·저장 전체를 죽이지 않게 */
     else if(it&&it.type==='sim'){inner=renderSim(it);kind='blk';}
     else if(it&&it.type==='calc'){inner=renderCalcButton(it);kind='blk';}
     else if(it&&it.type==='ref'){inner=renderRefCard(it);if(!inner)return;kind='blk';}
