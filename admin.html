@@ -994,6 +994,7 @@
         </table>
       </div>
       <input type="file" id="dr-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleDrAudioUpload(this)">
+      <input type="file" id="dr-short-audio-file" accept=".m4a,audio/*" style="display:none" onchange="handleDrShortAudioUpload(this)">
     </div>
 
     <!-- ═══ 고객 데일리리포트 관리 패널 ═══ -->
@@ -5345,7 +5346,7 @@ window.approveReSignup=approveReSignup;window.revokeReSignup=revokeReSignup;wind
 window.loadDailyReports=loadDailyReports;window.triggerDailyReport=triggerDailyReport;window.downloadDR=downloadDR;window.copyDrLink=copyDrLink;window.deleteSelectedDR=deleteSelectedDR;window.toggleAllDR=toggleAllDR;
 window.loadClientDailyReports=loadClientDailyReports;window.triggerClientDR=triggerClientDR;window.previewClientDR=previewClientDR;window.deleteSelectedCDR=deleteSelectedCDR;window.toggleAllCDR=toggleAllCDR;window.copyCdrAudioScript=copyCdrAudioScript;window.triggerCdrAudioUpload=triggerCdrAudioUpload;window.handleCdrAudioUpload=handleCdrAudioUpload;window.playCdrAudio=playCdrAudio;window.deleteCdrAudio=deleteCdrAudio;
 window.copyCdrShortScript=copyCdrShortScript;window.triggerCdrShortAudioUpload=triggerCdrShortAudioUpload;window.handleCdrShortAudioUpload=handleCdrShortAudioUpload;window.playCdrShortAudio=playCdrShortAudio;window.deleteCdrShortAudio=deleteCdrShortAudio;
-window.copyAudioScript=copyAudioScript;window.copyDrShortScript=copyDrShortScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;
+window.copyAudioScript=copyAudioScript;window.copyDrShortScript=copyDrShortScript;window.triggerDrAudioUpload=triggerDrAudioUpload;window.handleDrAudioUpload=handleDrAudioUpload;window.playDrAudio=playDrAudio;window.deleteDrAudio=deleteDrAudio;window.triggerDrShortAudioUpload=triggerDrShortAudioUpload;window.handleDrShortAudioUpload=handleDrShortAudioUpload;window.playDrShortAudio=playDrShortAudio;window.deleteDrShortAudio=deleteDrShortAudio;
 window.showAddUser=showAddUser;window.createFreeUser=createFreeUser;window.setExpPeriod=setExpPeriod;
 window.migrateUniqueLocks=migrateUniqueLocks;
 window.scanSignupOrphans=scanSignupOrphans;   /* ★ [2026-08-14] 가입 잔재 점검 */
@@ -8946,6 +8947,7 @@ function renderDailyReports(){
     const hasScript=!!(r.audioScript||r.section01_market||r.section02_news);
     const hasAudio=!!r.audioUrl;
     const hasShortScript=!!(r.audioScriptShort);   // ★ [2026-08-22] 5분 압축 스크립트
+    const hasShortAudio=!!(r.audioUrlShort);       // ★ [2026-08-24] 5분 압축 음원
     const fd=r.fileDate||r.id||'';
     return `<tr>
       <td style="text-align:center"><input type="checkbox" class="dr-chk" value="${fd}"></td>
@@ -8963,6 +8965,9 @@ function renderDailyReports(){
         ${hasAudio
           ?`<button class="btn btn-sm btn-sec" onclick="prDownload('${esc(r.audioUrl)}','${fd}_audio.m4a')">🎧 다운</button><button class="btn btn-sm btn-success" onclick="playDrAudio('${esc(r.audioUrl)}')">🎧 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteDrAudio('${fd}')" title="오디오 삭제">✕</button>`
           :`<button class="btn btn-sm btn-sec" onclick="triggerDrAudioUpload('${fd}')" style="border-color:var(--accent);color:var(--accent)">🎧 업로드</button>`}
+        ${(hasShortScript||hasShortAudio)?(hasShortAudio
+          ?`<button class="btn btn-sm btn-sec" onclick="prDownload('${esc(r.audioUrlShort)}','${fd}_short.m4a')">⚡ 다운</button><button class="btn btn-sm btn-success" onclick="playDrShortAudio('${esc(r.audioUrlShort)}')">⚡ 듣기</button><button class="btn btn-sm btn-danger" onclick="deleteDrShortAudio('${fd}')" title="5분 오디오 삭제">✕</button>`
+          :`<button class="btn btn-sm btn-sec" onclick="triggerDrShortAudioUpload('${fd}')" style="border-color:#C9A96E;color:#A68B4B">⚡ 5분 업로드</button>`):''}
       </td>
     </tr>`;
   }).join('');
@@ -9119,6 +9124,60 @@ async function deleteDrAudio(fileDate){
     if(idx>=0)_drList[idx].audioUrl='';
     renderDailyReports();
     toast('오디오 삭제 완료','success');
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
+}
+
+/* ★ [2026-08-24] 5분 압축 오디오 (audioScriptShort → NotebookLM → audioUrlShort)
+   · Storage : daily-reports/{fileDate}_short.{ext}
+   · Firestore: daily_reports/{fileDate}.audioUrlShort
+   · 15분 풀버전(audioUrl) 로직과 완전히 분리 — 서로 영향 없음 */
+let _drShortAudioTarget='';
+function triggerDrShortAudioUpload(fileDate){
+  _drShortAudioTarget=fileDate;
+  const inp=$('dr-short-audio-file');
+  inp.value='';
+  inp.click();
+}
+
+async function handleDrShortAudioUpload(input){
+  const file=input.files[0];
+  if(!file||!_drShortAudioTarget)return;
+  const fd=_drShortAudioTarget;
+  const ext=file.name.split('.').pop()||'m4a';
+  const path=`daily-reports/${fd}_short.${ext}`;
+  toast('⚡ 5분 오디오 업로드 중...','');
+  try{
+    const sRef2=stRef(storage,path);
+    const task=uploadBytesResumable(sRef2,file,{contentType:file.type||'audio/mp4'});
+    task.on('state_changed',null,
+      (err)=>{toast('업로드 실패: '+err.message,'error');},
+      async()=>{
+        const url=await getDownloadURL(task.snapshot.ref);
+        await updateDoc(doc(db,'daily_reports',fd),{audioUrlShort:url});
+        toast('⚡ 5분 요약 오디오 등록 완료!','success');
+        const idx=_drList.findIndex(d=>(d.fileDate||d.id)===fd);
+        if(idx>=0)_drList[idx].audioUrlShort=url;
+        renderDailyReports();
+      }
+    );
+  }catch(e){toast('업로드 오류: '+e.message,'error');}
+}
+
+function playDrShortAudio(url){
+  const w=window.open('','_blank','width=400,height=120');
+  w.document.write('<html><head><title>⚡ 5분 요약 Audio</title></head><body style="margin:20px;font-family:sans-serif"><p style="font-size:14px;margin-bottom:12px">⚡ Daily Report 5분 요약</p><audio controls autoplay style="width:100%" src="'+url+'"></audio></body></html>');
+}
+
+async function deleteDrShortAudio(fileDate){
+  if(!confirm('이 리포트의 5분 요약 오디오를 삭제할까요?'))return;
+  try{
+    const r=_drList.find(d=>(d.fileDate||d.id)===fileDate);
+    if(r&&r.audioUrlShort){try{const p=decodeURIComponent(r.audioUrlShort.match(/\/o\/(.+?)\?/)?.[1]||'');if(p)await deleteObject(stRef(storage,p));}catch(e){console.log('Storage 5분 오디오 삭제 스킵:',e.code);}}
+    await updateDoc(doc(db,'daily_reports',fileDate),{audioUrlShort:''});
+    const idx=_drList.findIndex(d=>(d.fileDate||d.id)===fileDate);
+    if(idx>=0)_drList[idx].audioUrlShort='';
+    renderDailyReports();
+    toast('5분 오디오 삭제 완료','success');
   }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
