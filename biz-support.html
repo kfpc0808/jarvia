@@ -448,6 +448,10 @@ function _unlock(){                                      /* ★ [2026-07-28 v2] 
 }
 function _hadLogin(){ try{ return localStorage.getItem('jarvia_hasLogin')==='1'; }catch(_){ return false; } }
 
+/* ★ [2026-08-24 v3] 자동 새로고침 한도 — 5분 창 안에서 최대 2회 */
+const _RELOAD_KEY='_bizAuthReloadV3', _RELOAD_MAX_N=2, _RELOAD_WINDOW_MS=5*60*1000;
+
+
 onAuthStateChanged(auth, async u=>{
   if(!u){
     /* 진짜 로그아웃의 신호는 '진입 성공 여부'가 아니라 로그인 이력 소멸이다.
@@ -457,22 +461,32 @@ onAuthStateChanged(auth, async u=>{
     if(auth.currentUser) return;                         // 복원됨 → 곧 유저와 함께 재발화
     await new Promise(r=>setTimeout(r,2000));
     if(auth.currentUser) return;
-    /* ★ [2026-07-28 v2] 진입/사용중 공통 1회 한정 자동 새로고침 — 가드 키 분리로 독립 관리.
-       사용 중 오발화는 SDK 인스턴스 자체가 저장소와 어긋난 상태일 수 있어 폴링으로는 복구가
-       안 되며, 새로고침(새 인스턴스가 IndexedDB 재판독)이 확실한 복구 수단이다. */
-    const _guard=_authSettled?'_bizAuthReload2':'_bizAuthReload';
+    /* ★ [2026-08-24 v3] 무한 새로고침 루프 차단 — 횟수+시간창 방식으로 교체.
+       [v2 결함] 인증 성공 시 가드를 삭제했기 때문에 "오발화 → 새로고침 → 인증성공(가드삭제)
+       → 오발화 → 새로고침 …" 순환이 무한 반복될 수 있었다(2026-08-24 시연 중 실제 발생).
+       [v3] 가드를 지우지 않고 { n:횟수, t:최초시각 } 으로 누적한다.
+            _RELOAD_WINDOW_MS 안에서 최대 _RELOAD_MAX_N 회까지만 자동 새로고침하고,
+            초과하면 잠금화면으로 넘겨 사용자가 판단하게 한다.
+            창이 지나면 카운터가 자연 리셋되어 이후 재발 시 다시 자동 복구된다. */
     try{
-      if(!sessionStorage.getItem(_guard)){               // 무한루프 방지 가드
-        sessionStorage.setItem(_guard,'1');
-        console.warn('[biz-support] 인증 오탐 감지('+(_authSettled?'사용 중':'진입 단계')+') — 자동 새로고침으로 복구 시도');
+      const _now=Date.now();
+      let _g={n:0,t:_now};
+      try{ const _raw=sessionStorage.getItem(_RELOAD_KEY); if(_raw) _g=JSON.parse(_raw)||_g; }catch(_){}
+      if(!_g.t || (_now-_g.t)>_RELOAD_WINDOW_MS){ _g={n:0,t:_now}; }   // 시간창 경과 → 리셋
+      if(_g.n < _RELOAD_MAX_N){
+        _g.n++;
+        sessionStorage.setItem(_RELOAD_KEY, JSON.stringify(_g));
+        console.warn('[biz-support] 인증 오탐 감지('+(_authSettled?'사용 중':'진입 단계')+') — 자동 새로고침 복구 '+_g.n+'/'+_RELOAD_MAX_N);
         location.reload(); return;
       }
+      console.warn('[biz-support] 자동 새로고침 한도 초과('+_g.n+'회/'+(_RELOAD_WINDOW_MS/60000)+'분) — 루프 차단, 잠금화면 전환');
     }catch(_){}
     console.warn('[biz-support] 세션 복원 실패(3초 대기 후) — settled:',_authSettled,'referrer:',document.referrer||'(없음)');
     _showLock(); return;
   }
   _authSettled = true;
-  try{ sessionStorage.removeItem('_bizAuthReload'); sessionStorage.removeItem('_bizAuthReload2'); }catch(_){}   // 정상 (재)인증 → 복구 가드 해제 (재발 시 다시 1회 복구 가능)
+  /* ★ [2026-08-24 v3] 인증 성공 시 가드를 삭제하지 않는다 — 삭제가 곧 무한루프의 원인이었다.
+     카운터는 _RELOAD_WINDOW_MS 경과 시 위쪽 로직에서 자연 리셋된다. */
   try{
     const uDoc=await getDoc(doc(db,'users',u.uid));
     if(uDoc.exists() && uDoc.data().role==='free_user' && !BIZ_ALLOW_FREE){
