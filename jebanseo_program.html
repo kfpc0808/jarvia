@@ -217,7 +217,7 @@
   .cards.cvert{flex-direction:column;}.cards.cvert .cd{flex:none;width:100%;}
   .cards.cgrid{display:grid;grid-template-columns:repeat(var(--cgc,3),1fr);}.cards.cgrid .cd{flex:none;}
   .stats.cvert{flex-direction:column;}.stats.cvert .stat{flex:none;width:100%;}
-  .stats{display:flex;gap:12px;margin:4px 0;}
+  .stats{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0;}   /* ★ wrap(2026-08-23): 긴 금액 stat가 캔버스를 뚫던 오버플로 차단 — 4개↑는 2×2로 감김 */
   .stat{flex:1;background:var(--navybg);border:1px solid var(--line);border-radius:12px;padding:16px 12px;text-align:center;}
   .stat .v{font-size:27px;font-weight:800;color:var(--navy);line-height:1.05;}.stat .v .u{font-size:15px;font-weight:700;margin-left:1px;}
   .stat .l{font-size:12px;color:var(--slate);margin-top:7px;font-weight:600;}
@@ -977,7 +977,7 @@
 </div>
 
 <!-- 📖 이용가이드 (jebanseo_guide.html iframe 오버레이) -->
-<div class="modal" id="featmodal" onclick="if(event.target===this)closeFeatGuide()">
+<div class="modal" id="featmodal" onmousedown="this._md=(event.target===this)" onclick="if(this._md&&event.target===this)closeFeatGuide()">
   <div class="featbox">
     <div class="feattop">
       <div class="feattt">📖 제안서AI 이용가이드</div>
@@ -1822,6 +1822,20 @@ function ensureDeckExtras(){
     if(cov.org==null||cov.org===''){let _co='';try{const _q=new URLSearchParams(location.search);_co=(_q.get('company')||'').trim();}catch(_){}cov.org=_co||cov.presenter||'';}
     if(cov.byline==null||cov.byline===''){let _nm='',_ti='';try{const _q=new URLSearchParams(location.search);_nm=(_q.get('name')||'').trim();_ti=(_q.get('title')||'').trim();}catch(_){}cov.byline=(_nm&&_ti)?(_nm+' '+_ti):(_nm||'');}
   }
+  /* ★ 빈 목차 방어 (2026-08-23): AI가 region:'toc' 장을 직접 낸 경우 buildToc가 읽는 items가 비어
+     빈 껍데기로 렌더되던 결함. AI가 content에 쓴 목차 문구가 있으면 items로 이관하고, 없으면 장 제목으로 재생성. */
+  deck.slides.forEach(function(s){
+    if(!s||s.region!=='toc')return;
+    if(Array.isArray(s.items)&&s.items.filter(function(x){return String(x||'').trim();}).length)return;
+    var mig=(Array.isArray(s.content)?s.content:[]).map(function(c){return (typeof c==='string')?c:((c&&(c.text||c.title))||'');})
+      .map(function(t){return String(t).replace(/^\s*\d+[.)]\s*/,'').trim();}).filter(Boolean);
+    s.items=mig.length?mig:deck.slides.filter(function(x){return x&&x.region!=='cover'&&x.region!=='toc'&&!x.consultantOnly;})
+      .map(function(x){return String(x.title||'').replace(/\s*[—:：].*$/,'').trim();}).filter(Boolean);
+    if(s.chip==null||s.chip==='')s.chip='목차';
+    if(s.tocTitle==null||s.tocTitle==='')s.tocTitle='제안 구성';
+    if(s.tocEn==null||s.tocEn==='')s.tocEn='CONTENTS';
+    s.content=[];
+  });
   if(!deck.slides.some(s=>s.region==='toc')){
     const items=deck.slides.filter(s=>s.region!=='cover'&&s.region!=='toc'&&!s.consultantOnly).map(s=>{const t=(s.title||'').replace(/\s*[—:：].*$/,'').trim();return t||(s.title||'');});   /* ★ 컨설턴트 전용 장 목차 제외 (2026-07-31) — 목차는 고객 노출 장 */
     const toc={region:'toc',slideNum:'',chip:'목차',tocTitle:'제안 구성',tocEn:'CONTENTS',items:items,foot:'본 자료는 의사결정을 돕는 참고용입니다.'};
@@ -1913,6 +1927,7 @@ function simOut(k,label,cls){return '<div class="simcell"><span>'+label+'</span>
 /* 모드별 시뮬레이터 설정 — 슬라이드 주제에 맞는 컨트롤만 노출 */
 const SIM_SLIDERS={
   /* ★ C2 (2026-08-23): 신규 배선 대응 3종 시뮬용 */
+  svSal:['대표 연간 보수','억',0.3,20,0.1],svYears:['근속연수','년',1,45,1],svMult:['지급배수(정관)','배',1,3,1],   /* ★ 임원퇴직금 시뮬(2026-08-23) */
   loanEok:['가지급금 잔액','억',0,100,0.5],payM:['월 상환액','만원',50,3000,50],tgtMon:['목표 비상금','개월',1,24,1],reEok:['부동산 자산','억',0,100,0.5],tfin:['목표 금융 비중','%',10,90,5],
   ca:['현재 나이','세',20,80,1],ra:['연금개시 나이','세',40,80,1],le:['계산 종료 나이','세',60,110,1],assetEok:['현재 준비자산','억',0,100,0.1],
   dep:['월 납입액','만원',0,200,5],depy:['납입 기간','년',0,40,1],rate:['적립기 수익률','%',0,10,0.1],rrate:['수령기 수익률','%',0,10,0.1],infl:['물가상승률','%',0,6,0.5],
@@ -1926,7 +1941,7 @@ const SIM_SLIDERS={
   interest:['연 이자소득','만원',0,10000,100],dividend:['연 배당소득','만원',0,10000,100],oth:['다른 종합소득','만원',0,20000,100],pded:['기본·인적공제','만원',0,5000,50],
   tasset:['총 상속재산','억',1,200,0.1],cash:['현금성 비중','%',0,100,5],spouse:['배우자','',0,1,1],child:['자녀 수','명',0,10,1],estateDebt:['채무','억',0,100,0.1],fasset:['금융재산','억',0,100,0.1],funeral:['장례비','만원',500,1000,50]
 };
-const SIM_OUTS={corpus:['적립 총액(은퇴시점·명목)'],recv:['월 예상 수령액(명목)'],futExp:['개시시점 목표 월생활비(명목)'],gap:['월 소득 부족','warn'],years:['수령 기간'],netNeed:['순 사적 월필요'],needCorpus:['필요 목돈'],requiredSave:['목표 위한 월 저축'],saveGap:['월 저축 과부족'],
+const SIM_OUTS={svTotal:['예상 임원퇴직금(§44 골격)'],svBase:['배수 1배 기준'],svGap:['규정 정비로 늘어나는 몫'],corpus:['적립 총액(은퇴시점·명목)'],recv:['월 예상 수령액(명목)'],futExp:['개시시점 목표 월생활비(명목)'],gap:['월 소득 부족','warn'],years:['수령 기간'],netNeed:['순 사적 월필요'],needCorpus:['필요 목돈'],requiredSave:['목표 위한 월 저축'],saveGap:['월 저축 과부족'],
   needCover:['필요 보장액'],gapCover:['부족 보장액','warn'],
   taxMode:['과세 방식'],taxAmt:['예상 세금(연)'],margRate:['적용 한계세율'],
   estTax:['예상 상속세'],liquidity:['납부 가능 유동성'],gapLiq:['유동성 부족','warn'], wholeTotal:['종신 총납입'],termTotal:['정기 총납입'],saved:['정기 선택 시 절감'],investFV:['정기+차액투자 만기적립'], ciNeed:['필요 진단자금'],ciGap:['모자란 진단보장','warn'],ciLoss:['치료 중 못 버는 소득'], affProtRatio:['보장성 보험료 비율'],affTotalRatio:['전체 보험료 비율'],affRecommend:['권장 보험료'],affHeadroom:['추가 가입 여력'], chNeed:['필요 자녀보장'],chGap:['모자란 자녀보장','warn'], medNoIns:['실손 없을 때 부담'],medWithIns:['실손 있을 때 부담'],medAnnualBen:['연 절감액'],medCumBen:['기간 누적 절감']};
@@ -1946,9 +1961,10 @@ const SIM_MODES={
   medicalexpense:{d:'medicalexpense',t:'의료비 노출(실손) 시뮬레이션',s:['medAnnual','medCovered','medCopayCov','medCopayNon','medYears','medInfl'],o:['medNoIns','medWithIns','medAnnualBen','medCumBen'],bar:false},
   tax:{d:'asset',t:'과세 시뮬레이션',s:['interest','dividend','oth','pded'],o:['taxMode','taxAmt','margRate'],bar:false},
   estate:{d:'corporate',t:'상속·유동성 시뮬레이션',s:['tasset','cash','spouse','child','estateDebt','fasset','funeral'],o:['estTax','liquidity','gapLiq'],bar:true,bl:['상속세','유동성']},
+  severance:{d:'severance',t:'임원퇴직금 시나리오',sub:'보수·근속·정관 배수를 바꾸면 §44 골격 추정치가 즉시 재계산됩니다 — 정관 확인 전 구조 참고용.',s:['svSal','svYears','svMult'],o:['svTotal','svBase','svGap'],bar:false},
   yearly:{d:'pension',t:'연도별 노후 현금흐름 시뮬레이션',sub:'은퇴 후 매년 목표 생활비·예상 연금·부족분을 공용 계산기로 즉시 계산합니다.',s:['ra','le','pen','exp','infl','pinfl'],yearly:true}
 };
-const SIM_DEF={loanEok:5,payM:500,tgtMon:6,reEok:5,tfin:40,ca:40,ra:65,le:90,assetEok:1,infl:2.5,exp:300,pen:120,pinfl:1,dep:50,depy:25,rate:5,rrate:3.5,surv:300,supy:20,edu:1,cover:0,debtEok:0,emergencyEok:0,liquidEok:0,irate:4,iinfl:2.5,wholePrem:0,termPrem:0,payY:20,investR:4,ciTreat:3000,ciRecov:12,ciIncome:500,ciLossRate:60,ciExtra:0,ciExisting:1000,affIncome:500,affProt:35,affSav:0,affTarget:10,affMax:12,chDiag:2000,chDaily:5,chDays:30,chSurg:500,chEdu:0,chExisting:0,medAnnual:500,medCovered:60,medCopayCov:20,medCopayNon:30,medYears:10,medInfl:4,interest:1000,dividend:0,oth:5000,pded:150,tasset:30,cash:20,spouse:1,child:2,estateDebt:0,fasset:0,funeral:500};
+const SIM_DEF={loanEok:5,payM:500,tgtMon:6,reEok:5,tfin:40,ca:40,ra:65,le:90,assetEok:1,infl:2.5,exp:300,pen:120,pinfl:1,dep:50,depy:25,rate:5,rrate:3.5,surv:300,supy:20,edu:1,cover:0,debtEok:0,emergencyEok:0,liquidEok:0,irate:4,iinfl:2.5,wholePrem:0,termPrem:0,payY:20,investR:4,ciTreat:3000,ciRecov:12,ciIncome:500,ciLossRate:60,ciExtra:0,ciExisting:1000,affIncome:500,affProt:35,affSav:0,affTarget:10,affMax:12,chDiag:2000,chDaily:5,chDays:30,chSurg:500,chEdu:0,chExisting:0,medAnnual:500,medCovered:60,medCopayCov:20,medCopayNon:30,medYears:10,medInfl:4,interest:1000,dividend:0,oth:5000,pded:150,tasset:30,cash:20,spouse:1,child:2,estateDebt:0,fasset:0,funeral:500,svSal:1.2,svYears:20,svMult:3};
 // 엔진 뷰별로 '실제 계산되는 출력'만 정의 → custom 출력은 이 안에서만 허용(틀린 표시 방지)
 var ENGINE_VIEW_OUTS={
   pension:{ full:['corpus','recv','futExp','requiredSave'], accum:['corpus','recv'], payout:['corpus','recv','years'], gap:['futExp','recv','requiredSave','gap'] },
@@ -2197,14 +2213,14 @@ function renderSim(it){const cfg=(it.mode==='custom')?buildCustomSimCfg(it):(SIM
 /* 분야별 기본 모드 / 시작값 */
 function simDefaultMode(){return ({'연금설계':'full','보험설계':'cover','자산관리':'tax','기업컨설팅':'estate'})[topic]||'full';}
 function simDefaults(){const p=params||{};const o={ca:+p.age||40,ra:+p.retire||65,le:+p.lifeExpectancy||90,assetEok:(+p.asset>0?Math.round((+p.asset/10000)*10)/10:1),exp:+p.desiredMonthlyExpense||300,pen:+p.ssMonthly||120,rate:+p.expectedReturn||5,rrate:+p.receiveRate||3.5,infl:+p.inflationRate||2.5};const E=v=>(+v>0?Math.round((+v/10000)*10)/10:null);const set=(k,v)=>{if(v!=null&&!Number.isNaN(v))o[k]=v;};/* 보험: 값이 있을 때만 채움(없으면 SIM_DEF 기본값 유지) */set('loanEok',E(p.loanAmount));set('reEok',E(p.realEstate));set('fasset',E(p.financialAssets));   /* ★ C2 시드 */
-set('surv',+p.survivorMonthly||null);set('supy',+p.supportYears||null);set('edu',E(p.eduCost));set('cover',E(p.existingCover));set('debtEok',E(p.debt));set('liquidEok',E(p.asset));set('emergencyEok',(function(){var v=+p.emergencyFund||0;if(v>=1e6)v=v/10000;return v>0?Math.round(v/10000*10)/10:null;})());set('irate',+p.discountRate||null);set('iinfl',+p.inflationRate||null);set('ciTreat',+p.treatmentCost||null);set('ciRecov',+p.recoveryMonths||null);set('ciIncome',+p.monthlySalary||null);set('ciLossRate',+p.incomeLossRate||null);set('ciExisting',+p.existingDiagnosisBenefit||null);set('affIncome',+p.monthlySalary||null);set('affProt',+p.protectionPremium||null);set('affSav',+p.savingsPremium||null);set('chDiag',+p.childDiagnosisCost||null);set('medAnnual',+p.annualMedicalCost||null);set('wholePrem',+p.wholeLifePremium||null);set('termPrem',+p.termPremium||null);set('payY',+p.payYears||null);/* 기업: 값이 있을 때만 채움 */set('tasset',E(p.totalAsset));set('cash',(+p.cashRatio>=0?+p.cashRatio:null));if(p.hasSpouse===true||p.hasSpouse==='true')o.spouse=1;else if(p.hasSpouse===false||p.hasSpouse==='false')o.spouse=0;set('child',+p.numChildren||null);set('fasset',E(p.estateFinancial));/* 상속 금융재산 만원→억 */set('estateDebt',E(p.estateDebt));/* 피상속인 채무 만원→억 */set('funeral',(+p.funeralCost>0?+p.funeralCost:null));/* 장례비(만원) — 슬라이더 단위 동일 *//* 연금: 월납입·납입기간 */set('dep',+p.monthlyDeposit||null);set('depy',+p.depositYears||null);/* 자산: 금융소득 분해 */var _intr=+p.interestIncome||+p.finIncome||0;if(_intr>0||+p.dividendIncome>0){set('interest',_intr);set('dividend',+p.dividendIncome||0);set('oth',+p.otherIncome||0);}return o;}
+set('surv',+p.survivorMonthly||null);set('supy',+p.supportYears||null);set('edu',E(p.eduCost));set('cover',E(p.existingCover));set('debtEok',E(p.debt));set('liquidEok',E(p.asset));set('emergencyEok',(function(){var v=+p.emergencyFund||0;if(v>=1e6)v=v/10000;return v>0?Math.round(v/10000*10)/10:null;})());set('irate',+p.discountRate||null);set('iinfl',+p.inflationRate||null);set('ciTreat',+p.treatmentCost||null);set('ciRecov',+p.recoveryMonths||null);set('ciIncome',+p.monthlySalary||null);set('ciLossRate',+p.incomeLossRate||null);set('ciExisting',+p.existingDiagnosisBenefit||null);set('affIncome',+p.monthlySalary||null);set('affProt',+p.protectionPremium||null);set('affSav',+p.savingsPremium||null);set('chDiag',+p.childDiagnosisCost||null);set('medAnnual',+p.annualMedicalCost||null);set('wholePrem',+p.wholeLifePremium||null);set('termPrem',+p.termPremium||null);set('payY',+p.payYears||null);/* 기업: 값이 있을 때만 채움 */set('tasset',E(p.totalAsset));set('svSal',E(p.ceoSalary));set('svYears',+p.serviceYears||null);set('svMult',(+p.severanceMultiple>=1&&+p.severanceMultiple<=3)?+p.severanceMultiple:null);set('cash',(+p.cashRatio>=0?+p.cashRatio:null));if(p.hasSpouse===true||p.hasSpouse==='true')o.spouse=1;else if(p.hasSpouse===false||p.hasSpouse==='false')o.spouse=0;set('child',+p.numChildren||null);set('fasset',E(p.estateFinancial));/* 상속 금융재산 만원→억 */set('estateDebt',E(p.estateDebt));/* 피상속인 채무 만원→억 */set('funeral',(+p.funeralCost>0?+p.funeralCost:null));/* 장례비(만원) — 슬라이더 단위 동일 *//* 연금: 월납입·납입기간 */set('dep',+p.monthlyDeposit||null);set('depy',+p.depositYears||null);/* 자산: 금융소득 분해 */var _intr=+p.interestIncome||+p.finIncome||0;if(_intr>0||+p.dividendIncome>0){set('interest',_intr);set('dividend',+p.dividendIncome||0);set('oth',+p.otherIncome||0);}return o;}
 /* 분야별 시뮬레이터 메뉴 [모드, 이름, 설명, 배지] */
 /* ═══ ★ C3 (2026-08-22): 자료 목적·용도 — 서버 domainKnowledge.PURPOSES/STAGES와 "문구 동일" 복제.
    서버가 화이트리스트로 검증하므로 여기 문구를 바꾸면 반드시 서버 상수도 함께 바꿀 것. */
 const JB_PURPOSES={
   "연금설계":["노후 부족액 진단","3층 연금 점검","은퇴 크레바스 대비","연금 수령전략 비교","세액공제·절세 활용","은퇴자산 배분","주택연금 검토","조기은퇴 설계","부부 합산 설계"],
-  "보험설계":["보장 공백 진단","사망보장 설계","진단비 보강","실손·의료비 점검","보험료 리모델링","은퇴 후 보장 유지","자녀 보장 설계","CEO·키맨 보장","보험의 상속·증여 활용"],
-  "자산관리":["자산배분 재설계","부동산 편중 해소","목돈 운용 방향","절세계좌 활용","금융소득 세금 점검","부채 상환 전략","은퇴 준비 점검","목적자금 마련"],
+  "보험설계":["보장 공백 진단","사망보장 설계","진단비 보강","실손·의료비 점검","보험료 리모델링","은퇴 후 보장 유지","자녀 보장 설계","CEO·키맨 보장","보험의 상속·증여 활용","간병·장기요양 대비"],
+  "자산관리":["자산배분 재설계","부동산 편중 해소","목돈 운용 방향","절세계좌 활용","금융소득 세금 점검","부채 상환 전략","은퇴 준비 점검","목적자금 마련","상속·증여 이전 설계"],
   "기업컨설팅":["가지급금 정리","미처분잉여금 관리","임원 퇴직금 설계","가업승계 준비","상속세 납부재원","지분 구조 정리","법인세 절감","CEO 유고 대비","임원 보수 설계","기업보험 활용"]};
 const JB_STAGES=[["first","첫 상담"],["main","본 상담"],["closing","클로징"],["after","사후관리"],["seminar","세미나"]];
 var _jbPurpose={picks:[],stage:'',free:''};
@@ -2218,6 +2234,17 @@ function togglePurpose(name){var i=_jbPurpose.picks.indexOf(name);
 function setPurposeStage(k){_jbPurpose.stage=(_jbPurpose.stage===k)?'':k;renderPurposePanel();}
 function setPurposeFree(v){_jbPurpose.free=v;}
 function renderPurposePanel(){var el=document.getElementById('purposePanel');if(!el)return;
+  /* ★ 미인식 상태 (2026-08-23): 기본값 '연금설계'의 칩이 확정 분야처럼 노출되던 표시 모순 제거.
+     힌트 영역(paintTopicHint)과 동일한 판정 — 미인식이면 칩 대신 4분야 태그를 보여주고,
+     태그 클릭 = pickDom 재사용(분야 타일·재무 첨부·플레이스홀더까지 전부 동기화). */
+  var _known=(typeof _startTouched!=='undefined'&&_startTouched)||(typeof _startAutoTopic!=='undefined'&&!!_startAutoTopic);
+  if(!_known){
+    var tags=Object.keys(JB_PURPOSES).map(function(t){
+      return '<button type="button" class="ppc" onclick="ppPickDomain(\''+t+'\')">'+t+'</button>';}).join('');
+    el.innerHTML='<details class="ppbox"><summary>🎯 이 자료의 목적 <span class="ppsub">분야가 인식되면 그 분야의 목적이 표시됩니다 — 또는 바로 고르세요</span></summary>'
+      +'<div class="pprow">'+tags+'</div></details>';
+    return;
+  }
   var list=JB_PURPOSES[startTopic]||[];
   /* 분야가 바뀌면 이전 분야 전용 선택은 자동 제거(화이트리스트 정합) */
   _jbPurpose.picks=_jbPurpose.picks.filter(function(x){return list.indexOf(x)>=0;});
@@ -2232,12 +2259,20 @@ function renderPurposePanel(){var el=document.getElementById('purposePanel');if(
     +'<div class="pprow ppstage"><span class="pplb">용도</span>'+stages+'</div>'
     +'<div class="pprow"><input class="ppfree" maxlength="200" placeholder="직접 입력 (예: 사모님도 함께 보시는 자리)" value="'+String(_jbPurpose.free||'').replace(/"/g,'&quot;')+'" oninput="setPurposeFree(this.value)"></div></details>';}
 window.togglePurpose=togglePurpose;window.setPurposeStage=setPurposeStage;window.setPurposeFree=setPurposeFree;
+function ppPickDomain(t){   /* ★ 목적 패널 분야 태그 (2026-08-23) — 기존 pickDom 경로 재사용 */
+  var tile=document.querySelector('#doms .dom[data-t="'+t+'"]');
+  if(tile&&typeof pickDom==='function'){pickDom(tile);}
+  else{startTopic=t;if(typeof _startTouched!=='undefined')_startTouched=true;
+    if(typeof syncDomTiles==='function')syncDomTiles();if(typeof updateIdFields==='function')updateIdFields();
+    if(typeof updateFinancialUI==='function')updateFinancialUI();if(typeof paintTopicHint==='function')paintTopicHint();}
+  renderPurposePanel();}
+window.ppPickDomain=ppPickDomain;
 
 const SIM_PICK={
-  '연금설계':[['yearly','연도별 노후 현금흐름','나이별(은퇴~종료)로 매년 목표생활비·예상연금·부족분이 어떻게 달라지는지 표로 보여줍니다.','NEW'],['full','종합 시뮬레이션','적립·수령·은퇴 후 부족분을 한 화면에서 — 납입·기간·수익률·은퇴나이 조절.'],['gap','부족액 집중','은퇴 후 월 부족분에 초점을 맞춘 간결한 버전.'],['accum','적립 시뮬레이션','현재자산·납입액·기간·적립/수령 수익률·물가를 확인해 형성 자산과 예상 월수령액을 봅니다.']],
+  '연금설계':[['yearly','연도별 노후 현금흐름','나이별(은퇴~종료)로 매년 목표생활비·예상연금·부족분이 어떻게 달라지는지 표로 보여줍니다.','NEW'],['full','종합 시뮬레이션','적립·수령·은퇴 후 부족분을 한 화면에서 — 납입·기간·수익률·은퇴나이 조절.'],['gap','부족액 집중','은퇴 후 월 부족분에 초점을 맞춘 간결한 버전.'],['accum','적립 시뮬레이션','현재자산·납입액·기간·적립/수령 수익률·물가를 확인해 형성 자산과 예상 월수령액을 봅니다.'],['payout','수령 시뮬레이션','모은 돈으로 매달 얼마씩 받을지 — 수령 수익률·기간을 반영해 계산.']],
   '보험설계':[['cover','보장 분석','유족 생활비·자녀 교육비 대비 필요 보장액과 부족분.'],['termcompare','종신·정기 비교','종신·정기 보험료 차이를 투자하면 만기에 얼마가 되는지.'],['criticalillness','중대질병(진단) 필요액','암·뇌·심장 진단 시 치료비와 소득공백까지 필요한 진단자금.'],['childinsurance','자녀보험 필요액','자녀 진단·입원·수술 대비 필요 보장과 부족분.'],['affordability','보험료 부담률','월소득 대비 보험료 비율과 추가 가입 여력.'],['medicalexpense','의료비 노출(실손)','실손 유무에 따른 의료비 부담 차이.']],
-  '자산관리':[['tax','금융소득 과세','분리/종합과세 여부·예상 세액·한계세율을 즉시 계산.'],['efund','비상금 점검','월 지출 대비 유동자산이 몇 달치인지 — 부족·여유를 즉시 확인.','NEW'],['shift','배분 이동','목표 금융 비중까지 부동산에서 얼마를 옮기면 되는지.','NEW']],
-  '기업컨설팅':[['estate','상속·유동성','상속세 vs 현금 유동성 — 납부 재원 부족분을 봅니다.'],['loanfix','가지급금 상환 계획','매월 얼마씩 갚으면 언제 끝나는지 — 첫해 인정이자 부담과 함께.','NEW']]
+  '자산관리':[['tax','금융소득 과세','분리/종합과세 여부·예상 세액·한계세율을 즉시 계산.'],['efund','비상금 점검','월 지출 대비 유동자산이 몇 달치인지 — 부족·여유를 즉시 확인.','NEW'],['shift','배분 이동','목표 금융 비중까지 부동산에서 얼마를 옮기면 되는지.','NEW'],['gap','은퇴 부족액 점검','은퇴 후 월 부족분에 초점 — 자산 운용 방향의 출발점.']],
+  '기업컨설팅':[['estate','상속·유동성','상속세 vs 현금 유동성 — 납부 재원 부족분을 봅니다.'],['loanfix','가지급금 상환 계획','매월 얼마씩 갚으면 언제 끝나는지 — 첫해 인정이자 부담과 함께.','NEW'],['severance','임원퇴직금 시나리오','정관 배수 1~3배로 퇴직금이 얼마나 달라지는지 — §44 골격 추정.','NEW']]
 };
 /* ===== 🧮 자비아 계산기 연결 — 슬라이드에 버튼 삽입, 클릭 시 새창으로 라이브 계산기 ===== */
 /* URL은 GitHub 실제 파일명 기준(공백은 %20). 인터넷 연결 시 작동, 항상 최신. */
@@ -2400,7 +2435,7 @@ function showCalcConfirm(name,url){
       '<div class="ccf-btns"><button type="button" class="ccf-cancel">취소</button><button type="button" class="ccf-ok">계산기 열기 →</button></div>'+
       '</div>';
     document.body.appendChild(ov);
-    ov.addEventListener('click',function(e){if(e.target===ov)ov.classList.remove('on');});
+    ov.addEventListener('mousedown',function(e){ov._mdSelf=(e.target===ov);});ov.addEventListener('click',function(e){if(ov._mdSelf&&e.target===ov)ov.classList.remove('on');});   /* ★ 드래그 가드(2026-08-23) */
     ov.querySelector('.ccf-cancel').addEventListener('click',function(){ov.classList.remove('on');});
   }
   ov.querySelector('.ccf-title').textContent=name||'계산기';
@@ -2413,7 +2448,7 @@ function _simModal(){
   let ov=document.getElementById('simpick');
   if(!ov){ov=document.createElement('div');ov.className='modal';ov.id='simpick';
     ov.innerHTML='<div class="mbox"><div class="mhead"><b id="sc-head">🎚 시뮬레이터 추가</b><button class="mx" onclick="closeSimPick()">✕</button></div><div class="mlist" id="simpicklist"></div></div>';
-    document.body.appendChild(ov);ov.addEventListener('click',e=>{if(e.target===ov)closeSimPick();});}
+    document.body.appendChild(ov);var _mdOv=false;ov.addEventListener('mousedown',function(e){_mdOv=(e.target===ov);});ov.addEventListener('click',function(e){if(_mdOv&&e.target===ov)closeSimPick();});}   /* ★ 드래그 가드(2026-08-23): 입력창에서 긁다 바깥에서 떼면 닫히던 결함 — mousedown 출처까지 확인 */
   return ov;
 }
 /* ★ 시뮬레이터 문맥 추천 (2026-08-22)
@@ -2424,7 +2459,7 @@ function _simModal(){
 let _simCtxIdx=null;
 const SIM_Q={loanfix:'매월 얼마씩 갚으면 언제 끝날까?',efund:'비상금은 몇 달치가 안전할까?',shift:'부동산을 얼마나 옮기면 될까?',
   yearly:'해마다 얼마나 부족해질까?', full:'조건을 바꾸면 노후가 어떻게 달라질까?',
-  gap:'은퇴 후 매달 얼마가 부족할까?', accum:'월 얼마씩 넣으면 얼마가 될까?', payout:'모은 돈으로 매달 얼마씩 받을까?',
+  gap:'은퇴 후 매달 얼마가 부족할까?', accum:'월 얼마씩 넣으면 얼마가 될까?', payout:'모은 돈으로 매달 얼마씩 받을까?', severance:'퇴직금, 배수에 따라 얼마나 달라질까?',
   cover:'가족에게 필요한 보장은 얼마일까?', termcompare:'종신 대신 정기+투자라면?',
   criticalillness:'큰 병 진단을 받으면 얼마가 필요할까?', childinsurance:'아이 보장, 얼마면 충분할까?',
   affordability:'보험료, 소득 대비 적정할까?', medicalexpense:'실손이 없다면 의료비는 얼마나 될까?',
@@ -2435,7 +2470,7 @@ const SIM_CTX_KW={loanfix:/가지급|대여금|인정이자|상환/,efund:/비�
   accum:/적립|납입|모으|복리|쌓/, payout:/수령|인출|개시|받는/,
   cover:/보장|유족|사망|가족|필요\s*보장/, termcompare:/종신|정기/, criticalillness:/진단|암|중대질병|뇌|심장|3대/,
   childinsurance:/자녀|어린이|태아/, affordability:/보험료|부담|여력/, medicalexpense:/실손|의료비/,
-  tax:/과세|세금|금융소득|종합과세|절세|세후/, estate:/상속|승계|가업|유동성|납부\s*재원|지분/
+  tax:/과세|세금|금융소득|종합과세|절세|세후/, estate:/상속|승계|가업|유동성|납부\s*재원|지분/, severance:/퇴직금|퇴직급여|배수|정관/
 };
 function _simSlideHay(s){return ((s.title||'')+' '+(s.eyebrow||'')+' '+(s.conclusion||'')+' '+(s.content||[]).map(function(c){return (c&&(c.text||c.title||''))||'';}).join(' '));}
 function openSimPicker(ctxIdx){if(!requireSaved())return;
@@ -3183,7 +3218,7 @@ async function generate(){
     if(calcOmissions.length) aiReply(calcOmissionWarnHtml(calcOmissions));
     (function(){var _sc=_jbDeckScan(auditFlags)||{};   /* ★ D1 관측 강화(2026-08-23): 배선 발동·본문 장수를 신호로 */
       try{_sc.calcKeys=Object.keys((data&&data.calc)||{}).filter(function(k){var v=data.calc[k];return v&&typeof v==='object'&&!v.error;});}catch(_e){}
-      try{_sc.bodyN=(deck.slides||[]).filter(function(s){return s&&!s.consultantOnly&&s.region!=='cover'&&!/^(현황|마무리|전용|근거)/.test(String(s.eyebrow||''))&&!/목차/.test(String(s.title||''));}).length;}catch(_e){}
+      try{_sc.bodyN=(deck.slides||[]).filter(function(s){return s&&!s.consultantOnly&&s.region!=='cover'&&s.region!=='toc'&&!/^(현황|마무리|전용|근거|참고|목차)/.test(String(s.eyebrow||''))&&!/목차/.test(String(s.title||''));}).length;}catch(_e){}
       _jbSignal('gen',_sc);})();   /* ★ D1: 생성 직후 스냅샷 — 정밀산출 지도·제목·위젯·감사 + calcKeys·bodyN */
     showSavePrompt();                              // ★ 생성 완료 → 저장 유도 팝업 (저장해야 과금·확정)
     refreshQuota();
@@ -6213,6 +6248,9 @@ function calcCI(d){return calc('criticalillness',{treatmentCost:num(d.ciTreat)*M
 function calcAfford(d){return calc('affordability',{monthlyIncome:num(d.affIncome)*MAN,protectionPremium:num(d.affProt)*MAN,savingsPremium:num(d.affSav)*MAN,targetRate:num(d.affTarget)/100,maxRate:num(d.affMax)/100});}
 function calcChild(d){return calc('childinsurance',{diagnosisCost:num(d.chDiag)*MAN,hospitalDailyCost:num(d.chDaily)*MAN,expectedHospitalDays:num(d.chDays),surgeryReserve:num(d.chSurg)*MAN,eduContinuity:num(d.chEdu)*MAN,existingChildCoverage:num(d.chExisting)*MAN});}
 function calcMed(d){return calc('medicalexpense',{annualMedicalCost:num(d.medAnnual)*MAN,coveredRate:num(d.medCovered)/100,copayCovered:num(d.medCopayCov)/100,copayNonCovered:num(d.medCopayNon)/100,years:num(d.medYears),medicalInflation:num(d.medInfl)/100});}
+  function calcSeverance(d){var r=calc('severancegap',{salMan:num(d.svSal)*10000,years:num(d.svYears),mult:num(d.svMult)});
+    if(!r||r.calculated===false)return r||fail('severancegap');
+    return{calculated:true,svTotal:r.severanceMan*MAN,svBase:r.statutoryBaseMan*MAN,svGap:r.gapVsBaseMan*MAN,warnings:r.warnings||[]};}
   function calcAsset(d){return calc('financialIncome',{interestIncome:num(d.interest)*MAN,dividendIncome:num(d.dividend)*MAN,otherIncome:num(d.oth)*MAN,personalDeduction:num(d.pded)*MAN});}
   /* ★ C2 (2026-08-23): 신규 3종 — 위젯 내장 간이 산식. 세부담 정밀치는 본문 계산결과(서버) 몫이며,
      여기서는 고객 앞 '감 잡기'용 즉시 반응만 담당한다. 인정이자율 4.6%는 당좌대출이자율 가정(warnings 표기). */
@@ -6244,9 +6282,10 @@ function calcMed(d){return calc('medicalexpense',{annualMedicalCost:num(d.medAnn
     corporate:{calc:calcCorp,fmt:{estTax:eok,liquidity:eok,gapLiq:eok},barfmt:eok,barpre:''},
     loanfix:{calc:calcLoanfix,fmt:{doneY:function(v){return (Math.round(v*10)/10)+'년';},firstInt:function(v){return man(v)+'/년';},totalPay:eok}},
     efund:{calc:calcEfund,fmt:{needF:man,haveM:function(v){return (Math.round(v*10)/10)+'개월치';},gapF:man},barfmt:man,barpre:''},
-    shift:{calc:calcShift,fmt:{nowFin:pctf,moveAmt:eok,afterRe:pctf}}
+    shift:{calc:calcShift,fmt:{nowFin:pctf,moveAmt:eok,afterRe:pctf}},
+    severance:{calc:calcSeverance,fmt:{svTotal:eok,svBase:eok,svGap:eok}}   /* ★ 2026-08-23: 공용 계산기 severancegap — 서버 배선과 단일 소스 */
   };
-  var UNIT={loanEok:'억',payM:'만원',tgtMon:'개월',reEok:'억',tfin:'%',ca:'세',ra:'세',le:'세',assetEok:'억',dep:'만원',depy:'년',rate:'%',rrate:'%',infl:'%',exp:'만원',pen:'만원',pinfl:'%',surv:'만원',supy:'년',edu:'억',cover:'억',debtEok:'억',emergencyEok:'억',liquidEok:'억',irate:'%',iinfl:'%',interest:'만원',dividend:'만원',oth:'만원',pded:'만원',tasset:'억',cash:'%',spouse:'',child:'명',estateDebt:'억',fasset:'억',funeral:'만원',wholePrem:'만원',termPrem:'만원',payY:'년',investR:'%',ciTreat:'만원',ciRecov:'개월',ciIncome:'만원',ciLossRate:'%',ciExtra:'만원',ciExisting:'만원',affIncome:'만원',affProt:'만원',affSav:'만원',affTarget:'%',affMax:'%',chDiag:'만원',chDaily:'만원',chDays:'일',chSurg:'만원',chEdu:'만원',chExisting:'만원',medAnnual:'만원',medCovered:'%',medCopayCov:'%',medCopayNon:'%',medYears:'년',medInfl:'%'};
+  var UNIT={loanEok:'억',payM:'만원',tgtMon:'개월',reEok:'억',tfin:'%',ca:'세',ra:'세',le:'세',assetEok:'억',dep:'만원',depy:'년',rate:'%',rrate:'%',infl:'%',exp:'만원',pen:'만원',pinfl:'%',surv:'만원',supy:'년',edu:'억',cover:'억',debtEok:'억',emergencyEok:'억',liquidEok:'억',irate:'%',iinfl:'%',interest:'만원',dividend:'만원',oth:'만원',pded:'만원',tasset:'억',cash:'%',spouse:'',child:'명',estateDebt:'억',fasset:'억',funeral:'만원',wholePrem:'만원',termPrem:'만원',payY:'년',investR:'%',ciTreat:'만원',ciRecov:'개월',ciIncome:'만원',ciLossRate:'%',ciExtra:'만원',ciExisting:'만원',affIncome:'만원',affProt:'만원',affSav:'만원',affTarget:'%',affMax:'%',chDiag:'만원',chDaily:'만원',chDays:'일',chSurg:'만원',chEdu:'만원',chExisting:'만원',medAnnual:'만원',medCovered:'%',medCopayCov:'%',medCopayNon:'%',medYears:'년',medInfl:'%',svSal:'억',svYears:'년',svMult:'배'};
   function slabel(k,v){if(k==='spouse')return (+v?'있음':'없음');if(UNIT[k]==='%')return (+v).toFixed(1)+'%';return (+v).toLocaleString()+(UNIT[k]||'');}
   var VARS=Object.keys(UNIT);
   function readData(root){var d={_mode:root.getAttribute('data-mode')||'full'};for(var i=0;i<VARS.length;i++){var k=VARS[i],s=q(root,'[data-k="'+k+'"]');d[k]=s?s.value:root.getAttribute('data-'+k);}return d;}

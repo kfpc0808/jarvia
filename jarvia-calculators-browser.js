@@ -1570,6 +1570,7 @@ function calcLifeInsuranceNeed(params) {
     existingCoverage: Math.max(0, existingCoverage),
     offset,
     requiredCoverageGap: gap,
+    returnRate, inflationRate,
     summary: {
       totalNeed_억: _round억(totalNeed),
       offset_억: _round억(offset),
@@ -8999,6 +9000,28 @@ function _calcRebalancingPlan(input) {
   return { calculated: true, total, trades, buyTotal: trades.reduce((s,t)=>s+Math.max(0,t.trade),0), sellTotal: trades.reduce((s,t)=>s+Math.max(0,-t.trade),0) };
 }
 
+/* ★ 임원퇴직금 배수 골격 (2026-08-23): C1 배선(제안서AI)·라이브 시뮬 공용.
+   법인세법 시행령 §44 구조 추정 — 직전 1년 총급여 × 10% × 근속 × 배수. 정관·3년평균·소득세법상
+   한도(현행 2배) 확인 전에는 estimateOnly. 입력·출력 단위: 만원. */
+function _calcSeveranceGap(input) {
+  const salMan = Number(input.annualSalaryMan);
+  const years = Number(input.serviceYears);
+  if (!Number.isFinite(salMan) || salMan <= 0) return _incompleteResult('severanceGap', ['annualSalaryMan']);
+  if (!Number.isFinite(years) || years <= 0) return _incompleteResult('severanceGap', ['serviceYears']);
+  const mult = Math.min(3, Math.max(1, Number(input.multiple) || 1));
+  const baseMan = Math.round(salMan * 0.1 * years);          // 배수 1 상당(§44 골격)
+  const severanceMan = Math.round(baseMan * mult);
+  return {
+    calculated: true, estimateOnly: true,
+    annualSalaryMan: Math.round(salMan), serviceYears: years, multiple: mult,
+    monthlyPayMan: Math.round(salMan / 12),
+    severanceMan, statutoryBaseMan: baseMan,
+    gapVsBaseMan: severanceMan - baseMan,                     // 규정 정비(배수 확보)로 늘어나는 몫
+    formula: '직전 1년 총급여 × 10% × 근속연수 × 배수 (법인세법 시행령 §44 골격)',
+    warnings: ['§44 골격의 구조 추정입니다 — 정관·지급규정의 배수 근거, 3년 평균급여 기준, 소득세법상 임원퇴직소득 한도(현행 배수 제한)를 확인한 뒤 정밀 산출이 필요합니다.'],
+  };
+}
+
 function _calcBusinessValueAdvanced(input) {
   const netAssets = Number(input.netAssets);
   const earningsValue = Number(_firstDefined(input.earningsValue, input.netProfitValue));
@@ -9153,6 +9176,7 @@ Object.assign(_INTERNAL_CALCS, {
   calcPensionWithdrawalOrder: _calcPensionWithdrawalOrder,
   calcGoalFundingPlan: _calcGoalFundingPlan,
   calcEmergencyFundAdequacy: _calcEmergencyFundAdequacy,
+  calcSeveranceGap: _calcSeveranceGap,   /* ★ 2026-08-23: 죽은 배선 부활 — 제안서AI 2565행 정확명 조회 대상 */
   calcPortfolioStressTest: _calcPortfolioStressTest,
   calcRebalancingPlan: _calcRebalancingPlan,
   calcBusinessValueAdvanced: _calcBusinessValueAdvanced,
@@ -10371,49 +10395,53 @@ function calculateForUI(type, rawInput = {}) {
     if ([accumRate, receiveRate, inflationRate].some(value => value <= -1 || value > 1)) invalidInputs.push('rate');
     if (invalidInputs.length) return _uiFailure('pension', [], invalidInputs, ['입력 범위를 확인해 주세요.']);
 
-    const np = personal.calcPensionNominalPlan({
+    const plan = personal.calcPensionPlan({
       currentAge,
       retireAge,
       lifeExpectancy,
-      currentAsset,
-      monthlyDeposit,
-      depositYears,
+      streams: [{ lump: currentAsset, monthly: monthlyDeposit, years: depositYears }],
+      ssMonthly: pensionMonthly,
+      ssStartAge: retireAge,
+      otherMonthly: 0,
+      monthlyExpense: targetMonthlyExpense,
+      expenseBasis: 'today',
       accumRate,
       receiveRate,
       inflationRate,
-      targetMonthlyExpense,
-      pensionMonthly,
-      pensionBasis: input.pensionBasis,
+      addMonthly: 0,
+      addYears: 0,
     });
-    if (np && np.calculated === false) return { ...np, calculator: 'pension' };
+    if (plan && plan.calculated === false) return { ...plan, calculator: 'pension' };
+    const payout = personal.calcPension({
+      principal: Math.max(0, Number(plan && plan.projected) || 0),
+      monthlyPmt: 0,
+      accumYears: 0,
+      receiveYears: lifeExpectancy - retireAge,
+      accumRate: 0,
+      receiveRate,
+      inflationRate,
+    });
+    if (payout && payout.calculated === false) return { ...payout, calculator: 'pension' };
+    const fundMonthly = Math.max(0, Number(payout.monthlyReceive) || 0);
+    const totalMonthlyIncome = pensionMonthly + fundMonthly;
+    const monthlyGap = Math.max(0, targetMonthlyExpense - totalMonthlyIncome);
     return {
       calculated: true,
       calculator: 'pension',
-      basis: 'nominal',
-      pensionBasis: np.pensionBasis,
-      // 지금 계획(명목·통장 기준) — 기존 셀 호환
-      corpus: np.corpus,                 // 은퇴시점 적립 총액(통장에 찍히는 실제 금액)
-      recv: np.monthlyReceive,           // 명목 월 수령액
-      gap: np.monthlyIncomeGap,          // 명목 월 소득 부족(목표 대비)
-      years: np.yearsInRetire,
+      corpus: Math.round(Number(plan.projected) || 0),
+      recv: Math.round(fundMonthly),
       pensionMonthly: Math.round(pensionMonthly),
-      totalMonthlyIncome: np.incomeAtRetire,
-      // 목표 역산(명목) — 신규 셀
-      futExp: np.futureMonthlyExpense,   // 은퇴시점 명목 목표 월생활비
-      penAtRetire: np.pensionAtRetire,
-      netNeed: np.netMonthlyNeed,        // 순 사적 월필요
-      needCorpus: np.requiredCorpus,     // 필요 목돈
-      requiredSave: np.requiredMonthlySave, // 목표 위한 월 저축(역산)
-      saveGap: np.monthlySaveGap,        // 월 저축 과부족(+부족/-여유)
-      capitalGap: np.corpusGap,
-      // 비교 바(필요 vs 은퇴시점 예상 월소득)
-      _need: np.futureMonthlyExpense,
-      _have: np.incomeAtRetire,
+      totalMonthlyIncome: Math.round(totalMonthlyIncome),
+      futExp: Math.round(targetMonthlyExpense),
+      gap: Math.round(monthlyGap),
+      years: lifeExpectancy - retireAge,
+      needAtRetire: Math.round(Number(plan.needAtRetire) || 0),
+      capitalGap: Math.round(Number(plan.gap) || 0),
+      _need: Math.round(targetMonthlyExpense),
+      _have: Math.round(totalMonthlyIncome),
       warnings: _uniqueStrings([
-        '모든 금액은 은퇴시점 명목(통장에 찍히는 실제 금액) 기준입니다. 물가상승률을 조절해 목표를 협의하세요.',
-        np.pensionBasis === 'indexed'
-          ? '국민연금은 물가연동(오늘 구매력 유지)으로 가정했습니다.'
-          : '국민연금은 입력 월수령액을 미래 명목으로 그대로 반영했습니다.',
+        ..._uiWarnings(plan, payout),
+        ...(view === 'accum' ? ['적립총액과 월수령액은 입력한 적립기·수령기 수익률 및 물가상승률 기준입니다.'] : ['월 생활비·월 수령액은 오늘 가치 기준으로 비교했습니다.']),
       ]),
     };
   }
@@ -10479,118 +10507,6 @@ function calculateForUI(type, rawInput = {}) {
       gapCover: Math.round(Number(result.requiredCoverageGap) || 0),
       _need: Math.round(Number(result.totalNeed) || 0),
       _have: Math.round(Number(result.offset) || 0),
-      warnings: _uiWarnings(result),
-    };
-  }
-
-  if (normalizedType === 'termcompare') {
-    const wholeLifeMonthlyPremium = _uiFinite(input, ['wholeLifeMonthlyPremium', 'wholePrem']);
-    const termMonthlyPremium = _uiFinite(input, ['termMonthlyPremium', 'termPrem']);
-    const payYears = _uiFinite(input, ['payYears', 'payY']);
-    const investReturn = _uiRate(input, ['investReturn', 'investR']);
-    const values = { wholeLifeMonthlyPremium, termMonthlyPremium, payYears, investReturn };
-    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
-    if (missingInputs.length) return _uiFailure('termcompare', missingInputs);
-    const result = personal.calcTermVsWholeLife(values);
-    if (!result || result.calculated === false) return result || _uiFailure('termcompare');
-    return {
-      calculated: true,
-      calculator: 'termcompare',
-      wholeTotal: Math.round(Number(result.wholeLifeTotalPaid) || 0),
-      termTotal: Math.round(Number(result.termTotalPaid) || 0),
-      saved: Math.round(Number(result.premiumSaved) || 0),
-      investFV: Math.round(Number(result.diffInvestFV) || 0),
-      warnings: _uiWarnings(result),
-    };
-  }
-
-  if (normalizedType === 'criticalillness') {
-    const treatmentCost = _uiFinite(input, ['treatmentCost', 'ciTreat']);
-    const recoveryMonths = _uiFinite(input, ['recoveryMonths', 'ciRecov']);
-    const monthlyIncome = _uiFinite(input, ['monthlyIncome', 'ciIncome']);
-    const incomeLossRate = _uiRate(input, ['incomeLossRate', 'ciLossRate']);
-    const extraCost = _uiFinite(input, ['extraCost', 'ciExtra']);
-    const existingDiagnosisBenefit = _uiFinite(input, ['existingDiagnosisBenefit', 'ciExisting']);
-    const values = { treatmentCost, recoveryMonths, monthlyIncome, incomeLossRate, extraCost, existingDiagnosisBenefit };
-    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
-    if (missingInputs.length) return _uiFailure('criticalillness', missingInputs);
-    const result = personal.calcCriticalIllnessNeed(values);
-    if (!result || result.calculated === false) return result || _uiFailure('criticalillness');
-    return {
-      calculated: true,
-      calculator: 'criticalillness',
-      ciNeed: Math.round(Number(result.totalNeed) || 0),
-      ciGap: Math.round(Number(result.requiredCoverageGap) || 0),
-      ciLoss: Math.round(Number(result.incomeLoss) || 0),
-      ciTreat: Math.round(Number(result.treatmentCost) || 0),
-      warnings: _uiWarnings(result),
-    };
-  }
-
-  if (normalizedType === 'affordability') {
-    const monthlyIncome = _uiFinite(input, ['monthlyIncome', 'affIncome']);
-    const protectionPremium = _uiFinite(input, ['protectionPremium', 'affProt']);
-    const savingsPremium = _uiFinite(input, ['savingsPremium', 'affSav']);
-    const targetRate = _uiRate(input, ['targetRate', 'affTarget']);
-    const maxRate = _uiRate(input, ['maxRate', 'affMax']);
-    const values = { monthlyIncome, protectionPremium, savingsPremium, targetRate, maxRate };
-    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
-    if (missingInputs.length) return _uiFailure('affordability', missingInputs);
-    const result = personal.calcInsuranceAffordability(values);
-    if (!result || result.calculated === false) return result || _uiFailure('affordability');
-    return {
-      calculated: true,
-      calculator: 'affordability',
-      affProtRatio: Math.round(Number(result.protectionRatio) * 1000) / 10,
-      affTotalRatio: Math.round(Number(result.totalRatio) * 1000) / 10,
-      affRecommend: Math.round(Number(result.recommendedPremium) || 0),
-      affHeadroom: Math.round(Number(result.headroom) || 0),
-      warnings: _uiWarnings(result),
-    };
-  }
-
-  if (normalizedType === 'childinsurance') {
-    const diagnosisCost = _uiFinite(input, ['diagnosisCost', 'chDiag']);
-    const hospitalDailyCost = _uiFinite(input, ['hospitalDailyCost', 'chDaily']);
-    const expectedHospitalDays = _uiFinite(input, ['expectedHospitalDays', 'chDays']);
-    const surgeryReserve = _uiFinite(input, ['surgeryReserve', 'chSurg']);
-    const eduContinuity = _uiFinite(input, ['eduContinuity', 'chEdu']);
-    const existingChildCoverage = _uiFinite(input, ['existingChildCoverage', 'chExisting']);
-    const values = { diagnosisCost, hospitalDailyCost, expectedHospitalDays, surgeryReserve, eduContinuity, existingChildCoverage };
-    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
-    if (missingInputs.length) return _uiFailure('childinsurance', missingInputs);
-    const result = personal.calcChildInsuranceNeed(values);
-    if (!result || result.calculated === false) return result || _uiFailure('childinsurance');
-    return {
-      calculated: true,
-      calculator: 'childinsurance',
-      chNeed: Math.round(Number(result.totalNeed) || 0),
-      chGap: Math.round(Number(result.requiredCoverageGap) || 0),
-      chDiagOut: Math.round(Number(result.diagnosisCost) || 0),
-      chHosp: Math.round(Number(result.hospitalCost) || 0),
-      warnings: _uiWarnings(result),
-    };
-  }
-
-  if (normalizedType === 'medicalexpense') {
-    const annualMedicalCost = _uiFinite(input, ['annualMedicalCost', 'medAnnual']);
-    const coveredRate = _uiRate(input, ['coveredRate', 'medCovered']);
-    const copayCovered = _uiRate(input, ['copayCovered', 'medCopayCov']);
-    const copayNonCovered = _uiRate(input, ['copayNonCovered', 'medCopayNon']);
-    const years = _uiFinite(input, ['years', 'medYears']);
-    const medicalInflation = _uiRate(input, ['medicalInflation', 'medInfl']);
-    const values = { annualMedicalCost, coveredRate, copayCovered, copayNonCovered, years, medicalInflation };
-    const missingInputs = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
-    if (missingInputs.length) return _uiFailure('medicalexpense', missingInputs);
-    const result = personal.calcMedicalExpenseExposure(values);
-    if (!result || result.calculated === false) return result || _uiFailure('medicalexpense');
-    return {
-      calculated: true,
-      calculator: 'medicalexpense',
-      medNoIns: Math.round(Number(result.exposedNoInsurance) || 0),
-      medWithIns: Math.round(Number(result.exposedWithInsurance) || 0),
-      medAnnualBen: Math.round(Number(result.annualBenefit) || 0),
-      medCumBen: Math.round(Number(result.cumulativeBenefit) || 0),
       warnings: _uiWarnings(result),
     };
   }
@@ -10667,6 +10583,14 @@ function calculateForUI(type, rawInput = {}) {
       _have: Math.round(liquidity),
       warnings: _uniqueStrings([..._uiWarnings(inheritance, funding), '입력된 항목 범위의 상속세·유동성 시나리오입니다.']),
     };
+  }
+
+  if (normalizedType === 'severancegap') {
+    return _calcSeveranceGap({
+      annualSalaryMan: _uiFinite(input, ['annualSalaryMan', 'salMan']),
+      serviceYears: _uiFinite(input, ['serviceYears', 'years']),
+      multiple: _uiFinite(input, ['multiple', 'mult']),
+    });
   }
 
   return _uiFailure(requestedType || 'unknown', [], ['unsupportedType'], ['지원하지 않는 UI 계산기입니다.']);
@@ -10809,5 +10733,4 @@ function req(id){
 }
 var api=req('./index');
 global.JarviaCalculators=api;
-try{global.JarviaTeaser=req('./corporate').Teaser;}catch(_e){}
 })(typeof window!=='undefined'?window:(typeof globalThis!=='undefined'?globalThis:this));
