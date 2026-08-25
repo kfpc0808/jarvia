@@ -2138,6 +2138,10 @@
           <span style="font-size:12px;color:var(--text-lt)">저장된 항목을 클릭하면 아래 메시지 내용에 채워집니다.</span>
         </div>
         <div id="smstpl-edit" class="hidden" style="background:#F8FAFC;border:1px solid var(--border-lt);border-radius:8px;padding:12px;margin-bottom:10px">
+          <div id="smstpl-sys-hint" style="display:none;background:#FFFCF5;border:1px solid #C9A96E;border-radius:6px;padding:9px 11px;margin-bottom:10px;font-size:12.5px;color:#7A5C1E;line-height:1.65">
+            <b>🔒 시스템 자동문자 문구입니다.</b> 저장하면 <b>다음 발송분부터 즉시 적용</b>됩니다(배포 불필요).<br>
+            <b>#{이름}</b> 은 발송 시 회원 이름으로 자동 치환됩니다. 이 태그는 지우지 마세요.
+          </div>
           <input id="smstpl-title" placeholder="제목 (예: 멤버십 업그레이드 안내)" maxlength="60" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);box-sizing:border-box;margin-bottom:8px">
           <textarea id="smstpl-body" rows="4" oninput="smsTplAutoGrow()" placeholder="메시지 내용을 입력하세요..." style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);resize:vertical;box-sizing:border-box;overflow:hidden;min-height:90px"></textarea>
           <div style="display:flex;gap:8px;margin-top:8px">
@@ -6022,7 +6026,9 @@ async function grantMembership(uid){
     // ★ [2026-08] 멤버십 신규 전환 시 업그레이드 안내문자 (평생 1회, 발송 전 확인 팝업)
     try{
       if(prevRole!=='jarvia_member' && !data.membershipUpgradeSmsSent && data.phone){
-        const smsMsg=(data.name||'회원')+'님, \n 자비아 멤버십으로 업그레이드되었습니다. 이제 모든 기능을 제한 없이 이용하실 수 있습니다.\n※ 현재 로그인 상태라면 로그아웃 후 다시 로그인하시면 멤버십이 적용됩니다.\n\n자비아 운영자 드림\n\nP.S. \n「컨설턴트 홈페이지」및「아침독서」제작 신청하신 분께선 아래링크 접속 후 작성하여 주시기 바랍니다.\n\n■ 아침독서 제작신청서 https://forms.gle/KnndqtT7k7CK2w2u8\n\n■ 컨설턴트 홈페이지 제작신청서 https://vo.la/aloHaQn\n\n■ 제작 기간안내 아침독서는 30일 이내 / 홈페이지는 7~10 영업일 이내 제공예정이며 완료시 별도로 안내하여 드립니다. \n\n■ 문의 박신제 본부장 010-5244-1467';
+        /* ★ [2026-08-25] 문구를 sms_templates/membership_upgrade 에서 조회 (관리자가 화면에서 수정 가능)
+           조회 실패 시 SYS_TPL 기본 문구로 자동 대체되므로 발송 누락 없음 */
+        const smsMsg=await getSysTplBody('membership_upgrade',{'이름':data.name||'회원'});
         if(confirm('업그레이드 관련 문자를 회원에게 전송할까요?\n\n──────────────\n'+smsMsg+'\n──────────────\n\n[확인] 클릭 시 즉시 발송됩니다. (LMS 1건 50원)')){
           await httpsCallable(functions,'sendAdminSMS')({recipients:[{name:data.name||'',phone:data.phone,loginId:data.loginId||''}],message:smsMsg});
           await updateDoc(userRef,{membershipUpgradeSmsSent:true});
@@ -12681,7 +12687,7 @@ async function loadSmsMembers(){
     _smsMembers.push({uid:d.id,name:u.name||'',loginId:u.loginId||'',role:u.role||'free_user',phone:u.phone||''});
   });
   renderSmsMembers();
-  loadSmsTemplates();   // ★ [2026-08-15] 저장된 메시지 목록 로드 (비차단)
+  ensureSysTemplates().then(loadSmsTemplates);   // ★ [2026-08-15] 저장된 메시지 목록 로드 (비차단) / [2026-08-25] 시스템 문구 자동 등록 후 로드
 }
 
 function _smsFiltered(){
@@ -12831,6 +12837,48 @@ function removeSmsSel(uid){
 // ═══════════════════════════════════════════════════
 let _smsTpl=[], _smsTplEditId=null;
 
+/* ★ [2026-08-25] 시스템 자동문자 템플릿
+   · 관리자가 「문자발송 → 저장된 메시지」에서 직접 수정 → 배포 없이 즉시 반영
+   · 실수 삭제 방지를 위해 삭제 버튼을 숨기고 「시스템」 배지를 표시한다.
+   · 문서가 없거나 조회 실패 시 아래 DEFAULT 문구로 자동 대체(fallback)되므로
+     안내문자가 누락되는 일은 없다. */
+const SYS_TPL={
+  membership_upgrade:{
+    title:'[시스템] 멤버십 업그레이드 안내',
+    def:'#{이름}님, \n 자비아 멤버십으로 업그레이드되었습니다. 이제 모든 기능을 제한 없이 이용하실 수 있습니다.\n※ 현재 로그인 상태라면 로그아웃 후 다시 로그인하시면 멤버십이 적용됩니다.\n\n자비아 운영자 드림\n\nP.S. \n「컨설턴트 홈페이지」및「아침독서」제작 신청하신 분께선 아래링크 접속 후 작성하여 주시기 바랍니다.\n\n■ 아침독서 제작신청서 https://forms.gle/KnndqtT7k7CK2w2u8\n\n■ 컨설턴트 홈페이지 제작신청서 https://vo.la/aloHaQn\n\n■ 제작 기간안내 아침독서는 30일 이내 / 홈페이지는 7~10 영업일 이내 제공예정이며 완료시 별도로 안내하여 드립니다. \n\n■ 문의 박신제 본부장 010-5244-1467'
+  }
+};
+
+/** 시스템 템플릿 본문을 읽어 치환까지 마친 문자열을 돌려준다. 실패 시 기본 문구 사용. */
+async function getSysTplBody(key,vars){
+  const cfg=SYS_TPL[key];if(!cfg)return '';
+  let body=cfg.def;
+  try{
+    const snap=await getDoc(doc(db,'sms_templates',key));
+    if(snap.exists()&&(snap.data().body||'').trim())body=snap.data().body;
+  }catch(e){console.warn('시스템 문구 조회 실패 — 기본 문구 사용',e);}
+  Object.keys(vars||{}).forEach(k=>{
+    body=body.split('#{'+k+'}').join(vars[k]==null?'':String(vars[k]));
+  });
+  return body;
+}
+
+/** 시스템 템플릿이 아직 없으면 기본 문구로 1회 생성 (관리자가 화면에서 바로 수정 가능) */
+async function ensureSysTemplates(){
+  for(const key of Object.keys(SYS_TPL)){
+    try{
+      const ref=doc(db,'sms_templates',key);
+      const snap=await getDoc(ref);
+      if(!snap.exists()){
+        await setDoc(ref,{title:SYS_TPL[key].title,body:SYS_TPL[key].def,isSystem:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:'시스템'});
+        console.log('시스템 문구 생성:',key);
+      }else if(!snap.data().isSystem){
+        await updateDoc(ref,{isSystem:true});
+      }
+    }catch(e){console.warn('시스템 문구 초기화 실패',key,e);}
+  }
+}
+
 async function loadSmsTemplates(){
   try{
     const snap=await getDocs(query(collection(db,'sms_templates'),orderBy('updatedAt','desc')));
@@ -12849,13 +12897,16 @@ function renderSmsTemplates(){
   if(!_smsTpl.length){box.innerHTML='<div style="padding:14px;text-align:center;color:var(--text-lt);font-size:13px">저장된 메시지가 없습니다. [＋ 새로 저장]으로 자주 쓰는 문구를 등록하세요.</div>';return;}
   box.innerHTML=_smsTpl.map(t=>{
     const preview=(t.body||'').replace(/\n/g,' ').slice(0,60);
-    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border:1px solid var(--border-lt);border-radius:7px;background:#fff">
+    const isSys=!!SYS_TPL[t.id];   // ★ [2026-08-25] 시스템 자동문자는 삭제 불가
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border:1px solid ${isSys?'#C9A96E':'var(--border-lt)'};border-radius:7px;background:${isSys?'#FFFCF5':'#fff'}">
       <div style="flex:1;min-width:0;cursor:pointer" onclick="smsTplApply('${t.id}')" title="클릭하면 메시지 내용에 채워집니다">
-        <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:2px">${esc(t.title||'(제목 없음)')}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:2px">${isSys?'<span style="display:inline-block;background:#C9A96E;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;margin-right:5px;vertical-align:middle">시스템</span>':''}${esc(t.title||'(제목 없음)')}</div>
         <div style="font-size:12px;color:var(--text-lt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}${(t.body||'').length>60?'…':''}</div>
       </div>
       <button class="btn btn-sm btn-sec" style="flex-shrink:0" onclick="smsTplEdit('${t.id}')">수정</button>
-      <button class="btn btn-sm btn-danger" style="flex-shrink:0" onclick="smsTplDelete('${t.id}')">삭제</button>
+      ${isSys
+        ?`<span style="flex-shrink:0;font-size:11px;color:var(--text-lt);padding:6px 4px" title="시스템이 자동 발송에 사용하는 문구라 삭제할 수 없습니다. 내용은 [수정]으로 변경하세요.">🔒</span>`
+        :`<button class="btn btn-sm btn-danger" style="flex-shrink:0" onclick="smsTplDelete('${t.id}')">삭제</button>`}
     </div>`;
   }).join('');
 }
@@ -12869,6 +12920,7 @@ function smsTplAutoGrow(){
 
 function smsTplNew(){
   _smsTplEditId=null;
+  const hint=$('smstpl-sys-hint');if(hint)hint.style.display='none';   /* ★ [2026-08-25] */
   $('smstpl-title').value='';
   $('smstpl-body').value=($('sms-msg').value||'').trim();   // 작성 중인 내용이 있으면 그대로 가져옴
   $('smstpl-edit').classList.remove('hidden');
@@ -12879,6 +12931,8 @@ function smsTplNew(){
 function smsTplEdit(id){
   const t=_smsTpl.find(x=>x.id===id);if(!t)return;
   _smsTplEditId=id;
+  const hint=$('smstpl-sys-hint');   /* ★ [2026-08-25] 시스템 문구 편집 안내 */
+  if(hint)hint.style.display=SYS_TPL[id]?'block':'none';
   $('smstpl-title').value=t.title||'';
   $('smstpl-body').value=t.body||'';
   $('smstpl-edit').classList.remove('hidden');
@@ -12914,6 +12968,7 @@ async function smsTplSave(){
 
 async function smsTplDelete(id){
   const t=_smsTpl.find(x=>x.id===id);if(!t)return;
+  if(SYS_TPL[id]){toast('시스템 자동문자 문구는 삭제할 수 없습니다. [수정]으로 내용을 바꿔주세요.','error');return;}   /* ★ [2026-08-25] 2차 방어 */
   if(!confirm(`"${t.title||'(제목 없음)'}" 를 삭제하시겠습니까?\n되돌릴 수 없습니다.`))return;
   try{
     await deleteDoc(doc(db,'sms_templates',id));
@@ -12923,8 +12978,19 @@ async function smsTplDelete(id){
   }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 
+/** ★ [2026-08-25] 치환 태그(#{...})가 남아 있으면 발송 차단.
+    수동 발송은 수신자별 치환을 하지 않으므로 그대로 나가면 사고가 된다. */
+function _smsHasTag(msg){
+  const m=String(msg||'').match(/#\{[^}]*\}/g);
+  if(!m)return false;
+  toast('치환 태그 '+[...new Set(m)].join(', ')+' 가 남아 있습니다. 실제 값으로 바꾼 뒤 발송하세요.','error');
+  return true;
+}
+
 function smsTplApply(id){
   const t=_smsTpl.find(x=>x.id===id);if(!t)return;
+  /* ★ [2026-08-25] 시스템 문구는 자동발송 전용 — 수동 발송 시 #{이름}이 치환되지 않는다 */
+  if(SYS_TPL[id]&&!confirm('이 문구는 시스템이 자동 발송할 때 쓰는 템플릿입니다.\n\n수동 발송에서는 #{이름} 이 회원 이름으로 바뀌지 않으므로,\n불러온 뒤 반드시 직접 수정해야 합니다.\n\n그래도 불러올까요?'))return;
   const cur=($('sms-msg').value||'').trim();
   if(cur && !confirm('작성 중인 메시지 내용이 있습니다. 저장된 메시지로 바꾸시겠습니까?'))return;
   $('sms-msg').value=t.body||'';
@@ -12963,6 +13029,7 @@ function updateSmsCost(){
 async function doSendAdminSMS(){
   if(_smsMode==='rsv')return doScheduleAdminSMS();   /* ★ [2026-08-22] 예약 모드 분기 */
   const msg=$('sms-msg').value.trim();
+  if(_smsHasTag(msg))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
   if(!msg){toast('메시지 내용을 입력하세요.','error');return;}
   const recipients=[];
   _smsSel.forEach(m=>recipients.push({name:m.name,phone:m.phone,loginId:m.loginId}));
@@ -13148,6 +13215,7 @@ function smsRsvQuick(n){
 async function doScheduleAdminSMS(){
   const msg=$('sms-msg').value.trim();
   if(!msg){toast('메시지 내용을 입력하세요.','error');return;}
+  if(_smsHasTag(msg))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
   const dt=($('sms-rsv-dt').value||'').trim();
   if(!dt){toast('예약 일시를 선택하세요.','error');return;}
   const when=new Date(dt);
