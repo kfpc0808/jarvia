@@ -104,6 +104,8 @@ textarea.ag{overflow:hidden;min-height:48px}
 .ckI:active{background:#F0F4FA}
 .ckI.on{color:var(--navy);font-weight:800}
 .ckI.on::after{content:'✓';margin-left:auto;color:var(--navy)}
+.ckF{padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);flex-shrink:0}
+.ckF button{width:100%;padding:13px;border:none;border-radius:11px;background:var(--navy);color:#fff;font-size:15px;font-weight:800}
 #enrich{background:#FBF6EA;border:1px solid #EAD9AE;border-radius:11px;padding:11px 13px;margin-bottom:15px;font-size:12.5px;color:#5A4A1E;display:none}
 .enr{line-height:1.75}
 .enr+.enr{margin-top:5px}
@@ -247,6 +249,7 @@ textarea.ag{overflow:hidden;min-height:48px}
   <div class="ckP">
     <div class="ckH">기업컨설팅 종류<button type="button" onclick="wlConsultClose()" aria-label="닫기">✕</button></div>
     <div class="ckL" id="ckList"></div>
+    <div class="ckF"><button type="button" id="ckDone" onclick="wlConsultClose()">선택 완료</button></div>
   </div>
 </div>
 <div id="toast"></div>
@@ -283,7 +286,7 @@ const WL_CONSULT=[
 
 /* ═══ 상태 ═══ */
 let me=null,_clients=null,_cache=null,_editId=null;
-let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consult:''};
+let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[]};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
 
 function ag(el){if(!el)return;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,340)+'px';}
@@ -293,6 +296,7 @@ const num=v=>{const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10);return is
 const comma=n=>(n==null||n==='')?'':Number(n).toLocaleString('ko-KR');
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
 const prodsOf=a=>{const p=(a.products||[]).filter(x=>x!=='__c');if(a.productCustom)p.push(a.productCustom);return p;};
+const consultsOf=a=>{const r=(a.consultTypes||(a.consultType?[a.consultType]:[])).filter(x=>x!=='__c');if(a.consultTypeCustom)r.push(a.consultTypeCustom);return r;};
 const stageOf=a=>a.stage==='__c'?(a.stageCustom||'직접입력'):(a.stage||'');
 const ckey=a=>a.clientType==='corp'?('k:'+(a.corpName||'')):(a.clientId?('c:'+a.clientId):('n:'+(a.clientName||'')));
 
@@ -357,7 +361,7 @@ function fTogSync(){
   const n=(_fp?1:0)+(_fs?1:0);
   $('fTogN').textContent=n?String(n):'';
   $('fTog').classList.toggle('on',_fOpen||n>0);
-  $('fTog').style.display=(_cache||[]).length?'':'none';   /* 기록 0건이면 필터 버튼 숨김 */
+  $('fTog').style.display='';   /* 기록 유무와 무관하게 필터 버튼 항상 표시 */
   if(n&&!_fOpen){_fOpen=true;$('fWrap').style.display='block';}   /* 필터 걸려 있으면 펼쳐서 보이게 */
 }
 window.wlFP=v=>{_fp=v;buildFilters();renderList();};
@@ -365,7 +369,7 @@ window.wlFS=v=>{_fs=v;buildFilters();renderList();};
 window.wlSearch=v=>{_q=(v||'').trim().toLowerCase();renderList();};
 window.wlSortSet=v=>{_sort=v;renderList();};
 
-const hay=a=>[a.clientName,a.corpName,a.corpContact,a.summary,a.request,a.nextAction,prodsOf(a).join(' '),stageOf(a),a.consultType,a.consultTypeCustom,a.channel].filter(Boolean).join(' ').toLowerCase();
+const hay=a=>[a.clientName,a.corpName,a.corpContact,a.summary,a.request,a.nextAction,prodsOf(a).join(' '),stageOf(a),consultsOf(a).join(' '),a.channel].filter(Boolean).join(' ').toLowerCase();
 function filtered(){
   let L=(_cache||[]).slice();
   if(_q)L=L.filter(a=>hay(a).includes(_q));
@@ -426,7 +430,7 @@ window.wlShowForm=function(id){
   $('fSum').value=a?.summary||'';$('fReq').value=a?.request||'';
   $('fNextA').value=a?.nextAction||'';$('fNextD').value=a?.nextDate||'';
   $('delBtn').style.display=id?'':'none';
-  _sel.consult=a?.consultType||'';
+  _sel.consults=(a?.consultTypes||(a?.consultType?[a.consultType]:[])).slice();
   ctRender();chipsRender();consultSync();
   wlClientChanged();
   ag($('fSum'));ag($('fReq'));
@@ -453,20 +457,27 @@ window.wlProd=v=>{const i=_sel.prods.indexOf(v);if(i>=0)_sel.prods.splice(i,1);e
 window.wlStage=v=>{_sel.stage=(_sel.stage===v)?'':v;chipsRender();};
 function consultSync(){
   const b=$('fConsultBtn');if(!b)return;
-  const lab=_sel.consult==='__c'?'직접입력 ✎':(_sel.consult||'컨설팅 종류 선택');
+  const L=_sel.consults;
+  const first=L[0]==='__c'?'직접입력':L[0];
+  const lab=!L.length?'컨설팅 종류 선택 (복수 가능)':(L.length===1?first:first+' 외 '+(L.length-1));
   b.innerHTML=esc(lab)+'<span>▾</span>';
-  b.classList.toggle('ph',!_sel.consult);
-  $('fConsultCW').style.display=(_sel.consult==='__c')?'':'none';
+  b.classList.toggle('ph',!L.length);
+  $('fConsultCW').style.display=L.includes('__c')?'':'none';
 }
-window.wlConsultOpen=function(){
-  $('ckList').innerHTML=WL_CONSULT.map(g=>`<div class="ckG">${esc(g[0])}</div>`+g[1].map(v=>`<div class="ckI${_sel.consult===v?' on':''}" onclick="wlConsultPick(this.dataset.v)" data-v="${esc(v)}">${esc(v)}</div>`).join('')).join('')
-    +`<div class="ckG">기타</div><div class="ckI${_sel.consult==='__c'?' on':''}" onclick="wlConsultPick('__c')" data-v="__c">직접입력 ✎</div>`;
-  $('ckOv').classList.add('show');
+function ckRender(){
+  $('ckList').innerHTML=WL_CONSULT.map(g=>`<div class="ckG">${esc(g[0])}</div>`+g[1].map(v=>`<div class="ckI${_sel.consults.includes(v)?' on':''}" onclick="wlConsultPick(this.dataset.v)" data-v="${esc(v)}">${esc(v)}</div>`).join('')).join('')
+    +`<div class="ckG">기타</div><div class="ckI${_sel.consults.includes('__c')?' on':''}" onclick="wlConsultPick('__c')" data-v="__c">직접입력 ✎</div>`;
+  $('ckDone').textContent=_sel.consults.length?('선택 완료 ('+_sel.consults.length+')'):'선택 완료';
+}
+window.wlConsultOpen=function(){ckRender();$('ckOv').classList.add('show');};
+window.wlConsultClose=function(){
+  $('ckOv').classList.remove('show');consultSync();
+  if(_sel.consults.includes('__c'))setTimeout(()=>{try{$('fConsultC').focus();}catch(e){}},60);
 };
-window.wlConsultClose=function(){$('ckOv').classList.remove('show');};
-window.wlConsultPick=function(v){
-  _sel.consult=v;consultSync();wlConsultClose();
-  if(v==='__c')setTimeout(()=>{try{$('fConsultC').focus();}catch(e){}},60);
+window.wlConsultPick=function(v){                       /* 탭=토글, 닫지 않음 → 복수 선택 */
+  const i=_sel.consults.indexOf(v);
+  if(i>=0)_sel.consults.splice(i,1);else _sel.consults.push(v);
+  ckRender();
 };
 window.wlPremLive=el=>{const n=num(el.value);el.value=n==null?'':comma(n);};   /* 입력 즉시 3자리 콤마 */
 
@@ -523,7 +534,7 @@ window.wlSave=async function(){
   if(!corp&&!clientName){toast('고객을 선택하거나 입력해주세요');return;}
   const summary=$('fSum').value.trim();
   if(!summary){toast('대화 내용을 입력해주세요');return;}
-  if(corp&&!_sel.consult){toast('기업컨설팅 종류를 선택해주세요');return;}
+  if(corp&&!_sel.consults.length){toast('기업컨설팅 종류를 선택해주세요');return;}
   const d={
     uid:me.uid,
     date:$('fDate').value||today(),
@@ -534,8 +545,8 @@ window.wlSave=async function(){
     channel:_sel.chan,
     products:corp?[]:_sel.prods.slice(),
     productCustom:(!corp&&_sel.prods.includes('__c'))?$('fProdC').value.trim():'',
-    consultType:corp?_sel.consult:'',
-    consultTypeCustom:(corp&&_sel.consult==='__c')?$('fConsultC').value.trim():'',
+    consultTypes:corp?_sel.consults.slice():[],
+    consultTypeCustom:(corp&&_sel.consults.includes('__c'))?$('fConsultC').value.trim():'',
     premium:num($('fPrem').value),
     summary,
     request:$('fReq').value.trim(),
@@ -628,7 +639,7 @@ window.wlShowClient=function(key){
   if(pend.length){
     h+='<div class="pend"><b>🙋 미처리 요청 '+pend.length+'건</b>'+pend.map(a=>`<label class="prow"><input type="checkbox" onchange="wlToggleDone('${a.id}',event)"><span style="color:#6B1515;font-size:13px">${esc(a.request)} <span>(${esc((a.date||'').slice(5))} 요청${a.nextDate?' · ⏰'+esc(a.nextDate.slice(5)):''})</span></span></label>`).join('')+'</div>';
   }
-  const topics={};acts.forEach(a=>{prodsOf(a).forEach(p=>topics[p]=(topics[p]||0)+1);const ct=a.consultType==='__c'?a.consultTypeCustom:a.consultType;if(ct)topics[ct]=(topics[ct]||0)+1;});
+  const topics={};acts.forEach(a=>{prodsOf(a).forEach(p=>topics[p]=(topics[p]||0)+1);consultsOf(a).forEach(ct=>topics[ct]=(topics[ct]||0)+1);});
   const top=Object.entries(topics).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]+' '+x[1]).join(' · ');
   const psum=acts.reduce((s,a)=>s+(a.premium||0),0);
   h+=`<div class="stats">
@@ -643,7 +654,7 @@ window.wlShowClient=function(key){
       return `<div class="tli">
         <div class="ir">
           <span class="dt">${esc(a.date||'')}</span>
-          ${a.clientType==='corp'?`<span class="bg bcorp">기업${a.consultType?' · '+esc(a.consultType==='__c'?a.consultTypeCustom:a.consultType):''}</span>`:ps.map(x=>`<span class="bg bprod">${esc(x)}</span>`).join('')}
+          ${a.clientType==='corp'?`<span class="bg bcorp">기업${consultsOf(a).length?' · '+esc(consultsOf(a).slice(0,2).join('·'))+(consultsOf(a).length>2?' 외':''):''}</span>`:ps.map(x=>`<span class="bg bprod">${esc(x)}</span>`).join('')}
           ${st?`<span class="bg bstage">${esc(st)}</span>`:''}
           <span class="meta">${esc(a.channel||'')}${a.premium?' · 월 '+comma(a.premium):''}</span>
           <button type="button" class="elink" onclick="wlShowForm('${a.id}')">수정</button>
