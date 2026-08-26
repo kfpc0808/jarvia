@@ -1190,7 +1190,7 @@
         <button class="btn btn-sm" onclick="mrUploadAudio()" style="margin-top:6px">🎧 오디오 업로드</button>
         <span id="mr-audio-stat" style="font-size:12px;color:#888;margin-left:8px"></span></div>
       <div class="toolbar" style="margin-top:20px"><strong style="font-size:14px">발행 목록</strong><button class="btn btn-sm" onclick="mrLoad()">🔄 새로고침</button></div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>요약본</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>발행월</th><th>상태</th><th>리포트</th><th>요약본</th><th>대본</th><th>오디오</th><th>수정일</th><th>관리</th></tr></thead><tbody id="mr-tbody"><tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:20px">새로고침을 눌러주세요.</td></tr></tbody></table></div>
       <div id="mr-assets" style="display:none;margin-top:16px;border:1px solid #e2e6ea;border-radius:12px;padding:18px;background:#fafbfc">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><strong id="mr-assets-title" style="font-size:14px"></strong>
           <span id="mr-assets-prog" style="font-size:12px;color:#888"></span>
@@ -14575,20 +14575,30 @@ window.mrAssets=async function(m){
   }catch(e){body.innerHTML='<span style="font-size:12px;color:#C0392B">로드 실패: '+e.message+'</span>';}
 };
 window.mrLoad=async function(){
-  const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">로딩...</td></tr>';
+  const tb=$('mr-tbody');tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:20px">로딩...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'monthly_reports'),orderBy('month','desc'),limit(24)));
-    if(snap.empty){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-lt);padding:20px">등록된 호가 없습니다.</td></tr>';return;}
+    if(snap.empty){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text-lt);padding:20px">등록된 호가 없습니다.</td></tr>';return;}
+    /* ★ [2026-08-26] 대본 생성 상태 열 — monthly_report_progress 병렬 조회.
+       진행 문서는 문서 생성(total=5)과 대본 생성(total=3)이 공유하므로 total===3 기록만 대본 작업으로 판별한다. */
+    const pgMap={};
+    await Promise.all(snap.docs.map(async d=>{try{const p=await getDoc(doc(db,'monthly_report_progress',d.id));if(p.exists())pgMap[d.id]=p.data();}catch(_){}}));
     tb.innerHTML=snap.docs.map(d=>{const x=d.data();const audioN=Object.keys(x.audio||{}).length;
+      /* ★ [2026-08-26] 대본 상태 셀 — running/error(대본 작업)는 진행 문서, 완료는 scriptUrls 기준 */
+      const suN=Object.keys(x.scriptUrls||{}).length;const pg=pgMap[d.id]||null;const pgS=pg&&pg.total===3?pg.status:'';
+      let scb='—';
+      if(pgS==='running')scb=`<span style="font-size:11px;color:#B7791F;white-space:nowrap">⏳ ${pg.step||0}/3 생성중</span>`;
+      else if(pgS==='error')scb=`<span style="font-size:11px;color:#C0392B;white-space:nowrap;cursor:help" title="${esc(pg.label||'')}">🔴 실패</span>`+(suN?'<br><small style="font-size:10px;color:#888">이전본 유지</small>':'');
+      else if(suN)scb=`<span style="font-size:11px;color:#1E8449;white-space:nowrap">✅ ${suN}종</span>`+(x.scriptsBuiltAt?`<br><small style="font-size:10px;color:#888">${fdatetime(x.scriptsBuiltAt)}</small>`:'');
       const sb=x.status==='published'?'<span class="badge" style="background:#E9F6F0;color:#177A4C">게시중</span>':'<span class="badge" style="background:#F9F3E2;color:#8A6A1F">검수 대기</span>';
       const tgl=x.status==='published'?`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','ai_draft')">내리기</button>`:`<button class="btn btn-sm" onclick="mrSetStatus('${d.id}','published')">게시</button>`;
       /* ★ [2026-08-04] 자동 게시 준비 상태 — 문서 확정 / 오디오 10 / 게시 승인 3조건 */
       const ready=!!x.docConfirmed&&audioN>=10&&!!x.publishApproved;
       const chk=`<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap" title="말일(주말·공휴일이면 직전 영업일) 07:00 자동 게시 대상으로 지정합니다"><input type="checkbox" ${x.publishApproved?'checked':''} onchange="mrApprove('${d.id}',this.checked)"> 게시승인</label>`;
       const rdy=x.status==='published'?'':`<br><small style="font-size:10px;color:${ready?'#1E8449':'#B7791F'}">${ready?'✅ 자동게시 준비완료':'⏳ '+[!x.docConfirmed?'문서확정':'',audioN<10?`오디오${audioN}/10`:'',!x.publishApproved?'승인':''].filter(Boolean).join('·')+' 필요'}</small>`;
-      return `<tr><td><b>${d.id}</b>${rdy}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      return `<tr><td><b>${d.id}</b>${rdy}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${scb}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
-  }catch(e){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
+  }catch(e){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
 
 // 📖 마스터가이드 관리 (master_guides / upcoming_master_guides)
