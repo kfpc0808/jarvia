@@ -166,7 +166,7 @@ textarea.ag{overflow:hidden;min-height:48px}
 <div class="hd" id="hd"><div class="hdIn">
   <button type="button" class="bk" onclick="goList()">‹ 목록</button>
   <div class="tt" id="hTitle">📋 업무일지</div>
-  <button type="button" class="hm" onclick="location.href='index.html'">메인</button>
+  <button type="button" class="hm" onclick="wlLeave()">메인</button>
 </div></div>
 
 <div id="bd">
@@ -331,6 +331,11 @@ const WL_CONSULT=[
 let me=null,_clients=null,_cache=null,_editId=null;
 let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',ptype:'',clientId:'',deal:false};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
+let _snap=null,_afterSave=null;   /* 미저장 이탈 가드 */
+function fSnap(){
+  const v=id=>{const el=$(id);return el?el.value:'';};
+  return JSON.stringify([v('fDate'),v('fClientNew'),v('fCorp'),v('fCorpC'),v('fInsC'),v('fPName'),v('fPrem'),v('fTopic'),v('fSum'),v('fReq'),v('fMemo'),v('fProdC'),v('fStageC'),v('fConsultC'),v('fNextA'),v('fNextD'),_sel]);
+}
 
 function ag(el){if(!el)return;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,340)+'px';}
 window.agIn=el=>ag(el);
@@ -387,10 +392,23 @@ function setView(v,title){
   $('fab').style.display=(v==='vList')?'block':'none';   /* ★ ''는 CSS기본(none)으로 회귀 — block 명시 */
   window.scrollTo(0,0);
 }
-window.goList=function(){
+window.goList=function(force){
+  if(!force&&_view==='vForm'&&_snap!==null&&fSnap()!==_snap){
+    if(confirm('수정한 내용이 저장되지 않았습니다.\n[확인] 저장하고 나가기 · [취소] 저장 없이 나가기')){wlSave();return;}
+  }
+  _snap=null;
   setView('vList','📋 업무일지');
   buildFilters();renderList();
 };
+window.wlLeave=function(){
+  if(_view==='vForm'&&_snap!==null&&fSnap()!==_snap){
+    if(confirm('수정한 내용이 저장되지 않았습니다.\n[확인] 저장하고 나가기 · [취소] 저장 없이 나가기')){_afterSave=()=>{location.href='index.html';};wlSave();return;}
+  }
+  _snap=null;location.href='index.html';
+};
+window.addEventListener('beforeunload',e=>{   /* 새로고침·탭 닫기·브라우저 뒤로가기 */
+  if(_view==='vForm'&&_snap!==null&&fSnap()!==_snap){e.preventDefault();e.returnValue='';}
+});
 
 /* ═══ ① 목록 ═══ */
 function buildFilters(){
@@ -493,6 +511,7 @@ window.wlShowForm=function(id){
   wlClientChanged();
   if(a&&a.clientType==='corp'){$('fMemo').value=a.corpMemo||'';ag($('fMemo'));}
   ag($('fSum'));ag($('fReq'));
+  _snap=fSnap();
 };
 /* 같은 기업명으로 남긴 최근 기록의 특이사항을 이어받는다 (신규 작성 & 칸이 비어 있을 때만) */
 window.wlCorpMemoPrefill=function(){
@@ -712,7 +731,9 @@ window.wlSave=async function(){
         try{await updateDoc(doc(db,'fc_clients',cli.id),{memo:nv,updatedAt:serverTimestamp()});cli.memo=nv;}catch(e){}
       }
     }
-    goList();
+    _snap=null;
+    const _f=_afterSave;_afterSave=null;
+    if(_f)_f();else goList(true);
   }catch(e){console.error(e);toast('저장 실패 — 네트워크를 확인해주세요');}
 };
 window.wlDel=async function(){
@@ -721,7 +742,7 @@ window.wlDel=async function(){
   try{
     await deleteDoc(doc(db,'fc_activities',_editId));
     _cache=(_cache||[]).filter(x=>x.id!==_editId);
-    toast('삭제되었습니다');goList();
+    toast('삭제되었습니다');_snap=null;goList(true);
   }catch(e){toast('삭제 실패');}
 };
 window.wlToggleDone=async function(id,ev){
