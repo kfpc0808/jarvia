@@ -50,6 +50,9 @@ mark{background:#FFF3BF;border-radius:2px;padding:0 1px}
 .frow{display:flex;gap:6px;overflow-x:auto;padding:2px 0 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .frow::-webkit-scrollbar{display:none}
 .flab{font-size:11px;color:var(--mut);flex-shrink:0;align-self:center}
+.ftog{border:1px solid #D8DEE8;background:#fff;color:var(--sub);font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:16px;margin:2px 0 8px;display:inline-flex;align-items:center;gap:5px}
+.ftog.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.ftog span:not(:empty){background:#fff;color:var(--navy);font-size:11px;font-weight:800;border-radius:9px;padding:1px 7px}
 .chip{padding:9px 15px;border-radius:18px;font-size:13px;background:#fff;border:1px solid #D8DEE8;color:var(--sub);white-space:nowrap;flex-shrink:0;min-height:38px}
 .chip.on{background:var(--navy);color:#fff;border-color:var(--navy);font-weight:700}
 .cnt{font-size:11.5px;color:var(--mut);margin:4px 2px 10px}
@@ -141,7 +144,9 @@ textarea.ag{overflow:hidden;min-height:48px}
 #toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:99;background:rgba(20,28,42,.92);color:#fff;font-size:13.5px;padding:11px 20px;border-radius:22px;max-width:86vw;text-align:center;opacity:0;pointer-events:none;transition:opacity .25s}
 #toast.show{opacity:1}
 
-@media(min-width:641px){body{background:#E9EDF3}#bd,#fab{max-width:640px}.hd{max-width:640px;left:50%;transform:translateX(-50%)}}
+@media(min-width:641px){body{background:#E9EDF3}#bd,#fab{max-width:640px}.hd{max-width:640px;left:50%;transform:translateX(-50%)}
+.frow{flex-wrap:wrap;overflow:visible}   /* ★ PC: 스크롤 대신 줄바꿈 — 오른쪽 칩 안 보이던 문제 해결 */
+}
 </style>
 </head>
 <body>
@@ -168,8 +173,11 @@ textarea.ag{overflow:hidden;min-height:48px}
         <option value="nextAsc">할 일 임박순</option>
       </select>
     </div>
-    <div class="frow" id="fP"></div>
-    <div class="frow" id="fS"></div>
+    <button type="button" class="ftog" id="fTog" onclick="wlFilterTog()">⚙ 필터<span id="fTogN"></span></button>
+    <div id="fWrap" style="display:none">
+      <div class="frow" id="fP"></div>
+      <div class="frow" id="fS"></div>
+    </div>
     <div class="cnt" id="cnt"></div>
     <div id="list"></div>
   </div>
@@ -343,6 +351,15 @@ function buildFilters(){
   $('fP').innerHTML='<span class="flab">상품</span>'+[''].concat(WL_PRODUCTS,['__c']).map(v=>`<button type="button" class="chip${v===_fp?' on':''}" onclick="wlFP('${v}')">${_lbl(v)}</button>`).join('');
   $('fS').innerHTML='<span class="flab">단계</span>'+[''].concat(WL_STAGES,['__c']).map(v=>`<button type="button" class="chip${v===_fs?' on':''}" onclick="wlFS('${v}')">${_lbl(v)}</button>`).join('');
 }
+let _fOpen=false;
+window.wlFilterTog=function(){_fOpen=!_fOpen;$('fWrap').style.display=_fOpen?'block':'none';$('fTog').classList.toggle('on',_fOpen||!!(_fp||_fs));};
+function fTogSync(){
+  const n=(_fp?1:0)+(_fs?1:0);
+  $('fTogN').textContent=n?String(n):'';
+  $('fTog').classList.toggle('on',_fOpen||n>0);
+  $('fTog').style.display=(_cache||[]).length?'':'none';   /* 기록 0건이면 필터 버튼 숨김 */
+  if(n&&!_fOpen){_fOpen=true;$('fWrap').style.display='block';}   /* 필터 걸려 있으면 펼쳐서 보이게 */
+}
 window.wlFP=v=>{_fp=v;buildFilters();renderList();};
 window.wlFS=v=>{_fs=v;buildFilters();renderList();};
 window.wlSearch=v=>{_q=(v||'').trim().toLowerCase();renderList();};
@@ -368,6 +385,7 @@ function hi(t){
   try{const re=new RegExp(_q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');return e.replace(re,m=>'<mark>'+m+'</mark>');}catch(x){return e;}
 }
 function renderList(){
+  fTogSync();
   const L=filtered(),td=today();
   $('cnt').textContent=(_cache||[]).length?('전체 '+(_cache||[]).length+'건 중 '+L.length+'건'):'';
   if(!L.length){$('list').innerHTML='<div class="empty">'+((_cache||[]).length?'조건에 맞는 기록이 없습니다.':'아직 기록이 없습니다.<br><b>아래 버튼</b>으로 오늘 상담을 남겨보세요 🙂')+'</div>';return;}
@@ -419,6 +437,7 @@ function ctRender(){
   $('ctP').classList.toggle('on',!c);$('ctC').classList.toggle('on',c);
   $('pBox').style.display=c?'none':'';$('cBox').style.display=c?'':'none';
   $('prodRow').style.display=c?'none':'';$('consultRow').style.display=c?'':'none';
+  const mw=$('fMemoW');if(mw)mw.style.display=c?'none':'';
 }
 function chipsRender(){
   $('fChan').innerHTML=WL_CHANNELS.map(v=>`<button type="button" class="chip${_sel.chan===v?' on':''}" onclick="wlChan('${v}')">${v}</button>`).join('');
@@ -456,10 +475,16 @@ window.wlClientChanged=function(){
   const v=$('fClient').value;
   $('fClientNewW').style.display=(v==='__new')?'':'none';
   const box=$('enrich');
-  if(_sel.ct==='corp'||!v||v==='__new'){box.style.display='none';box.innerHTML='';const mw=$('fMemoW');if(mw)mw.style.display='none';return;}
-  const c=(_clients||[]).find(x=>x.id===v);
   const mw=$('fMemoW');
-  if(c&&mw){mw.style.display='';$('fMemo').value=c.memo||'';ag($('fMemo'));}else if(mw){mw.style.display='none';}
+  if(mw)mw.style.display=(_sel.ct==='corp')?'none':'';           /* 개인고객이면 신규 포함 항상 표시 */
+  if(v==='__new'){setTimeout(()=>{try{$('fClientNew').focus();}catch(e){}},60);}
+  if(_sel.ct==='corp'||!v||v==='__new'){
+    box.style.display='none';box.innerHTML='';
+    if(mw&&_sel.ct!=='corp'&&!_editId){$('fMemo').value='';ag($('fMemo'));}
+    return;
+  }
+  const c=(_clients||[]).find(x=>x.id===v);
+  if(c&&mw){$('fMemo').value=c.memo||'';ag($('fMemo'));}
   if(!c){box.style.display='none';return;}
   const P=[];
   if(c.birthDate&&c.birthDate.length===10){
@@ -521,6 +546,18 @@ window.wlSave=async function(){
     updatedAt:serverTimestamp()
   };
   try{
+    /* ★ 신규 고객 자동 등록 — 이름을 직접 입력했으면 fc_clients에 고객 문서를 만들어
+       특이사항까지 심는다. 실패해도 기록 저장은 계속(이름만으로 저장). */
+    if(!corp&&!cli&&clientName){
+      try{
+        const nref=doc(collection(db,'fc_clients'));
+        const nvMemo=($('fMemo')?.value||'').trim();
+        await setDoc(nref,{fcAuthUid:me.uid,name:clientName.slice(0,20),birthDate:'',memo:nvMemo,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        (_clients=_clients||[]).push({id:nref.id,name:clientName.slice(0,20),birthDate:'',memo:nvMemo});
+        d.clientId=nref.id;
+        toast('신규 고객으로 자동 등록했습니다');
+      }catch(e){console.warn('신규 고객 등록 실패',e);}
+    }
     if(_editId){
       await updateDoc(doc(db,'fc_activities',_editId),d);
       const i=(_cache||[]).findIndex(x=>x.id===_editId);
@@ -534,7 +571,7 @@ window.wlSave=async function(){
       toast('저장되었습니다 ✅');
     }
     /* 고객 특이사항 — 바뀐 경우에만 fc_clients에 함께 저장 (실패해도 기록 저장은 유지) */
-    if(!corp&&cli&&$('fMemoW').style.display!=='none'){
+    if(!corp&&cli){
       const nv=$('fMemo').value.trim();
       if(nv!==String(cli.memo||'').trim()){
         try{await updateDoc(doc(db,'fc_clients',cli.id),{memo:nv,updatedAt:serverTimestamp()});cli.memo=nv;}catch(e){}
