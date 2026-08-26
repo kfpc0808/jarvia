@@ -643,6 +643,30 @@ function cliSync(){
   b.classList.toggle('ph',!_sel.clientId);
 }
 let _mpcAll=null;
+/* 내 고객 리스트(mycustomers_db)에 직접 등록 — fc 빠른생성과 동일한 최소 레코드.
+   같은 이름이 이미 있으면 생략. 드라이브 백업은 채널의 기존 동기화가 다음 실행 때 반영. */
+function wlMpcAdd(name,extra){
+  return wlMpcAll().then(all=>{
+    const nz=v=>String(v||'').replace(/\s+/g,'');
+    if((all||[]).some(x=>nz(x.name)===nz(name)))return false;   /* 중복 생략 */
+    const rec=Object.assign({
+      id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      name:String(name||'').trim(),phone:'',birthUnknown:true,
+      insurancePortfolio:[],createdAt:Date.now(),updatedAt:Date.now()
+    },extra||{});
+    return new Promise(res=>{
+      try{
+        const r=indexedDB.open('mycustomers_db',1);
+        r.onsuccess=()=>{try{
+          const t=r.result.transaction('customers','readwrite').objectStore('customers').put(rec);
+          t.onsuccess=()=>{(_mpcAll=_mpcAll||[]).push(rec);res(true);};
+          t.onerror=()=>res(false);
+        }catch(e){res(false);}};
+        r.onerror=()=>res(false);
+      }catch(e){res(false);}
+    });
+  });
+}
 function wlMpcAll(){                       /* 채널 '내 고객' 상세(IndexedDB, 같은 도메인) 읽기 전용 열람 */
   if(_mpcAll)return Promise.resolve(_mpcAll);
   return new Promise(res=>{
@@ -874,6 +898,7 @@ window.wlSave=async function(){
         d.clientId=nref.id;
         toast('신규 고객으로 자동 등록했습니다');
       }catch(e){console.warn('신규 고객 등록 실패',e);}
+      try{wlMpcAdd(clientName,{});}catch(e){}   /* 내 고객 리스트에도 등록 */
     }
     /* ★ 기업고객 대표자도 '사람'으로 자동 등록 — 동일 이름이 이미 있으면 생략(중복 방지) */
     if(corp){
@@ -887,6 +912,7 @@ window.wlSave=async function(){
           (_clients=_clients||[]).push({id:cref.id,name:_ceo.slice(0,20),birthDate:'',contracts:[],memo:_memo});
           toast('대표자 '+_ceo+'님을 고객 목록에 등록했습니다');
         }catch(e){console.warn('대표자 등록 실패',e);}
+        try{wlMpcAdd(_ceo,{company:corpName,title:'대표'});}catch(e){}   /* 내 고객 리스트에도 등록 */
       }
     }
     if(_editId){
