@@ -6674,7 +6674,7 @@ async function loadUpcoming(){
     const _maxD=new Date(Date.UTC(_kstNow.getUTCFullYear(),_kstNow.getUTCMonth()+(_kstNow.getUTCDate()>=26?2:1),0));
     const _maxDate=`${_maxD.getUTCFullYear()}-${String(_maxD.getUTCMonth()+1).padStart(2,'0')}-${String(_maxD.getUTCDate()).padStart(2,'0')}`;
     const _norm=s=>(s||'').replace(/\s+/g,'').toLowerCase();
-    const _pipeCats=['클로징리포트','마스터가이드','메디컬'];
+    const _pipeCats=['클로징리포트','마스터가이드','병의원 컨설팅'];   /* ★ [2026-08-26] 표기 통일 */
     const rows=[];const _seen=new Map();
     /* ★[2026-07-29] 구분 정규화 — 소스별 표기 편차('corporate'/'법인컨설팅' 등)를 '법인'/'개인'으로 통일해 병합 키 어긋남 방지 */
     const _normField=v=>{v=String(v||'').trim();if(!v)return'';if(/corporate|법인/i.test(v))return'법인';if(/personal|individual|개인/i.test(v))return'개인';return v;};
@@ -6704,23 +6704,17 @@ async function loadUpcoming(){
 
     /* ① upcoming_contents (기존 소스 — AI 초안은 사용자에게 숨김) */
     const snap=await getDocs(query(collection(db,'upcoming_contents'),orderBy('date','asc')));
-    snap.docs.forEach(d=>{const c=d.data();if(c.eduStatus==='ai_draft')return;
+    /* ★ [2026-08-26] 담당자 점검 게이트 — 미공개(pending)·AI초안은 회원 화면에 노출하지 않는다.
+       eduStatus 가 없는 기존 문서는 종전대로 노출(하위 호환). */
+    snap.docs.forEach(d=>{const c=d.data();if(c.eduStatus==='ai_draft'||c.eduStatus==='pending')return;
       pushRow({date:c.date,category:c.category||'',field:c.field||'',title:c.title||'',video:c.video,audio:c.audio,html:c.html,pdf:c.pdf,ppt:c.ppt,completed:c.completed===true});});
 
-    /* ② 클로징리포트 월간 일정 */
-    try{
-      const crSnap=await getDocs(collection(db,'upcoming_case_reports'));
-      crSnap.docs.forEach(d=>{const c=d.data();const dt=c.scheduledDate||c.date;if(!dt)return;
-        const fld=((c.clientType||c.salesType)==='corporate')?'법인':'개인';
-        pushRow({date:dt,category:'클로징리포트',field:fld,title:c.title||c.label||c.topicLabel||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:c.status==='published'});});
-    }catch(e){console.warn('클로징리포트 일정 로드 실패:',e);}
-
-    /* ③ 마스터가이드 연간 편성 */
-    try{
-      const mgSnap=await getDocs(collection(db,'master_guide_schedule'));
-      mgSnap.docs.forEach(d=>{const c=d.data();if(!c.scheduledDate)return;
-        pushRow({date:c.scheduledDate,category:'마스터가이드',field:c.track||'',title:c.title||'',video:'',audio:'',html:'O',pdf:'',ppt:'',completed:['published','done','completed'].includes(c.status)});});
-    }catch(e){console.warn('마스터가이드 편성 로드 실패:',e);}
+    /* ★ [2026-08-26] ②클로징리포트(upcoming_case_reports)·③마스터가이드(master_guide_schedule)
+       원본 직접 조회를 제거했다.
+       두 소스는 담당자 점검을 거치지 않고 편성 원본을 그대로 노출시켜 왔으므로,
+       25일 취합 → 26일 공개 게이트를 무력화하는 경로였다.
+       이제 ①upcoming_contents(eduStatus:'published')로만 노출된다.
+       이미 게시된 콘텐츠는 아래 ④에서 그대로 ✓완료로 보강되므로 누락되지 않는다. */
 
     /* ④ 당월 게시완료분 보강 — 일정 컬렉션에 없어도(수동·비상 생성 포함) ✓완료로 표시 */
     try{
@@ -6728,7 +6722,7 @@ async function loadUpcoming(){
         if(!['case_report','master_guide','medical_weekly'].includes(c.type))return;
         let dt=c.scheduledDate;
         if(!dt&&c.createdAt){const d2=c.createdAt.toDate?c.createdAt.toDate():new Date(c.createdAt);dt=`${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-${String(d2.getDate()).padStart(2,'0')}`;}
-        const cat=c.type==='case_report'?'클로징리포트':c.type==='master_guide'?'마스터가이드':'메디컬';
+        const cat=c.type==='case_report'?'클로징리포트':c.type==='master_guide'?'마스터가이드':'병의원 컨설팅';   /* ★ [2026-08-26] 관리자·취합 표기와 통일 — 라벨 불일치로 같은 콘텐츠가 2행으로 갈리던 문제 해소 */
         const fmts=c.formats||[];
         /* ★[2026-07-29] 클로징리포트 구분: 일정 소스(②)와 동일하게 clientType/salesType 우선 — subType 공백으로 인한 병합 실패 방지 */
         const fld=c.type==='case_report'?(((c.clientType||c.salesType)==='corporate')?'법인':((c.clientType||c.salesType)?'개인':(c.subType||''))):(c.subType||c.track||'');
@@ -6742,7 +6736,7 @@ async function loadUpcoming(){
     if(!rows.length){$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">등록된 예정 콘텐츠가 없습니다.</td></tr>';return;}
     const ck=v=>v?'<span style="color:#2e86ab;font-weight:700">✓</span>':'';
     const fmtDate=d=>(d||'').replace(/-/g,'.');
-    const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910'],'택스컨설팅위클리':['#e3eaf6','#1a3a6b'],'클로징리포트':['#fdf3d7','#8a6d1a'],'마스터가이드':['#e8ecfb','#3b4f9e'],'메디컬':['#fde4e4','#b91c1c']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${esc(c)}</span>`;};
+    const catBadge=c=>{const colors={'클로징PPT':['#fce4e4','#c0392b'],'특급보고서':['#ddeef9','#1a6fa0'],'이슈브리핑':['#def5e6','#1e8449'],'영상콘텐츠':['#f0e4f7','#6c3483'],'오디오':['#fef3de','#d68910'],'택스컨설팅위클리':['#e3eaf6','#1a3a6b'],'클로징리포트':['#fdf3d7','#8a6d1a'],'마스터가이드':['#e8ecfb','#3b4f9e'],'병의원 컨설팅':['#fde4e4','#b91c1c'],'메디컬':['#fde4e4','#b91c1c']};const cl=colors[c]||['#eee','#666'];return`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;color:${cl[1]};background:${cl[0]}">${esc(c)}</span>`;};
     $('upcoming-tbody').innerHTML=rows.map((c,i)=>{const bg=i%2===1?'background:#f8f9fa':'';const done=c.completed===true;const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">&mdash;</td>';return`<tr style="${bg};border-bottom:1px solid #e9ecef"><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.field||'')}">${esc(c.field||'')}</td><td style="text-align:left">${esc(c.title||'')}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}</tr>`;}).join('');
   }catch(e){console.error('게시예정 로드 오류:',e);$('upcoming-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-lt)">로드 중 오류가 발생했습니다.</td></tr>';}
 }

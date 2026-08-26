@@ -595,7 +595,7 @@
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>총판명</th><th>아이디</th><th style="text-align:right">직하위</th><th style="text-align:right">차하위</th><th style="text-align:right">합계</th><th style="text-align:right">자비아멤버</th><th style="text-align:right">당월 수수료</th><th>상세</th></tr></thead><tbody id="tb-distributors"></tbody></table></div>
       <p style="margin-top:14px;font-size:12px;color:var(--text-lt)">💡 행을 클릭하면 해당 총판의 산하 회원 트리를 볼 수 있습니다. 수수료는 JARVIA멤버십 회원수 × 10,000원으로 단순 계산되며 실시간 표시입니다.</p>
     </div>
-    <div id="p-upcoming" class="panel hidden"><h2>게시예정 콘텐츠 관리</h2><button class="btn" onclick="showUF()">게시예정 등록</button> <button class="btn" onclick="publishMonthlyAllUpcoming()" style="margin-left:8px;background:#2e7d32">🚀 익월 전체 게시</button> <button class="btn" onclick="publishSelectedUpcoming()" style="margin-left:8px;background:#1976d2">✅ 선택 게시</button> <button class="btn btn-danger" onclick="deleteSelectedUpcoming()" style="margin-left:8px">선택 삭제</button>
+    <div id="p-upcoming" class="panel hidden"><h2>게시예정 콘텐츠 관리</h2><button class="btn" onclick="showUF()">게시예정 등록</button> <button class="btn" onclick="syncMonthlyUpcoming()" style="margin-left:8px;background:#6c3483">🔄 익월 편성 취합</button> <button class="btn" onclick="publishMonthlyAllUpcoming()" style="margin-left:8px;background:#2e7d32">🚀 익월 전체 게시</button> <button class="btn" onclick="publishSelectedUpcoming()" style="margin-left:8px;background:#1976d2">✅ 선택 게시</button> <button class="btn btn-danger" onclick="deleteSelectedUpcoming()" style="margin-left:8px">선택 삭제</button>
 <!-- ★ 특급보고서 진행 배너 (active report 감지 시 표시) -->
 <div id="pr-upcoming-banner" style="display:none;margin-top:14px;padding:12px 18px;border-radius:10px;cursor:pointer;transition:border-color .2s" onclick="onPrBannerClick()"></div>
 <div style="margin-top:14px;padding:16px;background:#F0F4FF;border:1px solid #C5D0E8;border-radius:8px">
@@ -7904,9 +7904,10 @@ async function loadUpcomingAdm(){
     const doneCell=done?'<td style="text-align:center"><span style="display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap">✓ 완료</span></td>':'<td style="text-align:center;color:#bbb">—</td>';
     // ★ 게시 상태별 버튼 표시 (중복 방지)
     const isPub=c.eduStatus==='published';
+    const isPending=c.eduStatus==='pending';   /* ★ [2026-08-26] 25일 취합분 — 담당자 점검 대기 */
     const pubBtn=isPub
       ?`<span style="display:inline-block;padding:4px 8px;background:#e8f5e9;color:#2e7d32;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap">✓ 게시됨</span>`
-      :`<button class="btn btn-sm" style="background:#2e7d32" onclick="publishOneUpcoming('${d.id}')">🚀 게시</button>`;
+      :`<button class="btn btn-sm" style="background:#2e7d32" onclick="publishOneUpcoming('${d.id}')" title="${isPending?'26일 09시에 자동 공개됩니다. 지금 바로 공개하려면 클릭하세요.':'사용자 페이지에 즉시 게시합니다.'}">🚀 게시</button>${isPending?`<span style="display:inline-block;padding:3px 7px;background:#FFF3E0;color:#E65100;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap">점검대기</span>`:''}`;
     return`<tr style="${rowStyle};border-bottom:1px solid #e9ecef"><td style="text-align:center"><input type="checkbox" class="uf-chk" value="${d.id}"></td><td style="text-align:center">${i+1}</td><td style="text-align:center">${fmtDate(c.date)}</td><td style="text-align:center">${catBadge(c.category||'')}</td><td style="text-align:center">${c.field||''}</td><td style="text-align:left">${c.title||''}${rowBadge}</td><td style="text-align:center">${ck(c.video)}</td><td style="text-align:center">${ck(c.audio)}</td><td style="text-align:center">${ck(c.html)}</td><td style="text-align:center">${ck(c.pdf)}</td><td style="text-align:center">${ck(c.ppt)}</td>${doneCell}<td style="text-align:center"><div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">${pubBtn}<button class="btn btn-sm" onclick="editUpcoming('${d.id}')">수정</button><button class="btn btn-sm btn-danger" onclick="delUpcoming('${d.id}')">삭제</button></div></td></tr>`;}).join('');
   if($('uf-chk-all'))$('uf-chk-all').checked=false;
   // ★ active report 있으면 배너로만 표시 (모달은 배너 클릭 시에만 열림)
@@ -7963,6 +7964,21 @@ async function editUpcoming(id){
 async function delUpcoming(id){if(!confirm('삭제하시겠습니까?'))return;await deleteDoc(doc(db,'upcoming_contents',id));toast('삭제 완료','success');loadUpcomingAdm();}
 function toggleAllUpcoming(){const v=$('uf-chk-all').checked;document.querySelectorAll('.uf-chk').forEach(c=>c.checked=v);}
 async function deleteSelectedUpcoming(){const ids=[...document.querySelectorAll('.uf-chk:checked')].map(c=>c.value);if(!ids.length)return toast('삭제할 항목을 선택하세요.','error');if(!confirm(`${ids.length}건을 삭제하시겠습니까?`))return;for(const id of ids){try{await deleteDoc(doc(db,'upcoming_contents',id));}catch(e){console.error('삭제 실패:',id,e);}}toast(`${ids.length}건 삭제 완료`,'success');loadUpcomingAdm();}
+
+/* ★ [2026-08-26] 익월 편성 수동 취합
+   25일 09:00 자동 실행분을 다시 돌린다(중복 생성 없음 — category+date 로 걸러짐).
+   클로징리포트·마스터가이드·병의원 컨설팅 3종을 upcoming_contents 로 가져온다. */
+async function syncMonthlyUpcoming(){
+  if(!confirm('익월 편성을 취합합니다.\n\n· 클로징리포트 · 마스터가이드 · 병의원 컨설팅\n· 이미 등록된 항목은 건너뜁니다(중복 없음)\n· 취합된 항목은 「점검대기」 상태로 들어옵니다\n\n진행할까요?'))return;
+  toast('취합 중...','');
+  try{
+    const fn=httpsCallable(functions,'adminMonthlyUpcoming');
+    const res=await fn({mode:'sync'});
+    const j=res.data||{};
+    toast(`✅ ${j.yearMonth} 취합 완료 — 신규 ${j.created}건 / 기존 ${j.skipped}건${j.failed?` / 실패 ${j.failed}건`:''}`,'success');
+    loadUpcomingAdm();
+  }catch(e){toast('취합 실패: '+(e.message||'오류'),'error');}
+}
 
 // ★ 단건 즉시 게시 (중복 방지)
 async function publishOneUpcoming(id){
@@ -8036,7 +8052,7 @@ async function publishMonthlyAllUpcoming(){
   }catch(e){console.error('익월 전체 게시 실패:',e);toast('게시 실패: '+e.message,'error');}
 }
 
-window.showUF=showUF;window.saveUpcoming=saveUpcoming;window.loadUpcomingAdm=loadUpcomingAdm;window.editUpcoming=editUpcoming;window.delUpcoming=delUpcoming;window.toggleAllUpcoming=toggleAllUpcoming;window.deleteSelectedUpcoming=deleteSelectedUpcoming;window.publishOneUpcoming=publishOneUpcoming;window.publishSelectedUpcoming=publishSelectedUpcoming;window.publishMonthlyAllUpcoming=publishMonthlyAllUpcoming;
+window.showUF=showUF;window.saveUpcoming=saveUpcoming;window.loadUpcomingAdm=loadUpcomingAdm;window.editUpcoming=editUpcoming;window.delUpcoming=delUpcoming;window.toggleAllUpcoming=toggleAllUpcoming;window.deleteSelectedUpcoming=deleteSelectedUpcoming;window.publishOneUpcoming=publishOneUpcoming;window.publishSelectedUpcoming=publishSelectedUpcoming;window.publishMonthlyAllUpcoming=publishMonthlyAllUpcoming;window.syncMonthlyUpcoming=syncMonthlyUpcoming;
 
 // ═══ 교육콘텐츠 AI 자동생성 ═══
 const EDU_MONTHLY_URL='https://triggeredutopicmonthlybatch-cvmdsjgzxa-du.a.run.app';
