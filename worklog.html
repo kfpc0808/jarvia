@@ -104,6 +104,11 @@ mark{background:#FFF3BF;border-radius:2px;padding:0 1px}
 .tRow .tSt i{font-style:normal;color:#0F5132;margin-left:3px}
 .fdW{display:flex;gap:7px;margin-top:6px}
 .fdW input{flex:1;padding:9px 10px;border:1px solid #D8DEE8;border-radius:9px;background:#fff}
+.pgW{display:flex;gap:6px;justify-content:center;align-items:center;margin:13px 0 2px;flex-wrap:wrap}
+.pg{min-width:37px;height:37px;border:1px solid #D8DEE8;border-radius:9px;background:#fff;color:var(--sub);font-size:13px;font-weight:700}
+.pg.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.pg:disabled{opacity:.35}
+.pgInfo{font-size:11px;color:var(--mut);margin-left:4px}
 .empty b{color:var(--ink)}
 
 /* ── 폼 ── */
@@ -230,7 +235,13 @@ textarea.ag{overflow:hidden;min-height:48px}
     </div>
     <div class="lbar">
       <button type="button" class="ftog" id="fTog" style="margin:0" onclick="wlFilterTog()">⚙ 필터<span id="fTogN"></span></button>
-      <div class="vseg"><button type="button" id="vmS" onclick="wlView('simple')">간단</button><button type="button" id="vmC" onclick="wlView('card')">상세</button></div>
+      <div style="display:flex;gap:7px;align-items:center">
+        <select id="psize" onchange="wlPsize(this.value)" style="padding:8px 9px;border:1px solid #D8DEE8;border-radius:9px;background:#fff;font-size:12.5px">
+          <option value="10">10개</option><option value="20">20개</option><option value="30">30개</option>
+          <option value="40">40개</option><option value="50">50개</option><option value="100">100개</option>
+        </select>
+        <div class="vseg"><button type="button" id="vmS" onclick="wlView('simple')">간단</button><button type="button" id="vmC" onclick="wlView('card')">상세</button></div>
+      </div>
     </div>
     <div id="fWrap" style="display:none">
       <div class="frow" id="fD"></div>
@@ -422,6 +433,8 @@ let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',p
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
 let _vmode=(function(){try{return localStorage.getItem('wl_vmode')||'simple';}catch(e){return 'simple';}})();
 let _fdKey='',_pFrom='',_pTo='';   /* 구간 조회 */
+let _page=1,_lastSig='';
+let _psize=(function(){try{return parseInt(localStorage.getItem('wl_psize'))||20;}catch(e){return 20;}})();
 const man=n=>!n?'0':(n>=10000?comma(Math.round(n/10000))+'만':comma(n));
 let _snap=null,_afterSave=null;   /* 미저장 이탈 가드 */
 function fSnap(){
@@ -597,8 +610,15 @@ function renderList(){
   const L=filtered(),td=today();
   $('cnt').textContent=_sumLine(L);
   if(!L.length){$('list').innerHTML='<div class="empty">'+((_cache||[]).length?'조건에 맞는 기록이 없습니다.':'아직 기록이 없습니다.<br><b>아래 버튼</b>으로 오늘 상담을 남겨보세요 🙂')+'</div>';return;}
-  if(_vmode==='simple'){renderSimple(L,td);return;}
-  $('list').innerHTML=L.map(a=>{
+  /* ── 페이지네이션: 조건 바뀌면 1페이지로 ── */
+  const _sig=JSON.stringify([_q,_fp,_fs,_pFrom,_pTo,_sort,_psize]);
+  if(_sig!==_lastSig){_lastSig=_sig;_page=1;}
+  const pages=Math.max(1,Math.ceil(L.length/_psize));
+  if(_page>pages)_page=pages;
+  const P=L.slice((_page-1)*_psize,_page*_psize);
+  try{$('psize').value=String(_psize);}catch(e){}
+  if(_vmode==='simple'){renderSimple(P,td);if(pages>1)$('list').insertAdjacentHTML('beforeend',_pagerHTML(_page,pages));return;}
+  else $('list').innerHTML=P.map(a=>{
     const _ceo=a.clientType==='corp'?(a.corpCeo||''):'';
     const nm=a.clientType==='corp'?((_ceo?_ceo+' · ':'')+(a.corpName||'(기업)')):(a.clientName||'(고객)');
     const ps=prodsOf(a),st=stageOf(a);
@@ -619,7 +639,20 @@ function renderList(){
       ${(a.request&&!a.done)||a.nextDate?`<div class="nxt${over?' over':''}">${a.request&&!a.done?'🙋 '+hi(a.request):''}${a.nextDate?' ⏰ '+esc(a.nextDate.slice(5))+(over?' 지남':''):''}</div>`:''}
     </div>`;
   }).join('');
+  if(pages>1)$('list').insertAdjacentHTML('beforeend',_pagerHTML(_page,pages));
 }
+function _pagerHTML(cur,pages){
+  const win=[];const half=2;
+  let st=Math.max(1,cur-half),en=Math.min(pages,st+4);st=Math.max(1,en-4);
+  for(let i=st;i<=en;i++)win.push(i);
+  return '<div class="pgW">'
+    +`<button type="button" class="pg" ${cur<=1?'disabled':''} onclick="wlPage(${cur-1})">‹</button>`
+    +win.map(i=>`<button type="button" class="pg${i===cur?' on':''}" onclick="wlPage(${i})">${i}</button>`).join('')
+    +`<button type="button" class="pg" ${cur>=pages?'disabled':''} onclick="wlPage(${cur+1})">›</button>`
+    +`<span class="pgInfo">${cur} / ${pages}p</span></div>`;
+}
+window.wlPage=function(n){_page=n;renderList();window.scrollTo(0,0);};
+window.wlPsize=function(v){_psize=parseInt(v)||20;try{localStorage.setItem('wl_psize',String(_psize));}catch(e){}_page=1;renderList();};
 
 /* ── 간단(리스트) 뷰: 가로 스크롤 표 · 행 높이 고정 42px ── */
 function renderSimple(L,td){
