@@ -640,18 +640,64 @@ function cliSync(){
   b.innerHTML=esc(lab)+'<span>▾</span>';
   b.classList.toggle('ph',!_sel.clientId);
 }
+let _mpcAll=null;
+function wlMpcAll(){                       /* 채널 '내 고객' 상세(IndexedDB, 같은 도메인) 읽기 전용 열람 */
+  if(_mpcAll)return Promise.resolve(_mpcAll);
+  return new Promise(res=>{
+    try{
+      const r=indexedDB.open('mycustomers_db',1);
+      r.onupgradeneeded=e=>{try{const d=e.target.result;if(!d.objectStoreNames.contains('customers'))d.createObjectStore('customers',{keyPath:'id'});}catch(_e){}};
+      r.onsuccess=()=>{try{
+        const g=r.result.transaction('customers','readonly').objectStore('customers').getAll();
+        g.onsuccess=()=>{_mpcAll=g.result||[];res(_mpcAll);};
+        g.onerror=()=>res(_mpcAll=[]);
+      }catch(e){res(_mpcAll=[]);}};
+      r.onerror=()=>res(_mpcAll=[]);
+    }catch(e){res(_mpcAll=[]);}
+  });
+}
 window.wlInfoOpen=function(cid){
   const c=(_clients||[]).find(x=>x.id===cid);if(!c){toast('고객 정보를 찾을 수 없습니다');return;}
   $('infTitle').childNodes[0].textContent='👤 '+(c.name||'고객')+' 정보';
-  const R=(k,v)=>v?`<div class="infR"><span>${k}</span><b>${esc(v)}</b></div>`:'';
-  let h=R('이름',c.name)+R('연락처',c.phone)+R('회사·직함',[c.company,c.position].filter(Boolean).join(' '))
-    +R('생년월일',c.birthDate)+R('특이사항',c.memo);
-  const cts=c.contracts||[];
-  h+=`<div class="infR"><span>등록 계약</span><b>${cts.length? cts.length+'건':'없음'}</b></div>`;
-  if(cts.length)h+='<div class="infC">'+cts.map(t=>'<div>'+esc([t.insurer,t.productName||t.product].filter(Boolean).join(' · ')||'계약')+(t.maturityDate?' <span style="color:#8A93A6">('+esc(String(t.maturityDate).slice(0,7))+' 만기)</span>':'')+'</div>').join('')+'</div>';
-  h+='<div style="padding:10px 18px 14px;font-size:11px;color:var(--mut)">정보 수정·계약 추가는 채널의 <b>내 고객</b>에서 할 수 있습니다</div>';
-  $('infBody').innerHTML=h;
+  $('infBody').innerHTML='<div class="empty" style="padding:26px">불러오는 중…</div>';
   $('infOv').classList.add('show');
+  wlMpcAll().then(all=>{
+    /* 이름(+생년월일) 매칭 — 빠른등록(fc_clients)과 내 고객(기기 저장)은 별도 체계 */
+    const nm=String(c.name||'').trim();
+    let hits=(all||[]).filter(x=>String(x.name||'').trim()===nm);
+    if(hits.length>1&&c.birthDate){const b=hits.filter(x=>String(x.birthDate||'').slice(0,10)===c.birthDate);if(b.length)hits=b;}
+    const m=hits[0]||null;
+    const R=(k,v)=>v?`<div class="infR"><span>${k}</span><b>${esc(v)}</b></div>`:'';
+    let h='';
+    h+=R('이름',m?.name||c.name)+R('연락처',m?.phone||'')+R('이메일',m?.email||'');
+    h+=R('회사·직함',[m?.company,m?.title||m?.mgTitle,m?.job].filter(Boolean).join(' · '));
+    h+=R('주소',m?.addr||'')+R('생년월일',(m?.birthDate||c.birthDate||'').slice(0,10));
+    h+=R('소개자',m?.referrer||'')+R('선호 연락',[m?.prefChannel,m?.prefTime].filter(Boolean).join(' · '));
+    h+=R('다음 연락',(m?.nextContact||'').slice(0,10))+R('니즈',Array.isArray(m?.needs)?m.needs.join(', '):(m?.needs||''));
+    h+=R('특이사항',c.memo||m?.memo||'');
+    /* 가입보험: 내 고객 포트폴리오 우선, 없으면 빠른등록 계약 */
+    const ip=(m&&Array.isArray(m.insurancePortfolio))?m.insurancePortfolio:[];
+    const cts=c.contracts||[];
+    if(ip.length){
+      h+=`<div class="infR"><span>가입보험</span><b>${ip.length}건</b></div><div class="infC">`
+        +ip.map(t=>'<div>'+esc([t.company,t.product].filter(Boolean).join(' · ')||'계약')
+          +(t.relation?' <span style="color:#5B3A82">['+esc(t.relation)+']</span>':'')
+          +((t.start||t.expiry)?' <span style="color:#8A93A6">'+esc(String(t.start||'').slice(0,10))+'~'+esc(String(t.expiry||'').slice(0,10)||'종신')+'</span>':'')
+          +(t.status&&t.status!=='유지(정상)'?' <span style="color:#C0392B">'+esc(t.status)+'</span>':'')+'</div>').join('')+'</div>';
+    }else if(cts.length){
+      h+=`<div class="infR"><span>등록 계약</span><b>${cts.length}건</b></div><div class="infC">`
+        +cts.map(t=>'<div>'+esc([t.insurer,t.productName||t.product].filter(Boolean).join(' · ')||'계약')+(t.maturityDate?' <span style="color:#8A93A6">('+esc(String(t.maturityDate).slice(0,7))+' 만기)</span>':'')+'</div>').join('')+'</div>';
+    }else{
+      h+=`<div class="infR"><span>가입보험</span><b>없음</b></div>`;
+    }
+    if(!m)h+='<div style="padding:9px 18px 0;font-size:11px;color:#8A5A00">이 기기의 내 고객 목록에서 동일 이름을 찾지 못했습니다 — 채널에서 드라이브 동기화 후 다시 확인해보세요</div>';
+    else if(hits.length>1)h+='<div style="padding:9px 18px 0;font-size:11px;color:#8A5A00">동명 '+hits.length+'명 — 첫 번째 고객 기준으로 표시했습니다</div>';
+    h+=`<div style="padding:12px 16px 14px"><button type="button" class="save" style="margin:0;padding:12px;font-size:14px" onclick="wlGoCust('${m?esc(m.id):''}')">✏️ 내 고객에서 상세 보기·수정</button></div>`;
+    $('infBody').innerHTML=h;
+  });
+};
+window.wlGoCust=function(mid){
+  location.href='/fc.html?fc='+encodeURIComponent(_loginId)+'&open=cust'+(mid?('&cid='+encodeURIComponent(mid)):'');
 };
 window.wlInfoClose=function(){$('infOv').classList.remove('show');};
 
