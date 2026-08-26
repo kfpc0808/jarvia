@@ -669,8 +669,11 @@ window.wlInfoOpen=function(cid){
   $('infBody').innerHTML=_basic;
   wlMpcAll().then(all=>{
     /* 이름(+생년월일) 매칭 — 빠른등록(fc_clients)과 내 고객(기기 저장)은 별도 체계 */
-    const nm=String(c.name||'').trim();
-    let hits=(all||[]).filter(x=>String(x.name||'').trim()===nm);
+    /* 유연 매칭: 공백 제거 후 완전일치 → 없으면 '이름으로 시작'(김철수 vs 김철수 대표) → 생년월일로 동명 판별 */
+    const _norm=v=>String(v||'').replace(/\s+/g,'').trim();
+    const nm=_norm(c.name);
+    let hits=(all||[]).filter(x=>_norm(x.name)===nm);
+    if(!hits.length&&nm.length>=2)hits=(all||[]).filter(x=>_norm(x.name).startsWith(nm)||nm.startsWith(_norm(x.name)));
     if(hits.length>1&&c.birthDate){const b=hits.filter(x=>String(x.birthDate||'').slice(0,10)===c.birthDate);if(b.length)hits=b;}
     const m=hits[0]||null;
     const R=(k,v)=>v?`<div class="infR"><span>${k}</span><b>${esc(v)}</b></div>`:'';
@@ -866,11 +869,25 @@ window.wlSave=async function(){
       try{
         const nref=doc(collection(db,'fc_clients'));
         const nvMemo=($('fMemo')?.value||'').trim();
-        await setDoc(nref,{fcAuthUid:me.uid,name:clientName.slice(0,20),birthDate:'',memo:nvMemo,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-        (_clients=_clients||[]).push({id:nref.id,name:clientName.slice(0,20),birthDate:'',memo:nvMemo});
+        await setDoc(nref,{fcAuthUid:me.uid,name:clientName.slice(0,20),birthDate:'',contracts:[],memo:nvMemo,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        (_clients=_clients||[]).push({id:nref.id,name:clientName.slice(0,20),birthDate:'',contracts:[],memo:nvMemo});
         d.clientId=nref.id;
         toast('신규 고객으로 자동 등록했습니다');
       }catch(e){console.warn('신규 고객 등록 실패',e);}
+    }
+    /* ★ 기업고객 대표자도 '사람'으로 자동 등록 — 동일 이름이 이미 있으면 생략(중복 방지) */
+    if(corp){
+      const _ceo=$('fCorpCeo').value.trim();
+      if(_ceo&&!(_clients||[]).some(x=>String(x.name||'').trim()===_ceo)){
+        try{
+          const cref=doc(collection(db,'fc_clients'));
+          const _cm=($('fMemo')?.value||'').trim();
+          const _memo=(corpName+' 대표'+(_cm?(' · '+_cm.slice(0,120)):''));
+          await setDoc(cref,{fcAuthUid:me.uid,name:_ceo.slice(0,20),birthDate:'',contracts:[],memo:_memo,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+          (_clients=_clients||[]).push({id:cref.id,name:_ceo.slice(0,20),birthDate:'',contracts:[],memo:_memo});
+          toast('대표자 '+_ceo+'님을 고객 목록에 등록했습니다');
+        }catch(e){console.warn('대표자 등록 실패',e);}
+      }
     }
     if(_editId){
       await updateDoc(doc(db,'fc_activities',_editId),d);
