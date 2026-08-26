@@ -96,8 +96,11 @@ textarea.ag{overflow:hidden;min-height:48px}
 .pickbtn{width:100%;padding:12px 13px;border:1px solid #D8DEE8;border-radius:10px;background:#fff;color:var(--ink);font-size:16px;text-align:left;display:flex;align-items:center;gap:6px}
 .pickbtn span{margin-left:auto;color:var(--mut);font-size:13px}
 .pickbtn.ph{color:var(--mut)}
-#ckOv,#insOv{position:fixed;inset:0;z-index:80;background:rgba(15,23,40,.45);display:none;align-items:flex-end;justify-content:center}
-#ckOv.show,#insOv.show{display:flex}
+#ckOv,#insOv,#cliOv{position:fixed;inset:0;z-index:80;background:rgba(15,23,40,.45);display:none;align-items:flex-end;justify-content:center}
+#ckOv.show,#insOv.show,#cliOv.show{display:flex}
+.ckS{padding:9px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+.ckS input{width:100%;padding:11px 13px;border:1px solid #D8DEE8;border-radius:10px;background:#fff}
+.ckSub{margin-left:auto;font-size:11px;color:var(--mut);flex-shrink:0;padding-left:8px}
 .ckP{background:#fff;width:100%;max-width:640px;border-radius:16px 16px 0 0;max-height:78vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px);animation:ckUp .18s ease}
 @keyframes ckUp{from{transform:translateY(24px);opacity:.6}}
 .ckH{display:flex;align-items:center;padding:14px 16px 11px;font-weight:800;font-size:15px;border-bottom:1px solid var(--line);flex-shrink:0}
@@ -200,7 +203,7 @@ textarea.ag{overflow:hidden;min-height:48px}
     </div>
     <div id="pBox">
       <div class="fg"><label>고객 <i>*</i></label>
-        <select id="fClient" onchange="wlClientChanged()"></select>
+        <button type="button" class="pickbtn ph" id="fClientBtn" onclick="wlCliOpen()">고객 선택<span>▾</span></button>
         <div id="fClientNewW" style="display:none;margin-top:7px"><input type="text" id="fClientNew" placeholder="신규 고객 이름"></div>
       </div>
       <div id="enrich"></div>
@@ -270,6 +273,13 @@ textarea.ag{overflow:hidden;min-height:48px}
     <div class="ckF"><button type="button" id="ckDone" onclick="wlConsultClose()">선택 완료</button></div>
   </div>
 </div>
+<div id="cliOv" onclick="if(event.target===this)wlCliClose()">
+  <div class="ckP">
+    <div class="ckH">고객 선택<button type="button" onclick="wlCliClose()" aria-label="닫기">✕</button></div>
+    <div class="ckS"><input type="search" id="cliQ" placeholder="🔍 이름·회사·연락처 검색" oninput="cliRender(this.value)" autocomplete="off"></div>
+    <div class="ckL" id="cliList"></div>
+  </div>
+</div>
 <div id="insOv" onclick="if(event.target===this)wlInsClose()">
   <div class="ckP">
     <div class="ckH">보험사 선택<button type="button" onclick="wlInsClose()" aria-label="닫기">✕</button></div>
@@ -316,7 +326,7 @@ const WL_CONSULT=[
 
 /* ═══ 상태 ═══ */
 let me=null,_clients=null,_cache=null,_editId=null;
-let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',ptype:''};
+let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',ptype:'',clientId:''};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
 
 function ag(el){if(!el)return;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,340)+'px';}
@@ -451,10 +461,8 @@ window.wlShowForm=function(id){
   _sel={ct:a?.clientType||'personal',chan:a?.channel||'대면',prods:(a?.products||[]).slice(),stage:a?.stage||''};
   setView('vForm',id?'기록 수정':'새 기록');
   $('fDate').value=a?.date||today();
-  const cs=$('fClient');
-  const cls=(_clients||[]).slice().sort((x,y)=>String(x.name||'').localeCompare(String(y.name||''),'ko'));
-  cs.innerHTML='<option value="">고객 선택</option>'+cls.map(c=>`<option value="${esc(c.id)}">${esc(c.name||'')}${c.company?' ('+esc(c.company)+')':''}</option>`).join('')+'<option value="__new">＋ 직접 입력(신규)</option>';
-  cs.value=a?.clientId||'';
+  _sel.clientId=a?.clientId||((a&&!a.clientId&&a.clientName)?'__new':'');
+  cliSync();
   $('fClientNew').value=(a&&!a.clientId)?(a.clientName||''):'';
   $('fCorp').value=a?.corpName||'';$('fCorpC').value=a?.corpContact||'';
   $('fConsultC').value=a?.consultTypeCustom||'';$('fProdC').value=a?.productCustom||'';$('fStageC').value=a?.stageCustom||'';
@@ -532,6 +540,33 @@ window.wlConsultClose=function(){
   $('ckOv').classList.remove('show');consultSync();
   if(_sel.consults.includes('__c'))setTimeout(()=>{try{$('fConsultC').focus();}catch(e){}},60);
 };
+function cliSync(){
+  const b=$('fClientBtn');if(!b)return;
+  let lab='고객 선택';
+  if(_sel.clientId==='__new')lab='＋ 직접 입력(신규)';
+  else if(_sel.clientId){const c=(_clients||[]).find(x=>x.id===_sel.clientId);lab=c?((c.name||'')+(c.company?' ('+c.company+')':'')):'고객 선택';}
+  b.innerHTML=esc(lab)+'<span>▾</span>';
+  b.classList.toggle('ph',!_sel.clientId);
+}
+window.wlCliOpen=function(){
+  $('cliQ').value='';cliRender('');
+  $('cliOv').classList.add('show');
+  setTimeout(()=>{try{$('cliQ').focus();}catch(e){}},80);
+};
+window.wlCliClose=function(){$('cliOv').classList.remove('show');};
+window.cliRender=function(q){
+  q=(q||'').trim().toLowerCase();
+  const L=(_clients||[]).slice().sort((x,y)=>String(x.name||'').localeCompare(String(y.name||''),'ko'))
+    .filter(c=>!q||[c.name,c.company,c.phone].filter(Boolean).join(' ').toLowerCase().includes(q));
+  $('cliList').innerHTML=
+    `<div class="ckI${_sel.clientId==='__new'?' on':''}" onclick="wlCliPick('__new')" style="color:var(--blue);font-weight:700">＋ 직접 입력 (신규 고객)</div>`
+    +(L.length?L.map(c=>`<div class="ckI${_sel.clientId===c.id?' on':''}" onclick="wlCliPick(this.dataset.v)" data-v="${esc(c.id)}">${esc(c.name||'')}<span class="ckSub">${esc(c.company||'')}${c.phone?(c.company?' · ':'')+esc(String(c.phone).slice(-4)):''}</span></div>`).join('')
+      :'<div class="ckI" style="color:var(--mut)">'+(q?'검색 결과가 없습니다':'등록된 고객이 없습니다 — 직접 입력으로 시작하세요')+'</div>');
+};
+window.wlCliPick=function(v){
+  _sel.clientId=v;cliSync();wlCliClose();wlClientChanged();
+  if(v==='__new')setTimeout(()=>{try{$('fClientNew').focus();}catch(e){}},60);
+};
 function insSync(){
   const b=$('fInsBtn');if(!b)return;
   const lab=_sel.insurer==='__c'?'직접입력':(_sel.insurer||'보험사 선택');
@@ -558,7 +593,7 @@ window.wlPremLive=el=>{const n=num(el.value);el.value=n==null?'':comma(n);};   /
 
 /* 고객 선택 → 기존 정보 자동 표시 + 누락 보완 */
 window.wlClientChanged=function(){
-  const v=$('fClient').value;
+  const v=_sel.clientId;
   $('fClientNewW').style.display=(v==='__new')?'':'none';
   const box=$('enrich');
   const mw=$('fMemoW');
@@ -601,7 +636,7 @@ window.wlSaveBirth=async function(cid){
 /* 저장·삭제·완료 */
 window.wlSave=async function(){
   const corp=_sel.ct==='corp';
-  const selV=$('fClient').value;
+  const selV=_sel.clientId;
   const cli=(!corp&&selV&&selV!=='__new')?(_clients||[]).find(x=>x.id===selV):null;
   const clientName=corp?'':(cli?(cli.name||''):$('fClientNew').value.trim());
   const corpName=corp?$('fCorp').value.trim():'';
@@ -754,7 +789,7 @@ window.wlShowClient=function(key){
 };
 window.wlNewFor=function(key){
   wlShowForm();
-  if(key.startsWith('c:')){$('fClient').value=key.slice(2);wlClientChanged();}
+  if(key.startsWith('c:')){_sel.clientId=key.slice(2);cliSync();wlClientChanged();}
   else if(key.startsWith('k:')){wlCtSet('corp');$('fCorp').value=key.slice(2);}
 };
 window.wlSaveMemo=async function(cid){
