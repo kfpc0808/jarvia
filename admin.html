@@ -14474,22 +14474,27 @@ window.mrBuildScripts=async function(m,ask){
     .then(r=>{if(!r.ok)r.text().then(t=>toast('대본 생성 요청 거부('+r.status+'): '+t.slice(0,120),'error'));})
     .catch(e=>console.warn('[MR] 요청 전송 경고(서버는 진행 중일 수 있음):',e.message));
   toast(`${m}호 대본 생성을 시작했습니다 — 진행 상태가 아래에 표시됩니다`);
-  mrPollScripts(m,0);
+  mrPollScripts(m,0,Date.now());
 };
-/* 진행 상태 폴링 — 최대 15분 */
-window.mrPollScripts=async function(m,n){
+/* 진행 상태 폴링 — 최대 15분.
+   ★ [2026-08-26] since(클릭 시각) 이전의 done/error 는 지난 실행의 기록이므로 무시하고 계속 대기한다.
+   (클릭 직후 첫 폴링이 서버의 running 전환보다 빨라 옛 실패를 읽고 "실패" 토스트 후 중단되던 경합 수정.
+    서버·클라이언트 시계 오차를 감안해 2분 여유를 둔다) */
+window.mrPollScripts=async function(m,n,since){
   if(n>90)return;
   const st=$('mr-html-stat');
   try{
     const p=await getDoc(doc(db,'monthly_report_progress',m));
     if(p.exists()){
       const d=p.data();
-      if(d.status==='done'){if(st)st.textContent='✅ '+(d.label||'완료');toast('대본 생성 완료 — 산출물에서 내려받아 음성을 만드십시오');mrLoad();return;}
-      if(d.status==='error'){if(st)st.textContent='';toast('대본 생성 실패: '+(d.label||''),'error');return;}
-      if(st)st.textContent=`⏳ ${d.step||0}/${d.total||3} ${d.label||''}`;
+      const up=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;
+      const stale=since&&up&&up<since-120000;
+      if(!stale&&d.status==='done'){if(st)st.textContent='✅ '+(d.label||'완료');toast('대본 생성 완료 — 산출물에서 내려받아 음성을 만드십시오');mrLoad();return;}
+      if(!stale&&d.status==='error'){if(st)st.textContent='';toast('대본 생성 실패: '+(d.label||''),'error');mrLoad();return;}
+      if(st)st.textContent=stale?'⏳ 서버 시작 대기 중...':`⏳ ${d.step||0}/${d.total||3} ${d.label||''}`;
     }
   }catch(e){console.warn('[MR] 폴링 경고:',e.message);}
-  setTimeout(()=>mrPollScripts(m,n+1),10000);
+  setTimeout(()=>mrPollScripts(m,n+1,since),10000);
 };
 window.mrUploadSlides=async function(){
   const m=mrMonth();if(!m)return;
