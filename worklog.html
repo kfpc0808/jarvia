@@ -68,6 +68,7 @@ mark{background:#FFF3BF;border-radius:2px;padding:0 1px}
 .bcorp{background:var(--purpBg);color:var(--purp)}
 .bnew{background:var(--greenBg);color:var(--green)}
 .meta{font-size:11.5px;color:var(--mut);margin-left:auto;flex-shrink:0}
+.ins{margin-top:4px;font-size:11.5px;color:var(--mut)}
 .tpc{margin-top:6px;font-size:13.5px;font-weight:700;color:var(--ink)}
 .tpc+.sum{margin-top:3px}
 .sum{margin-top:6px;font-size:13px;color:var(--sub);line-height:1.65;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -95,8 +96,8 @@ textarea.ag{overflow:hidden;min-height:48px}
 .pickbtn{width:100%;padding:12px 13px;border:1px solid #D8DEE8;border-radius:10px;background:#fff;color:var(--ink);font-size:16px;text-align:left;display:flex;align-items:center;gap:6px}
 .pickbtn span{margin-left:auto;color:var(--mut);font-size:13px}
 .pickbtn.ph{color:var(--mut)}
-#ckOv{position:fixed;inset:0;z-index:80;background:rgba(15,23,40,.45);display:none;align-items:flex-end;justify-content:center}
-#ckOv.show{display:flex}
+#ckOv,#insOv{position:fixed;inset:0;z-index:80;background:rgba(15,23,40,.45);display:none;align-items:flex-end;justify-content:center}
+#ckOv.show,#insOv.show{display:flex}
 .ckP{background:#fff;width:100%;max-width:640px;border-radius:16px 16px 0 0;max-height:78vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px);animation:ckUp .18s ease}
 @keyframes ckUp{from{transform:translateY(24px);opacity:.6}}
 .ckH{display:flex;align-items:center;padding:14px 16px 11px;font-weight:800;font-size:15px;border-bottom:1px solid var(--line);flex-shrink:0}
@@ -218,6 +219,14 @@ textarea.ag{overflow:hidden;min-height:48px}
       <button type="button" class="pickbtn ph" id="fConsultBtn" onclick="wlConsultOpen()">컨설팅 종류 선택<span>▾</span></button>
       <div id="fConsultCW" style="display:none;margin-top:7px"><input type="text" id="fConsultC" placeholder="컨설팅 종류 직접 입력"></div>
     </div>
+    <div class="fg"><label>보험상품 <small>선택</small></label>
+      <div class="row2">
+        <button type="button" class="pickbtn ph" id="fInsBtn" onclick="wlInsOpen()">보험사 선택<span>▾</span></button>
+        <input type="text" id="fPName" list="pnList" placeholder="상품명 입력" autocomplete="off">
+      </div>
+      <div id="fInsCW" style="display:none;margin-top:7px"><input type="text" id="fInsC" placeholder="보험사 직접 입력"></div>
+      <datalist id="pnList"></datalist>
+    </div>
     <div class="fg" style="max-width:230px"><label>예상보험료 <small>월납 · 선택</small></label>
       <input type="text" id="fPrem" inputmode="numeric" placeholder="300,000" oninput="wlPremLive(this)">
     </div>
@@ -258,6 +267,12 @@ textarea.ag{overflow:hidden;min-height:48px}
     <div class="ckF"><button type="button" id="ckDone" onclick="wlConsultClose()">선택 완료</button></div>
   </div>
 </div>
+<div id="insOv" onclick="if(event.target===this)wlInsClose()">
+  <div class="ckP">
+    <div class="ckH">보험사 선택<button type="button" onclick="wlInsClose()" aria-label="닫기">✕</button></div>
+    <div class="ckL" id="insList"></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script type="module">
@@ -281,6 +296,12 @@ const WL_TEST_IDS=['gildong'];   // ★ 테스트 단계 — 전체 오픈 시 �
 const WL_CHANNELS=['대면','전화','카톡','문자'];
 const WL_PRODUCTS=['종신','정기','건강·질병','암','치아','운전자','실손','자동차','연금','저축','변액','화재·재물','법인','기타'];
 const WL_STAGES=['첫상담','PT','클로징','고객관리','소개','기타'];
+const WL_INSURERS=[
+ ['생명보험',['삼성생명','한화생명','교보생명','신한라이프','NH농협생명','KB라이프','미래에셋생명','동양생명','흥국생명','메트라이프','AIA생명','ABL생명','푸본현대생명','KDB생명','iM라이프','IBK연금보험','라이나생명','처브라이프']],
+ ['손해보험',['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','한화손해보험','흥국화재','롯데손해보험','NH농협손해보험','MG손해보험','캐롯손해보험','하나손해보험','AXA손해보험','AIG손해보험','에이스손해보험']],
+ ['기타',['우체국보험','기타']]
+];
+const WL_INS_FLAT=WL_INSURERS.flatMap(g=>g[1]);
 const WL_CONSULT=[
  ['법인 재무·지배구조',['CEO플랜(퇴직플랜)','정관 정비','임원 보수·상여 설계','배당 정책','가지급금 정리','명의신탁주식 환원','자사주 매입·이익소각','증자·감자','법인전환']],
  ['승계·상속',['가업승계','상속·증여 설계','주식이동·양도']],
@@ -292,7 +313,7 @@ const WL_CONSULT=[
 
 /* ═══ 상태 ═══ */
 let me=null,_clients=null,_cache=null,_editId=null;
-let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[]};
+let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:''};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
 
 function ag(el){if(!el)return;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,340)+'px';}
@@ -375,7 +396,7 @@ window.wlFS=v=>{_fs=v;buildFilters();renderList();};
 window.wlSearch=v=>{_q=(v||'').trim().toLowerCase();renderList();};
 window.wlSortSet=v=>{_sort=v;renderList();};
 
-const hay=a=>[a.clientName,a.corpName,a.corpContact,a.topic,a.summary,a.request,a.nextAction,prodsOf(a).join(' '),stageOf(a),consultsOf(a).join(' '),a.channel].filter(Boolean).join(' ').toLowerCase();
+const hay=a=>[a.clientName,a.corpName,a.corpContact,a.topic,a.insurer,a.productName,a.summary,a.request,a.nextAction,prodsOf(a).join(' '),stageOf(a),consultsOf(a).join(' '),a.channel].filter(Boolean).join(' ').toLowerCase();
 function filtered(){
   let L=(_cache||[]).slice();
   if(_q)L=L.filter(a=>hay(a).includes(_q));
@@ -413,6 +434,7 @@ function renderList(){
         <span class="meta">${esc(a.channel||'')}${a.premium?' · 월 '+comma(a.premium):''}</span>
       </div>
       ${a.topic?`<div class="tpc">${hi(a.topic)}</div>`:''}
+      ${(a.insurer||a.productName)?`<div class="ins">🏷 ${hi([a.insurer,a.productName].filter(Boolean).join(' · '))}</div>`:''}
       ${a.summary?`<div class="sum">${hi(a.summary)}</div>`:''}
       ${(a.request&&!a.done)||a.nextDate?`<div class="nxt${over?' over':''}">${a.request&&!a.done?'🙋 '+hi(a.request):''}${a.nextDate?' ⏰ '+esc(a.nextDate.slice(5))+(over?' 지남':''):''}</div>`:''}
     </div>`;
@@ -435,6 +457,17 @@ window.wlShowForm=function(id){
   $('fConsultC').value=a?.consultTypeCustom||'';$('fProdC').value=a?.productCustom||'';$('fStageC').value=a?.stageCustom||'';
   $('fPrem').value=a?.premium?comma(a.premium):'';
   $('fTopic').value=a?.topic||'';
+  const _ins=a?.insurer||'';
+  if(_ins&&WL_INS_FLAT.includes(_ins)){_sel.insurer=_ins;$('fInsC').value='';}
+  else if(_ins){_sel.insurer='__c';$('fInsC').value=_ins;}
+  else{_sel.insurer='';$('fInsC').value='';}
+  $('fPName').value=a?.productName||'';
+  insSync();
+  /* 상품명 자동완성 — 내 기록 + 고객 계약에서 수집 */
+  const _pn=new Set();
+  (_cache||[]).forEach(x=>{if(x.productName)_pn.add(x.productName);});
+  (_clients||[]).forEach(c=>(c.contracts||[]).forEach(t=>{if(t.productName)_pn.add(t.productName);}));
+  $('pnList').innerHTML=[..._pn].slice(0,80).map(v=>'<option value="'+esc(v)+'">').join('');
   $('fSum').value=a?.summary||'';$('fReq').value=a?.request||'';
   $('fNextA').value=a?.nextAction||'';$('fNextD').value=a?.nextDate||'';
   $('delBtn').style.display=id?'':'none';
@@ -492,6 +525,23 @@ window.wlConsultOpen=function(){ckRender();$('ckOv').classList.add('show');};
 window.wlConsultClose=function(){
   $('ckOv').classList.remove('show');consultSync();
   if(_sel.consults.includes('__c'))setTimeout(()=>{try{$('fConsultC').focus();}catch(e){}},60);
+};
+function insSync(){
+  const b=$('fInsBtn');if(!b)return;
+  const lab=_sel.insurer==='__c'?'직접입력':(_sel.insurer||'보험사 선택');
+  b.innerHTML=esc(lab)+'<span>▾</span>';
+  b.classList.toggle('ph',!_sel.insurer);
+  $('fInsCW').style.display=(_sel.insurer==='__c')?'':'none';
+}
+window.wlInsOpen=function(){
+  $('insList').innerHTML=WL_INSURERS.map(g=>`<div class="ckG">${esc(g[0])}</div>`+g[1].map(v=>`<div class="ckI${_sel.insurer===v?' on':''}" onclick="wlInsPick(this.dataset.v)" data-v="${esc(v)}">${esc(v)}</div>`).join('')).join('')
+    +`<div class="ckI${_sel.insurer==='__c'?' on':''}" onclick="wlInsPick('__c')" data-v="__c">직접입력 ✎</div>`;
+  $('insOv').classList.add('show');
+};
+window.wlInsClose=function(){$('insOv').classList.remove('show');};
+window.wlInsPick=function(v){
+  _sel.insurer=(_sel.insurer===v)?'':v;insSync();wlInsClose();
+  setTimeout(()=>{try{(v==='__c'?$('fInsC'):$('fPName')).focus();}catch(e){}},60);
 };
 window.wlConsultPick=function(v){                       /* 탭=토글, 닫지 않음 → 복수 선택 */
   const i=_sel.consults.indexOf(v);
@@ -568,6 +618,8 @@ window.wlSave=async function(){
     consultTypeCustom:(corp&&_sel.consults.includes('__c'))?$('fConsultC').value.trim():'',
     premium:num($('fPrem').value),
     topic:$('fTopic').value.trim(),
+    insurer:_sel.insurer==='__c'?$('fInsC').value.trim():_sel.insurer,
+    productName:$('fPName').value.trim(),
     summary,
     request:$('fReq').value.trim(),
     stage:_sel.stage,
@@ -685,6 +737,7 @@ window.wlShowClient=function(key){
           <button type="button" class="elink" onclick="wlShowForm('${a.id}')">수정</button>
         </div>
         ${a.topic?`<div class="tpc">${esc(a.topic)}</div>`:''}
+        ${(a.insurer||a.productName)?`<div class="ins">🏷 ${esc([a.insurer,a.productName].filter(Boolean).join(' · '))}</div>`:''}
         ${a.summary?`<div class="sum full">${esc(a.summary)}</div>`:''}
         ${a.request?`<div class="nxt${over?' over':''}">🙋 ${esc(a.request)}${a.done?' ✅':''}${a.nextDate?' ⏰ '+esc(a.nextDate.slice(5))+(over?' 지남':''):''}</div>`:(a.nextDate?`<div class="nxt${over?' over':''}">⏰ ${esc(a.nextDate.slice(5))}${over?' 지남':''}</div>`:'')}
       </div>`;
