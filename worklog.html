@@ -468,6 +468,10 @@ textarea.ag{overflow:hidden;min-height:48px}
     </div>
     <div class="cnt" id="cnt"></div>
     <div id="list"></div>
+    <div style="margin:18px 2px 0;text-align:center">
+      <button type="button" onclick="wlXlsx()" style="border:1px solid var(--line2);background:#fff;color:var(--sub);font-size:12.5px;font-weight:700;padding:11px 18px;border-radius:12px;box-shadow:var(--shSm)">📥 내 기록 엑셀로 내려받기</button>
+      <div class="hint" style="margin-top:7px">업무기록 · 고객 · 전략/목표 · 아이디어 전체 — 분기마다 내 PC에도 보관하세요</div>
+    </div>
   </div>
 
   <!-- ② 입력 폼 -->
@@ -1172,6 +1176,69 @@ function renderHome(){
     return `<div class="mr" onclick="wlDetOpen('${a.id}')"><span class="d">${esc((a.date||'').slice(5))}</span><span class="n" onclick="event.stopPropagation();wlShowClient('${esc(ckey(a))}')">${esc(nm)}</span><span class="t">${esc(a.topic||a.summary||'')}</span><span class="p"><span class="sp ${cls}" style="line-height:20px;padding:0 8px;border-radius:11px;font-size:10.5px;font-weight:700;display:inline-block">${esc(st||'—')}</span></span></div>`;
   }).join(''):`<div class="mr" style="cursor:default;color:var(--mut);grid-template-columns:1fr;padding:0 14px">첫 기록을 남기면 이곳이 채워집니다</div>`;
 }
+/* ── 내 기록 엑셀 백업 (SheetJS 지연 로드) ── */
+let _xlsxReady=null;
+function loadXlsx(){
+  if(window.XLSX)return Promise.resolve();
+  if(_xlsxReady)return _xlsxReady;
+  _xlsxReady=new Promise((res,rej)=>{
+    const sc=document.createElement('script');
+    sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    sc.onload=res;sc.onerror=()=>{_xlsxReady=null;rej();};
+    document.head.appendChild(sc);
+  });
+  return _xlsxReady;
+}
+window.wlXlsx=async function(){
+  toast('엑셀 파일을 만드는 중…');
+  try{await loadXlsx();}catch(e){toast('다운로드 모듈 로드 실패 — 네트워크 확인 후 다시 시도해주세요');return;}
+  try{
+    const stTxt=a=>a==null?'':String(a);
+    /* ① 업무기록 */
+    const acts=(_cache||[]).slice().sort((a,b)=>(a.date||'')<(b.date||'')?1:-1).map(a=>({
+      '날짜':a.date||'','구분':a.clientType==='corp'?'기업':'개인',
+      '고객명':a.clientName||'','기업명':a.corpName||'','대표자':a.corpCeo||'','담당자':a.corpContact||'',
+      '방식':a.channel||'','상품종류':(a.products||[]).map(x=>x==='__c'?(a.productCustom||'직접입력'):x).join(', '),
+      '컨설팅종류':(a.consultTypes||[]).map(x=>x==='__c'?(a.consultTypeCustom||'직접입력'):x).join(', '),
+      '보험사':a.insurer==='__c'?'':stTxt(a.insurer),'상품명':a.productName||'',
+      '보험료(원)':a.premium!=null?a.premium:'','보장구분':a.premiumType||'','계약여부':a.dealDone?'계약':'',
+      '진행단계':stageOf(a)||'','상담주제':a.topic||'','대화내용':a.summary||'',
+      '고객요청':a.request||'','요청완료':a.done?'완료':'','다음할일':a.nextAction||'','예정일':a.nextDate||'',
+      '기업특이사항':a.corpMemo||''
+    }));
+    /* ② 고객 */
+    const clis=(_clients||[]).map(c=>({
+      '이름':c.name||'','회사/소속':c.company||'','연락처':c.phone||'','생년월일':c.birthDate||'',
+      '메모':c.memo||'','등록계약수':(c.contracts||[]).length
+    }));
+    /* ③ 전략·목표 */
+    const months=_notes.filter(n=>n.type==='month').sort((a,b)=>a.ym<b.ym?1:-1).map(n=>({
+      '월':n.ym,'전략':n.strategy||'',
+      '목표_활동(건)':n.goal?.cnt??'','목표_월초(만)':n.goal?.mchul??'','목표_소득(만)':n.goal?.inc??'',
+      '확정_활동(건)':n.final?.cnt??'','확정_월초(만)':n.final?.mchul??'','확정_소득(만)':n.final?.inc??'',
+      '자동_활동(건)':autoOf(n.ym).cnt,'자동_월초(만)':autoOf(n.ym).mchul
+    }));
+    /* ④ 아이디어 */
+    const ideas=_notes.filter(n=>n.type==='idea').sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)).map(n=>{
+      const d=n.createdAt?.seconds?new Date(n.createdAt.seconds*1000+9*3600000):null;
+      return {'날짜':d?d.toISOString().slice(0,10):'','내용':n.text||'','실행완료':n.done?'완료':''};
+    });
+    const wb=XLSX.utils.book_new();
+    const add=(rows,name,cols)=>{
+      const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{'안내':'데이터가 없습니다'}]);
+      if(cols)ws['!cols']=cols;
+      XLSX.utils.book_append_sheet(wb,ws,name);
+    };
+    add(acts,'업무기록',[{wch:10},{wch:5},{wch:9},{wch:14},{wch:8},{wch:8},{wch:6},{wch:16},{wch:16},{wch:10},{wch:14},{wch:10},{wch:7},{wch:5},{wch:8},{wch:18},{wch:40},{wch:24},{wch:7},{wch:16},{wch:10},{wch:24}]);
+    add(clis,'고객',[{wch:9},{wch:14},{wch:13},{wch:11},{wch:30},{wch:9}]);
+    add(months,'전략과목표',[{wch:8},{wch:44},{wch:11},{wch:11},{wch:11},{wch:11},{wch:11},{wch:11},{wch:11},{wch:11}]);
+    add(ideas,'아이디어',[{wch:11},{wch:50},{wch:8}]);
+    const d=new Date(Date.now()+9*3600000);
+    const fn='업무일지_백업_'+d.toISOString().slice(0,10).replace(/-/g,'')+'.xlsx';
+    XLSX.writeFile(wb,fn);
+    toast('저장했습니다 — 파일함에서 확인하세요 📥');
+  }catch(e){console.warn(e);toast('생성 실패 — 새로고침 후 다시 시도해주세요');}
+};
 window.wlCareGo=function(){if(window._careKey)wlShowClient(_careKey);};
 window.wlHomeDone=async function(id){
   const a=(_cache||[]).find(x=>x.id===id);if(!a)return;

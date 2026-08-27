@@ -13363,28 +13363,72 @@ async function loadScheduledSms(){
   sec.classList.remove('hidden');
 
   const totalCost=_smsSchedCache.reduce((a,b)=>a+(b.estCost||0),0);
-  $('sms-rsv-summary').textContent=`${_smsSchedCache.length}건 · 예상 ${totalCost.toLocaleString()}원`;
+  const sentCnt=_smsSchedCache.filter(x=>x.scheduledAt&&new Date(x.scheduledAt).getTime()<=Date.now()).length;
+  $('sms-rsv-summary').innerHTML=`${_smsSchedCache.length}건 · 예상 ${totalCost.toLocaleString()}원`
+    +(sentCnt?` <span style="color:var(--warning);font-weight:600">· 결과 수집 대기 ${sentCnt}건</span> <button class="btn btn-sm" style="background:var(--accent);margin-left:6px" onclick="collectScheduledSmsNow()">🔄 전체 결과 확인</button>`:'');
 
   tb.innerHTML=_smsSchedCache.map(it=>{
     const dt=it.scheduledAt?new Date(it.scheduledAt):null;
     const dateStr=dt?dt.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
+    /* ★ [2026-08-27] 발송 시각이 지난 건은 이미 통신사로 넘어갔으므로 취소가 불가능하다.
+       취소 버튼을 감추고 「결과 확인」으로 바꿔 담당자가 즉시 성공·실패를 확인하게 한다. */
+    const isSent=dt?(dt.getTime()<=Date.now()):false;
     let left='-';
     if(dt){
       const ms=dt.getTime()-Date.now();
-      if(ms<=0)left='<span style="color:var(--warning)">발송 처리 중</span>';
+      if(ms<=0)left='<span style="color:var(--warning);font-weight:600">⏳ 결과 수집 중</span>';
       else{
         const dd=Math.floor(ms/86400000), hh=Math.floor((ms%86400000)/3600000), mm=Math.floor((ms%3600000)/60000);
         left=`<span style="color:var(--accent);font-weight:600">${dd?dd+'일 ':''}${hh?hh+'시간 ':''}${(!dd&&!hh)?mm+'분':''}</span>`;
       }
     }
     const prev=(it.message||'').substring(0,26)+((it.message||'').length>26?'...':'');
-    return `<tr><td style="font-weight:600">${dateStr}</td><td>${left}</td><td>${_smsEscH(it.createdBy)}</td><td>${it.type||'SMS'}</td><td>${it.validCount||0}명</td><td>${Number(it.estCost||0).toLocaleString()}원</td><td title="${_smsEscH(it.message)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_smsEscH(prev)}</td><td><button class="btn-danger" onclick="cancelScheduledSms('${it.id}')">취소</button></td></tr>`;
+    return `<tr><td style="font-weight:600">${dateStr}</td><td>${left}</td><td>${_smsEscH(it.createdBy)}</td><td>${it.type||'SMS'}</td><td>${it.validCount||0}명</td><td>${Number(it.estCost||0).toLocaleString()}원</td><td title="${_smsEscH(it.message)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_smsEscH(prev)}</td><td>${isSent
+      ?`<button class="btn btn-sm" style="background:var(--accent);white-space:nowrap" onclick="collectScheduledSmsNow('${it.id}')" title="Solapi에서 발송 결과를 즉시 가져와 발송 이력에 기록합니다.">🔄 결과 확인</button>`
+      :`<button class="btn-danger" onclick="cancelScheduledSms('${it.id}')">취소</button>`}</td></tr>`;
   }).join('');
+}
+
+/* ★ [2026-08-27] 예약 발송 결과 즉시 수집
+   30분 주기 배치를 기다리지 않고 Solapi에서 수신자별 결과를 가져와 sms_logs 에 적재한다.
+   적재되면 예약 대기 목록에서 빠지고 발송 이력에서 성공·실패·재발송을 쓸 수 있다. */
+async function collectScheduledSmsNow(id){
+  toast('결과를 확인하는 중...','');
+  try{
+    const fn=httpsCallable(functions,'collectScheduledSmsNow');
+    const res=await fn(id?{id}:{});
+    const d=res.data||{};
+    const done=(d.results||[]).filter(r=>r.state==='collected');
+    const prog=(d.results||[]).filter(r=>r.state==='in_progress');
+
+    if(done.length){
+      const sc=done.reduce((a,b)=>a+(b.successCount||0),0);
+      const fc=done.reduce((a,b)=>a+(b.failCount||0),0);
+      toast(`✅ 결과 수집 완료 — 성공 ${sc}건 / 실패 ${fc}건. 발송 이력에서 확인하세요.`,'success');
+    }else if(prog.length){
+      if(confirm('통신사에서 아직 발송이 진행 중입니다.\n\n지금 시점의 결과로 확정할까요?\n(확정 후에는 이후 도착분이 반영되지 않습니다)')){
+        const res2=await httpsCallable(functions,'collectScheduledSmsNow')(id?{id,force:true}:{force:true});
+        const d2=res2.data||{};
+        const done2=(d2.results||[]).filter(r=>r.state==='collected');
+        const sc=done2.reduce((a,b)=>a+(b.successCount||0),0);
+        const fc=done2.reduce((a,b)=>a+(b.failCount||0),0);
+        toast(`✅ 확정 완료 — 성공 ${sc}건 / 실패 ${fc}건`,'success');
+      }else{ toast('취소했습니다. 30분 주기 배치가 자동으로 수집합니다.',''); }
+    }else if(!d.checked){
+      toast('수집할 대상이 없습니다.','');
+    }else{
+      toast('결과를 가져오지 못했습니다. 잠시 후 다시 시도하세요.','error');
+    }
+    loadScheduledSms();loadSmsLogs();
+  }catch(e){toast('결과 확인 실패: '+(e.message||'오류'),'error');}
 }
 
 async function cancelScheduledSms(id){
   const it=_smsSchedCache.find(x=>x.id===id);
   if(!it)return;
+  if(it.scheduledAt&&new Date(it.scheduledAt).getTime()<=Date.now()){   /* ★ [2026-08-27] 이미 발송된 건은 취소 불가 */
+    toast('이미 발송된 예약입니다. 「🔄 결과 확인」으로 성공·실패를 확인하세요.','error');return;
+  }
   const dt=it.scheduledAt?new Date(it.scheduledAt).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
   if(!confirm(`아래 예약을 취소합니다.\n\n${dt} · ${it.validCount||0}명 · ${Number(it.estCost||0).toLocaleString()}원\n\n되돌릴 수 없습니다. 진행하시겠습니까?`))return;
   try{
@@ -13397,7 +13441,7 @@ async function cancelScheduledSms(id){
   }
 }
 
-window.smsConfirmCost=smsConfirmCost;window.smsConfirmReset=smsConfirmReset;window.smsConfirmClose=smsConfirmClose;window.setSmsMode=setSmsMode;window.smsRsvQuick=smsRsvQuick;window.doScheduleAdminSMS=doScheduleAdminSMS;window.loadScheduledSms=loadScheduledSms;window.cancelScheduledSms=cancelScheduledSms;
+window.smsConfirmCost=smsConfirmCost;window.smsConfirmReset=smsConfirmReset;window.smsConfirmClose=smsConfirmClose;window.setSmsMode=setSmsMode;window.smsRsvQuick=smsRsvQuick;window.doScheduleAdminSMS=doScheduleAdminSMS;window.loadScheduledSms=loadScheduledSms;window.cancelScheduledSms=cancelScheduledSms;window.collectScheduledSmsNow=collectScheduledSmsNow;
 
 // ═══════════════════════════════════════════════════
 //  📂 사이드바 메뉴 그룹 아코디언 [2026-08-22]
