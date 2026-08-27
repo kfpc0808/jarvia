@@ -1144,6 +1144,8 @@
 .crman-chk.bad{background:#FBEDEB;color:#A93226}
 .crman-chk.idle{background:#F3EFE4;color:#8A8577}
 .crman-apply{width:100%;margin-top:9px;border:none;border-radius:9px;padding:11px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;background:#0F1B33;color:#F3EFE4}
+.crman-info{margin-left:5px;padding:0 6px;border:1px solid #B08540;border-radius:50%;background:#fff;color:#B08540;font-size:11px;font-weight:800;line-height:1.5;cursor:pointer;vertical-align:1px}
+.crman-info:hover{background:#B08540;color:#fff}   /* ★ D6: 항목 도움말 버튼 */
 .crman-apply:disabled{background:#C7C2B4;cursor:not-allowed}
 .crman-srcline{margin-top:7px;font-size:10.5px;color:#96783C;line-height:1.55}
 .crman-missmsg{margin-top:8px;font-size:11.5px;background:#FFF6D9;border:1px solid #E8CE8A;border-radius:9px;padding:9px 11px;line-height:1.65;color:#5C4A16}
@@ -3095,6 +3097,7 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
     pendingGen={field:'financialConfirm'};
     aiReply('붙여넣으신 <b>재무보고서 추출 텍스트</b>를 표 서식 그대로 읽었습니다. (AI 재추출 없음 · 입력창에서 수정하신 값 그대로 반영)');
     aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+    finConfirmGuide();   /* ★ D7: 확인 버튼 안내 팝업(최초 1회) */
     return true;
   }
   showThinking();
@@ -3106,6 +3109,7 @@ async function beginFinancialExtraction(source,appendMode,correctionMode){
     financialValidation=appendMode?clientFinancialValidation(pendingFinancialData):mergeIssues(Array.isArray(data.financialValidation)?data.financialValidation:[],clientFinancialValidation(pendingFinancialData));
     pendingGen={field:'financialConfirm'};
     aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+    finConfirmGuide();   /* ★ D7: 확인 버튼 안내 팝업(최초 1회) */
     return true;
   }catch(e){
     financialSourceParts.pop();financialSourceText=financialSourceParts.join('\n');   // 실패한 입력은 원문 누적에서 제거
@@ -4297,6 +4301,7 @@ async function finPdfHandle(e){
     if(bad)toast('검산에서 '+bad+'건이 확인되었습니다. 내용을 확인해 주세요.',5000);
     else toast('재무 수치 추출 완료 — 검산 전건 통과',3200);
     finVerifyAI();   /* ★ B1 (2026-07-30): AI 원문 대조 검증 — 비동기 발사, 실패해도 기존 흐름 무영향 */
+    setTimeout(finMissAutoPrompt,450);   /* ★ D6: 미판독 항목 자동 안내(토스트와 겹침 완화용 지연) */
   }catch(err){
     FIN.data=null;FIN.calc=null;FIN.risks=null;FIN.checks=null;FIN.src='';FIN.fileName='';FIN.verify=null;   /* ★ finClearPdf와 동일한 전체 초기화 — 파싱 실패 시 앞서 설정한 FIN.src 잔존 방지 (2026-07-21) */
     finRender();
@@ -4702,7 +4707,7 @@ function finToText(mode){   /* ★ D2 (2026-08-27): mode==='data' → 입력창 
   const D=FIN.data,K=finPick(FIN.calc),Y=D.years;
   const ST=FIN.stmtType||'별도';
   const L=[];
-  const P=(k,a)=>{ if(!a)return; L.push(`- ${k}: ${Y[0]}년 ${a[0].toLocaleString()} / ${Y[1]}년 ${a[1].toLocaleString()} / ${Y[2]}년 ${a[2].toLocaleString()}`); };
+  const P=(k,a)=>{ if(!a||!Number.isFinite(a[0]))return; const seg=[0,1,2].filter(i=>Number.isFinite(a[i])&&Y[i]!=null).map(i=>`${Y[i]}년 ${a[i].toLocaleString()}`); L.push(`- ${k}: ${seg.join(' / ')}${a._p?'  ◀ 보충 입력값':''}`); };   /* ★ D4·D5 (2026-08-27): 당기-단독 배열 안전 출력 + 보충·수정 행 마커 */
 
   L.push(`법인 기업컨설팅. ${D.회사명||''}${D.업종?' ('+D.업종+')':''}.`);
   L.push(`대표 ${D.대표자||''}, 지분 ${D.대표지분}%${D.대표주식?` (${D.대표주식.toLocaleString()}주 / 총 발행 ${D.총주식.toLocaleString()}주, 1주당 액면가 ${D.액면.toLocaleString()}원)`:''}.`
@@ -4747,10 +4752,10 @@ function finToText(mode){   /* ★ D2 (2026-08-27): mode==='data' → 입력창 
     L.push('');
     if(_gjP){
       L.push('[가지급금]');
-      L.push(`- 대표 가지급금(단기대여금) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}${finUnit()} / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}${finUnit()}`);
+      L.push(`- 대표 가지급금(단기대여금) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}${finUnit()}${Number.isFinite(D.가지급금[1])?` / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}${finUnit()}`:''}`);   /* ★ D4: 대칭 안전화 */
     }else{
       L.push('[가지급금 관련 — 확인 필요]');
-      L.push(`- 단기대여금(가지급금 추정) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}${finUnit()} / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}${finUnit()} — 대표 가지급금 여부·관계회사 대여 가능성 CEO 확인 필요`);
+      L.push(`- 단기대여금(가지급금 추정) 잔액: ${Y[0]}년 ${D.가지급금[0].toLocaleString()}${finUnit()}${Number.isFinite(D.가지급금[1])?` / ${Y[1]}년 ${D.가지급금[1].toLocaleString()}${finUnit()}`:''} — 대표 가지급금 여부·관계회사 대여 가능성 CEO 확인 필요`);   /* ★ D4: 보충 단독 배열 크래시 차단 */
     }
   }
   L.push('');
@@ -4852,6 +4857,11 @@ function parseStart(t){const chips=[];const p={};let m;let retire=null,age=null;
 let rawInput="", clientName="", companyName="", collectedParams={}, pendingGen=null, chosenBasis=null, origRequest="", selectedTopic="", topicLocked=false;
 let pendingFinancialData=null, confirmedFinancialData=null, financialSourceText="", financialSourceParts=[], financialValidation=[], financialTableDetected=false;
 let _finAutoBlock="", _finHeldDirectives="";   /* ★ D2: 입력창 자동 반영 블록 원문 · 보류 지시 블록 */
+let _finConfirmGuided=false;   /* ★ D7 (2026-08-27): 재무 확인 카드 최초 표시 시 1회 안내 */
+function finConfirmGuide(){
+  if(_finConfirmGuided)return; _finConfirmGuided=true;
+  setTimeout(function(){alert('왼쪽 대화창에 추출된 재무 수치 표가 표시되었습니다.\n\n① 내용을 확인하신 뒤 맞으면 [✓ 모두 맞음 — 확인 완료] 버튼을 눌러 주세요.\n   → 이 버튼을 눌러야 다음 단계(질문지)가 시작됩니다.\n\n② 다른 값이 있으면 아래 입력창에 정정할 항목과 값을 적어 보내 주세요.\n   예) 매출액은 80억원, 단위는 백만원\n   → 정정을 반영해 표를 다시 보여드립니다.');},350);
+}
 let interviewState={coverageScore:0,missingCritical:[],missingUseful:[],answeredUnknown:[],activeIssueGroups:[],ready:false,readyReason:""};
 let interviewRound=0, _lastRoundAsked=false, totalAsked=0; const INTERVIEW_SAFETY_MAX_ROUNDS=8, INTERVIEW_SAFETY_MAX_QUESTIONS=5; // 질문은 한 번에 1개씩, 가장 중요한 것부터 최대 5개. 라운드 상한은 비정상 반복만 차단
 function preflightAsk(text,topic){
@@ -5380,6 +5390,7 @@ async function startSession(){
       pendingGen={field:'financialConfirm'};
       aiReply('첨부하신 <b>재무보고서</b>에서 수치를 <b>표에서 직접</b> 읽었습니다. (AI 추정이 아닙니다 · 회계 항등식 검산 '+FIN.checks.filter(c=>c.ok).length+'/'+FIN.checks.length+' 통과)');
       aiReply(financialConfirmHtml(pendingFinancialData,financialValidation));
+      finConfirmGuide();   /* ★ D7: 확인 버튼 안내 팝업(최초 1회) */
     }else{
       financialTableDetected=topic==='기업컨설팅'&&looksLikeFinancialTable(rawInput);
       if(financialTableDetected){
@@ -6555,6 +6566,11 @@ document.addEventListener('DOMContentLoaded',function(){
    설계: 필수 7칸(항등식 검산 통과 필수) + 권장(신호·상속세 정확도).
    파싱 성공 상태에서 적용하면 '병합'(수정·추가 칸만 기존 FIN.data에 반영, 3개년 데이터 보존),
    파싱 없는 상태면 신규 D(fmt:'MANUAL', 당기 1개년) 구성. 계산·검산·렌더는 기존 경로 재사용. */
+/* ★ D6 (2026-08-27): 항목 도움말 — ⓘ 클릭 시 표시. 무엇을·어디서·왜(제안서 영향) */
+var FIN_FIELD_HELP={
+ ocf:'[영업활동현금흐름]\n\n■ 무엇을 입력하나\n재무제표의 현금흐름표 맨 윗줄 "영업활동으로 인한 현금흐름" 당기 금액입니다(원 단위).\n크레탑 PDF에서는 뒤쪽 상세 현금흐름표의 첫 항목이며, 앞쪽 요약표의 "현금영업이익"과는 다른 값이니 혼동에 주의하세요.\n마이너스면 마이너스 그대로 입력합니다(예: -7,974,469천원 → -7974469000).\n\n■ 왜 필요한가\n손익은 흑자인데 영업현금이 마이너스면 "장부상 이익만 있고 실제 현금은 없는" 상태로, 흑자도산 위험 신호 판정에 쓰입니다. 이 값이 있어야 이익이 매출채권·재고에 묶여 있는지 자금 흐름 진단이 정확해집니다.\n\n■ 모르면\n비워두셔도 됩니다 — 이 신호만 생략되고 제안서는 정상 생성됩니다.',
+ adv:'[가지급금(단기대여금)]\n\n■ 무엇을 입력하나\n회사가 대표이사·임원·주주 등에게 빌려준 돈의 잔액입니다(원 단위). 재무상태표의 단기대여금·주임종단기채권 등이 해당하며, 크레탑 재무상태표의 "단기대여금" 당기 잔액을 넣으시면 됩니다. 없으면 0을 입력하세요.\n\n■ 왜 필요한가\n세무조사에서 인정이자 익금산입·대표 상여처분 쟁점이 되는 대표 항목입니다. 이 값이 있어야 제안서의 가지급금 정리 논점(연간 세부담 추정·정리 경로 비교)이 정확해집니다. 대표 개인 대여인지 거래처·관계회사 대여인지는 이후 질문지에서 확인합니다.\n\n■ 모르면\n비워두시면 "확인 필요"로 처리됩니다.'};
+function finFieldHelp(k){ if(FIN_FIELD_HELP[k])alert(FIN_FIELD_HELP[k]); }
 var CR_MAN_FIELDS=[
  /* [key, 라벨, 이 값이 여는 것, 그룹 req|a|b, D키(배열) 또는 특수] */
  ['asset','자산총계','','req','자산총계'],
@@ -6585,7 +6601,7 @@ function crManBuild(){
     var inp=f[0]==='year'
       ?'<select id="crm_'+f[0]+'" onchange="crManCheck()">'+(function(){var y=new Date().getFullYear(),o='';for(var k=y;k>=y-4;k--)o+='<option value="'+k+'"'+(k===y-1?' selected':'')+'>'+k+'년</option>';return o;})()+'</select>'
       :'<input id="crm_'+f[0]+'" inputmode="decimal" placeholder="" oninput="jbNumIn(this,{d:1,n:1});crManCheck()">';
-    return '<div class="crman-f"><label><b>'+f[1]+'</b>'+(f[2]?'<em>· '+f[2]+'</em>':'')+'</label>'+inp+(f[0]==='year'?'':'<small class="won" id="crmw_'+f[0]+'"></small>')+'</div>';
+    return '<div class="crman-f"><label><b>'+f[1]+'</b>'+(FIN_FIELD_HELP[f[0]]?'<button type="button" class="crman-info" onclick="finFieldHelp(\''+f[0]+'\')" title="이 항목 설명 보기">ⓘ</button>':'')+(f[2]?'<em>· '+f[2]+'</em>':'')+'</label>'+inp+(f[0]==='year'?'':'<small class="won" id="crmw_'+f[0]+'"></small>')+'</div>';
   }).join('');};
   b.innerHTML='<div class="crman-note">최신 결산 기준 · 단위 <b>원</b> — 입력하면 칸 아래에 <b>억·만 환산</b>이 바로 표시됩니다.<br>크레탑 표가 <b>백만원</b> 단위면 뒤에 0을 6개(예: 1,657 → 1,657,000,000), <b>천원</b> 단위면 0을 3개 붙여 주세요 · 지분율은 %, 주식수는 주 · 모르는 칸은 비워두세요</div>'
    +'<div class="crman-sec"><span class="req">★ 필수</span> — 이 7칸이 있어야 생성됩니다</div><div class="crman-grid">'+g('req')+'</div>'
@@ -6673,10 +6689,10 @@ function crManCheck(){
   var a=req[0],l=req[1],e=req[2],diff=a-(l+e),tol=Math.max(Math.abs(a)*0.01,1);
   if(Math.abs(diff)>tol){chk.className='crman-chk bad';chk.textContent='❌ 검산 불일치 — 자산 vs 부채+자본 차액 '+jbKoWon(diff)+'. 오타를 확인해 주세요 (통과 전에는 적용되지 않습니다)';btn.disabled=true;return;}
   if(pfMode&&!anyEdit){
-    /* 파싱/기적용 값 그대로 — 누를 이유가 없으므로 비활성 (사용자 혼선 방지) */
+    /* ★ D6: 항상 활성 — 수정이 없어도 클릭하면 창이 닫히는 단일 동작(사용자 혼선 해소) */
     chk.className='crman-chk ok';
-    chk.textContent='✅ 검산 통과 · 현재 적용 중인 값 그대로입니다 — 값을 수정하거나 노란 칸을 채우면 반영 버튼이 켜집니다';
-    btn.disabled=true;return;
+    chk.textContent='✅ 검산 통과 · 현재 적용 중인 값 그대로입니다 — 수정 없이 눌러도 창이 닫히고 그대로 진행됩니다';
+    btn.disabled=false;return;
   }
   chk.className='crman-chk ok';chk.textContent='✅ 검산 통과 — 자산 '+jbKoWon(a)+' = 부채 '+jbKoWon(l)+' + 자본 '+jbKoWon(e);
   btn.disabled=false;
@@ -6694,7 +6710,7 @@ function crManApply(){
       if(!el)return;
       if(String(el.value||'')===el.dataset.pf)return;                 /* 수정 안 함 */
       if(v==null)return;                                              /* 지웠으면 보존 */
-      if(!D[dk])D[dk]=[];D[dk][i]=Math.round(v*fromM);patched++;};
+      if(!D[dk])D[dk]=[];D[dk][i]=Math.round(v*fromM);D[dk]._p=1;patched++;};   /* ★ D5: 보충 표시 태그 */
     setArr('자산총계',0,'asset');setArr('부채총계',0,'liab');setArr('자본총계',0,'equity');setArr('자본금',0,'capital');
     setArr('매출액',0,'rev');setArr('영업이익',0,'op');setArr('순이익',0,'ni');
     setArr('이익잉여금',0,'re');setArr('현금',0,'cash');setArr('이자비용',0,'ie');
@@ -6702,7 +6718,7 @@ function crManApply(){
     setArr('매출액',1,'rev1');setArr('순이익',1,'ni1');setArr('순이익',2,'ni2');
     var bel=document.getElementById('crm_borrow');
     if(bel&&String(bel.value||'')!==bel.dataset.pf&&V('borrow')!=null){
-      D.장기차입금=[Math.round(V('borrow')*fromM)];D.단기차입금=null;D.사채=null;patched++;   /* 합산값은 장기에 배치(단기 유동성 과대경고 방지) */
+      D.장기차입금=[Math.round(V('borrow')*fromM)];D.장기차입금._p=1;D.단기차입금=null;D.사채=null;patched++;   /* 합산값은 장기에 배치(단기 유동성 과대경고 방지) */
     }
     var _shPatched=false;
     if(share!=null&&share!==D.대표지분){D.대표지분=share;patched++;_shPatched=true;}
@@ -6714,7 +6730,7 @@ function crManApply(){
     if(_ye&&_ye.dataset.pf!==undefined&&String(_ye.value)!==_ye.dataset.pf&&Number(_ye.value)>0){
       var _y0=Number(_ye.value);D.years=(D.years||[_y0]).map(function(_,i){return _y0-i;});patched++;   /* 사용자 교정 연도 최우선 (2026-07-15) */
     }   /* ★ P0-③ 원값 스냅샷 동기화(2026-07-15) — 패널 적용값이 새 원값. 이게 없으면 crApplyManual이 이전 값으로 롤백해 "변경이 안 되는" 결함 발생 */
-    if(!patched){toast('수정된 칸이 없습니다 — 파싱값 그대로 사용 중입니다.');return;}
+    if(!patched){toast('수정된 칸이 없습니다 — 현재 값 그대로 진행합니다.');crManToggle(false);return;}   /* ★ D6: 클릭=닫기 */
     FIN.manual=true;
   }else{
     var y0=(function(){var ye=document.getElementById('crm_year');return ye?Number(ye.value):new Date().getFullYear()-1;})();
@@ -6743,6 +6759,7 @@ function crManApply(){
     FIN.risks=finRisks(FIN.data,FIN.calc);
     if(typeof finRender==='function')finRender();
     if(typeof finStat==='function')finStat('📝 직접 입력 적용 — 검산 후 반영되었습니다.');
+    if(typeof finAutoToInput==='function')finAutoToInput();   /* ★ D4: 보충값을 입력창 텍스트·보류 지시 블록에도 재반영 */
     var jm=document.getElementById('jebManMiss');if(jm)jm.innerHTML=crManMissMsg('jeb');
   }else{
     FIN.risks=null;
@@ -6751,10 +6768,12 @@ function crManApply(){
   var _regenHint=(CRMAN_CTX!=='jeb'&&typeof CEO!=='undefined'&&CEO&&CEO.teaser)?' · 문장에 새 숫자를 반영하려면 [다시 생성]하세요':'';
   toast((fromParse?'✔ 보충 입력 적용 — 파싱값과 병합했습니다':'✔ 직접 입력 적용 — 검산 통과')+_regenHint,_regenHint?5200:3000);
   crManPrefill();   /* 적용 후 최신 상태로 재프리필 */
+  crManToggle(false);   /* ★ D6: 반영 즉시 닫기 — 클릭=완료 단일 동작 */
 }
 /* 파싱 성공 후 결손 항목 안내 — 판독·산출에 실제 쓰이는 항목만 */
-function crManMissMsg(ctx){
-  var D=FIN.data;if(!D||FIN.src==='MANUAL')return '';
+/* ★ D6 (2026-08-27): 미판독 판정을 목록 함수로 분리 — 배너(crManMissMsg)와 자동 팝업(finMissAutoPrompt)이 공유 */
+function crManMissList(){
+  var D=FIN.data;if(!D||FIN.src==='MANUAL')return [];
   var miss=[];
   var no=function(a){return !(a&&Number.isFinite(a[0]));};
   if(!(D.대표지분>0))miss.push(['대표 지분율','상속세 산출']);
@@ -6765,6 +6784,17 @@ function crManMissMsg(ctx){
   if(no(D.매출채권))miss.push(['매출채권','급증 신호']);
   if(no(D.이자비용))miss.push(['이자비용','이자보상 판독']);
   if(no(D.영업현금))miss.push(['영업활동현금흐름','흑자도산 신호']);
+  return miss;
+}
+/* ★ D6: 첨부 직후 미판독 항목 자동 안내 — [확인]=보충 화면 자동 오픈, [취소]=그대로 진행 */
+function finMissAutoPrompt(){
+  var miss=crManMissList(); if(!miss.length)return;
+  var names=miss.map(function(m){return m[0];}).join(', ');
+  if(confirm('PDF에서 읽지 못한 항목이 '+miss.length+'개 있습니다.\n('+names+')\n\n값을 아시는 경우 보충 입력해 주시면 제안서가 더 정확해집니다.\n모르시면 [취소]를 눌러 그대로 진행하셔도 됩니다.\n\n[확인] 보충 입력 화면 열기 · [취소] 그대로 진행'))
+    crManToggle(true,'jeb');
+}
+function crManMissMsg(ctx){
+  var miss=crManMissList();
   if(!miss.length)return '';
   return '<div class="crman-missmsg">⚠ PDF에서 읽지 못한 항목 <b>'+miss.length+'개</b>: '
     +miss.map(function(m){return m[0];}).join(' · ')
