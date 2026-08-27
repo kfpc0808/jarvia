@@ -434,7 +434,7 @@ let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
 let _vmode=(function(){try{return localStorage.getItem('wl_vmode')||'simple';}catch(e){return 'simple';}})();
 let _fdKey='',_pFrom='',_pTo='';   /* 구간 조회 */
 let _page=1,_lastSig='';
-let _psize=(function(){try{return parseInt(localStorage.getItem('wl_psize'))||20;}catch(e){return 20;}})();
+let _psize=(function(){try{return parseInt(localStorage.getItem('wl_psize'))||10;}catch(e){return 10;}})();
 const man=n=>!n?'0':(n>=10000?comma(Math.round(n/10000))+'만':comma(n));
 let _snap=null,_afterSave=null;   /* 미저장 이탈 가드 */
 function fSnap(){
@@ -578,12 +578,25 @@ function filtered(){
   else if(_fs)L=L.filter(a=>stageOf(a)===_fs||a.stage===_fs);
   if(_pFrom)L=L.filter(a=>(a.date||'')>=_pFrom);
   if(_pTo)L=L.filter(a=>(a.date||'')<=_pTo);
-  const dir={dateDesc:-1,dateAsc:1}[_sort];
-  if(dir)L.sort((a,b)=>((a.date||'')<(b.date||'')?-1:1)*dir);
-  else if(_sort==='name')L.sort((a,b)=>String(a.clientName||a.corpName||'').localeCompare(String(b.clientName||b.corpName||''),'ko'));
-  else if(_sort==='premDesc')L.sort((a,b)=>(b.premium||0)-(a.premium||0));
-  else if(_sort==='nextAsc'){const k=x=>x.nextDate&&!x.done?x.nextDate:'9999-12-31';L.sort((a,b)=>k(a)<k(b)?-1:1);}
-  else if(_sort==='stage')L.sort((a,b)=>String(stageOf(a)).localeCompare(String(stageOf(b)),'ko'));
+  /* ── 정렬: 주제 제외 전 칼럼 양방향 ── */
+  const _nmOf=a=>String(a.clientType==='corp'?(a.corpCeo||a.corpName||''):(a.clientName||''));
+  const _pdOf=a=>{const p=a.clientType==='corp'?consultsOf(a):prodsOf(a);return String(p[0]||'');};
+  const _ko=(x,y)=>x.localeCompare(y,'ko');
+  const CMP={
+    dateDesc:(a,b)=>(a.date||'')<(b.date||'')?1:-1,
+    dateAsc:(a,b)=>(a.date||'')<(b.date||'')?-1:1,
+    name:(a,b)=>_ko(_nmOf(a),_nmOf(b)),
+    nameDesc:(a,b)=>_ko(_nmOf(b),_nmOf(a)),
+    ct:(a,b)=>((a.clientType==='corp'?1:0)-(b.clientType==='corp'?1:0))||((a.date||'')<(b.date||'')?1:-1),
+    ctDesc:(a,b)=>((b.clientType==='corp'?1:0)-(a.clientType==='corp'?1:0))||((a.date||'')<(b.date||'')?1:-1),
+    prod:(a,b)=>_ko(_pdOf(a),_pdOf(b))||((a.date||'')<(b.date||'')?1:-1),
+    prodDesc:(a,b)=>_ko(_pdOf(b),_pdOf(a))||((a.date||'')<(b.date||'')?1:-1),
+    stage:(a,b)=>_ko(String(stageOf(a)),String(stageOf(b)))||((a.date||'')<(b.date||'')?1:-1),
+    stageDesc:(a,b)=>_ko(String(stageOf(b)),String(stageOf(a)))||((a.date||'')<(b.date||'')?1:-1),
+    premDesc:(a,b)=>(b.premium||0)-(a.premium||0),
+    nextAsc:(a,b)=>{const k=x=>x.nextDate&&!x.done?x.nextDate:'9999-12-31';return k(a)<k(b)?-1:1;}
+  };
+  L.sort(CMP[_sort]||CMP.dateDesc);
   return L;
 }
 function hi(t){
@@ -591,9 +604,9 @@ function hi(t){
   try{const re=new RegExp(_q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');return e.replace(re,m=>'<mark>'+m+'</mark>');}catch(x){return e;}
 }
 window.wlView=function(v){_vmode=v;try{localStorage.setItem('wl_vmode',v);}catch(e){}renderList();};
-window.wlTSort=function(k){   /* 타이틀 행 탭 정렬 — 날짜는 오름/내림 토글 */
+window.wlTSort=function(k){   /* 타이틀 행 탭 — 모든 칼럼 오름↔내림 토글 */
   if(k==='date')_sort=(_sort==='dateDesc')?'dateAsc':'dateDesc';
-  else _sort=k;
+  else _sort=(_sort===k)?(k+'Desc'):k;
   renderList();
 };
 function _sumLine(L){
@@ -656,13 +669,15 @@ window.wlPsize=function(v){_psize=parseInt(v)||20;try{localStorage.setItem('wl_p
 
 /* ── 간단(리스트) 뷰: 가로 스크롤 표 · 행 높이 고정 42px ── */
 function renderSimple(L,td){
-  const sa=k=>((k==='date'&&(_sort==='dateDesc'||_sort==='dateAsc'))||_sort===k)?' on':'';
-  const arrow=(_sort==='dateAsc')?'↑':'↓';
+  const hc=(k,lab)=>{   /* 정렬 헤더 셀: 활성 표시 + ↑↓ */
+    const act=(k==='date')?(_sort==='dateDesc'||_sort==='dateAsc'):(_sort===k||_sort===k+'Desc');
+    const ar=!act?'':((k==='date'?_sort==='dateAsc':_sort===k)?' ↑':' ↓');
+    return `<div class="sortable${act?' on':''}" onclick="wlTSort('${k}')">${lab}${ar}</div>`;
+  };
   let h=`<div class="tblW"><div class="tHead">
-    <div class="sortable${sa('date')}" onclick="wlTSort('date')">날짜 ${_sort.startsWith('date')?arrow:''}</div>
-    <div class="sortable${sa('name')}" onclick="wlTSort('name')">성명</div>
-    <div>구분</div><div>상품</div><div>주제</div>
-    <div class="sortable${sa('stage')}" onclick="wlTSort('stage')">Step</div>
+    ${hc('date','날짜')}${hc('name','성명')}${hc('ct','구분')}${hc('prod','상품')}
+    <div>주제</div>
+    ${hc('stage','Step')}
   </div>`;
   h+=L.map(a=>{
     const corp=a.clientType==='corp';
