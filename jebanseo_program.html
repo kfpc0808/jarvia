@@ -891,6 +891,18 @@
   .jbm-bar{height:3px;background:linear-gradient(90deg,#1A3577 0%,#B8860B 100%);}
   .jbm-t{padding:18px 22px 0;font-size:15px;font-weight:700;color:#1A3577;letter-spacing:.01em;}
   .jbm-b{padding:10px 22px 4px;font-size:13.8px;line-height:1.75;color:#3A4658;white-space:pre-line;word-break:keep-all;max-height:56vh;overflow-y:auto;}
+  /* ★ 2026-08-28: 첨부 직후 핵심 확인 팝업(finConfirmPopup) */
+  .fcp{white-space:normal;}
+  .fcp-g{display:grid;grid-template-columns:112px 1fr;gap:5px 10px;align-items:start;}
+  .fcp-k{font-size:12.2px;color:#8A8378;padding-top:1px;}
+  .fcp-v{font-size:13.4px;color:#2A3444;font-weight:500;line-height:1.55;}
+  .fcp-warn{color:#B0413E;}
+  .fcp-ok{margin-top:11px;padding:7px 10px;border-radius:7px;background:#EAF4EE;color:#2E7058;font-size:12.6px;}
+  .fcp-bad{margin-top:11px;padding:8px 10px;border-radius:7px;background:#FBEDEB;color:#B0413E;font-size:12.6px;line-height:1.65;}
+  .fcp-bad b{display:block;margin-bottom:3px;}
+  .fcp-miss{margin-top:8px;padding:8px 10px;border-radius:7px;background:#FAF4E6;color:#8A6520;font-size:12.4px;line-height:1.6;}
+  .fcp-note{margin-top:10px;font-size:12.2px;color:#8A8378;line-height:1.65;}
+  @media(max-width:820px){.fcp-g{grid-template-columns:92px 1fr;} .fcp-v{font-size:12.8px;}}
   .jbm-acts{display:flex;justify-content:flex-end;gap:8px;padding:16px 20px 18px;}
   .jbm-btn{font-family:inherit;font-size:13.5px;font-weight:700;border-radius:9px;padding:9px 18px;cursor:pointer;
     border:1px solid #DCE0E6;background:#fff;color:#3A4658;transition:filter .12s,background .12s;}
@@ -1856,7 +1868,11 @@ function jbModal(o){
     ov.innerHTML='<div class="jbm" role="dialog" aria-modal="true"><div class="jbm-bar"></div>'
       +'<div class="jbm-t"></div><div class="jbm-b"></div><div class="jbm-acts"></div></div>';
     ov.querySelector('.jbm-t').textContent=o.title||'안내';
-    ov.querySelector('.jbm-b').textContent=String(o.body||'');
+    /* ★ 2026-08-28: html 옵션 추가 — 확인 팝업의 표·강조 표현용.
+       o.html이 없으면 기존과 동일하게 textContent로 처리하므로 기존 호출부는 전혀 영향받지 않는다.
+       내용은 앱이 생성한 문자열이며 외부 입력은 escHtml로 이스케이프해 넣는다. */
+    if(o.html)ov.querySelector('.jbm-b').innerHTML=o.html;
+    else ov.querySelector('.jbm-b').textContent=String(o.body||'');
     var acts=ov.querySelector('.jbm-acts');
     function close(v){ov.classList.remove('on');document.removeEventListener('keydown',onKey);setTimeout(function(){ov.remove();res(v);},160);}
     btns.forEach(function(b){var el=document.createElement('button');el.type='button';el.className='jbm-btn'+(b.pri?' pri':'');el.textContent=b.label;el.onclick=function(){close(b.value);};acts.appendChild(el);});
@@ -3370,6 +3386,7 @@ async function generate(){
     if(topic==='기업컨설팅'&&FIN.data&&FIN.calc&&collectedParams&&typeof collectedParams==='object'){
       try{
         const _D=FIN.data,_K=finPick(FIN.calc),_ov=[];
+        const _prevCSV=Number(collectedParams.ceoSharesValue);   /* 교정 전 LLM 지분평가액(만원) — totalAsset 동기화 판정용 */
         const _set=(k,v)=>{ if(v==null||!Number.isFinite(Number(v)))return;
           if(collectedParams[k]!=null&&Number(collectedParams[k])!==Number(v))_ov.push(k+' '+collectedParams[k]+'→'+v);
           collectedParams[k]=v; };
@@ -3381,6 +3398,13 @@ async function generate(){
         if(Number.isFinite(_K.주당))_set('unlistedStockValuePerShare',_K.주당);
         if(Number.isFinite(_K.대표지분가치))_set('ceoSharesValue',Math.round(_K.대표지분가치/1e4));
         if(Number.isFinite(_K.상속세))_set('estimatedInheritanceTax',Math.round(_K.상속세/1e4));
+        /* ★ 서버 calcInheritanceTax의 상속재산 기준은 params.totalAsset이다(index.js _jbToFormData → fd.totalAssets).
+           이 값이 교정 전 지분평가액과 사실상 같으면 '지분평가액을 상속재산으로 쓴 것'이므로 함께 교정한다.
+           개인자산이 합산된 값(차이가 큰 경우)은 건드리지 않는다 — 임의 가공 금지. */
+        const _newCSV=Number(collectedParams.ceoSharesValue);
+        if(_prevCSV>0&&Number.isFinite(_newCSV)&&collectedParams.totalAsset!=null
+           &&Math.abs(Number(collectedParams.totalAsset)-_prevCSV)<=Math.max(1,_prevCSV*0.01))
+          _set('totalAsset',_newCSV);
         if(_ov.length)console.info('[패치H] 계산기 확정값으로 교정:',_ov.join(' / '));
       }catch(_pe){console.warn('[패치H] 파라미터 교정 생략:',_pe&&_pe.message||_pe);}
     }
@@ -4253,6 +4277,7 @@ function finParse(pages,fmt){
       const _b2=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('관계회사현황')&&(_top==null||i.y<_top));
       if(_b2.length)_bot=Math.max(..._b2.map(i=>i.y));
     }
+    const _scanRows=()=>{
     rows.forEach(r=>{
       r.sort((a,b)=>a.x-b.x);
       const _ry=r[0]&&r[0].y;
@@ -4279,7 +4304,13 @@ function finParse(pages,fmt){
       if(!Number.isFinite(shares)||!Number.isFinite(rate)||rate<=0||rate>100)return;
       if(shares<1)return;
       D.주주.push({명:nm,주식:shares,율:rate});
-    });
+    });};
+    _scanRows();
+    /* ★ 패치A 안전망 (2026-08-28): 표 제목 좌표를 못 잡거나 레이아웃이 달라 구간 가드가 모든 행을 걸러내면
+       주주 0건 → 대표지분 0 → 주식·상속·승계 논점이 통째로 사라진다(제안서 핵심 슬라이드 소실).
+       그런 경우에만 가드를 풀고 한 번 더 스캔한다. 이물 행이 다시 섞이더라도
+       패치B(지분율 합계 상한)·패치C(액면 비표준)가 오염을 잡아 잘못된 수치가 확정되지는 않는다. */
+    if((_top!=null||_bot!=null)&&!D.주주.length){_top=null;_bot=null;_scanRows();}
     if(fmt==='KODATA_WEB'&&!D.주주.length){
       /* 웹출력형 주요주주현황은 소유주식수 칸이 비고 지분율만 있는 경우가 있다 — 지분율 단독 행 수용 (주식수 0).
          같은 페이지의 다른 표(관계회사현황 등) 혼입을 막기 위해 표 제목 y 구간 안쪽 행만 본다. */
@@ -4569,12 +4600,26 @@ async function finPdfHandle(e){
       }
     }catch(_e){}
     finRender();
-    finAutoToInput();   /* ★ D2: 첨부 성공 즉시 입력창 자동 반영 */
     var _jm=document.getElementById('jebManMiss');if(_jm)_jm.innerHTML=crManMissMsg('jeb');
     if(bad)toast('검산에서 '+bad+'건이 확인되었습니다. 내용을 확인해 주세요.',5000);
     else toast('재무 수치 추출 완료 — 검산 전건 통과',3200);
-    finVerifyAI();   /* ★ B1 (2026-07-30): AI 원문 대조 검증 — 비동기 발사, 실패해도 기존 흐름 무영향 */
-    setTimeout(finMissAutoPrompt,450);   /* ★ D6: 미판독 항목 자동 안내(토스트와 겹침 완화용 지연) */
+    /* ★ 2026-08-28: 입력창 반영을 '확인 팝업 뒤'로 옮겼다.
+       예전에는 첨부 즉시 입력창에 텍스트가 들어간 뒤에야 안내가 떠서, 컨설턴트가
+       이미 반영된 화면을 보며 뒤늦게 확인하는 순서였다.
+       ★ finVerifyAI(AI 원문 대조)도 팝업 뒤로 미룬다 — 이 함수는 값을 정정하면 내부에서
+         finAutoToInput()을 호출하므로(4864행), 먼저 발사하면 팝업이 열려 있는 동안 입력창이
+         채워져 '팝업 먼저' 순서가 깨진다. 네트워크 호출이라 몇 초 늦어지지만 순서가 더 중요하다.
+       ★ finAutoToInput은 팝업이 어떤 경로로 닫히든(확인·수정·ESC·바깥클릭) 반드시 실행한다 —
+         실행되지 않으면 "첨부했는데 아무 일도 안 일어난" 상태가 되기 때문이다.
+         이 함수는 이전 블록을 교체하는 구조(_finAutoBlock)라, 이후 보충 입력으로 값을 고쳐도
+         crManApply가 다시 호출해 깨끗하게 갱신된다(중복 누적 없음). */
+    (typeof finConfirmPopup==='function'?finConfirmPopup():Promise.resolve(true))
+      .then(function(ok){ if(!ok)crManToggle(true,'jeb'); })   /* [수정할게요] → 보충 입력 패널 자동 개방 */
+      .catch(function(){})
+      .then(function(){
+        finAutoToInput();
+        finVerifyAI();   /* ★ B1 (2026-07-30): AI 원문 대조 검증 — 비동기 발사, 실패해도 기존 흐름 무영향 */
+      });
   }catch(err){
     FIN.data=null;FIN.calc=null;FIN.risks=null;FIN.checks=null;FIN.src='';FIN.fileName='';FIN.verify=null;   /* ★ finClearPdf와 동일한 전체 초기화 — 파싱 실패 시 앞서 설정한 FIN.src 잔존 방지 (2026-07-21) */
     finRender();
@@ -6996,8 +7041,16 @@ function crManApply(){
     var _shPatched=false;
     if(share!=null&&share!==D.대표지분){D.대표지분=share;patched++;_shPatched=true;}
     if(shares!=null&&shares!==D.총주식){D.총주식=shares;patched++;_shPatched=true;}
-    if(D.총주식>0&&D.대표지분>0){D.대표주식=Math.floor(D.총주식*D.대표지분/100);
-      if(D.자본금&&D.자본금[0])D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);}
+    /* ★ 2026-08-28: 이 재계산이 _shPatched 가드 밖에 있어, 현금·이익잉여금 등 다른 칸만 고쳐도
+       실행되면서 PDF 주주현황에서 읽은 정확한 대표주식수를 지분율×총주식 근사치로 덮어썼다
+       (에버그린텍: 297,000주 → floor(429,000×69.23%) = 296,996주).
+       지분율·주식수를 실제로 수정했을 때만 재계산한다. 또한 총주식만 고쳤다면 대표주식은
+       기존 확정값을 유지한다 — 주주현황 원값이 지분율 역산보다 정확하기 때문. */
+    if(_shPatched&&D.총주식>0&&D.대표지분>0){
+      if(share!=null&&share!==D._share0)D.대표주식=Math.floor(D.총주식*D.대표지분/100);   /* 지분율을 직접 고친 경우에만 역산 */
+      else if(!(D.대표주식>0))D.대표주식=Math.floor(D.총주식*D.대표지분/100);              /* 원값이 없을 때만 보충 */
+      if(D.자본금&&D.자본금[0])D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);
+    }
     if(_shPatched){D._share0=D.대표지분;D._tot0=D.총주식;D._par0=D.액면||0;D._cs0=D.대표주식;}
     var _ye=document.getElementById('crm_year');
     if(_ye&&_ye.dataset.pf!==undefined&&String(_ye.value)!==_ye.dataset.pf&&Number(_ye.value)>0){
@@ -7059,13 +7112,58 @@ function crManMissList(){
   if(no(D.영업현금))miss.push(['영업활동현금흐름','흑자도산 신호']);
   return miss;
 }
-/* ★ D6: 첨부 직후 미판독 항목 자동 안내 — [확인]=보충 화면 자동 오픈, [취소]=그대로 진행 */
-function finMissAutoPrompt(){
-  var miss=crManMissList(); if(!miss.length)return;
-  var names=miss.map(function(m){return m[0];}).join(', ');
-  jbConfirm('PDF에서 읽지 못한 항목이 '+miss.length+'개 있습니다.\n('+names+')\n\n값을 아시는 경우 보충 입력해 주시면 제안서가 더 정확해집니다. 모르시면 그대로 진행하셔도 됩니다.',
-    {title:'읽지 못한 항목 '+miss.length+'개',ok:'보충 입력 열기',cancel:'그대로 진행'})
-    .then(function(ok){ if(ok)crManToggle(true,'jeb'); });
+/* ★ 2026-08-28: 첨부 직후 '핵심 확인' 팝업.
+   기존 finMissAutoPrompt는 '값이 비었는가'만 봤기 때문에, 값이 채워진 채 틀린 경우를 못 잡았다
+   (총주식 431,024 · 액면 4,977원 · 취임 2016년은 모두 값이 있어 안내가 뜨지 않았다).
+   여기서는 '읽었지만 틀리면 뒤가 전부 무너지는' 항목을 눈으로 확인받고, 검산 실패와
+   미판독 항목까지 한 팝업에 모은다(팝업 두 번 뜨는 것 방지).
+   ★ 어떤 경로로 닫히든 호출부가 finAutoToInput()을 실행하므로 입력창이 비는 일은 없다. */
+function finConfirmRows(){
+  var D=FIN.data; if(!D)return [];
+  var Y=new Date().getFullYear(), R=[];
+  var esc=function(v){return escHtml(String(v==null?'':v));};
+  var co=[];
+  if(D.회사명)co.push(esc(D.회사명));
+  if(D.업종)co.push(esc(D.업종));
+  if(D.설립년)co.push('설립 '+D.설립년+'년('+(Y-D.설립년)+'년차)');
+  if(D.종업원)co.push('직원 '+D.종업원+'명');
+  if(co.length)R.push(['회사',co.join(' · ')]);
+  if(D.총주식>0)R.push(['총 발행주식',D.총주식.toLocaleString()+'주'+(D.액면>0?' · 액면 '+D.액면.toLocaleString()+'원':'')]);
+  else R.push(['총 발행주식','<b class="fcp-warn">미확정 — 주식평가·상속세가 산출되지 않습니다</b>']);
+  if(D.대표지분>0)R.push(['대표 지분',esc(D.대표자||'대표')+' '+(D.대표주식>0?D.대표주식.toLocaleString()+'주 ':'')+'('+D.대표지분+'%)']);
+  var pi=[];
+  if(D.대표생년)pi.push(D.대표생년+'년생(만 '+(Y-D.대표생년)+'세 안팎)');
+  if(D.대표취임년)pi.push('대표이사 취임 '+D.대표취임년+'년(근속 '+(Y-D.대표취임년)+'년차)');
+  if(pi.length)R.push(['대표 인적',pi.join(' · ')]);
+  R.push(['재무제표',(FIN.stmtType||'별도')+' · '+((D.years&&D.years[0])?D.years[0]+'년 기준 · ':'')+'단위 '+finUnit()]);
+  var eok=function(a){return (a&&Number.isFinite(a[0]))?(finToEok(a[0])).toFixed(1)+'억':'—';};
+  R.push(['매출 · 영업이익 · 순이익',eok(D.매출액)+' · '+eok(D.영업이익)+' · '+eok(D.순이익)]);
+  return R;
+}
+function finConfirmPopup(){
+  if(!FIN.data)return Promise.resolve(false);
+  var rows=finConfirmRows();
+  var bad=(FIN.checks||[]).filter(function(c){return !c.ok;});
+  var okN=(FIN.checks||[]).length-bad.length;
+  var miss=(typeof crManMissList==='function')?crManMissList():[];
+  var h='<div class="fcp">'
+    +'<div class="fcp-g">'+rows.map(function(r){
+        return '<div class="fcp-k">'+escHtml(r[0])+'</div><div class="fcp-v">'+r[1]+'</div>';}).join('')+'</div>';
+  if(bad.length){
+    h+='<div class="fcp-bad"><b>확인이 필요합니다</b>'
+      +bad.map(function(c){return '<div>⚠ '+escHtml(c.w||(c.n+' — '+c.d))+'</div>';}).join('')+'</div>';
+  }else{
+    h+='<div class="fcp-ok">✓ 회계 항등식 검산 '+okN+'건 통과</div>';
+  }
+  if(miss.length){
+    h+='<div class="fcp-miss"><b>PDF에서 읽지 못한 항목 '+miss.length+'개</b><br>'
+      +miss.map(function(m){return escHtml(m[0]);}).join(' · ')
+      +'<br>모르시면 그대로 진행하셔도 됩니다.</div>';
+  }
+  h+='<div class="fcp-note">숫자가 다르면 <b>수정할게요</b>를 눌러 보충 입력에서 고쳐 주세요. '
+    +'확인 후 입력창에 반영되고, 생성 시 한 번 더 전체 수치를 보여드립니다.</div></div>';
+  return jbModal({title:'읽어온 내용을 확인해 주세요',html:h,
+    buttons:[{label:'✏️ 수정할게요',value:false},{label:'맞습니다 →',value:true,pri:1}]});
 }
 function crManMissMsg(ctx){
   var miss=crManMissList();
