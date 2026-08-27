@@ -3362,6 +3362,28 @@ async function generate(){
             aiReply('⚠️ 질문지의 대표 나이 <b>'+v+'세</b>가 재무보고서 생년('+_fdBirth+'년)과 달라 <b>'+_age+'세</b>로 교정해 전달합니다. (예: "1955년생"의 55를 나이로 오인한 사례 방지)');}});
       }
     }
+    /* ★ 패치H (2026-08-28): 주식·상속 관련 파라미터는 인터뷰 LLM 추출값이라 결정값이 아니다.
+       실증 — 브리핑에 '297,000주'를 정확히 넘겼는데 params.ceoShares가 지분율×총주식으로 재계산된 298,397로 들어와
+       표기 주식수와 지분평가액(40.41억=13,606×297,000)의 곱셈이 어긋났다.
+       ★ 반드시 '전송 전'에 덮어써야 서버의 calcInheritanceTax·calcSalaryVsDividend까지 확정값으로 계산된다.
+       (응답 후 덮어쓰면 저장본 params만 고쳐지고 서버 calc은 오염된 값 그대로 남는다) */
+    if(topic==='기업컨설팅'&&FIN.data&&FIN.calc&&collectedParams&&typeof collectedParams==='object'){
+      try{
+        const _D=FIN.data,_K=finPick(FIN.calc),_ov=[];
+        const _set=(k,v)=>{ if(v==null||!Number.isFinite(Number(v)))return;
+          if(collectedParams[k]!=null&&Number(collectedParams[k])!==Number(v))_ov.push(k+' '+collectedParams[k]+'→'+v);
+          collectedParams[k]=v; };
+        if(_D.대표주식>0)_set('ceoShares',_D.대표주식);
+        if(_D.총주식>0)_set('totalShares',_D.총주식);
+        if(_D.액면>0)_set('parValuePerShare',_D.액면);
+        if(_D.대표지분>0)_set('ceoShareRatio',_D.대표지분);
+        if(FIN.calc.npv&&Number.isFinite(FIN.calc.npv.perShareValue))_set('netProfitValuePerShare',FIN.calc.npv.perShareValue);
+        if(Number.isFinite(_K.주당))_set('unlistedStockValuePerShare',_K.주당);
+        if(Number.isFinite(_K.대표지분가치))_set('ceoSharesValue',Math.round(_K.대표지분가치/1e4));
+        if(Number.isFinite(_K.상속세))_set('estimatedInheritanceTax',Math.round(_K.상속세/1e4));
+        if(_ov.length)console.info('[패치H] 계산기 확정값으로 교정:',_ov.join(' / '));
+      }catch(_pe){console.warn('[패치H] 파라미터 교정 생략:',_pe&&_pe.message||_pe);}
+    }
     const genPayload={action:'generate',topic,text:rawInput+(_finHeldDirectives?'\n\n'+_finHeldDirectives:''),params:collectedParams,   /* ★ D2: AI 지시 블록은 여기서만 결합 — 입력창에는 미노출 */clientName,companyName,needBasis:chosenBasis||undefined,member:MEMBER,activeGroups:(interviewState&&interviewState.activeIssueGroups)||[],qsheetConfirmed:QS.confirmedForGen||[],qsheetPromises:QS.promisesForGen||[],qsheetUnknown:QS.unknownForGen||[],purpose:_jbPurposePayload()};   /* ★ C3 */
     if(topic==='기업컨설팅'&&(financialTableDetected||pendingFinancialData||confirmedFinancialData)){
       if(_forceGen){ genPayload.skipFinancialConfirm=true; }   // ★ 즉시생성: 재무확인 건너뜀(미확인값은 '정밀산출 필요'로 표기)
@@ -3401,6 +3423,21 @@ async function generate(){
     _deckSaved=false;                              // 미저장 상태 (저장 전 편집 잠금)
     aiOpCount=0;                                   // 새 문서 → 슬라이드 10회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
+    /* ★ 패치H 안전망 (2026-08-28): 실제 교정은 전송 전(genPayload 직전)에서 수행한다.
+       여기서는 서버가 params를 재가공해 되돌려보낸 경우에 대비해 저장본 params만 확정값으로 재고정한다(멱등). */
+    if(topic==='기업컨설팅'&&FIN.data&&FIN.calc&&params&&typeof params==='object'){
+      try{
+        const _D=FIN.data,_K=finPick(FIN.calc);
+        if(_D.대표주식>0)params.ceoShares=_D.대표주식;
+        if(_D.총주식>0)params.totalShares=_D.총주식;
+        if(_D.액면>0)params.parValuePerShare=_D.액면;
+        if(_D.대표지분>0)params.ceoShareRatio=_D.대표지분;
+        if(FIN.calc.npv&&Number.isFinite(FIN.calc.npv.perShareValue))params.netProfitValuePerShare=FIN.calc.npv.perShareValue;
+        if(Number.isFinite(_K.주당))params.unlistedStockValuePerShare=_K.주당;
+        if(Number.isFinite(_K.대표지분가치))params.ceoSharesValue=Math.round(_K.대표지분가치/1e4);
+        if(Number.isFinite(_K.상속세))params.estimatedInheritanceTax=Math.round(_K.상속세/1e4);
+      }catch(_pe){console.warn('[params overwrite] skip:',_pe&&_pe.message||_pe);}
+    }
     const _scaleFlags=(topic==='기업컨설팅')?finScaleAudit(data.params):[];   /* ★ 배율 가드 (2026-07-30) */
     if(data.calc) calc=data.calc;
     auditFlags=Array.isArray(data.numberAudit)?data.numberAudit:[];   // ★ 검증 안 된 금액 목록
@@ -4124,7 +4161,12 @@ function finParse(pages,fmt){
     매출액:ord(finCells(IS,P.매출액)), 매출원가:ord(finCells(IS,P.매출원가)),
     영업이익:ord(finCells(IS,P.영업이익)), 순이익:ord(finCells(IS,P.순이익)),
     이자비용:ord(finCells(IS,P.이자비용)), 인건비:ord(finCells(IS,P.인건비)),
-    영업현금:ord(finCells(CF,P.영업현금))
+    영업현금:ord(finCells(CF,P.영업현금)),
+    /* ★ 패치I (2026-08-28): 부동산과다보유법인 신호(S12·realty_weight)가 계산기에 이미 있으나
+       realEstateRatio를 만들 재료(토지·건물)를 파서가 추출하지 않아 영구 미발화 상태였다.
+       미검출 포맷에서는 null → 기존 동작 무영향. */
+    토지:ord(finCells(BS,['토지'])),
+    건물:ord(finCells(BS,['건물 및 부속설비','건물및부속설비','건물및구축물','건물']))
   };
   for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
     if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
@@ -4160,11 +4202,21 @@ function finParse(pages,fmt){
       if(_bm)D.대표생년=parseInt(_bm[1]);
       const _T=PI.text,_hits=[];let _am;const _are=/((?:19|20)\d{2})-\d{2}\s*~/g;
       while((_am=_are.exec(_T))!==null)_hits.push({y:parseInt(_am[1]),i:_am.index});
+      /* ★ 패치D (2026-08-28): 주요경력사항에 관계사 대표이사 재직행이 함께 있으면 첫 매치에서 break 하던 기존 로직이
+         관계사 취임년을 자사 취임년으로 잡았다(에버그린텍 실증 — (주)이지메탈 2016-11을 채택, 실제 자사 취임은 2010-01).
+         근속연수는 퇴직금 한도의 기초라 오차 영향이 크므로, 자사명이 포함된 행을 우선 채택하고
+         자사명 매칭이 없을 때만 재직중 대표이사 행 중 가장 오래된 연도를 쓴다. */
+      const _nzc=s=>String(s||'').replace(/\(주\)|\(유\)|\(합\)|주식회사|유한회사|\s+/g,'');
+      const _own=_nzc(D.회사명);
+      let _selfY=0,_oldestY=0;
       for(let _h=0;_h<_hits.length;_h++){
         const _seg=_T.slice(_hits[_h].i,_hits[_h+1]?_hits[_h+1].i:_hits[_h].i+140);
-        /* 재직중 경력(~ 뒤에 종료 연도가 없음) + 대표이사 직위 → 취임년 */
-        if(/대표이사/.test(_seg)&&!/~\s*(?:19|20)\d{2}/.test(_seg.slice(0,20))){D.대표취임년=_hits[_h].y;break;}
+        /* 재직중 경력(~ 뒤에 종료 연도가 없음) + 대표이사 직위 → 취임년 후보 */
+        if(!(/대표이사/.test(_seg)&&!/~\s*(?:19|20)\d{2}/.test(_seg.slice(0,20))))continue;
+        if(_own&&_nzc(_seg).indexOf(_own)>=0&&(!_selfY||_hits[_h].y<_selfY))_selfY=_hits[_h].y;
+        if(!_oldestY||_hits[_h].y<_oldestY)_oldestY=_hits[_h].y;
       }
+      D.대표취임년=_selfY||_oldestY||0;
     }
   }
 
@@ -4190,6 +4242,16 @@ function finParse(pages,fmt){
       if(_h.length)_top=Math.min(..._h.map(i=>i.y));
       const _b=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('관계사')&&(_top==null||i.y<_top));
       if(_b.length)_bot=Math.max(..._b.map(i=>i.y));
+    }
+    /* ★ 패치A (2026-08-28): KODATA_WEB(크레탑)도 한 페이지에 주요주주현황·관계회사현황이 함께 있다.
+       가드가 NICE에만 걸려 있어 관계회사 행 [지분율 100 / 결산년도 2024 / 자본금 990 / 자산총계 1,622 / 매출액 1,398 / 순이익 24]이
+       주주로 흡수(주식수=최댓값 2024·지분율=마지막 24)되어 총주식이 429,000 → 431,024로 오염됐다(에버그린텍 실증).
+       아래 폴백 분기(_hy/_ey)와 동일 기준을 메인 루프에도 적용한다. */
+    else if(fmt==='KODATA_WEB'){
+      const _h2=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('주요주주현황'));
+      if(_h2.length)_top=Math.min(..._h2.map(i=>i.y));
+      const _b2=SH.filter(i=>i.s.replace(/\s+/g,'').startsWith('관계회사현황')&&(_top==null||i.y<_top));
+      if(_b2.length)_bot=Math.max(..._b2.map(i=>i.y));
     }
     rows.forEach(r=>{
       r.sort((a,b)=>a.x-b.x);
@@ -4243,10 +4305,14 @@ function finParse(pages,fmt){
     D.총주식 = tot?parseInt(tot[1].replace(/,/g,'')) : (cnt?parseInt(cnt[1].replace(/,/g,'')):0);
     if(!D.총주식 && D.주주.length){
       const _rs=D.주주.reduce((a,b)=>a+b.율,0);
-      if(_rs>=95) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);   /* ★ 부분 명부(상장사 상위주주만 표시)로 총주식·액면 역산 오류 차단 — 95% 미만이면 총주식 미확정, 액면·주식가치 계산 안 함 (2026-07-21) */
+      /* ★ 패치B (2026-08-28): 하한(95%)만 있고 상한이 없어 이물 행 혼입으로 합계가 124%가 돼도 통과했다.
+         지분율 합계는 정의상 100%를 넘을 수 없으므로 초과 시 총주식을 확정하지 않는다(주식평가·상속세 산출 차단). */
+      if(_rs>=95&&_rs<=100.5) D.총주식 = D.주주.reduce((a,b)=>a+b.주식,0);   /* ★ 부분 명부(상장사 상위주주만 표시)로 총주식·액면 역산 오류 차단 — 95% 미만이면 총주식 미확정, 액면·주식가치 계산 안 함 (2026-07-21) */
+      else if(_rs>100.5) D.지분합계이상=Math.round(_rs*100)/100;
     }
     D.액면 = par?parseInt(par[1].replace(/,/g,''))
                 : ((D.총주식&&D.자본금)?Math.round(D.자본금[0]*finUnitScale().won/D.총주식):0);
+    let _parFromDoc=!!par;   /* ★ 패치C (2026-08-28): 액면가가 보고서 명시값인지(true) 자본금÷총주식 역산값인지(false) 추적 */
     /* ★ KODATA_WEB: 재무상태표에 '발행주식수'·'(1주당금액)'이 최신 결산 기준으로 명기된다.
        주주현황 표는 기준일자가 과거(감자·자기주식 변동 전)일 수 있어 재무상태표 값을 우선 채택하고,
        주주현황 합산 주식수와 2% 이상 어긋나면 지분상충으로 표시한다. '[단위:주]' 등 비숫자 토큰은 건너뛴다 (2026-07-21) */
@@ -4265,15 +4331,34 @@ function finParse(pages,fmt){
            기존엔 _parv 실패 시 주주현황 구기준 주식수로 역산한 stale 액면이 남아
            '자본금 739,449,000원 ≠ 주식수×액면가 2,681,245,700원' 같은 거짓 검산 경고를 만들었다(실증).
            _parv 우선, 없으면 새 총주식 기준 재역산으로 정합 유지 */
-        if(_parv&&_parv[0]>0)D.액면=_parv[0];
+        if(_parv&&_parv[0]>0){D.액면=_parv[0];_parFromDoc=true;}
         else if(D.자본금&&Number.isFinite(D.자본금[0])&&D.자본금[0]>0)D.액면=Math.round(D.자본금[0]*finUnitScale().won/D.총주식);
       }
-      else if(_parv&&_parv[0]>0)D.액면=_parv[0];
+      else if(_parv&&_parv[0]>0){D.액면=_parv[0];_parFromDoc=true;}
+    }
+    /* ★ 패치C (2026-08-28): 총주식이 오염되면 역산 액면가가 상용 액면가(100·200·500·1,000·2,500·5,000·10,000)에서 미세하게 벗어난다.
+       '자본금 = 주식수 × 액면가' 검산은 같은 식의 역산이라 항상 통과해 이 오류를 잡지 못한다(4,977원 사례 실증).
+       ★ 이 검사는 반드시 위 KODATA_WEB 블록(발행주식수·1주당금액 재채택) 뒤에서 최종 D.액면을 대상으로 해야 한다.
+       값은 바꾸지 않고 플래그만 세워 finVerify가 경고한다. 보고서 명시 액면가(_parFromDoc)는 검사 대상이 아니다. */
+    if(!_parFromDoc&&D.액면>0){
+      const _STD=[100,200,500,1000,2500,5000,10000];
+      /* 허용오차는 자본금 천원단위 절사에서 오는 ±1~2원만 흡수한다.
+         ★ 0.5%로 잡으면 4,977원(5,000원 대비 0.46%)이 통과해 검사가 무의미해진다 — 실증으로 확인. */
+      if(!_STD.some(v=>Math.abs(D.액면-v)<=Math.max(2,v*0.001))) D.액면비표준=true;
     }
   }
   const me=D.주주.find(s=>s.명===D.대표자);
   D.대표지분=me?me.율:0; D.대표주식=me?me.주식:0;
   if(D.지분상충){D.지분참고주식=D.대표주식;D.대표주식=0;}   /* ★ 주주현황(구기준) 주식수로 주식평가·상속세가 계산되는 것을 차단 — 지분율은 대화 논점용으로 유지, 수치 확정은 CEO 확인 후 (2026-07-21) */
+  /* ★ 패치I (2026-08-28): 부동산 비중(장부 취득가 기준). 상증세법상 부동산과다보유법인 판정은 '평가액' 기준이라
+     장부가로 확정할 수 없다 → 평가 가중치(3:2 → 2:3)를 자동 전환하지 않고, 신호·경고 재료로만 쓴다.
+     감가상각누계액은 계정 위치가 포맷마다 달라 차감하지 않으므로 실제보다 다소 높게 나온다(보수적 경고). */
+  D.부동산비중=(function(){
+    const _A=(D.자산총계&&Number.isFinite(D.자산총계[0]))?D.자산총계[0]:0;
+    const _L=(D.토지&&Number.isFinite(D.토지[0]))?D.토지[0]:0;
+    const _B=(D.건물&&Number.isFinite(D.건물[0]))?D.건물[0]:0;
+    return (_A>0&&(_L+_B)>0)?Math.round((_L+_B)/_A*1000)/10:null;
+  })();
   const _bwTot=BS?finCells(BS,'차입금총계'):null;   /* NICE-IFRS 차입금구조 표 (2026-07-14) */
   D.차입금=_bwTot?ord(_bwTot)
                 :[0,1,2].map(i=>((D.단기차입금&&D.단기차입금[i])||0)+((D.장기차입금&&D.장기차입금[i])||0)+((D.사채&&D.사채[i])||0));
@@ -4302,6 +4387,13 @@ function finVerify(D){
   if(D.주주.length){const s=D.주주.reduce((a,b)=>a+b.율,0);
     C.push({n:'지분율 합계 = 100%',ok:near(s,100,0.02),d:s.toFixed(2)+'%',
     w:`지분율 합계 ${s.toFixed(2)}% (기대 100%) — 상위주주만 공시된 부분 명부 또는 일부 행 미파싱 가능성, 지분 구조 CEO 확인 필요`});}
+  /* ★ 패치B·C (2026-08-28): 총주식 오염의 두 지문 — 지분율 합계 100% 초과, 역산 액면의 비표준값 */
+  if(D.지분합계이상)C.push({n:'지분율 합계 상한',ok:false,
+    d:`합계 ${D.지분합계이상}% (>100%)`,
+    w:`지분율 합계가 ${D.지분합계이상}%로 100%를 초과합니다 — 주주표가 아닌 행(관계회사 등)이 섞였을 가능성. 총발행주식수를 확정하지 않았으므로 주식평가·상속세는 산출되지 않습니다`});
+  if(D.액면비표준)C.push({n:'액면가 표준값',ok:false,
+    d:`역산 액면 ${D.액면.toLocaleString()}원`,
+    w:`자본금 ÷ 총주식으로 역산한 액면가 ${D.액면.toLocaleString()}원이 상용 액면가(100·500·1,000·5,000·10,000원)와 다릅니다 — 총발행주식수 추출값 확인 필요`});
   if(D.지분상충)C.push({n:'주주현황 기준일 = 최신 결산',ok:false,
     d:`주주현황 주식수 합계 ${(D.주주합산주식||0).toLocaleString()}주 vs 재무상태표 발행주식수 ${D.총주식.toLocaleString()}주 — 감자·자기주식 변동 후 지분 미반영 가능. 대표 실제 지분·주식수는 CEO 확인 필요`,
     w:`주주현황 주식수 합계 ${(D.주주합산주식||0).toLocaleString()}주 vs 재무상태표 발행주식수 ${D.총주식.toLocaleString()}주 — 주주현황이 감자·자기주식 변동 전 구기준 가능성. 대표 실제 지분·주식수는 CEO 확인 필요`});   /* ★ 2026-07-21 */
@@ -4362,6 +4454,10 @@ function finCalc(D){
         industry:'general', totalShares:D.총주식, targetShares:D.대표주식
       });
       if(R.stock&&R.stock.warnings)R.warns.push(...R.stock.warnings);
+      /* ★ 패치I·J (2026-08-28): 실제로는 순자산가치 80% 하한이 적용됐는데 본문이 '순손익 3 : 순자산 2'로 단정 서술되던 문제.
+         적용된 산식과 부동산 비중을 경고 앞머리에 명시해 AI가 방법론을 잘못 기술하지 못하게 한다. */
+      if(R.stock&&R.stock.usedFloor)R.warns.unshift(`1주당 평가액 ${R.stock.finalValue.toLocaleString()}원은 가중평균(${R.stock.weightedValue.toLocaleString()}원)이 아니라 순자산가치 ${Math.round((R.stock.floorRate||0.8)*100)}% 하한이 적용된 값이다. '순손익가치 3 : 순자산가치 2로 평가했다'고 단정 서술하지 말 것.`);
+      if(D.부동산비중!=null&&D.부동산비중>=50)R.warns.unshift(`토지·건물이 자산총계의 약 ${D.부동산비중}%(장부 취득가 기준)로, 부동산과다보유법인(평가 가중치 순손익 2 : 순자산 3)에 해당할 수 있다. 현재 계산은 일반법인(3:2) 기준이므로 해당 여부는 평가액 기준으로 별도 확인이 필요하다고 표기할 것.`);
 
       /* ④ 상속세 — calcInheritanceTax (주식분만. 개인 부동산·금융자산은 미확인) */
       R.inherit=J.calcInheritanceTax({
@@ -4975,7 +5071,7 @@ function finToText(mode){   /* ★ D2 (2026-08-27): mode==='data' → 입력창 
   L.push('[주의사항 — 단정적 서술 금지]');
   L.push(`- 재무제표 구분은 ${ST}로 가정했습니다. 연결재무제표이면 사용자가 정정해야 합니다.`);
   const W=(FIN.calc&&FIN.calc.warns)||[];
-  W.slice(0,6).forEach(w=>L.push('- '+w));
+  W.slice(0,8).forEach(w=>L.push('- '+w));   /* ★ 패치J (2026-08-28): 6→8. 패치I·J가 평가방법론 경고 2건을 앞에 붙이면서 기존 '상속세는 주식분만 반영' 등 필수 고지가 상한 밖으로 밀려날 수 있었다(결손연도 포함 시 npv 경고가 3건까지 늘어남) */
   const bad=FIN.checks.filter(x=>!x.ok);
   bad.forEach(x=>L.push(`- 검산 경고: ${x.w||`${x.n} — ${x.d}`}`));   /* ★ A3: 실패 전용 문구 우선 (2026-07-30) */
   if(FIN.verify&&FIN.verify.flags&&FIN.verify.flags.length)FIN.verify.flags.slice(0,4).forEach(f=>L.push('- AI 원문 대조 확인 필요: '+f));   /* ★ B2 (2026-07-30) */
@@ -7299,6 +7395,7 @@ function crEngineInput(){
     ceoAge:f.age?Number(f.age):null,ceoTenureYears:f.tenure?Number(f.tenure):null,
     annualSalaryMan:crNum(f.salary),
     ceoShareRatio:D.대표지분?D.대표지분/100:null,
+    realEstateRatio:(D.부동산비중!=null)?D.부동산비중/100:null,   /* ★ 패치I (2026-08-28): 계산기 S12·realty_weight 패턴의 req 필드 — 미전달로 영구 미발화였다 */
     stockValueMan:(FIN.calc&&FIN.calc.stock)?FIN.calc.stock.totalValuation/1e4:null,
     largestShareholderIsCEO:f.major==='yes'?true:(f.major==='no'?false:null),
   };
