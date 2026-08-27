@@ -2150,7 +2150,7 @@
             <button class="btn btn-sm btn-sec" onclick="smsTplCancel()">취소</button>
           </div>
         </div>
-        <div id="smstpl-list" style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto"></div>
+        <div id="smstpl-list" style="display:flex;flex-direction:column;gap:6px;max-height:460px;overflow-y:auto"></div>
       </div>
       <div class="form-box" style="margin-top:12px">
         <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">메시지 내용</label>
@@ -2863,6 +2863,22 @@
   </main>
 </div>
 <div id="mdl-member" class="modal hidden"><div class="mdl-bg" onclick="closeM('mdl-member')"></div><div class="mdl-box mdl-lg"><button class="mdl-x" onclick="closeM('mdl-member')">×</button><div id="member-inner"></div></div></div>
+<!-- ★ [2026-08-27] 발송 전 문구 확인·수정 모달 (건별 1회 수정 — 템플릿 원본은 그대로) -->
+<div id="mdl-smsconfirm" class="modal hidden" style="z-index:9500"><div class="mdl-bg" onclick="smsConfirmClose(false)"></div><div class="mdl-box mdl-lg"><button class="mdl-x" onclick="smsConfirmClose(false)">×</button>
+  <h2 style="font-size:19px;font-weight:700;color:var(--primary);margin:0 0 4px">✉️ 안내문자 발송 확인</h2>
+  <p id="smscf-target" style="font-size:12.5px;color:var(--text-lt);margin:0 0 12px"></p>
+  <div id="smscf-histbox" class="hidden" style="background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;padding:9px 11px;margin-bottom:12px;font-size:12.5px;color:#E65100;line-height:1.6"></div>
+  <textarea id="smscf-msg" rows="14" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-size:13.5px;font-family:var(--font);line-height:1.7;resize:vertical;box-sizing:border-box" oninput="smsConfirmCost()"></textarea>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:8px">
+    <span id="smscf-cost" style="font-size:12.5px;color:var(--text-lt)"></span>
+    <button class="btn btn-sm btn-sec" onclick="smsConfirmReset()" title="템플릿 원본 문구로 되돌립니다">↩ 원본 복원</button>
+  </div>
+  <div style="font-size:12px;color:var(--text-lt);margin-top:10px;line-height:1.65">여기서 고친 내용은 <b>이번 발송에만</b> 적용됩니다. 저장된 템플릿 원본은 바뀌지 않습니다.<br>문구 자체를 바꾸려면 「문자발송 → 저장된 메시지」에서 수정하세요.</div>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+    <button class="btn btn-sec" onclick="smsConfirmClose(false)">발송 안 함</button>
+    <button class="btn" onclick="smsConfirmClose(true)">📱 발송</button>
+  </div>
+</div></div>
 <div id="mdl-withdrawn" class="modal hidden"><div class="mdl-bg" onclick="closeM('mdl-withdrawn')"></div><div class="mdl-box" style="max-width:540px"><button class="mdl-x" onclick="closeM('mdl-withdrawn')">×</button>
   <h2 style="font-size:19px;font-weight:700;color:var(--primary);margin:0 0 4px">🚫 탈퇴회원 조회</h2>
   <p style="font-size:12px;color:var(--text-lt);margin:0 0 16px">연락처는 암호화(해시) 저장되어 평문은 조회 불가합니다. 동일 연락처 입력 시 과거 아이디를 확인할 수 있습니다.</p>
@@ -6029,15 +6045,24 @@ async function grantMembership(uid){
       }
     }catch(e){console.warn('멤버십 추천보상 지급 실패',e);}
     await logRoleChange(uid,data.name||'',data.loginId||'',prevRole,'jarvia_member',prevRole==='jarvia_member'?'멤버십 기간변경':'멤버십 부여',admData?.name||'');
-    // ★ [2026-08] 멤버십 신규 전환 시 업그레이드 안내문자 (평생 1회, 발송 전 확인 팝업)
+    /* ★ [2026-08-27] 멤버십 전환 안내문자
+       · 자비아가 아닌 유형 → 자비아로 전환될 때마다 발송 (중지 후 재전환 포함)
+         재전환 회원도 그 시점의 최신 안내(재로그인·신청링크·담당자 연락처)를 받아야 하므로
+         종전의 "평생 1회" 제한(membershipUpgradeSmsSent)을 조건에서 제외했다.
+       · 이미 자비아인 상태에서의 기간연장·재부여는 종전대로 발송하지 않는다.
+       · 발송 전 모달에서 문구를 건별로 수정할 수 있다(템플릿 원본은 불변). */
     try{
-      if(prevRole!=='jarvia_member' && !data.membershipUpgradeSmsSent && data.phone){
-        /* ★ [2026-08-25] 문구를 sms_templates/membership_upgrade 에서 조회 (관리자가 화면에서 수정 가능)
-           조회 실패 시 SYS_TPL 기본 문구로 자동 대체되므로 발송 누락 없음 */
+      if(prevRole!=='jarvia_member' && data.phone){
         const smsMsg=await getSysTplBody('membership_upgrade',{'이름':data.name||'회원'});
-        if(confirm('업그레이드 관련 문자를 회원에게 전송할까요?\n\n──────────────\n'+smsMsg+'\n──────────────\n\n[확인] 클릭 시 즉시 발송됩니다. (LMS 1건 50원)')){
-          await httpsCallable(functions,'sendAdminSMS')({recipients:[{name:data.name||'',phone:data.phone,loginId:data.loginId||''}],message:smsMsg});
-          await updateDoc(userRef,{membershipUpgradeSmsSent:true});
+        let histText='';
+        if(data.membershipUpgradeSmsSent){
+          const at=data.membershipUpgradeSmsAt?.toDate?.();
+          histText='⚠️ 이전에 안내문자가 발송된 이력이 있습니다'+(at?` (최종 ${at.toLocaleDateString('ko-KR')})`:'')+'. 재전환 건이라면 그대로 발송하시면 됩니다.';
+        }
+        const finalMsg=await askSmsBeforeSend(smsMsg,{name:data.name||'',phone:data.phone,histText});
+        if(finalMsg){
+          await httpsCallable(functions,'sendAdminSMS')({recipients:[{name:data.name||'',phone:data.phone,loginId:data.loginId||''}],message:finalMsg});
+          await updateDoc(userRef,{membershipUpgradeSmsSent:true,membershipUpgradeSmsAt:serverTimestamp()});
           toast('업그레이드 안내문자 발송 완료','success');
         }
       }
@@ -12871,6 +12896,48 @@ const SYS_TPL={
   }
 };
 
+/* ★ [2026-08-27] 발송 전 문구 확인·수정 모달
+   confirm() 은 읽기 전용이라 건별 수정이 불가능했다.
+   여기서 고친 내용은 이번 발송에만 적용되고 sms_templates 원본은 건드리지 않는다. */
+let _smsCfResolve=null, _smsCfOrigin='';
+
+function smsConfirmCost(){
+  const msg=($('smscf-msg').value||'');
+  const bytes=new Blob([msg]).size;
+  const type=bytes>90?'LMS':'SMS';
+  const cost=bytes>90?50:20;
+  $('smscf-cost').textContent=`${bytes} 바이트 · ${type} · 예상 ${cost.toLocaleString()}원`;
+}
+function smsConfirmReset(){
+  $('smscf-msg').value=_smsCfOrigin;
+  smsConfirmCost();
+  toast('원본 문구로 되돌렸습니다.','success');
+}
+function smsConfirmClose(ok){
+  const r=_smsCfResolve; _smsCfResolve=null;
+  const msg=($('smscf-msg').value||'').trim();
+  $('mdl-smsconfirm').classList.add('hidden');
+  if(r)r(ok?(msg||null):null);
+}
+/**
+ * @param {string} defaultMsg 기본 문구(치환 완료 상태)
+ * @param {object} opt {name, phone, histText}
+ * @returns {Promise<string|null>} 발송할 문구 / 취소 시 null
+ */
+function askSmsBeforeSend(defaultMsg,opt){
+  opt=opt||{};
+  _smsCfOrigin=defaultMsg||'';
+  $('smscf-msg').value=_smsCfOrigin;
+  $('smscf-target').textContent=`수신자 : ${opt.name||'(이름없음)'} · ${opt.phone||'-'}`;
+  const hb=$('smscf-histbox');
+  if(opt.histText){hb.textContent=opt.histText;hb.classList.remove('hidden');}
+  else hb.classList.add('hidden');
+  smsConfirmCost();
+  $('mdl-smsconfirm').classList.remove('hidden');
+  setTimeout(()=>{try{$('smscf-msg').focus();}catch(_e){}},50);
+  return new Promise(res=>{_smsCfResolve=res;});
+}
+
 /** 시스템 템플릿 본문을 읽어 치환까지 마친 문자열을 돌려준다. 실패 시 기본 문구 사용. */
 async function getSysTplBody(key,vars){
   const cfg=SYS_TPL[key];if(!cfg)return '';
@@ -13330,7 +13397,7 @@ async function cancelScheduledSms(id){
   }
 }
 
-window.setSmsMode=setSmsMode;window.smsRsvQuick=smsRsvQuick;window.doScheduleAdminSMS=doScheduleAdminSMS;window.loadScheduledSms=loadScheduledSms;window.cancelScheduledSms=cancelScheduledSms;
+window.smsConfirmCost=smsConfirmCost;window.smsConfirmReset=smsConfirmReset;window.smsConfirmClose=smsConfirmClose;window.setSmsMode=setSmsMode;window.smsRsvQuick=smsRsvQuick;window.doScheduleAdminSMS=doScheduleAdminSMS;window.loadScheduledSms=loadScheduledSms;window.cancelScheduledSms=cancelScheduledSms;
 
 // ═══════════════════════════════════════════════════
 //  📂 사이드바 메뉴 그룹 아코디언 [2026-08-22]
