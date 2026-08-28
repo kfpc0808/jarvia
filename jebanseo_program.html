@@ -4503,6 +4503,25 @@ function finCalc(D){
   return R;
 }
 
+/* ★ 2026-08-28: 비상장주식 평가의 '실제 적용 산식' 문구 생성.
+   기존에는 브리핑 두 곳(finToPending 4707행·finToText 5088행)이 산식을 "순손익 3 : 순자산 2"로 하드코딩해 AI에 넘겼다.
+   그런데 가중평균값이 순자산가치 80%보다 낮으면 계산기는 하한값을 채택한다(usedFloor=true).
+   결과적으로 데이터는 "3:2로 계산했다"고 말하는데 실제 값은 하한값이라, 제안서 본문 5곳이
+   "3:2로 가중평균해 평가한다"고 단정 서술했다(에버그린텍 실증: 표기 13,670원 ≠ 3:2 계산값 10,732원).
+   경고문(finCalc의 R.warns)만으로는 이 데이터 문장을 이기지 못했으므로, 데이터 자체를 적용된 산식으로 바꾼다. */
+function finStockMethodText(){
+  const S=FIN.calc&&FIN.calc.stock;
+  if(!S||!Number.isFinite(S.finalValue))return '상증세법 시행령 §54';
+  /* 계산기는 industry를 반환하지 않고 earningsWeight/assetWeight를 반환한다 — 실제 적용 가중치를 그대로 읽는다 */
+  const ew=Number.isFinite(S.earningsWeight)?S.earningsWeight:3;
+  const aw=Number.isFinite(S.assetWeight)?S.assetWeight:2;
+  const w=`순손익가치 ${ew} : 순자산가치 ${aw}`;
+  if(!S.usedFloor)return `상증세법 시행령 §54, ${w} 가중평균`;
+  return `상증세법 시행령 §54 — 순자산가치 ${Math.round((S.floorRate||0.8)*100)}% 하한이 적용된 값`
+    +`(${w} 가중평균은 ${Number(S.weightedValue).toLocaleString()}원으로 하한 ${Number(S.floorValue).toLocaleString()}원보다 낮아 하한을 채택)`
+    +`. ★ 이 평가액을 '${w}로 가중평균해 평가했다'고 서술하면 틀린다 — 하한 규정이 적용된 사실을 반드시 함께 밝힐 것`;
+}
+
 /* 표시·리스크 판정용 요약치 — 반드시 계산기 결과에서만 읽는다 */
 function finPick(R){
   const s=(R.ratios&&R.ratios.stability)||{};
@@ -4704,7 +4723,7 @@ function finToBrief(){
   if(K.주당){
     const N=FIN.calc&&FIN.calc.npv;
     if(N)L.push(`· 1주당 순손익가치 ${N.perShareValue.toLocaleString()}원 (상증령 §56, 3개년 3:2:1 가중평균 ÷ 환원율 10%)`);
-    L.push(`· 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (상증령 §54, 순손익 3 : 순자산 2)`);
+    L.push(`· 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (${finStockMethodText()})`);
     L.push(`· 대표 보유지분 평가액 ${(K.대표지분가치/1e8).toFixed(2)}억원`);
     if(K.상속세!=null)L.push(`· 대표 유고 시 주식분 예상 상속세 ${(K.상속세/1e8).toFixed(2)}억원 (배우자 있음·자녀 1인 가정, 주식만 반영)`);
   }
@@ -5085,7 +5104,7 @@ function finToText(mode){   /* ★ D2 (2026-08-27): mode==='data' → 입력창 
   if(K.주당){
     const N=FIN.calc&&FIN.calc.npv;
     if(N)L.push(`- 1주당 순손익가치 ${N.perShareValue.toLocaleString()}원 (calcNetProfitValue · 상증세법 시행령 §56, 3개년 순손익 3:2:1 가중평균 ÷ 환원율 ${(N.capRate*100).toFixed(0)}%)`);
-    L.push(`- 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (calcUnlistedStockValue · 상증세법 시행령 §54, 순손익가치 3 : 순자산가치 2)`);
+    L.push(`- 1주당 비상장주식 평가액 ${K.주당.toLocaleString()}원 (calcUnlistedStockValue · ${finStockMethodText()})`);
     L.push(`- 대표 보유지분 평가액 ${(K.대표지분가치/1e8).toFixed(2)}억원`);
     if(K.상속세!=null)L.push(`- 대표 유고 시 주식분 예상 상속세 ${(K.상속세/1e8).toFixed(2)}억원 (calcInheritanceTax · 배우자 있음·자녀 1인 가정)`);
   }
