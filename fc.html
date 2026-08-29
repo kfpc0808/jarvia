@@ -12586,12 +12586,24 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(last&&last.name&&last.name!==file.name){if(!confirm("🚨 지난번 파일("+last.name+")과 다른 파일입니다.\n\n선택한 파일: "+file.name+"\n\n정본 파일이 바뀐 것이 맞습니까?")){_clr();return;}}
     /* ★ [2026-08-29] 기존 고객 목록 동기화를 여기서 수행 — 파일창을 먼저 여느라 뒤로 밀렸다.
        ⚠️ 목록이 로드되지 않은 채 처리하면 전건이 신규로 등록돼 대량 중복이 생긴다(11233행 주석).
-       따라서 _mpcInputReady 완료 후에만 파싱·등록으로 진행한다. */
-    try{toast("고객 목록을 확인하는 중… 잠시만요","info");}catch(_e){}
+       따라서 _mpcInputReady 완료 후에만 파싱·등록으로 진행한다.
+       ★ 진행 화면을 먼저 띄운다 — 이 단계가 드라이브 상태에 따라 최대 12초 걸리는데
+          토스트만 잠깐 떴다 사라져 사용자에게는 아무 일도 안 일어난 것처럼 보였다. */
+    var _pv=function(t,sub){try{var e=$("mpcXlsxProg");if(e)e.classList.add("show");
+      var a=$("mpcProgTit");if(a)a.textContent=t;
+      var b=$("mpcProgSub");if(b)b.textContent=sub||"";
+      var f=$("mpcProgFill");if(f)f.style.width="0%";
+      var st=$("mpcProgStop");if(st)st.style.display=(t.indexOf("확인")>=0)?"none":"";}catch(_e){}};
+    var _pvHide=function(){try{var e=$("mpcXlsxProg");if(e)e.classList.remove("show");
+      var st=$("mpcProgStop");if(st)st.style.display="";}catch(_e){}};
+    _pv("고객 목록을 확인하는 중…","기존 고객과 대조할 준비를 하고 있어요 (최대 12초)");
     _mpcInputReady(function(){
+    _pv("엑셀을 읽는 중…","파일을 여는 중이에요");
     try{localStorage.setItem("mpc_last_upload",JSON.stringify({name:file.name,ts:Date.now(),count:0}));}catch(_e){}
     try{window.ccAppendRecord&&window.ccAppendRecord("업로드이력","upload_log",{fileName:file.name,side:"customer_map"});}catch(_e){}
-    mpcLoadXLSX(function(ok){if(!ok){alert("엑셀 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");_clr();return;}var reader=new FileReader();reader.onload=function(e){try{var wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});var json=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});if(!json.length){alert("데이터가 없어요.");_clr();return;}try{var lu=JSON.parse(localStorage.getItem("mpc_last_upload")||"null");if(lu){lu.count=json.length;localStorage.setItem("mpc_last_upload",JSON.stringify(lu));}}catch(_e){}_clr();mpcXlsxImport(json);}catch(err){alert("엑셀을 읽지 못했어요. 양식을 확인해 주세요.");_clr();}};reader.readAsArrayBuffer(file);});
+    mpcLoadXLSX(function(ok){if(!ok){_pvHide();alert("엑셀 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");_clr();return;}var reader=new FileReader();
+      reader.onerror=function(){_pvHide();alert("파일을 읽지 못했어요. 다시 시도해 주세요.");_clr();};
+      reader.onload=function(e){try{var wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});var json=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});if(!json.length){_pvHide();alert("데이터가 없어요.");_clr();return;}try{var lu=JSON.parse(localStorage.getItem("mpc_last_upload")||"null");if(lu){lu.count=json.length;localStorage.setItem("mpc_last_upload",JSON.stringify(lu));}}catch(_e){}_clr();mpcXlsxImport(json);}catch(err){_pvHide();console.error("엑셀 파싱 실패:",err);alert("엑셀을 읽지 못했어요.\n\n"+(err&&err.message?err.message:"양식을 확인해 주세요."));_clr();}};reader.readAsArrayBuffer(file);});
     });}
   function mpcXlsxImport(rows){var mp=mpcHeaderMap(rows[0]);
     /* ★ [2026-07-23] 이름 열을 못 찾으면 AI 매핑 폴백 — 헤더+샘플 3행만 전송(질문 1회 차감 가능) */
@@ -12631,10 +12643,12 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       Object.keys(it.extra||{}).forEach(function(k2){if(b.extra[k2]&&b.extra[k2]!==it.extra[k2])b.extra[k2]=(b.extra[k2]+" / "+it.extra[k2]).slice(0,300);else if(!b.extra[k2]&&Object.keys(b.extra).length<40)b.extra[k2]=it.extra[k2];});
       (it.contracts||[]).forEach(function(ct){var dup=b.contracts.some(function(x){return x.product===ct.product&&x.expiry===ct.expiry;});if(!dup)b.contracts.push(ct);});});
       if(o.length<items.length){mpcFoldNote="동일인 "+items.length+"행 → "+o.length+"명으로 병합";items=o;}})();
-    if(mpcFoldNote&&!confirm("같은 이름·생년월일 행을 한 고객으로 합쳤어요.\n("+mpcFoldNote+" — 예: 한 고객의 계약이 여러 행인 원장 형식)\n\n이대로 등록할까요?")){return;}
+    var _hideProg=function(){try{var e=$("mpcXlsxProg");if(e)e.classList.remove("show");var st=$("mpcProgStop");if(st)st.style.display="";}catch(_e){}};
+    if(mpcFoldNote&&!confirm("같은 이름·생년월일 행을 한 고객으로 합쳤어요.\n("+mpcFoldNote+" — 예: 한 고객의 계약이 여러 행인 원장 형식)\n\n이대로 등록할까요?")){_hideProg();return;}
     /* ★ [2026-08-29] 1회 업로드 인원 상한 — 동일인 병합 뒤 실제 등록 인원 기준(원장형 파일이 부당하게 막히지 않도록).
        넘으면 아무것도 저장하지 않고 중단한다. 안내 문구와 동작을 일치시키기 위한 실제 검사. */
     if(items.length>MPC_MAX_ROWS){
+      _hideProg();
       alert("한 번에 올릴 수 있는 인원은 "+MPC_MAX_ROWS.toLocaleString()+"명까지예요.\n\n이 파일은 "+items.length.toLocaleString()+"명입니다"+(mpcFoldNote?(" — "+mpcFoldNote):"")+".\n\n파일을 나눠서 올려주세요. 나눠 올려도 이름+생년월일이 같으면 중복 없이 합쳐집니다.");
       return;
     }
