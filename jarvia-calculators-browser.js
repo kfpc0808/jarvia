@@ -900,21 +900,26 @@ function calcTaxCredit(params) {
   const safeParams = params && typeof params === 'object' ? params : {};
   const missingInputs = _missingFinite(safeParams, ['totalSalary']);
   if (missingInputs.length) return _invalidCalculation('calcTaxCredit', missingInputs);
-  const { totalSalary, pensionSaving = 0, irp = 0 } = safeParams;
+  const { totalSalary, pensionSaving = 0, irp = 0, __officialRules = {} } = safeParams;
   if (![pensionSaving, irp].every(Number.isFinite) || totalSalary < 0 || pensionSaving < 0 || irp < 0) {
     return { ..._invalidCalculation('calcTaxCredit', [], ['급여와 납입액은 0 이상의 유한한 숫자여야 합니다.']), invalidInputs: ['amount'] };
   }
 
-  // 세액공제 한도 (2023년 개정 반영)
-  const pensionLimit = 6000000; // 연금저축 한도 600만원
-  const totalLimit = 9000000; // 연금저축+IRP 합산 한도 900만원
+  // 세액공제 한도·율: OFFICIAL_RULE 우선, 미주입 시 기존값 fallback.
+  const pensionRule = __officialRules.PENSION_ACCOUNT_TAX_CREDIT || {};
+  const pensionLimit = Number(pensionRule.pensionSavingLimit ?? 6000000);
+  const totalLimit = Number(pensionRule.combinedLimit ?? 9000000);
 
   const effectivePension = Math.min(pensionSaving, pensionLimit);
-  const effectiveIRP = Math.min(irp, totalLimit - effectivePension);
+  const effectiveIRP = Math.min(irp, Math.max(0, totalLimit - effectivePension));
   const effectiveTotal = effectivePension + effectiveIRP;
 
-  // 세액공제율: 총급여 5,500만(종합소득 4,500만) 이하 16.5%, 초과 13.2% (지방세 포함)
-  const creditRate = totalSalary <= 55000000 ? 0.165 : 0.132;
+  const lowSalaryThreshold = Number(pensionRule.lowIncomeSalaryThreshold ?? 55000000);
+  const nationalRate = totalSalary <= lowSalaryThreshold
+    ? Number(pensionRule.lowIncomeNationalRate ?? 0.15)
+    : Number(pensionRule.standardNationalRate ?? 0.12);
+  const localSurtaxRate = Number(pensionRule.localIncomeTaxSurtaxRate ?? 0.10);
+  const creditRate = nationalRate * (1 + localSurtaxRate);
   const taxCredit = Math.round(effectiveTotal * creditRate);
 
   return {
@@ -924,7 +929,10 @@ function calcTaxCredit(params) {
     creditRate: creditRate,
     taxCredit: taxCredit,
     realMonthlyBurden: Math.round((pensionSaving + irp - taxCredit) / 12),
-    note: totalSalary <= 55000000 ? '총급여 5,500만원 이하: 16.5%(지방세 포함) 적용' : '총급여 5,500만원 초과: 13.2%(지방세 포함) 적용',
+    note: __officialRules.PENSION_ACCOUNT_TAX_CREDIT
+      ? `OFFICIAL_RULE 기준: 총급여 ${lowSalaryThreshold.toLocaleString('ko-KR')}원 ${totalSalary <= lowSalaryThreshold ? '이하' : '초과'}, 지방소득세 포함 ${(creditRate * 100).toFixed(1)}% 적용`
+      : `총급여 5,500만원 ${totalSalary <= 55000000 ? '이하: 16.5%' : '초과: 13.2%'}(지방세 포함) 적용`,
+    officialRuleApplied: !!__officialRules.PENSION_ACCOUNT_TAX_CREDIT,
   };
 }
 
@@ -1808,14 +1816,21 @@ function calcPensionDepositIRP(params) {
     expectedReturn = 0.04,
     withdrawTaxRate = 0.055,
     confirmedTaxableWithdrawalBase,
+    __officialRules = {},
   } = params || {};
 
-  const LIMIT = 9000000;
+  const pensionRule = __officialRules.PENSION_ACCOUNT_TAX_CREDIT || {};
+  const LIMIT = Number(pensionRule.combinedLimit ?? 9000000);
   const contribution = Math.min(Math.max(0, annualContribution), LIMIT);
 
-  // 세액공제율 — 종합소득 4,500만 이하 16.5%(지방세 포함), 초과 13.2%
-  const isLowIncome = Math.max(0, globalIncome) <= 45000000;
-  const creditRate = isLowIncome ? 0.165 : 0.132;
+  // 세액공제율 — OFFICIAL_RULE 국세율에 지방소득세 효과를 합산해 기존 출력계약(16.5%/13.2%) 유지.
+  const lowIncomeThreshold = Number(pensionRule.lowIncomeGlobalIncomeThreshold ?? 45000000);
+  const isLowIncome = Math.max(0, globalIncome) <= lowIncomeThreshold;
+  const nationalRate = isLowIncome
+    ? Number(pensionRule.lowIncomeNationalRate ?? 0.15)
+    : Number(pensionRule.standardNationalRate ?? 0.12);
+  const localSurtaxRate = Number(pensionRule.localIncomeTaxSurtaxRate ?? 0.10);
+  const creditRate = nationalRate * (1 + localSurtaxRate);
   const annualTaxCredit = contribution * creditRate;
   const totalCreditOverYears = annualTaxCredit * Math.max(0, yearsToContribute);
 
@@ -1846,6 +1861,7 @@ function calcPensionDepositIRP(params) {
     withdrawTax,
     netReceived,
     estimateOnly: !taxableBaseConfirmed,
+    officialRuleApplied: !!__officialRules.PENSION_ACCOUNT_TAX_CREDIT,
     warnings: taxableBaseConfirmed ? [] : ['과세대상 인출재원 확인값이 없어 전체 적립액을 과세대상으로 가정한 단순 추정입니다.'],
     summary: {
       annualCredit_만: Math.round(annualTaxCredit / 10000),
@@ -2131,8 +2147,34 @@ Object.defineProperty(module.exports, 'calcPensionIncomeSchedule', {
 /**
  * 상속세/증여세 누진세율 (상속세및증여세법 제26조)
  */
-function calcProgressiveTax(taxBase) {
+function _officialRuleValue(params, ruleId) {
+  const rules = params && params.__officialRules;
+  return rules && rules[ruleId] && typeof rules[ruleId] === 'object' ? rules[ruleId] : null;
+}
+
+function _progressiveTaxByBrackets(taxBase, brackets) {
+  let tax = 0;
+  let remaining = Math.max(0, Number(taxBase) || 0);
+  let prevCap = 0;
+  for (const bracket of Array.isArray(brackets) ? brackets : []) {
+    const cap = bracket.cap == null ? Infinity : Number(bracket.cap);
+    const rate = Number(bracket.rate);
+    if (!Number.isFinite(rate) || rate < 0) continue;
+    const taxable = Math.min(remaining, cap - prevCap);
+    if (taxable <= 0) break;
+    tax += taxable * rate;
+    remaining -= taxable;
+    prevCap = cap;
+  }
+  return tax;
+}
+
+function calcProgressiveTax(taxBase, officialBrackets) {
   if (taxBase <= 0) return 0;
+  if (Array.isArray(officialBrackets) && officialBrackets.length) {
+    return _progressiveTaxByBrackets(taxBase, officialBrackets);
+  }
+  // Legacy fallback: OFFICIAL_RULE 컨텍스트가 없는 독립 실행 환경과의 역호환용.
   if (taxBase <= 100000000) return taxBase * 0.1;
   if (taxBase <= 500000000) return taxBase * 0.2 - 10000000;
   if (taxBase <= 1000000000) return taxBase * 0.3 - 60000000;
@@ -2205,10 +2247,10 @@ function calcInheritanceTax(params) {
     debts = 0, publicCharges = 0,
     funeralCost = 5000000, burialCost = 0,
     financialAssets = 0, financialDebts = 0,
-    unlistedStock = 0, majorShareholder = false,
-    totalAssetsIncludesUnlistedStock = false, isSMEUnlistedStock = false,
+    unlistedStock = 0, majorShareholder = null, majorShareholderSurchargeApplies,
+    totalAssetsIncludesUnlistedStock = false, isSMEUnlistedStock = null,
     retirement = 0, taxExempt = 0,
-    hasSpouse = true, isSingleInheritance = false,
+    hasSpouse = null, isSingleInheritance = false,
     spouseInheritance = 0, spouseLegalShare = 0,
     numChildren = 0, numMinors = 0, minorAges = [],
     numElderly = 0, disabledDeduction = 0,
@@ -2217,8 +2259,14 @@ function calcInheritanceTax(params) {
     farmDeduction: rawFarm = 0,
     disasterLoss = 0,
     isGenSkip = false, genSkipAmount = 0,
-    isMinorGenSkip = false, isDaeseupInheritance = false
+    isMinorGenSkip = false, isDaeseupInheritance = false,
+    __officialRules = {},
   } = params || {};
+
+  const inheritanceRule = __officialRules.INHERITANCE_DEDUCTIONS || {};
+  const spouseRule = __officialRules.SPOUSE_INHERITANCE_DEDUCTION || {};
+  const surchargeCreditRule = __officialRules.INHERITANCE_GIFT_SURCHARGE_CREDIT || {};
+  const inheritanceTaxBrackets = __officialRules.INHERITANCE_TAX_BRACKETS?.brackets;
 
   const inheritanceValues = [totalAssets, estimatedAssets, preGifts, spouseGift, otherGift, giftTaxPaid, nonHeirBequest, debts, publicCharges, funeralCost, burialCost, financialAssets, financialDebts, unlistedStock, retirement, taxExempt, spouseInheritance, spouseLegalShare, numChildren, numMinors, numElderly, disabledDeduction, rawResidence, familyBusinessDeduction, rawFarm, disasterLoss, genSkipAmount];
   if (!inheritanceValues.every(value => Number.isFinite(Number(value))) || inheritanceValues.some(value => Number(value) < 0)) {
@@ -2229,17 +2277,23 @@ function calcInheritanceTax(params) {
   const preGift = (preGifts > 0) ? preGifts : (spouseGift + otherGift);
 
   // 2. 장례비 의제공제 (시행령 §9② — 일반 500만~1,000만, 봉안시설 별도 500만)
-  let funeralFinal = Math.min(Math.max(funeralCost, 5000000), 10000000);
-  let burialFinal = Math.min(burialCost, 5000000);
+  const funeralMinimum = Number(inheritanceRule.funeralMinimum ?? 5000000);
+  const funeralMaximum = Number(inheritanceRule.funeralMaximum ?? 10000000);
+  const burialMaximum = Number(inheritanceRule.burialMaximum ?? 5000000);
+  let funeralFinal = Math.min(Math.max(funeralCost, funeralMinimum), funeralMaximum);
+  let burialFinal = Math.min(burialCost, burialMaximum);
 
   // 3. 한도 적용
   const residenceDeduction = Math.min(rawResidence, 600000000);          // 동거주택 6억
   const farmDeduction = Math.min(rawFarm, 3000000000);                   // 영농 30억 (§18조의3)
 
-  // 4. 최대주주 할증 (상증법 §63③) — 비상장주식 평가단계에만 적용
-  //    중소기업은 제외 (사용자가 majorShareholder 체크로 판단)
-  const stockSurcharge = (majorShareholder && !isSMEUnlistedStock && unlistedStock > 0)
-    ? unlistedStock * 0.20 : 0;
+  // 4. 최대주주 할증 (상증법 §63③) — 적용요건·제외요건을 확인한 경우에만 적용
+  //    최대주주라는 사실만으로는 부족하며 중소기업·중견기업·계속 결손법인 등 법정 제외사유가 있다.
+  const surchargeRule = __officialRules.UNLISTED_STOCK_SURCHARGE || {};
+  const surchargeRate = Number(surchargeRule.surchargeRate ?? 0.20);
+  const surchargeEligibilityConfirmed = typeof majorShareholderSurchargeApplies === 'boolean';
+  const stockSurcharge = (majorShareholderSurchargeApplies === true && unlistedStock > 0)
+    ? unlistedStock * surchargeRate : 0;
 
   // 5. 총 상속재산 (사전증여 제외)
   // 기존 호출은 totalAssets에 비상장주식이 포함되지 않은 것으로 처리한다.
@@ -2257,23 +2311,24 @@ function calcInheritanceTax(params) {
     grossAssets - debts - publicCharges - funeralFinal - burialFinal + preGift);
 
   // 8. 기초공제
-  const basicDeduction = 200000000;
+  const basicDeduction = Number(inheritanceRule.basic ?? 200000000);
 
   // 9. 인적공제 (§20)
-  const childDeduction = numChildren * 50000000;                         // 자녀공제 5천만/인
+  const childDeduction = numChildren * Number(inheritanceRule.childPerPerson ?? 50000000);
   let minorDeduction = 0;
   if (numMinors > 0 && minorAges.length > 0) {
     minorAges.forEach(age => {
-      if (age >= 0 && age < 19) {
-        minorDeduction += (19 - age) * 10000000;                         // 1천만 × 잔여연수
+      const minorAgeThreshold = Number(inheritanceRule.minorAgeThreshold ?? 19);
+      if (age >= 0 && age < minorAgeThreshold) {
+        minorDeduction += (minorAgeThreshold - age) * Number(inheritanceRule.minorPerRemainingYear ?? 10000000);
       }
     });
   }
-  const elderlyDeduction = numElderly * 50000000;                        // 연로자공제 5천만/인
+  const elderlyDeduction = numElderly * Number(inheritanceRule.elderlyPerPerson ?? 50000000);
   const personalDeduction = childDeduction + minorDeduction + elderlyDeduction + disabledDeduction;
 
   // 10. 일괄공제 5억 vs (기초+인적) 중 큰 금액 (배우자 단독상속 시 일괄공제 불가)
-  const lumpSumDeduction = 500000000;
+  const lumpSumDeduction = Number(inheritanceRule.lumpSum ?? 500000000);
   let selectedDeduction, isLumpSum;
   if (isSingleInheritance) {
     selectedDeduction = basicDeduction + personalDeduction;
@@ -2291,8 +2346,9 @@ function calcInheritanceTax(params) {
 
   // 11. 배우자공제 (§19, 최소 5억 ~ 최대 30억)
   let spouseDeduction = 0;
-  if (hasSpouse) {
-    const sMin = 500000000, sMax = 3000000000;
+  if (hasSpouse === true) {
+    const sMin = Number(spouseRule.minimumWhenActualInheritanceBelowThreshold ?? 500000000);
+    const sMax = Number(spouseRule.maximum ?? 3000000000);
     let legalRatio, legalBase;
     if (spouseLegalShare > 0) {
       // 옛 인터페이스: spouseLegalShare 직접 사용
@@ -2321,12 +2377,16 @@ function calcInheritanceTax(params) {
   const netFinancial = financialAssets - financialDebts;
   let financialDeduction = 0;
   if (netFinancial > 0) {
-    if (netFinancial <= 20000000) {
-      financialDeduction = netFinancial;                                 // 2천만 이하 전액
+    const fullThreshold = Number(inheritanceRule.financialFullDeductionThreshold ?? 20000000);
+    const financialRate = Number(inheritanceRule.financialRate ?? 0.20);
+    const financialMinimum = Number(inheritanceRule.financialMinimum ?? 20000000);
+    const financialMaximum = Number(inheritanceRule.financialMaximum ?? 200000000);
+    if (netFinancial <= fullThreshold) {
+      financialDeduction = netFinancial;
     } else {
-      financialDeduction = Math.max(netFinancial * 0.2, 20000000);       // 20% (최소 2천만)
+      financialDeduction = Math.max(netFinancial * financialRate, financialMinimum);
     }
-    financialDeduction = Math.min(financialDeduction, 200000000);        // 최대 2억
+    financialDeduction = Math.min(financialDeduction, financialMaximum);
   }
 
   // 13. 총 공제액 (상증법 §24 공제한도)
@@ -2341,7 +2401,7 @@ function calcInheritanceTax(params) {
   const taxBase = Math.max(0, taxableAmount - totalDeduction);
 
   // 15. 산출세액 (§26 누진세율)
-  const calculatedTax = calcProgressiveTax(taxBase);
+  const calculatedTax = calcProgressiveTax(taxBase, inheritanceTaxBrackets);
 
   // 16. 세대생략 할증과세 (§27)
   //     비율 분모 = 상속세 과세가액 (국세청 실무 기준)
@@ -2354,13 +2414,17 @@ function calcInheritanceTax(params) {
   const effGenSkipAmount = genSkipAmount > 0 ? genSkipAmount : (isGenSkip ? taxableAmount : 0);
   if (effGenSkipAmount > 0 && taxableAmount > 0 && !isDaeseupInheritance) {
     genSkipRatio = Math.min(effGenSkipAmount / taxableAmount, 1);
-    genSkipRate = (isMinorGenSkip && effGenSkipAmount > 2000000000) ? 0.40 : 0.30;
+    const highThreshold = Number(surchargeCreditRule.minorGenerationSkipThreshold ?? 2000000000);
+    const highRate = Number(surchargeCreditRule.minorGenerationSkipHighRate ?? 0.40);
+    const normalRate = Number(surchargeCreditRule.generationSkipRate ?? 0.30);
+    genSkipRate = (isMinorGenSkip && effGenSkipAmount > highThreshold) ? highRate : normalRate;
     generationSurcharge = calculatedTax * genSkipRatio * genSkipRate;
   }
   const taxWithSurcharge = calculatedTax + generationSurcharge;
 
   // 17. 신고세액공제 (§69, 2019년 이후 3%)
-  const reportDeduction = Math.round(taxWithSurcharge * 0.03);
+  const filingCreditRate = Number(surchargeCreditRule.filingCreditRate ?? 0.03);
+  const reportDeduction = Math.round(taxWithSurcharge * filingCreditRate);
 
   // 18. 증여세액공제 (§28) — 사전증여재산 합산 시 기납부 증여세 공제
   const finalTax = Math.max(0, taxWithSurcharge - reportDeduction - giftTaxPaid);
@@ -2391,6 +2455,8 @@ function calcInheritanceTax(params) {
     isSMEUnlistedStock,
     preGift: Math.round(preGift),
     stockSurcharge: Math.round(stockSurcharge),
+    stockSurchargeRate: stockSurcharge > 0 ? surchargeRate : 0,
+    majorShareholderSurchargeApplies: surchargeEligibilityConfirmed ? majorShareholderSurchargeApplies : null,
     inheritanceBase: Math.round(inheritanceBase),
     basicDeduction,
     childDeduction: Math.round(childDeduction),
@@ -2414,8 +2480,12 @@ function calcInheritanceTax(params) {
     // [통합 추가] PIIC 호환 필드
     itemizedDeduction: Math.round(basicDeduction + personalDeduction),
     funeralDeduction: Math.round(funeralFinal + burialFinal),
-    estimateOnly: !totalAssetsIncludesUnlistedStock && unlistedStock > 0,
+    estimateOnly: (!totalAssetsIncludesUnlistedStock && unlistedStock > 0) || typeof hasSpouse !== 'boolean' || (unlistedStock > 0 && majorShareholder === true && !surchargeEligibilityConfirmed),
     warnings: [
+      ...(typeof hasSpouse !== 'boolean'
+        ? ['배우자 유무가 확인되지 않아 배우자 상속공제를 자동 적용하지 않았습니다.'] : []),
+      ...(unlistedStock > 0 && majorShareholder === true && !surchargeEligibilityConfirmed
+        ? ['최대주주 여부만으로 20% 할증을 자동 적용하지 않았습니다. 중소기업·중견기업·계속 결손법인 등 법정 제외요건까지 확인한 뒤 majorShareholderSurchargeApplies를 명시해야 합니다.'] : []),
       ...(!totalAssetsIncludesUnlistedStock && unlistedStock > 0
         ? ['totalAssets에서 비상장주식이 제외됐다는 전제로 별도 합산했습니다. 이미 포함된 경우 totalAssetsIncludesUnlistedStock=true가 필요합니다.'] : []),
       ...(familyBusinessDeduction > 0 || residenceDeduction > 0 || farmDeduction > 0
@@ -2448,6 +2518,7 @@ function calcGiftTax(params) {
     priorMarriageChildbirthDeduction = 0,
     confirmedPriorGiftTax,
     reportCreditEligible = true,
+    __officialRules = {},
   } = params || {};
 
   const giftValues = [giftAmount, priorGifts, debts, priorMarriageChildbirthDeduction];
@@ -2455,17 +2526,20 @@ function calcGiftTax(params) {
     return { calculated: false, calculator: 'calcGiftTax', missingInputs: [], invalidInputs: ['amount'], warnings: ['증여가액·채무·기증여액은 0 이상의 유한한 숫자여야 합니다.'] };
   }
 
-  // 증여재산공제 (10년간 합산)
-  const deductions = {
-    'spouse': 600000000, // 6억
-    'lineal_descendant_adult': 50000000, // 5천만
-    'lineal_descendant_minor': 20000000, // 2천만
-    'lineal_ascendant': 50000000, // 5천만
-    'other_relative': 10000000, // 1천만
-    'other': 0,
+  // 증여재산공제 (10년간 합산) — OFFICIAL_RULE 우선, 기존값은 독립실행 fallback.
+  const giftDeductionRule = __officialRules.GIFT_TAX_DEDUCTIONS || {};
+  const giftTaxBrackets = __officialRules.GIFT_TAX_BRACKETS?.brackets;
+  const surchargeCreditRule = __officialRules.INHERITANCE_GIFT_SURCHARGE_CREDIT || {};
+  const deductions = giftDeductionRule.relation || {
+    spouse: 600000000,
+    lineal_descendant_adult: 50000000,
+    lineal_descendant_minor: 20000000,
+    lineal_ascendant: 50000000,
+    other_relative: 10000000,
+    other: 0,
   };
 
-  const baseDeduction = deductions[relation] || 0;
+  const baseDeduction = Number(deductions[relation] || 0);
 
   // 혼인·출산 증여재산공제는 두 제도를 합쳐 통산 1억원 한도다.
   // 과거 동일 특례 사용액이 있으면 priorMarriageChildbirthDeduction으로 차감한다.
@@ -2473,7 +2547,7 @@ function calcGiftTax(params) {
     || relation === 'lineal_descendant_minor';
   const specialDeductionRemaining = Math.max(
     0,
-    100000000 - Math.max(0, Number(priorMarriageChildbirthDeduction) || 0)
+    Number(giftDeductionRule.marriageChildbirthCombinedLimit ?? 100000000) - Math.max(0, Number(priorMarriageChildbirthDeduction) || 0)
   );
   let marriageDeduction = 0;
   let childbirthDeduction = 0;
@@ -2490,20 +2564,21 @@ function calcGiftTax(params) {
   const taxBase = Math.max(0, taxableGift - totalDeduction);
 
   // 산출세액
-  const calculatedTax = calcProgressiveTax(taxBase);
+  const calculatedTax = calcProgressiveTax(taxBase, giftTaxBrackets);
 
   // [Y-1I 수정] 기납부세액 공제 — 한국 상증세법 §58
   //   기존: priorGifts에 totalDeduction(혼인·출산공제 포함) 차감 → 이중공제 위험
   //   수정: priorGifts에는 baseDeduction(평생/10년 한도 공제)만 차감
   //   혼인·출산공제는 현재 증여 한정이므로 사전증여에서 제외
-  const priorTaxEstimated = priorGifts > 0 ? calcProgressiveTax(Math.max(0, priorGifts - baseDeduction)) : 0;
+  const priorTaxEstimated = priorGifts > 0 ? calcProgressiveTax(Math.max(0, priorGifts - baseDeduction), giftTaxBrackets) : 0;
   const priorTax = Number.isFinite(Number(confirmedPriorGiftTax))
     ? Math.max(0, Number(confirmedPriorGiftTax))
     : priorTaxEstimated;
   const netTax = Math.max(0, calculatedTax - priorTax);
 
   // 신고세액공제 (기한 내 신고·납부 요건 충족 시 3%)
-  const reportDeduction = reportCreditEligible ? Math.round(netTax * 0.03) : 0;
+  const filingCreditRate = Number(surchargeCreditRule.filingCreditRate ?? 0.03);
+  const reportDeduction = reportCreditEligible ? Math.round(netTax * filingCreditRate) : 0;
   const finalTax = Math.max(0, netTax - reportDeduction);
 
   return {
@@ -2538,8 +2613,11 @@ function calcGiftTax(params) {
 /**
  * 소득세 누진세율 (소득세법 제55조)
  */
-function calcIncomeTaxProgressive(taxBase) {
+function calcIncomeTaxProgressive(taxBase, officialBrackets) {
   if (taxBase <= 0) return 0;
+  if (Array.isArray(officialBrackets) && officialBrackets.length) {
+    return _progressiveTaxByBrackets(taxBase, officialBrackets);
+  }
   if (taxBase <= 14000000) return taxBase * 0.06;
   if (taxBase <= 50000000) return taxBase * 0.15 - 1260000;
   if (taxBase <= 88000000) return taxBase * 0.24 - 5760000;
@@ -3017,16 +3095,24 @@ function calcCorporateTax(params) {
   const {
     taxableIncome = 0,
     corpType = 'sme',
-    taxYear = new Date().getFullYear()
+    taxYear = new Date().getFullYear(),
+    __officialRules = {},
   } = params || {};
 
   if (!Number.isFinite(Number(taxableIncome)) || Number(taxableIncome) < 0 || !Number.isFinite(Number(taxYear))) {
     return { calculated: false, calculator: 'calcCorporateTax', missingInputs: [], invalidInputs: ['input'], warnings: ['과세표준과 적용연도를 확인해 주세요.'] };
   }
 
-  // 법인세율: 2026.1.1. 이후 개시 사업연도는 전 구간 1%p 인상
+  // 법인세율: OFFICIAL_RULE이 있으면 해당 Rule을 제1원칙으로 사용한다.
   const isYear2026OrLater = Number(taxYear) >= 2026;
+  const officialCorpRule = __officialRules.CORPORATE_TAX_BRACKETS;
+  const officialLocalRule = __officialRules.CORPORATE_LOCAL_INCOME_TAX_BRACKETS;
   let brackets;
+  if (officialCorpRule) {
+    brackets = corpType === 'sme_realty' ? officialCorpRule.smallRealty : officialCorpRule.general;
+    brackets = (brackets || []).map(b => ({ cap: b.cap == null ? Infinity : Number(b.cap), rate: Number(b.rate) }));
+  }
+  if (!brackets || !brackets.length) {
   if (corpType === 'sme_realty') {
     // 성실신고확인대상 소규모법인 등: 2억 이하 구간 없이 200억 이하 단일구간
     brackets = isYear2026OrLater ? [
@@ -3052,6 +3138,7 @@ function calcCorporateTax(params) {
       { cap: Infinity, rate: 0.24 },
     ];
   }
+  }
 
   let tax = 0;
   let remaining = taxableIncome;
@@ -3074,18 +3161,72 @@ function calcCorporateTax(params) {
   }
 
   const roundedTax = Math.round(tax);
-  const localTax = Math.round(roundedTax * 0.1);
+  let localTax = 0;
+  let localTaxDetails = [];
+  if (officialLocalRule) {
+    const localBrackets = corpType === 'sme_realty' ? officialLocalRule.smallRealty : officialLocalRule.general;
+    if (Array.isArray(localBrackets) && localBrackets.length) {
+      let localRemaining = Number(taxableIncome);
+      let localPrevCap = 0;
+      let localTaxRaw = 0;
+      for (const b of localBrackets) {
+        const cap = b.cap == null ? Infinity : Number(b.cap);
+        const rate = Number(b.rate);
+        const taxable = Math.min(localRemaining, cap - localPrevCap);
+        if (taxable <= 0) break;
+        const bracketTax = taxable * rate;
+        localTaxRaw += bracketTax;
+        localTaxDetails.push({ cap: Number.isFinite(cap) ? cap : null, rate, taxable: Math.round(taxable), tax: Math.round(bracketTax) });
+        localRemaining -= taxable;
+        localPrevCap = cap;
+      }
+      localTax = Math.round(localTaxRaw);
+    }
+  } else {
+    // 구버전/독립 실행 폴백도 국세의 10%가 아니라 지방세법 제103조의20 과표별 세율을 적용한다.
+    const y2026 = Number(taxYear) >= 2026;
+    const localBrackets = corpType === 'sme_realty'
+      ? (y2026
+        ? [{ cap: 20000000000, rate: 0.020 }, { cap: 300000000000, rate: 0.022 }, { cap: Infinity, rate: 0.025 }]
+        : [{ cap: 20000000000, rate: 0.019 }, { cap: 300000000000, rate: 0.021 }, { cap: Infinity, rate: 0.024 }])
+      : (y2026
+        ? [{ cap: 200000000, rate: 0.010 }, { cap: 20000000000, rate: 0.020 }, { cap: 300000000000, rate: 0.022 }, { cap: Infinity, rate: 0.025 }]
+        : [{ cap: 200000000, rate: 0.009 }, { cap: 20000000000, rate: 0.019 }, { cap: 300000000000, rate: 0.021 }, { cap: Infinity, rate: 0.024 }]);
+    let remainLocal = Number(taxableIncome);
+    let prevLocal = 0;
+    for (const b of localBrackets) {
+      const taxable = Math.min(remainLocal, b.cap - prevLocal);
+      if (taxable <= 0) break;
+      const bracketTax = taxable * b.rate;
+      localTax += bracketTax;
+      localTaxDetails.push({ cap: Number.isFinite(b.cap) ? b.cap : null, rate: b.rate, taxable: Math.round(taxable), tax: Math.round(bracketTax) });
+      remainLocal -= taxable;
+      prevLocal = b.cap;
+    }
+    localTax = Math.round(localTax);
+  }
 
   return {
     taxableIncome,
     corpType,
     taxYear,
-    taxRateBasis: isYear2026OrLater ? '2026년 이후 법인세율' : '2023~2025년 법인세율',
+    taxRateBasis: officialCorpRule ? 'OFFICIAL_RULE 법인세율' : (isYear2026OrLater ? '2026년 이후 법인세율' : '2023~2025년 법인세율'),
     tax: roundedTax,
     localTax,
     totalTax: roundedTax + localTax,
     effectiveRate: taxableIncome > 0 ? (roundedTax + localTax) / taxableIncome : 0,
     details,
+    localTaxDetails,
+    officialRuleApplied: !!officialCorpRule,
+    estimateOnly: Boolean(officialLocalRule?.ordinanceAdjustmentPossible),
+    warnings: [
+      ...(corpType === 'sme_realty'
+        ? ['성실신고확인대상 소규모법인 특례세율은 법인세법 제60조의2제1항제1호 해당 여부가 확인된 경우에만 적용해야 합니다.']
+        : []),
+      ...(officialLocalRule?.ordinanceAdjustmentPossible
+        ? ['법인지방소득세는 지방세법 제103조의20 표준세율 기준입니다. 납세지 조례에 따른 ±50% 범위 세율 가감 여부는 별도 확인해야 합니다.']
+        : []),
+    ],
   };
 }
 
@@ -3108,16 +3249,24 @@ function calcDeemedInterest(params) {
   const {
     loanAmount = 0,
     interestRate = 0,
-    deemedRate = 0.046,
+    deemedRate: rawDeemedRate,
     days = 365,
     corpType = 'sme',
     taxYear = new Date().getFullYear(),
+    __officialRules = {},
   } = safeParams;
+  const deemedRule = __officialRules.DEEMED_INTEREST_RATE || {};
+  const deemedRateProvided = rawDeemedRate !== undefined && rawDeemedRate !== null && rawDeemedRate !== '' && Number.isFinite(Number(rawDeemedRate));
+  const deemedRate = deemedRateProvided ? Number(rawDeemedRate) : (Number.isFinite(Number(deemedRule.overdraftLoanRate)) ? Number(deemedRule.overdraftLoanRate) : null);
   const corpIncomeProvided = Number.isFinite(Number(safeParams.corpTaxableIncome));
   const marginalProvided = Number.isFinite(Number(safeParams.marginalRate));
   const corpTaxableIncome = corpIncomeProvided ? Math.max(0, Number(safeParams.corpTaxableIncome)) : null;
   let marginalRate = marginalProvided ? Math.max(0, Number(safeParams.marginalRate)) : null;
   if (marginalRate !== null && marginalRate > 1) marginalRate /= 100;
+
+  if (deemedRate === null) {
+    return { calculated: false, calculator: 'calcDeemedInterest', missingInputs: ['deemedRate|OFFICIAL_RULE.DEEMED_INTEREST_RATE'], invalidInputs: [], warnings: ['확인된 인정이자율 또는 공식 Rule이 없어 4.6%를 임의 적용하지 않았습니다.'] };
+  }
 
   if (![loanAmount, interestRate, deemedRate, days, taxYear].every(value => Number.isFinite(Number(value)))
       || Number(loanAmount) < 0 || Number(days) < 0 || Number(interestRate) < 0 || Number(deemedRate) < 0
@@ -3130,21 +3279,24 @@ function calcDeemedInterest(params) {
   const difference = Math.max(0, deemedInterestAmount - actualInterest);
 
   let corpTaxEffect = null;
+  let corpLocalTaxEffect = null;
   let corpRate = null;
   if (corpIncomeProvided) {
-    const before = calcCorporateTax({ taxableIncome: corpTaxableIncome, corpType, taxYear });
-    const after = calcCorporateTax({ taxableIncome: corpTaxableIncome + difference, corpType, taxYear });
+    const before = calcCorporateTax({ taxableIncome: corpTaxableIncome, corpType, taxYear, __officialRules });
+    const after = calcCorporateTax({ taxableIncome: corpTaxableIncome + difference, corpType, taxYear, __officialRules });
     corpTaxEffect = Math.max(0, after.tax - before.tax);
-    corpRate = difference > 0 ? corpTaxEffect / difference : 0;
+    corpLocalTaxEffect = Math.max(0, after.localTax - before.localTax);
+    corpRate = difference > 0 ? (corpTaxEffect + corpLocalTaxEffect) / difference : 0;
   }
   const incomeTaxEffect = marginalRate === null ? null : Math.round(difference * marginalRate);
-  const corpLocalTaxEffect = corpTaxEffect === null ? null : Math.round(corpTaxEffect * 0.1);
   const incomeLocalTaxEffect = incomeTaxEffect === null ? null : Math.round(incomeTaxEffect * 0.1);
   const totalTaxBurden = corpTaxEffect === null || incomeTaxEffect === null
-    ? null : corpTaxEffect + incomeTaxEffect;
-  const totalTaxBurdenIncludingLocal = totalTaxBurden === null
-    ? null : Math.round(totalTaxBurden * 1.1);
+    ? null : corpTaxEffect + corpLocalTaxEffect + incomeTaxEffect + incomeLocalTaxEffect;
+  const totalTaxBurdenIncludingLocal = totalTaxBurden;
   const warnings = [];
+  if (!deemedRateProvided && deemedRule.weightedAverageBorrowingRateIsPrimary) {
+    warnings.push('4.6% 당좌대출이자율은 법정 대체기준으로 적용한 값입니다. 가중평균차입이자율 적용 가능 여부를 먼저 확인해야 합니다.');
+  }
   if (!corpIncomeProvided) warnings.push('법인 과세표준이 없어 인정이자 익금산입에 따른 법인세 증가액은 계산하지 않았습니다.');
   if (!marginalProvided) warnings.push('대표자 확인 한계소득세율이 없어 상여처분 소득세 효과는 계산하지 않았습니다.');
   warnings.push('실제 소득처분, 약정·회수 사실, 지방소득세와 법인세 과세표준 변동을 함께 확인해야 합니다.');
@@ -3271,6 +3423,7 @@ function calcUnlistedStockValue(params) {
     industry = 'general',
     totalShares = 1, targetShares = 1,
     confirmedFloorRate,
+    __officialRules = {},
   } = params || {};
 
   if (![netAssets, earningsValue, totalShares, targetShares].every(Number.isFinite)
@@ -3278,9 +3431,14 @@ function calcUnlistedStockValue(params) {
     return { calculated: false, calculator: 'calcUnlistedStockValue', missingInputs: [], invalidInputs: ['input'], warnings: ['순자산·순손익가치·주식 수 입력을 확인해 주세요.'] };
   }
 
-  // 가중치: 일반업종 순손익3 + 순자산2, 부동산업 순손익2 + 순자산3
+  // 가중치: OFFICIAL_RULE 우선. 업종 해당 여부 자체는 고객 사실관계로 별도 확인한다.
+  const valuationRule = __officialRules.UNLISTED_STOCK_VALUATION || {};
+  const weight = industry === 'realty' ? valuationRule.realty : valuationRule.general;
   let earningsWeight, assetWeight;
-  if (industry === 'realty') {
+  if (weight) {
+    earningsWeight = Number(weight.earningsWeight);
+    assetWeight = Number(weight.assetWeight);
+  } else if (industry === 'realty') {
     earningsWeight = 2;
     assetWeight = 3;
   } else {
@@ -3298,7 +3456,7 @@ function calcUnlistedStockValue(params) {
   // 순자산가치 하한 (80%) — 주당 기준으로 환산
   const floorRate = Number.isFinite(Number(confirmedFloorRate))
     ? Math.min(1, Math.max(0, Number(confirmedFloorRate)))
-    : 0.8;
+    : Number(valuationRule.navFloorRate ?? 0.8);
   const floorValuePerShare = (netAssets * floorRate) / safeTotalShares;
   const finalValuePerShare = Math.max(weightedValuePerShare, floorValuePerShare);
 
@@ -3353,50 +3511,100 @@ function calcSalaryVsDividend(params) {
     corpTaxableIncome = 0,
     otherIncome = 0,
     confirmedDividendTax,
+    confirmedEmployeeSocialInsurance,
+    salaryDeductibilityConfirmed = null,
+    corpTaxableIncomeBeforeSalaryConfirmed = null,
     taxYear = new Date().getFullYear(),
     corpType = 'sme',
+    effectiveDate,
+    __officialRules = {},
   } = params || {};
-  if (![totalAmount, corpTaxableIncome, otherIncome].every(Number.isFinite) || totalAmount < 0 || corpTaxableIncome < 0 || otherIncome < 0) {
+  if (![totalAmount, corpTaxableIncome, otherIncome].every(value => Number.isFinite(Number(value))) || totalAmount < 0 || corpTaxableIncome < 0 || otherIncome < 0) {
     return { calculated: false, calculator: 'calcSalaryVsDividend', missingInputs: [], invalidInputs: ['input'], warnings: ['인출액과 소득 입력을 확인해 주세요.'] };
   }
 
-  // 급여 경로
-  const salary = totalAmount;
-  const earnedDeduction = calcEarnedIncomeDeduction(salary);
-  const salaryTaxBase = Math.max(0, salary - earnedDeduction - 1500000); // 기본공제
-  const salaryIncomeTax = calcIncomeTaxProgressive(salaryTaxBase);
-  const salaryLocalTax = Math.round(salaryIncomeTax * 0.1);
-  // 4대보험 (근로자 부담분 약 9%)
-  const insurance = Math.round(Math.min(salary, 120000000) * 0.09);
-  const salaryNetAmount = salary - Math.round(salaryIncomeTax) - salaryLocalTax - insurance;
+  const incomeBrackets = __officialRules.INCOME_TAX_BRACKETS?.brackets;
+  const financialRule = __officialRules.FINANCIAL_INCOME_AGGREGATION || {};
+  const financialThreshold = Number(financialRule.aggregationThreshold ?? 20000000);
+  const withholdingNationalRate = Number(financialRule.standardNationalWithholdingRate ?? 0.14);
+  const localSurtaxRate = Number(financialRule.localIncomeTaxSurtaxRate ?? 0.10);
 
-  // 배당 경로
-  const corpTaxResult = calcCorporateTax({ taxableIncome: corpTaxableIncome, taxYear, corpType });
-  const corpTax = corpTaxResult && corpTaxResult.calculated === false ? 0 : corpTaxResult.totalTax;
-  const afterCorpTax = corpTaxableIncome - corpTax;
-  const dividend = Math.min(totalAmount, afterCorpTax);
-  const dividendCapped = dividend < totalAmount; // 세후이익(배당재원) 한도로 인출액이 제한됨
-  // 배당소득세 (2천만원 이하 15.4% 분리과세, 초과 시 종합과세 + Gross-up + 배당세액공제)
-  // 법령: 소득세법 §17③ Gross-up, §55 누진세, §56 배당세액공제, 지방세법 §103의3
+  // 급여 경로 — 개인소득세 + 확인된/공식 Rule 기반 근로자 사회보험 부담
+  const salary = Number(totalAmount);
+  const earnedDeduction = calcEarnedIncomeDeduction(salary);
+  const salaryTaxBase = Math.max(0, salary - earnedDeduction - 1500000);
+  const salaryIncomeTax = calcIncomeTaxProgressive(salaryTaxBase, incomeBrackets);
+  const salaryLocalTax = Math.round(salaryIncomeTax * localSurtaxRate);
+
+  let insurance = null;
+  let insuranceDetail = { method: '미확인', confirmed: false, ruleBased: false };
+  if (Number.isFinite(Number(confirmedEmployeeSocialInsurance))) {
+    insurance = Math.max(0, Number(confirmedEmployeeSocialInsurance));
+    insuranceDetail = { method: '확인된 근로자 사회보험료', confirmed: true, ruleBased: false };
+  } else {
+    const npsRule = __officialRules.NATIONAL_PENSION_CONTRIBUTION || null;
+    const npsPeriods = Array.isArray(__officialRules.NATIONAL_PENSION_PERIODS) ? __officialRules.NATIONAL_PENSION_PERIODS : [];
+    const healthRule = __officialRules.HEALTH_LONG_TERM_CARE_RATES || null;
+    const employmentRule = __officialRules.EMPLOYMENT_INSURANCE_RATES || null;
+    if ((npsRule || npsPeriods.length) && healthRule && employmentRule) {
+      const monthlySalary = salary / 12;
+      let annualNps = 0;
+      const periods = npsPeriods.length ? npsPeriods : [{ months: 12, ...npsRule }];
+      for (const period of periods) {
+        const months = Math.max(0, Number(period.months) || 0);
+        const min = Math.max(0, Number(period.monthlyMin) || 0);
+        const max = Number(period.monthlyMax) || Number.MAX_SAFE_INTEGER;
+        const base = monthlySalary > 0 ? Math.min(Math.max(monthlySalary, min), max) : 0;
+        annualNps += base * Number(period.employeeRate ?? npsRule?.employeeRate ?? 0) * months;
+      }
+      const annualHealth = salary * Number(healthRule.employeeHealthRate || 0);
+      const annualLtc = annualHealth * Number(healthRule.longTermCareToHealthRatio || 0);
+      const annualEmployment = salary * Number(employmentRule.employeeUnemploymentRate || 0);
+      insurance = Math.round(annualNps + annualHealth + annualLtc + annualEmployment);
+      insuranceDetail = {
+        method: 'OFFICIAL_RULE 기반 연간 추정', confirmed: false, ruleBased: true,
+        nationalPension: Math.round(annualNps), healthInsurance: Math.round(annualHealth),
+        longTermCare: Math.round(annualLtc), employmentInsurance: Math.round(annualEmployment),
+        effectiveDate: effectiveDate || __officialRules.__effectiveDate || null,
+      };
+    }
+  }
+  const salaryComparable = insurance !== null && insurance !== undefined && Number.isFinite(Number(insurance));
+  const salaryNetAmount = salaryComparable
+    ? salary - Math.round(salaryIncomeTax) - salaryLocalTax - insurance
+    : null;
+
+  // 배당 경로 — 법인세(국세+법인지방소득세)를 공식 Rule로 계산한 세후배당재원 기준
+  const corpTaxResult = calcCorporateTax({ taxableIncome: Number(corpTaxableIncome), taxYear, corpType, effectiveDate, __officialRules });
+  const corpTax = corpTaxResult && corpTaxResult.calculated !== false ? Number(corpTaxResult.totalTax || 0) : 0;
+  const afterCorpTax = Math.max(0, Number(corpTaxableIncome) - corpTax);
+  const dividend = Math.min(salary, afterCorpTax);
+  const dividendCapped = dividend < salary;
+
   let dividendTax;
   let dividendTaxDetail = {};
   if (Number.isFinite(Number(confirmedDividendTax))) {
     dividendTax = Math.max(0, Number(confirmedDividendTax));
     dividendTaxDetail = { method: '확인된 배당세액', confirmed: true };
-  } else if (dividend <= 20000000) {
-    dividendTax = Math.round(dividend * 0.154);
-    dividendTaxDetail = { method: '원천징수 15.4% 추정', confirmed: false };
+  } else if (dividend <= financialThreshold) {
+    dividendTax = Math.round(dividend * withholdingNationalRate * (1 + localSurtaxRate));
+    dividendTaxDetail = { method: '일반 금융소득 원천징수 추정', confirmed: false, threshold: financialThreshold };
   } else {
-    // 배당가산·배당세액공제 대상 여부를 모르는 경우에는 일반 금융소득 비교과세로 보수적으로 추정한다.
-    const threshold = 20000000;
-    const otherTax = calcIncomeTaxProgressive(Math.max(0, otherIncome - 1500000));
-    const method1 = calcIncomeTaxProgressive(Math.max(0, otherIncome + dividend - threshold - 1500000)) + threshold * 0.14;
-    const method2 = otherTax + dividend * 0.14;
+    // 배당가산·배당세액공제 대상 여부가 미확인인 경우 일반 금융소득 비교과세 골격만 적용한다.
+    const otherTax = calcIncomeTaxProgressive(Math.max(0, Number(otherIncome) - 1500000), incomeBrackets);
+    const method1 = calcIncomeTaxProgressive(Math.max(0, Number(otherIncome) + dividend - financialThreshold - 1500000), incomeBrackets)
+      + financialThreshold * withholdingNationalRate;
+    const method2 = otherTax + dividend * withholdingNationalRate;
     const attributableNational = Math.max(0, Math.max(method1, method2) - otherTax);
-    dividendTax = Math.round(attributableNational * 1.1);
+    dividendTax = Math.round(attributableNational * (1 + localSurtaxRate));
     dividendTaxDetail = { method: '금융소득 비교과세 추정', method1: Math.round(method1), method2: Math.round(method2), confirmed: false };
   }
   const dividendNetAmount = dividend - dividendTax;
+  // 급여의 법인 손금효과까지 동일 기준으로 확인되지 않으면 숫자만 제시하고 추천은 보류한다.
+  const comparisonBasisConfirmed = salaryDeductibilityConfirmed === true && corpTaxableIncomeBeforeSalaryConfirmed === true;
+  const recommendation = salaryComparable && comparisonBasisConfirmed
+    ? (salaryNetAmount > dividendNetAmount ? 'salary' : 'dividend')
+    : null;
 
   return {
     salary: {
@@ -3405,9 +3613,10 @@ function calcSalaryVsDividend(params) {
       taxBase: Math.round(salaryTaxBase),
       incomeTax: Math.round(salaryIncomeTax),
       localTax: salaryLocalTax,
-      insurance,
-      netAmount: Math.round(salaryNetAmount),
-      effectiveRate: salary > 0 ? 1 - salaryNetAmount / salary : 0,
+      insurance: salaryComparable ? Math.round(insurance) : null,
+      insuranceDetail,
+      netAmount: salaryComparable ? Math.round(salaryNetAmount) : null,
+      effectiveRate: salary > 0 && salaryComparable ? 1 - salaryNetAmount / salary : null,
     },
     dividend: {
       grossAmount: dividend,
@@ -3419,17 +3628,21 @@ function calcSalaryVsDividend(params) {
       netAmount: Math.round(dividendNetAmount),
       effectiveRate: dividend > 0 ? 1 - dividendNetAmount / dividend : 0,
     },
-    recommendation: salaryNetAmount > dividendNetAmount ? 'salary' : 'dividend',
-    recommendationPreliminary: true,
-    difference: Math.round(Math.abs(salaryNetAmount - dividendNetAmount)),
+    recommendation,
+    recommendationPreliminary: recommendation !== null,
+    comparisonBasisConfirmed,
+    difference: salaryComparable ? Math.round(Math.abs(salaryNetAmount - dividendNetAmount)) : null,
     estimateOnly: true,
+    officialRuleApplied: Boolean(incomeBrackets || __officialRules.CORPORATE_TAX_BRACKETS || __officialRules.EMPLOYMENT_INSURANCE_RATES),
     warnings: [
-      '급여와 배당은 법인 손금·사업주 사회보험료·다른 금융소득·배당가산 및 배당세액공제에 따라 결과가 달라지는 사전 비교입니다.',
-      ...(Number.isFinite(Number(confirmedDividendTax)) ? [] : ['배당세액은 확인세액이 없어 일반 비교과세 방식으로 추정했습니다.']),
+      '급여와 배당은 법인 손금 인정, 사업주 부담 사회보험료, 다른 금융소득, 배당가산·배당세액공제 등 실제 사실관계에 따라 달라지는 사전 비교입니다.',
+      ...(!salaryComparable ? ['근로자 사회보험료 확인값과 공식 Rule 컨텍스트가 없어 임의의 일괄 요율을 적용하지 않았으며 급여·배당 추천도 보류했습니다.'] : []),
+      ...(!comparisonBasisConfirmed ? ['급여의 손금산입 가능성과 입력 법인과세소득이 급여 차감 전 금액인지 확인되지 않아 급여·배당 추천을 보류했습니다.'] : []),
+      ...(insuranceDetail.ruleBased ? ['사회보험료는 연중 급여가 일정하고 비과세 보수 차감이 없다는 전제의 공식요율 기반 추정입니다. 실제 고지액이 있으면 확인값을 우선해야 합니다.'] : []),
+      ...(Number.isFinite(Number(confirmedDividendTax)) ? [] : ['배당세액은 확인세액이 없어 일반 금융소득 기준으로 추정했습니다.']),
     ],
   };
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Module Exports
@@ -3503,14 +3716,15 @@ function _tzEok(man) { return Math.round((man / 10000) * 100) / 100; }  // 만�
 /* ── 계산 ①: 상속세 보수 추정 (주식만 · 기본공제 가정 명시형) ──
    골든 검산: 22.15억 → 3.1428억 / 실효 14.22% (하이테커 목업 일치 확인 2026-07-13) */
 function calcInheritanceEstimate(params) {
-  const { stockValueMan, hasSpouse = true, applySurcharge = false } = params || {};
+  const { stockValueMan, hasSpouse = null, applySurcharge = false, effectiveDate, __officialRules = {} } = params || {};
   const sv = _tzNum(stockValueMan);
   if (sv === null || sv <= 0) return { calculated: false, calculator: 'calcInheritanceEstimate', warnings: ['지분 평가액(만원)이 필요합니다.'] };
   const r = calcInheritanceTax({
     unlistedStock: sv * 10000,
-    isSMEUnlistedStock: !applySurcharge,      // 보수 기본값: 할증 미적용 (면책에 가정 명시)
-    majorShareholder: applySurcharge,
-    hasSpouse: hasSpouse,
+    isSMEUnlistedStock: applySurcharge ? false : null,
+    majorShareholder: applySurcharge ? true : null,
+    majorShareholderSurchargeApplies: applySurcharge === true,
+    hasSpouse: hasSpouse, effectiveDate, __officialRules,
   });
   if (!r || r.calculated === false) return { calculated: false, calculator: 'calcInheritanceEstimate', warnings: (r && r.warnings) || [] };
   return {
@@ -3518,19 +3732,19 @@ function calcInheritanceEstimate(params) {
     taxMan: Math.round(r.finalTax / 10000),
     taxEok: _tzEok(r.finalTax / 10000),
     effectiveRate: r.effectiveRate,
-    assumptions: ['주식분만 반영', '일괄공제·배우자공제 기본 가정' + (hasSpouse ? '' : '(배우자 없음)'), applySurcharge ? '최대주주 할증 20% 적용' : '최대주주 할증 미적용(보수 추정)'],
+    assumptions: ['주식분만 반영', hasSpouse === true ? '배우자 있음 확인값 반영' : hasSpouse === false ? '배우자 없음 확인값 반영' : '배우자 유무 미확인 — 배우자공제 미적용', applySurcharge ? '최대주주 할증 적용요건 확인값으로 20% 적용' : '최대주주 할증 적용요건 미확인 — 자동 적용하지 않음'],
   };
 }
 
 /* ── 계산 ②: 10년 뒤 상속세 추정 (봉인 미끼용 · 성장 가정 명시형) ── */
 function calcInheritanceFuture(params) {
-  const { stockValueMan, years = 10, growthRate = 0.05, hasSpouse = true, applySurcharge = false } = params || {};
+  const { stockValueMan, years = 10, growthRate = 0.05, hasSpouse = null, applySurcharge = false, effectiveDate, __officialRules = {} } = params || {};
   const sv = _tzNum(stockValueMan);
   const g = _tzClamp(_tzNum(growthRate) === null ? 0.05 : Number(growthRate), 0, 0.3);
   if (sv === null || sv <= 0) return { calculated: false, calculator: 'calcInheritanceFuture', warnings: ['지분 평가액(만원)이 필요합니다.'] };
-  const now = calcInheritanceEstimate({ stockValueMan: sv, hasSpouse, applySurcharge });
+  const now = calcInheritanceEstimate({ stockValueMan: sv, hasSpouse, applySurcharge, effectiveDate, __officialRules });
   const futureVal = sv * Math.pow(1 + g, years);
-  const fut = calcInheritanceEstimate({ stockValueMan: futureVal, hasSpouse, applySurcharge });
+  const fut = calcInheritanceEstimate({ stockValueMan: futureVal, hasSpouse, applySurcharge, effectiveDate, __officialRules });
   if (!now.calculated || !fut.calculated) return { calculated: false, calculator: 'calcInheritanceFuture', warnings: ['추정 실패'] };
   return {
     calculated: true, calculator: 'calcInheritanceFuture',
@@ -3599,7 +3813,11 @@ const TEASER_SIGNALS = [
     req: ['advanceToCEO'],
     eval: (F) => {
       if (!(F.advanceToCEO > 0)) return null;
-      return { severity: _tzClamp(F.advanceToCEO / 100000, 0.35, 1), talk: 0.9, urgency: 0.55, detail: '가지급금 ' + _tzEok(F.advanceToCEO) + '억 · 인정이자 연 ' + Math.round(F.advanceToCEO * 0.046) + '만원' };
+      const rate = F.deemedInterestRate;
+      const detail = rate !== null
+        ? '가지급금 ' + _tzEok(F.advanceToCEO) + '억 · 인정이자 연 ' + Math.round(F.advanceToCEO * rate) + '만원'
+        : '가지급금 ' + _tzEok(F.advanceToCEO) + '억 · 인정이자율 공식기준 확인 필요';
+      return { severity: _tzClamp(F.advanceToCEO / 100000, 0.35, 1), talk: 0.9, urgency: 0.55, detail };
     } },
   { id: 'S07', name: '자본잠식 근접', line: '자본금을 갉아먹은 누적 손실',
     req: ['totalEquity', 'capital'],
@@ -3754,6 +3972,7 @@ function _tzNormalize(raw) {
     borrowings: pick(['borrowings', 'loanAmount']),
     interestExpense: pick(['interestExpense']),
     advanceToCEO: pick(['advanceToCEO', 'advancePayment']),
+    deemedInterestRate: pick(['deemedInterestRate', 'deemedRate']),
     dividend: pick(['dividend']),
     noDividendYears: pick(['noDividendYears']),
     realEstateRatio: pick(['realEstateRatio']),
@@ -3824,8 +4043,8 @@ function computeTeaserBaits(F, fired, topPattern) {
     else if ((s.id === 'S09' || s.id === 'S01' || s.id === 'S08') && F.stockValueMan) {
       const f = calcInheritanceFuture({ stockValueMan: F.stockValueMan });
       if (f.calculated) bait = { label: '10년 뒤', masked: f.taxNowEok + '억 → █.█억', realEok: f.taxFutureEok, calc: 'calcInheritanceFuture' };
-    } else if (s.id === 'S06' && F.advanceToCEO) {
-      bait = { label: '연간 비용', masked: '█,███만원', realEok: _tzEok(F.advanceToCEO * 0.046), calc: 'deemedInterest4.6' };
+    } else if (s.id === 'S06' && F.advanceToCEO && F.deemedInterestRate !== null) {
+      bait = { label: '연간 비용', masked: '█,███만원', realEok: _tzEok(F.advanceToCEO * F.deemedInterestRate), calc: 'deemedInterestOfficialRate' };
     }
     sealed.push({ signalId: s.id, title: s.line, bait });   // bait 없으면 먹줄만 (숫자 창작 금지)
   }
@@ -3960,8 +4179,33 @@ if (typeof window !== 'undefined') {
 // ═══════════════════════════════════════════════════════════
 // 유틸: 종합소득세 누진세율 (소득세법 제55조)
 // ═══════════════════════════════════════════════════════════
-function _incomeTax(taxBase) {
+function _ruleValue(params, ruleId) {
+  const rules = params && params.__officialRules;
+  return rules && rules[ruleId] && typeof rules[ruleId] === 'object' ? rules[ruleId] : null;
+}
+
+function _progressiveTaxByBrackets(taxBase, brackets) {
+  let tax = 0;
+  let remaining = Math.max(0, Number(taxBase) || 0);
+  let prevCap = 0;
+  for (const b of Array.isArray(brackets) ? brackets : []) {
+    const cap = b.cap == null ? Infinity : Number(b.cap);
+    const rate = Number(b.rate);
+    if (!Number.isFinite(rate) || rate < 0) continue;
+    const taxable = Math.min(remaining, cap - prevCap);
+    if (taxable <= 0) break;
+    tax += taxable * rate;
+    remaining -= taxable;
+    prevCap = cap;
+  }
+  return tax;
+}
+
+function _incomeTax(taxBase, officialRules) {
   if (taxBase <= 0) return 0;
+  const brackets = officialRules && officialRules.INCOME_TAX_BRACKETS?.brackets;
+  if (Array.isArray(brackets) && brackets.length) return _progressiveTaxByBrackets(taxBase, brackets);
+  // Legacy fallback for standalone/browser execution without server OFFICIAL_RULE context.
   if (taxBase <= 14000000)  return taxBase * 0.06;
   if (taxBase <= 50000000)  return taxBase * 0.15 - 1260000;
   if (taxBase <= 88000000)  return taxBase * 0.24 - 5760000;
@@ -3984,16 +4228,28 @@ function _npsMonthlyCap(value) {
   return _effectiveYyyymm(value) >= 202607 ? 6590000 : 6370000;
 }
 
-function _estimatedAnnualNpsEmployeeContribution(grossSalary, taxYear = 2026) {
+function _estimatedAnnualNpsEmployeeContribution(grossSalary, taxYear = 2026, officialRules = {}) {
   const salary = Math.max(0, Number(grossSalary) || 0);
   const monthly = salary / 12;
+  const periods = Array.isArray(officialRules.NATIONAL_PENSION_PERIODS)
+    ? officialRules.NATIONAL_PENSION_PERIODS.filter(p => Number.isFinite(Number(p.employeeRate)))
+    : [];
+  if (periods.length) {
+    return periods.reduce((sum, period) => {
+      const min = Math.max(0, Number(period.monthlyMin) || 0);
+      const max = Math.max(min, Number(period.monthlyMax) || Infinity);
+      const base = salary > 0 ? Math.min(Math.max(monthly, min), max) : 0;
+      return sum + base * Number(period.employeeRate) * Math.max(0, Number(period.months) || 0);
+    }, 0);
+  }
   const year = Number(taxYear) || 2026;
   if (year === 2026) {
     return Math.min(monthly, 6370000) * 0.0475 * 6
       + Math.min(monthly, 6590000) * 0.0475 * 6;
   }
-  const cap = year >= 2027 ? 6590000 : 6370000;
-  return Math.min(monthly, cap) * 0.0475 * 12;
+  // Legacy fallback only. Future year rate/cap is not silently invented here.
+  if (year > 2026) return 0;
+  return Math.min(monthly, 6370000) * 0.045 * 12;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4028,6 +4284,7 @@ function calcRentalIncome(params) {
     isOverseasSingleHouse = false,
     oneHouseTaxableConfirmed,
     deemedRentFinancialIncome = 0,  // 임대보증금 운용수익(시행령 §53④ 차감분), 미입력 시 0
+    __officialRules = {},
   } = params || {};
 
   const rentalValues = [annualRent, deposit, numHouses, otherIncome, basicDeduction, deemedRentFinancialIncome, highValueHouseCount];
@@ -4037,12 +4294,15 @@ function calcRentalIncome(params) {
   if (necessaryExpense !== null && (!Number.isFinite(Number(necessaryExpense)) || Number(necessaryExpense) < 0 || Number(necessaryExpense) > 1)) {
     return { calculated: false, calculator: 'calcRentalIncome', missingInputs: [], invalidInputs: ['necessaryExpense'], warnings: ['필요경비율은 0~1 범위여야 합니다.'] };
   }
+  if (Number(annualRent) > 0 && Number(numHouses) < 1) {
+    return { calculated: false, calculator: 'calcRentalIncome', missingInputs: ['numHouses'], invalidInputs: [], warnings: ['주택 임대소득의 과세 여부를 판단하려면 보유 주택 수가 필요합니다.'] };
+  }
 
   // 1. 간주임대료 (보증금 3억 초과분 × 60% × 정기예금이자율 − 보증금 운용수익)
   //    소득세법 §25, 시행령 §53, 시행규칙 §23 — 기획재정부 매년 고시
   //    ※ 주택 간주임대료는 부부합산 3주택 이상 보유 + 보증금 합계 3억 초과 시에만 과세
   //    2024~2025년 귀속: 3.5%  /  2026년 귀속~: 3.1% (2026.1 시행규칙 개정)
-  const deemedRentRate = 0.031;
+  const deemedRentRate = Number(__officialRules.RENTAL_DEEMED_RENT_RATE?.annualRate ?? 0.031);
   const normalizedHouseCount = Math.max(0, Number(numHouses) || 0);
   const normalizedHighValueCount = Math.max(0, Number(highValueHouseCount) || 0);
   const twoHighValueHouseRule = Number(taxYear) >= 2026
@@ -4055,27 +4315,26 @@ function calcRentalIncome(params) {
   const deemedRent = Math.max(0, deemedRentGross - Math.max(0, Number(deemedRentFinancialIncome) || 0));
 
   // 1주택은 국외주택 또는 기준시가 12억원 초과 주택의 월세만 과세한다.
+  // 과세상태가 미확인인데 국내·저가주택이라고 추정해 0원 처리하지 않는다.
+  const oneHouseTaxableKnown = typeof oneHouseTaxableConfirmed === 'boolean'
+    || isOverseasSingleHouse === true
+    || normalizedHighValueCount >= 1;
   const oneHouseTaxable = typeof oneHouseTaxableConfirmed === 'boolean'
     ? oneHouseTaxableConfirmed
-    : (isOverseasSingleHouse === true || normalizedHighValueCount >= 1);
-  if (normalizedHouseCount === 1 && Number(annualRent) > 0 && !oneHouseTaxable) {
+    : (isOverseasSingleHouse === true || normalizedHighValueCount >= 1 ? true : null);
+  if (normalizedHouseCount === 1 && Number(annualRent) > 0 && !oneHouseTaxableKnown) {
     return {
-      calculated: true,
-      totalRevenue: 0,
-      deemedRent: 0,
-      isRegistered,
-      canSeparate: false,
-      betterMethod: '비과세',
-      recommendedTax: 0,
-      effectiveRate: 0,
-      oneHouseTaxable: false,
-      taxableStatusConfirmed: typeof oneHouseTaxableConfirmed === 'boolean'
-        || isOverseasSingleHouse === true
-        || normalizedHighValueCount >= 1,
-      warnings: typeof oneHouseTaxableConfirmed === 'boolean'
-        ? []
-        : ['1주택의 국내 기준시가 12억원 이하 주택으로 보아 월세소득을 비과세 처리했습니다. 고가주택 또는 국외주택이면 관련 입력을 확인해야 합니다.'],
-      summary: '1주택 월세소득 비과세 요건 적용',
+      calculated: false, calculator: 'calcRentalIncome',
+      missingInputs: ['oneHouseTaxableConfirmed|highValueHouseCount|isOverseasSingleHouse'],
+      invalidInputs: [], taxableStatusConfirmed: false,
+      warnings: ['1주택 월세는 국외주택 또는 기준시가 12억원 초과 여부에 따라 과세가 달라져, 사실관계 확인 전에는 비과세로 자동 가정하지 않습니다.'],
+    };
+  }
+  if (normalizedHouseCount === 1 && Number(annualRent) > 0 && oneHouseTaxable === false) {
+    return {
+      calculated: true, totalRevenue: 0, deemedRent: 0, isRegistered, canSeparate: false,
+      betterMethod: '비과세', recommendedTax: 0, effectiveRate: 0, oneHouseTaxable: false,
+      taxableStatusConfirmed: true, warnings: [], summary: '1주택 월세소득 비과세 요건 확인값 적용',
     };
   }
 
@@ -4103,10 +4362,10 @@ function calcRentalIncome(params) {
   const rentalIncome    = Math.max(0, totalRevenue - compExpense);
   const combinedIncome  = rentalIncome + otherIncome;
   const compTaxBase     = Math.max(0, combinedIncome - basicDeduction); // 종합과세 시 인적공제
-  const compTax         = _incomeTax(compTaxBase);
+  const compTax         = _incomeTax(compTaxBase, __officialRules);
   // 임대소득으로 인해 증가한 세액을 차액 방식으로 계산한다(누진세율 비율안분 왜곡 방지).
   const otherTaxBase    = Math.max(0, otherIncome - basicDeduction);
-  const taxWithoutRental = _incomeTax(otherTaxBase);
+  const taxWithoutRental = _incomeTax(otherTaxBase, __officialRules);
   const rentalTax       = Math.max(0, compTax - taxWithoutRental);
   const compLocal       = rentalTax * 0.1;
   const compTotal       = rentalTax + compLocal;
@@ -4147,6 +4406,10 @@ function calcRentalIncome(params) {
     recommendedTax:      Math.round(recommendedTax),
     effectiveRate:       totalRevenue > 0
       ? Math.round((recommendedTax / totalRevenue) * 1000) / 10 : 0,
+    estimateOnly: necessaryExpense === null,
+    warnings: necessaryExpense === null
+      ? ['종합과세 필요경비율 확인값이 없어 40% 비교 시나리오를 사용했습니다. 실제 장부·경비자료가 있으면 확인값으로 재산출해야 합니다.']
+      : [],
     summary: `연 임대수입 ${Math.round(totalRevenue).toLocaleString()}원 → ${betterMethod} 선택 시 세부담 ${Math.round(recommendedTax).toLocaleString()}원 (실효세율 ${totalRevenue > 0 ? ((recommendedTax / totalRevenue) * 100).toFixed(1) : 0}%)`,
   };
 }
@@ -4173,6 +4436,7 @@ function calcFinancialIncome(params) {
     personalDeduction = 1500000,
     confirmedFinancialWithholdingTax,
     confirmedOtherIncomePrepaidTax = 0,
+    __officialRules = {},
   } = params || {};
 
   const financialValues = [interestIncome, dividendIncome, otherIncome, personalDeduction];
@@ -4181,45 +4445,51 @@ function calcFinancialIncome(params) {
   }
 
   const totalFinancial = Number(interestIncome) + Number(dividendIncome);
-  const threshold      = 20000000; // 2천만원 기준
+  const financialRule = __officialRules.FINANCIAL_INCOME_AGGREGATION || {};
+  const threshold = Number(financialRule.aggregationThreshold ?? 20000000);
+  const withholdingNationalRate = Number(financialRule.standardNationalWithholdingRate ?? 0.14);
+  const localSurtaxRate = Number(financialRule.localIncomeTaxSurtaxRate ?? 0.10);
+  const standardWithholdingTotalRate = withholdingNationalRate * (1 + localSurtaxRate);
 
-  // 2천만원 이하 — 원천징수(14%)로 종결
+  // 종합과세 기준 이하 — 일반 국내 금융소득이 법정 원천징수된 경우 분리과세 종결
   if (totalFinancial <= threshold) {
-    const withholding      = totalFinancial * 0.154; // 14% + 지방소득세 1.4%
+    const hasConfirmedWithholding = Number.isFinite(Number(confirmedFinancialWithholdingTax));
+    const withholding = hasConfirmedWithholding
+      ? Math.max(0, Number(confirmedFinancialWithholdingTax))
+      : totalFinancial * standardWithholdingTotalRate;
     return {
-      totalFinancial:   Math.round(totalFinancial),
-      isSubjectToGlobal: false,
-      withholding:      Math.round(withholding),
-      excessAmount:     0,
-      additionalTax:    0,
-      totalTax:         Math.round(withholding),
-      effectiveRate:    15.4,
-      summary: `금융소득 ${Math.round(totalFinancial).toLocaleString()}원으로 종합과세 기준(2천만원) 이하 → 원천징수(15.4%) 종결, 세부담 ${Math.round(withholding).toLocaleString()}원`,
+      totalFinancial: Math.round(totalFinancial), isSubjectToGlobal: false, withholding: Math.round(withholding),
+      excessAmount: 0, additionalTax: 0, totalTax: Math.round(withholding),
+      effectiveRate: totalFinancial > 0 ? Math.round(withholding / totalFinancial * 1000) / 10 : 0,
+      withholdingConfirmed: hasConfirmedWithholding,
+      estimateOnly: !hasConfirmedWithholding,
+      warnings: hasConfirmedWithholding ? [] : ['일반 국내 이자·배당소득이 법정 원천징수되었다는 전제의 추정입니다. 비영업대금 이익·실명 미확인 등 다른 원천징수세율 또는 원천징수 예외가 있으면 확인세액을 입력해야 합니다.'],
+      summary: `금융소득 ${Math.round(totalFinancial).toLocaleString()}원으로 종합과세 기준(${Math.round(threshold).toLocaleString()}원) 이하 → 일반 원천징수 기준 세부담 ${Math.round(withholding).toLocaleString()}원`,
     };
   }
 
   // 2천만원 초과 — 소득세법 제62조 비교산출세액
   const excessAmount = totalFinancial - threshold;
   const otherTaxBase = Math.max(0, otherIncome - personalDeduction);
-  const otherIncomeNationalTax = _incomeTax(otherTaxBase);
+  const otherIncomeNationalTax = _incomeTax(otherTaxBase, __officialRules);
 
   // 제62조 제1호: (금융소득 초과분 + 다른 종합소득)의 누진세 + 기준금액 2천만원×14%
   const method1TaxBase = Math.max(0, excessAmount + otherIncome - personalDeduction);
-  const method1NationalTax = _incomeTax(method1TaxBase) + threshold * 0.14;
+  const method1NationalTax = _incomeTax(method1TaxBase, __officialRules) + threshold * withholdingNationalRate;
 
   // 제62조 제2호: 금융소득 원천징수세율 세액 + 다른 종합소득의 산출세액
   // 배당가산·배당세액공제 대상은 별도 상세자료가 필요하므로 본 함수는 일반 국내 금융소득 기준이다.
-  const method2NationalTax = totalFinancial * 0.14 + otherIncomeNationalTax;
+  const method2NationalTax = totalFinancial * withholdingNationalRate + otherIncomeNationalTax;
 
   const finalNationalTax = Math.max(method1NationalTax, method2NationalTax);
-  const localTax = finalNationalTax * 0.1;
+  const localTax = finalNationalTax * localSurtaxRate;
   const finalTax = finalNationalTax + localTax;
 
   const financialWithholding = Number.isFinite(Number(confirmedFinancialWithholdingTax))
     ? Math.max(0, Number(confirmedFinancialWithholdingTax))
-    : totalFinancial * 0.154;
+    : totalFinancial * standardWithholdingTotalRate;
   const otherIncomePrepaidTax = Math.max(0, Number(confirmedOtherIncomePrepaidTax) || 0);
-  const otherIncomeTaxIncludingLocal = otherIncomeNationalTax * 1.1;
+  const otherIncomeTaxIncludingLocal = otherIncomeNationalTax * (1 + localSurtaxRate);
   const financialAttributableTax = Math.max(0, finalTax - otherIncomeTaxIncludingLocal);
   const additionalTax = Math.max(0, financialAttributableTax - financialWithholding);
   const totalAdditionalTax = Math.max(0, finalTax - financialWithholding - otherIncomePrepaidTax);
@@ -4230,9 +4500,9 @@ function calcFinancialIncome(params) {
     excessAmount:      Math.round(excessAmount),
     taxBase:           Math.round(method1TaxBase),
     globalTax:         Math.round(method1NationalTax),
-    globalTotal:       Math.round(method1NationalTax * 1.1),
-    compareTax:        Math.round(method1NationalTax * 1.1),
-    withholdingComparisonTax: Math.round(method2NationalTax * 1.1),
+    globalTotal:       Math.round(method1NationalTax * (1 + localSurtaxRate)),
+    compareTax:        Math.round(method1NationalTax * (1 + localSurtaxRate)),
+    withholdingComparisonTax: Math.round(method2NationalTax * (1 + localSurtaxRate)),
     finalNationalTax:  Math.round(finalNationalTax),
     localTax:          Math.round(localTax),
     finalTax:          Math.round(finalTax),
@@ -4241,10 +4511,11 @@ function calcFinancialIncome(params) {
     financialAttributableTax: Math.round(financialAttributableTax),
     additionalTax:     Math.round(additionalTax),
     totalAdditionalTax: Math.round(totalAdditionalTax),
-    estimateOnly: dividendIncome > 0,
-    warnings: dividendIncome > 0
-      ? ['배당가산·배당세액공제 대상 배당 여부가 구분되지 않아 일반 금융소득 기준으로 계산했습니다.']
-      : [],
+    estimateOnly: dividendIncome > 0 || !Number.isFinite(Number(confirmedFinancialWithholdingTax)),
+    warnings: [
+      ...(dividendIncome > 0 ? ['배당가산·배당세액공제 대상 배당 여부가 구분되지 않아 일반 금융소득 기준으로 계산했습니다.'] : []),
+      ...(!Number.isFinite(Number(confirmedFinancialWithholdingTax)) ? ['기납부 금융소득 원천징수세액이 없어 일반 원천징수율로 추정했습니다. 실제 원천징수영수증 금액을 우선해야 합니다.'] : []),
+    ],
     effectiveRate:     totalFinancial > 0
       ? Math.round((financialAttributableTax / totalFinancial) * 1000) / 10 : 0,
     summary: `금융소득 ${Math.round(totalFinancial).toLocaleString()}원 (2천만원 초과 ${Math.round(excessAmount).toLocaleString()}원) → 금융소득 귀속 추가세액 ${Math.round(additionalTax).toLocaleString()}원`,
@@ -4295,6 +4566,7 @@ function calcEarnedIncome(params) {
     confirmedHealthInsuranceDeduction = 0,
     confirmedEmploymentInsuranceDeduction = 0,
     confirmedHousingFundDeduction,
+    __officialRules = {},
   } = params || {};
 
   const earnedValues = [grossSalary, dependents, childrenUnder7, childrenOver7, insurancePremium, medicalExpense, educationExpense, donationExpense, pensionSaving, irpAmount, housingFund];
@@ -4322,7 +4594,7 @@ function calcEarnedIncome(params) {
   // 4. 보험료·주택자금 소득공제
   // 2026년 국민연금 기준소득월액 상한은 1~6월 637만원, 7~12월 659만원을 적용한다.
   // 실제 연말정산에서는 확인된 납부액을 우선 사용하고, 없을 때만 총급여 기준 추정액을 사용한다.
-  const estimatedNationalPension = _estimatedAnnualNpsEmployeeContribution(grossSalary, taxYear);
+  const estimatedNationalPension = _estimatedAnnualNpsEmployeeContribution(grossSalary, taxYear, __officialRules);
   const nationalPension = Number.isFinite(Number(confirmedNationalPensionDeduction))
     ? Math.max(0, Number(confirmedNationalPensionDeduction))
     : estimatedNationalPension;
@@ -4338,7 +4610,7 @@ function calcEarnedIncome(params) {
   const taxBase          = Math.max(0, earnedIncome - totalDeduction);
 
   // 6. 산출세액
-  const calculatedTax    = _incomeTax(taxBase);
+  const calculatedTax    = _incomeTax(taxBase, __officialRules);
 
   // 7. 세액공제
   // 근로소득 세액공제 (소득세법 §59 ①, 2023.1.1 이후 300만 초과 공제율 30% 통일)
@@ -4412,11 +4684,17 @@ function calcEarnedIncome(params) {
     ? donationExpense * 0.15
     : 1500000 + (donationExpense - 10000000) * 0.30;
 
-  // 연금저축·IRP 세액공제 (연금저축 600만 한도 + IRP 포함 통합 900만 한도)
-  const effPensionSaving = Math.min(pensionSaving, 6000000);
-  const effIRP           = Math.min(irpAmount, 9000000 - effPensionSaving);
+  // 연금저축·IRP 세액공제 — OFFICIAL_RULE 우선.
+  const pensionRule = __officialRules.PENSION_ACCOUNT_TAX_CREDIT || {};
+  const pensionSavingLimit = Number(pensionRule.pensionSavingLimit ?? 6000000);
+  const pensionCombinedLimit = Number(pensionRule.combinedLimit ?? 9000000);
+  const effPensionSaving = Math.min(pensionSaving, pensionSavingLimit);
+  const effIRP           = Math.min(irpAmount, Math.max(0, pensionCombinedLimit - effPensionSaving));
   const pensionTotal     = effPensionSaving + effIRP;
-  const pensionRate      = grossSalary <= 55000000 ? 0.15 : 0.12; // 종합소득 산출세액에서 공제하는 국세 공제율
+  const lowSalaryThreshold = Number(pensionRule.lowIncomeSalaryThreshold ?? 55000000);
+  const pensionRate      = grossSalary <= lowSalaryThreshold
+    ? Number(pensionRule.lowIncomeNationalRate ?? 0.15)
+    : Number(pensionRule.standardNationalRate ?? 0.12);
   const pensionCredit    = pensionTotal * pensionRate;
 
   // 세액공제 합계
@@ -4516,6 +4794,7 @@ function calcGlobalIncome(params) {
     taxYear             = 2026,
     confirmedNationalPensionDeduction,
     confirmedStandardTaxCredit,
+    __officialRules = {},
   } = params || {};
 
   const globalValues = [businessIncome, rentalIncome, earnedIncome, pensionIncome, otherIncome, businessExpense, dependents, pensionSaving, irpAmount];
@@ -4529,9 +4808,12 @@ function calcGlobalIncome(params) {
 
   // 2. 소득공제
   const basicDeduct  = dependents * 1500000;
-  // 연금계좌 세액공제 대상: 연금저축 600만 한도 + IRP 포함 통합 900만 한도
-  const effPensionSaving = Math.min(pensionSaving, 6000000);
-  const effIRP           = Math.min(irpAmount, 9000000 - effPensionSaving);
+  // 연금계좌 세액공제 대상 — OFFICIAL_RULE 우선.
+  const pensionRule = __officialRules.PENSION_ACCOUNT_TAX_CREDIT || {};
+  const pensionSavingLimit = Number(pensionRule.pensionSavingLimit ?? 6000000);
+  const pensionCombinedLimit = Number(pensionRule.combinedLimit ?? 9000000);
+  const effPensionSaving = Math.min(pensionSaving, pensionSavingLimit);
+  const effIRP           = Math.min(irpAmount, Math.max(0, pensionCombinedLimit - effPensionSaving));
   const pensionTotal = effPensionSaving + effIRP;
 
   // 국민연금 보험료 공제: 확인된 실제 납부액을 우선 사용하고, 없을 때만 소득 기준으로 추정한다.
@@ -4544,11 +4826,14 @@ function calcGlobalIncome(params) {
   const taxBase      = Math.max(0, totalIncome - totalDeduct);
 
   // 3. 산출세액
-  const calculatedTax = _incomeTax(taxBase);
+  const calculatedTax = _incomeTax(taxBase, __officialRules);
 
   // 4. 세액공제
   // 연금계좌 세액공제: 종합소득금액 4,500만(총급여 5,500만) 이하 16.5%, 초과 13.2% (지방세 포함)
-  const pensionRate   = totalIncome <= 45000000 ? 0.15 : 0.12;
+  const lowIncomeThreshold = Number(pensionRule.lowIncomeGlobalIncomeThreshold ?? 45000000);
+  const pensionRate   = totalIncome <= lowIncomeThreshold
+    ? Number(pensionRule.lowIncomeNationalRate ?? 0.15)
+    : Number(pensionRule.standardNationalRate ?? 0.12);
   const pensionCredit = pensionTotal * pensionRate;
 
   // 사업소득자의 일반 표준세액공제는 7만원을 기본으로 하되,
@@ -4880,74 +5165,89 @@ function calcSocialInsurancePersonal(params) {
     includeEmployer,
     effectiveDate,
     effectivePeriod,
-    industry = 'manufacturing',
+    workforceScale,
+    confirmedEmployerEmploymentAdditionalRate,
+    confirmedWorkersCompRate,
+    confirmedEmployeeSocialInsurance,
+    __officialRules = {},
   } = params || {};
 
   if (!Number.isFinite(Number(monthlySalary)) || Number(monthlySalary) < 0) {
     return { calculated: false, calculator: 'calcSocialInsurancePersonal', missingInputs: [], invalidInputs: ['monthlySalary'], warnings: ['월 보수는 0 이상의 유한한 숫자여야 합니다.'] };
   }
-
   const includeEmployerBurden = typeof includeEmployer === 'boolean' ? includeEmployer : hasEmployer;
   if (employeeType !== 'employee') {
-    return {
-      calculated: false,
-      missingInputs: ['regionalInsuranceAssessmentData'],
-      invalidInputs: [],
-      warnings: ['지역가입자 보험료는 소득·재산 등 별도 부과자료가 필요하므로 직장가입자 방식으로 계산하지 않았습니다.'],
-      employeeType,
-    };
+    return { calculated: false, calculator: 'calcSocialInsurancePersonal', missingInputs: ['regionalInsuranceAssessmentData'], invalidInputs: [], warnings: ['지역가입자 보험료는 소득·재산 등 별도 부과자료가 필요하므로 직장가입자 방식으로 계산하지 않았습니다.'], employeeType };
   }
 
-  const annualSalary = monthlySalary * 12;
+  const warnings = [];
+  const annualSalary = Number(monthlySalary) * 12;
   const period = effectiveDate || effectivePeriod;
-  const npCap = _npsMonthlyCap(period);
-  const npBase = Math.min(Math.max(0, monthlySalary), npCap);
-  const npEmployee = Math.round(npBase * 0.0475);
-  const npEmployer = npEmployee;
+  const npsRule = __officialRules.NATIONAL_PENSION_CONTRIBUTION || {};
+  const healthRule = __officialRules.HEALTH_LONG_TERM_CARE_RATES || {};
+  const employmentRule = __officialRules.EMPLOYMENT_INSURANCE_RATES || {};
+  const npMin = Math.max(0, Number(npsRule.monthlyMin) || 0);
+  const npCap = Number(npsRule.monthlyMax) || _npsMonthlyCap(period);
+  const npBase = Number(monthlySalary) > 0 ? Math.min(Math.max(Number(monthlySalary), npMin), npCap) : 0;
+  const npEmployeeRate = Number(npsRule.employeeRate ?? 0.0475);
+  const npEmployerRate = Number(npsRule.employerRate ?? npEmployeeRate);
+  const npEmployee = Math.round(npBase * npEmployeeRate);
+  const npEmployer = Math.round(npBase * npEmployerRate);
 
-  const hiEmployee = Math.round(monthlySalary * 0.03595);
-  const hiEmployer = hiEmployee;
-  const ltcEmployee = Math.round(hiEmployee * (0.9448 / 7.19));
-  const ltcEmployer = ltcEmployee;
-  const eiEmployee = Math.round(monthlySalary * 0.009);
-  const eiEmployer = Math.round(monthlySalary * 0.009);
+  const hiEmployeeRate = Number(healthRule.employeeHealthRate ?? 0.03595);
+  const hiEmployerRate = Number(healthRule.employerHealthRate ?? hiEmployeeRate);
+  const ltcToHealthRatio = Number(healthRule.longTermCareToHealthRatio ?? (0.9448 / 7.19));
+  const hiEmployee = Math.round(Number(monthlySalary) * hiEmployeeRate);
+  const hiEmployer = Math.round(Number(monthlySalary) * hiEmployerRate);
+  const ltcEmployee = Math.round(hiEmployee * ltcToHealthRatio);
+  const ltcEmployer = Math.round(hiEmployer * ltcToHealthRatio);
 
-  const accidentRates = { general: 0.007, manufacturing: 0.014, construction: 0.036 };
-  const accidentRate = accidentRates[industry] || accidentRates.manufacturing;
-  const wcEmployer = Math.round(monthlySalary * accidentRate);
+  const employeeEmploymentRate = Number(employmentRule.employeeUnemploymentRate ?? 0.009);
+  const employerUnemploymentRate = Number(employmentRule.employerUnemploymentRate ?? 0.009);
+  const eiEmployee = Math.round(Number(monthlySalary) * employeeEmploymentRate);
+  const eiEmployer = Math.round(Number(monthlySalary) * employerUnemploymentRate);
 
-  const employeeTotal = npEmployee + hiEmployee + ltcEmployee + eiEmployee;
-  const employerTotal = npEmployer + hiEmployer + ltcEmployer + eiEmployer + wcEmployer;
-  const totalBurden = employeeTotal + (includeEmployerBurden ? employerTotal : 0);
+  let employerAdditionalRate = null;
+  if (Number.isFinite(Number(confirmedEmployerEmploymentAdditionalRate))) {
+    employerAdditionalRate = Math.max(0, Number(confirmedEmployerEmploymentAdditionalRate));
+    if (employerAdditionalRate > 1) employerAdditionalRate /= 100;
+  } else {
+    const map = employmentRule.employerStabilizationTrainingRates || {};
+    if (workforceScale && Number.isFinite(Number(map[workforceScale]))) employerAdditionalRate = Number(map[workforceScale]);
+  }
+  let workersCompRate = null;
+  if (Number.isFinite(Number(confirmedWorkersCompRate))) {
+    workersCompRate = Math.max(0, Number(confirmedWorkersCompRate));
+    if (workersCompRate > 1) workersCompRate /= 100;
+  }
+  const employmentAdditional = employerAdditionalRate == null ? 0 : Math.round(Number(monthlySalary) * employerAdditionalRate);
+  const workersComp = workersCompRate == null ? 0 : Math.round(Number(monthlySalary) * workersCompRate);
+
+  const employeeCalculated = npEmployee + hiEmployee + ltcEmployee + eiEmployee;
+  const employeeTotal = Number.isFinite(Number(confirmedEmployeeSocialInsurance))
+    ? Math.max(0, Math.round(Number(confirmedEmployeeSocialInsurance)))
+    : employeeCalculated;
+  const employeeConfirmed = Number.isFinite(Number(confirmedEmployeeSocialInsurance));
+  const employerKnownTotal = npEmployer + hiEmployer + ltcEmployer + eiEmployer + employmentAdditional + workersComp;
+  const employerComplete = employerAdditionalRate != null && workersCompRate != null;
+  if (includeEmployerBurden && employerAdditionalRate == null) warnings.push('고용안정·직업능력개발 사업주 추가요율은 사업장 규모 확인값이 없어 합산하지 않았습니다.');
+  if (includeEmployerBurden && workersCompRate == null) warnings.push('산재보험료율은 업종명만으로 임의 추정하지 않았습니다. 실제 사업장 산재보험료율을 입력해야 합니다.');
+  if (!employeeConfirmed) warnings.push('근로자 부담분은 공식 보험료율과 월 보수 기준의 추정치입니다. 비과세 보수 및 실제 고지액이 있으면 확인값을 우선해야 합니다.');
 
   return {
     calculated: true,
-    monthlySalary: Math.round(monthlySalary),
-    annualSalary: Math.round(annualSalary),
-    employeeType,
-    effectivePeriod: _effectiveYyyymm(period),
-    nationalPensionCap: npCap,
-    employee: {
-      nationalPension: npEmployee,
-      healthInsurance: hiEmployee,
-      longTermCare: ltcEmployee,
-      employment: eiEmployee,
-      total: employeeTotal,
-      annual: employeeTotal * 12,
-    },
-    employer: {
-      nationalPension: npEmployer,
-      healthInsurance: hiEmployer,
-      longTermCare: ltcEmployer,
-      employment: eiEmployer,
-      accident: wcEmployer,
-      total: employerTotal,
-      annual: employerTotal * 12,
-    },
-    totalBurden: Math.round(totalBurden),
-    estimateOnly: true,
-    warnings: ['건강보험 보수월액 상·하한, 고용·산재보험의 업종별 추가요율 등은 실제 사업장 자료에 따라 달라질 수 있습니다.'],
-    summary: `월급 ${Math.round(monthlySalary).toLocaleString()}원 → 근로자 4대보험 월 ${Math.round(employeeTotal).toLocaleString()}원 (연 ${Math.round(employeeTotal * 12).toLocaleString()}원)`,
+    monthlySalary: Math.round(Number(monthlySalary)), annualSalary: Math.round(annualSalary), employeeType,
+    effectivePeriod: _effectiveYyyymm(period), nationalPensionCap: npCap,
+    employee: { nationalPension: npEmployee, healthInsurance: hiEmployee, longTermCare: ltcEmployee, employment: eiEmployee, total: employeeTotal, annual: employeeTotal * 12, confirmedTotal: employeeConfirmed },
+    employer: { nationalPension: npEmployer, healthInsurance: hiEmployer, longTermCare: ltcEmployer, employment: eiEmployer, employmentAdditional, accident: workersCompRate == null ? null : workersComp, totalKnown: employerKnownTotal, total: employerKnownTotal, annualKnown: employerKnownTotal * 12, complete: employerComplete, employmentAdditionalRate: employerAdditionalRate, workersCompRate },
+    totalBurden: includeEmployerBurden ? employeeTotal + employerKnownTotal : employeeTotal,
+    totalBurdenComplete: !includeEmployerBurden || employerComplete,
+    estimateOnly: !employeeConfirmed || (includeEmployerBurden && !employerComplete),
+    officialRuleApplied: !!(__officialRules.NATIONAL_PENSION_CONTRIBUTION || __officialRules.HEALTH_LONG_TERM_CARE_RATES || __officialRules.EMPLOYMENT_INSURANCE_RATES),
+    warnings,
+    summary: includeEmployerBurden && !employerComplete
+      ? `월급 ${Math.round(Number(monthlySalary)).toLocaleString()}원 → 근로자 부담 월 ${Math.round(employeeTotal).toLocaleString()}원, 사업주 확인가능 최소부담 월 ${Math.round(employerKnownTotal).toLocaleString()}원(산재·사업주 추가요율 확인 필요)`
+      : `월급 ${Math.round(Number(monthlySalary)).toLocaleString()}원 → 근로자 4대보험 월 ${Math.round(employeeTotal).toLocaleString()}원 (연 ${Math.round(employeeTotal * 12).toLocaleString()}원)`,
   };
 }
 
@@ -4995,16 +5295,48 @@ function _isProvidedFinite(value) {
   return value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '') && Number.isFinite(Number(value));
 }
 
+
+function _officialRuleValue(rules, key) {
+  return rules && rules[key] && typeof rules[key] === 'object' ? rules[key] : null;
+}
+
+function _progressiveByBrackets(taxBase, brackets) {
+  let remaining = Math.max(0, Number(taxBase) || 0);
+  let prevCap = 0;
+  let tax = 0;
+  for (const b of Array.isArray(brackets) ? brackets : []) {
+    const rate = Number(b?.rate);
+    if (!Number.isFinite(rate) || rate < 0) continue;
+    const cap = b?.cap == null ? Infinity : Number(b.cap);
+    if (!Number.isFinite(cap) && cap !== Infinity) continue;
+    const taxable = Math.min(remaining, cap - prevCap);
+    if (taxable <= 0) break;
+    tax += taxable * rate;
+    remaining -= taxable;
+    prevCap = cap;
+    if (remaining <= 0) break;
+  }
+  return Math.round(tax);
+}
+
 // ═══════════════════════════════════════════════════════════
 // 유틸: 법인세 누진세율 (법인세법 제55조)
 //   ※ 법인세 기본세율은 중소기업 여부와 무관하게 동일 (중소기업 혜택은 조특법 감면으로 별도)
 //   ※ 성실신고확인대상 소규모법인(corpType='sme_realty')은 2억 이하 구간 없이 200억 이하 단일세율(19→20%)
 //   ※ 2026.1.1. 이후 개시 사업연도부터 전 구간 1%p 인상 (2025.12 개정)
 // ═══════════════════════════════════════════════════════════
-function _corpTax(taxBase, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme') {
+function _corpTax(taxBase, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme', officialRules = null) {
   if (taxBase <= 0) return 0;
+  const official = _officialRuleValue(officialRules, 'CORPORATE_TAX_BRACKETS');
+  const officialBrackets = official
+    ? (corpType === 'sme_realty' ? official.smallRealty : official.general)
+    : null;
+  if (Array.isArray(officialBrackets) && officialBrackets.length) {
+    return _progressiveByBrackets(taxBase, officialBrackets);
+  }
+
+  // OFFICIAL_RULE이 전달되지 않은 독립 실행/구버전 호출의 호환 폴백.
   const y2026 = Number(taxYear) >= 2026;
-  // 성실신고확인대상 소규모법인(부동산임대 주업 등): 2억 이하 구간 없이 200억 이하 단일세율 (19→20%)
   if (corpType === 'sme_realty') {
     if (y2026) {
       if (taxBase <= 20000000000)  return taxBase * 0.20;
@@ -5016,22 +5348,77 @@ function _corpTax(taxBase, isSME = true, taxYear = new Date().getFullYear(), cor
     return 62600000000 + (taxBase - 300000000000) * 0.24;
   }
   if (y2026) {
-    // 2026~: 2억 10% / 200억 20% / 3,000억 22% / 초과 25%
     if (taxBase <= 200000000)    return taxBase * 0.10;
     if (taxBase <= 20000000000)  return 20000000 + (taxBase - 200000000) * 0.20;
     if (taxBase <= 300000000000) return 3980000000 + (taxBase - 20000000000) * 0.22;
     return 65580000000 + (taxBase - 300000000000) * 0.25;
   }
-  // ~2025: 2억 9% / 200억 19% / 3,000억 21% / 초과 24%
   if (taxBase <= 200000000)    return taxBase * 0.09;
   if (taxBase <= 20000000000)  return 18000000 + (taxBase - 200000000) * 0.19;
   if (taxBase <= 300000000000) return 3780000000 + (taxBase - 20000000000) * 0.21;
   return 62580000000 + (taxBase - 300000000000) * 0.24;
 }
 
-// 유틸: 소득세 누진세율
-function _incomeTax(taxBase) {
+
+// 유틸: 법인지방소득세 누진세율 — 지방세법 제103조의20
+// 국세 산출세액의 10%가 아니라 과세표준에 별도 누진세율을 적용한다.
+function _corpLocalTax(taxBase, taxYear = new Date().getFullYear(), corpType = 'sme', officialRules = null) {
+  const base = Math.max(0, Number(taxBase) || 0);
+  if (base <= 0) return 0;
+  const official = _officialRuleValue(officialRules, 'CORPORATE_LOCAL_INCOME_TAX_BRACKETS');
+  const officialBrackets = official
+    ? (corpType === 'sme_realty' ? official.smallRealty : official.general)
+    : null;
+  if (Array.isArray(officialBrackets) && officialBrackets.length) {
+    return _progressiveByBrackets(base, officialBrackets);
+  }
+
+  const y2026 = Number(taxYear) >= 2026;
+  if (corpType === 'sme_realty') {
+    if (y2026) {
+      if (base <= 20000000000)  return Math.round(base * 0.020);
+      if (base <= 300000000000) return Math.round(400000000 + (base - 20000000000) * 0.022);
+      return Math.round(6560000000 + (base - 300000000000) * 0.025);
+    }
+    if (base <= 20000000000)  return Math.round(base * 0.019);
+    if (base <= 300000000000) return Math.round(380000000 + (base - 20000000000) * 0.021);
+    return Math.round(6260000000 + (base - 300000000000) * 0.024);
+  }
+  if (y2026) {
+    if (base <= 200000000)    return Math.round(base * 0.010);
+    if (base <= 20000000000)  return Math.round(2000000 + (base - 200000000) * 0.020);
+    if (base <= 300000000000) return Math.round(398000000 + (base - 20000000000) * 0.022);
+    return Math.round(6558000000 + (base - 300000000000) * 0.025);
+  }
+  if (base <= 200000000)    return Math.round(base * 0.009);
+  if (base <= 20000000000)  return Math.round(1800000 + (base - 200000000) * 0.019);
+  if (base <= 300000000000) return Math.round(378000000 + (base - 20000000000) * 0.021);
+  return Math.round(6258000000 + (base - 300000000000) * 0.024);
+}
+
+function _corpTotalTax(taxBase, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme', officialRules = null) {
+  const national = Math.round(_corpTax(taxBase, isSME, taxYear, corpType, officialRules));
+  const local = Math.round(_corpLocalTax(taxBase, taxYear, corpType, officialRules));
+  return { national, local, total: national + local };
+}
+
+function _corpTotalTaxDelta(beforeBase, afterBase, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme', officialRules = null) {
+  const before = _corpTotalTax(Math.max(0, Number(beforeBase) || 0), isSME, taxYear, corpType, officialRules);
+  const after = _corpTotalTax(Math.max(0, Number(afterBase) || 0), isSME, taxYear, corpType, officialRules);
+  return {
+    national: Math.max(0, before.national - after.national),
+    local: Math.max(0, before.local - after.local),
+    total: Math.max(0, before.total - after.total),
+  };
+}
+
+// 유틸: 소득세 누진세율 — OFFICIAL_RULE 우선, 없으면 기존 폴백
+function _incomeTax(taxBase, officialRules = null) {
   if (taxBase <= 0) return 0;
+  const official = _officialRuleValue(officialRules, 'INCOME_TAX_BRACKETS');
+  if (Array.isArray(official?.brackets) && official.brackets.length) {
+    return _progressiveByBrackets(taxBase, official.brackets);
+  }
   if (taxBase <= 14000000)   return taxBase * 0.06;
   if (taxBase <= 50000000)   return taxBase * 0.15 - 1260000;
   if (taxBase <= 88000000)   return taxBase * 0.24 - 5760000;
@@ -5065,21 +5452,22 @@ function calcCorpVsIndividual(params) {
     corpType      = 'sme',   // 'sme'|'general'|'sme_realty'(성실신고 소규모법인)
     taxYear       = new Date().getFullYear(),
     otherFinancialIncome = 0,
+    __officialRules = {},
   } = params || {};
 
   // ── 개인사업자 세부담 ──
   // 근로소득공제 없음, 전액 종합소득 과세
   const indivDeduct    = 1500000; // 기본공제만
   const indivTaxBase   = Math.max(0, annualProfit - indivDeduct);
-  const indivTax       = _incomeTax(indivTaxBase);
+  const indivTax       = _incomeTax(indivTaxBase, __officialRules);
   const indivLocal     = indivTax * 0.1;
   const indivTotal     = indivTax + indivLocal;
 
   // ── 법인 세부담 ──
   // 법인: 대표 급여 손금산입 후 법인세
   const corpProfit     = Math.max(0, annualProfit - ceoSalary);
-  const corpTaxAmt     = _corpTax(corpProfit, isSME, taxYear, corpType);
-  const corpLocal      = corpTaxAmt * 0.1;
+  const corpTaxAmt     = _corpTax(corpProfit, isSME, taxYear, corpType, __officialRules);
+  const corpLocal      = _corpLocalTax(corpProfit, taxYear, corpType, __officialRules);
   const corpTaxTotal   = corpTaxAmt + corpLocal;
 
   // 대표 급여에 대한 소득세 (근로소득공제 적용)
@@ -5092,7 +5480,7 @@ function calcCorpVsIndividual(params) {
   earnedDeduction      = Math.min(earnedDeduction, 20000000);
 
   const salaryTaxBase  = Math.max(0, ceoSalary - earnedDeduction - 1500000);
-  const salaryTax      = _incomeTax(salaryTaxBase) * 1.1;
+  const salaryTax      = _incomeTax(salaryTaxBase, __officialRules) * 1.1;
 
   // 배당 세금 (15.4% 원천징수 기준, 종합과세 시 추가납부 발생 가능)
   const afterCorpProfit = corpProfit - corpTaxTotal;
@@ -5160,12 +5548,13 @@ function calcCorpLiquidation(params) {
     corpType         = 'sme',   // 'sme'|'general'|'sme_realty'
     taxYear          = new Date().getFullYear(),
     otherFinancialIncome = 0,
+    __officialRules = {},
   } = params || {};
 
   // 1. 법인 청산소득 (법인세법 제79조)
   const liquidationIncome = Math.max(0, residualAssets - paidInCapital);
-  const corpTaxOnLiq      = _corpTax(liquidationIncome, isSME, taxYear, corpType);
-  const corpLocalTax      = corpTaxOnLiq * 0.1;
+  const corpTaxOnLiq      = _corpTax(liquidationIncome, isSME, taxYear, corpType, __officialRules);
+  const corpLocalTax      = _corpLocalTax(liquidationIncome, taxYear, corpType, __officialRules);
   const corpTaxTotal      = corpTaxOnLiq + corpLocalTax;
 
   // 2. 주주 의제배당 (잔여재산분배액 - 취득원가)
@@ -5230,6 +5619,8 @@ function calcVehicleExpense(params) {
     taxYear = 2026,
     corpType = 'sme',
     confirmedMarginalRate,
+    confirmedLocalMarginalRate,
+    __officialRules = {},
   } = params || {};
 
   const values = [vehiclePrice, annualLeaseCost, businessUseRatio, annualFuelCost, businessMonths];
@@ -5286,12 +5677,24 @@ function calcVehicleExpense(params) {
     marginalRate = Math.min(1, Math.max(0, Number(confirmedMarginalRate)));
   }
   let taxSaving = null;
-  if (marginalRate !== null) {
-    taxSaving = deductibleLimit * marginalRate * 1.1;
-  } else if (Number.isFinite(Number(taxableIncomeBefore))) {
-    const before = _corpTax(Math.max(0, Number(taxableIncomeBefore)), true, taxYear, corpType);
-    const after = _corpTax(Math.max(0, Number(taxableIncomeBefore) - deductibleLimit), true, taxYear, corpType);
-    taxSaving = (before - after) * 1.1;
+  let taxSavingNational = null;
+  let taxSavingLocal = null;
+  if (Number.isFinite(Number(taxableIncomeBefore))) {
+    const beforeBase = Math.max(0, Number(taxableIncomeBefore));
+    const delta = _corpTotalTaxDelta(beforeBase, Math.max(0, beforeBase - deductibleLimit), true, taxYear, corpType, __officialRules);
+    taxSavingNational = delta.national;
+    taxSavingLocal = delta.local;
+    taxSaving = delta.total;
+  } else if (marginalRate !== null) {
+    taxSavingNational = deductibleLimit * marginalRate;
+    if (Number.isFinite(Number(confirmedLocalMarginalRate))) {
+      const localRate = Math.min(1, Math.max(0, Number(confirmedLocalMarginalRate)));
+      taxSavingLocal = deductibleLimit * localRate;
+      taxSaving = taxSavingNational + taxSavingLocal;
+    } else {
+      taxSaving = taxSavingNational;
+      warnings.push('확인된 법인지방소득세 한계세율 또는 과세표준이 없어 절감액에는 국세 법인세만 반영했습니다.');
+    }
   } else {
     warnings.push('과세표준 또는 확인된 한계세율이 없어 법인세 절감액은 계산하지 않았습니다.');
   }
@@ -5308,6 +5711,8 @@ function calcVehicleExpense(params) {
     excessAmount: Math.round(excessAmount),
     depreciationCarryforward: Math.round(depreciationCarryforward),
     taxSaving: taxSaving === null ? null : Math.round(taxSaving),
+    taxSavingNational: taxSavingNational === null ? null : Math.round(taxSavingNational),
+    taxSavingLocal: taxSavingLocal === null ? null : Math.round(taxSavingLocal),
     taxSavingCalculated: taxSaving !== null,
     hasLogbook,
     hasExclusiveInsurance,
@@ -5346,6 +5751,8 @@ function calcEntertainmentLimit(params) {
     taxYear = 2026,
     corpType = 'sme',
     confirmedMarginalRate,
+    confirmedLocalMarginalRate,
+    __officialRules = {},
   } = params || {};
 
   const values = [revenue, relatedPartyRevenue, actualExpense, culturalRatio];
@@ -5377,12 +5784,25 @@ function calcEntertainmentLimit(params) {
   let marginalRate = null;
   if (Number.isFinite(Number(confirmedMarginalRate))) marginalRate = Math.min(1, Math.max(0, Number(confirmedMarginalRate)));
   let addedTax = null;
-  if (marginalRate !== null) {
-    addedTax = nonDeductible * marginalRate * 1.1;
-  } else if (Number.isFinite(Number(taxableIncomeBefore))) {
-    const before = _corpTax(Math.max(0, Number(taxableIncomeBefore) + nonDeductible), isSME, taxYear, corpType);
-    const after = _corpTax(Math.max(0, Number(taxableIncomeBefore)), isSME, taxYear, corpType);
-    addedTax = (before - after) * 1.1;
+  let addedTaxNational = null;
+  let addedTaxLocal = null;
+  if (Number.isFinite(Number(taxableIncomeBefore))) {
+    const base = Math.max(0, Number(taxableIncomeBefore));
+    const beforeTax = _corpTotalTax(base + nonDeductible, isSME, taxYear, corpType, __officialRules);
+    const afterTax = _corpTotalTax(base, isSME, taxYear, corpType, __officialRules);
+    addedTaxNational = Math.max(0, beforeTax.national - afterTax.national);
+    addedTaxLocal = Math.max(0, beforeTax.local - afterTax.local);
+    addedTax = Math.max(0, beforeTax.total - afterTax.total);
+  } else if (marginalRate !== null) {
+    addedTaxNational = nonDeductible * marginalRate;
+    if (Number.isFinite(Number(confirmedLocalMarginalRate))) {
+      const localRate = Math.min(1, Math.max(0, Number(confirmedLocalMarginalRate)));
+      addedTaxLocal = nonDeductible * localRate;
+      addedTax = addedTaxNational + addedTaxLocal;
+    } else {
+      addedTax = addedTaxNational;
+      warnings.push('확인된 법인지방소득세 한계세율 또는 과세표준이 없어 추가세액에는 국세 법인세만 반영했습니다.');
+    }
   } else {
     warnings.push('과세표준 또는 확인된 한계세율이 없어 손금불산입에 따른 추가 법인세는 계산하지 않았습니다.');
   }
@@ -5400,6 +5820,8 @@ function calcEntertainmentLimit(params) {
     deductible: Math.round(deductible),
     nonDeductible: Math.round(nonDeductible),
     addedTax: addedTax === null ? null : Math.round(addedTax),
+    addedTaxNational: addedTaxNational === null ? null : Math.round(addedTaxNational),
+    addedTaxLocal: addedTaxLocal === null ? null : Math.round(addedTaxLocal),
     addedTaxCalculated: addedTax !== null,
     calculated: true,
     estimateOnly: warnings.length > 0,
@@ -5651,58 +6073,46 @@ function calcNomineeTrust(params) {
     aggregatePriorGifts = false,
     confirmedPriorGiftTax,
     confirmedPenaltyAmount,
+    __officialRules = {},
   } = params || {};
 
-  // 증여의제 세금 (상증세법 제45조의2)
-  // 증여재산공제 없음 (명의신탁은 공제 미적용)
   if (![stockValue, priorGifts].every(value => Number.isFinite(Number(value))) || stockValue < 0 || priorGifts < 0) {
     return { calculated: false, calculator: 'calcNomineeTrust', missingInputs: [], invalidInputs: ['amount'], warnings: ['주식가액과 과거 증여액은 0 이상의 유한한 숫자여야 합니다.'] };
   }
-  const taxBase       = stockValue + (aggregatePriorGifts ? priorGifts : 0);
+  const taxBase = stockValue + (aggregatePriorGifts ? priorGifts : 0);
+  const giftTax = _giftTaxProgressive(taxBase, __officialRules);
 
-  // 누진세율
-  let giftTax = 0;
-  if (taxBase <= 100000000)       giftTax = taxBase * 0.1;
-  else if (taxBase <= 500000000)  giftTax = taxBase * 0.2 - 10000000;
-  else if (taxBase <= 1000000000) giftTax = taxBase * 0.3 - 60000000;
-  else if (taxBase <= 3000000000) giftTax = taxBase * 0.4 - 160000000;
-  else                            giftTax = taxBase * 0.5 - 460000000;
-
-  // 기납부 증여세 차감 (5구간 누진세율 동일 적용)
   let priorGiftTax = 0;
   if (aggregatePriorGifts && Number.isFinite(Number(confirmedPriorGiftTax))) {
     priorGiftTax = Math.max(0, Number(confirmedPriorGiftTax));
-  } else if (aggregatePriorGifts && priorGifts <= 100000000)       priorGiftTax = priorGifts * 0.1;
-  else if (aggregatePriorGifts && priorGifts <= 500000000)  priorGiftTax = priorGifts * 0.2 - 10000000;
-  else if (aggregatePriorGifts && priorGifts <= 1000000000) priorGiftTax = priorGifts * 0.3 - 60000000;
-  else if (aggregatePriorGifts && priorGifts <= 3000000000) priorGiftTax = priorGifts * 0.4 - 160000000;
-  else if (aggregatePriorGifts)      priorGiftTax = priorGifts * 0.5 - 460000000;
+  } else if (aggregatePriorGifts) {
+    priorGiftTax = _giftTaxProgressive(priorGifts, __officialRules);
+  }
 
-  const finalGiftTax  = Math.max(0, giftTax - priorGiftTax);
-  const localTax      = 0; // 증여세는 지방소득세 과세대상이 아님
-
-  // 조세회피 목적은 증여의제 적용 판단요소이며 가산세액을 자동 확정하는 입력이 아니다.
+  const finalGiftTax = Math.max(0, giftTax - priorGiftTax);
+  const localTax = 0; // 증여세는 지방소득세 과세대상이 아님
   const penaltyTax = Number.isFinite(Number(confirmedPenaltyAmount))
     ? Math.max(0, Number(confirmedPenaltyAmount)) : 0;
   const totalBurden = finalGiftTax + localTax + penaltyTax;
   const nomineeWarnings = [];
   if (!aggregatePriorGifts && priorGifts > 0) nomineeWarnings.push('명의신탁 증여의제의 과거 증여 합산 여부가 확인되지 않아 priorGifts를 과세표준에 합산하지 않았습니다.');
-  if (aggregatePriorGifts && !Number.isFinite(Number(confirmedPriorGiftTax))) nomineeWarnings.push('과거 증여세액이 확인되지 않아 누진세액 차감 방식으로 추정했습니다.');
+  if (aggregatePriorGifts && !Number.isFinite(Number(confirmedPriorGiftTax))) nomineeWarnings.push('과거 증여세액이 확인되지 않아 동일 OFFICIAL_RULE 누진세율로 추정했습니다.');
   if (!Number.isFinite(Number(confirmedPenaltyAmount))) nomineeWarnings.push('가산세는 신고내용·부정행위·경과일수 확인이 필요하여 자동 가산하지 않았습니다.');
 
   return {
-    stockValue:       Math.round(stockValue),
-    taxBase:          Math.round(taxBase),
-    giftTax:          Math.round(giftTax),
-    finalGiftTax:     Math.round(finalGiftTax),
-    localTax:         Math.round(localTax),
-    penaltyTax:       Math.round(penaltyTax),
+    stockValue: Math.round(stockValue),
+    taxBase: Math.round(taxBase),
+    giftTax: Math.round(giftTax),
+    finalGiftTax: Math.round(finalGiftTax),
+    localTax: Math.round(localTax),
+    penaltyTax: Math.round(penaltyTax),
     aggregatePriorGifts,
-    totalBurden:      Math.round(totalBurden),
+    totalBurden: Math.round(totalBurden),
     hasEvasionIntent,
-    riskLevel:        hasEvasionIntent ? '고위험(조세회피 목적 추정)' : '중위험',
+    riskLevel: hasEvasionIntent ? '고위험(조세회피 목적 추정)' : '중위험',
     calculated: true,
     estimateOnly: true,
+    officialRuleApplied: Boolean(_officialRuleValue(__officialRules, 'GIFT_TAX_BRACKETS')),
     warnings: nomineeWarnings,
     note: '명의신탁 증여의제 적용 여부, 과거 증여 합산, 신고세액공제 및 가산세는 사실관계별 확인이 필요합니다.',
     summary: `명의신탁 주식 ${Math.round(stockValue).toLocaleString()}원 → 증여의제 세부담 ${Math.round(totalBurden).toLocaleString()}원 (가산세 ${Math.round(penaltyTax).toLocaleString()}원 포함)`,
@@ -5727,85 +6137,105 @@ function calcSocialInsuranceCorp(params) {
     totalMonthlySalary = 0,
     monthlySalaries,
     numEmployees = Array.isArray(monthlySalaries) ? monthlySalaries.length : 1,
-    industry = 'general',
     effectiveDate,
     effectivePeriod,
     taxableIncomeBefore,
     confirmedMarginalRate,
+    confirmedEmployerEmploymentAdditionalRate,
+    confirmedWorkersCompRate,
+    workforceScale,
     taxYear = new Date().getFullYear(),
     corpType = 'sme',
     isSME = true,
+    __officialRules = {},
   } = params || {};
 
-  const accidentRates = { general: 0.007, manufacturing: 0.014, construction: 0.036 };
-  const accidentRate = accidentRates[industry] || 0.007;
   const period = effectiveDate || effectivePeriod;
-  const npCap = _npsMonthlyCap(period);
+  const npsRule = _officialRuleValue(__officialRules, 'NATIONAL_PENSION_CONTRIBUTION');
+  const healthRule = _officialRuleValue(__officialRules, 'HEALTH_LONG_TERM_CARE_RATES');
+  const employmentRule = _officialRuleValue(__officialRules, 'EMPLOYMENT_INSURANCE_RATES');
+  const npMin = Number(npsRule?.monthlyMin) || 0;
+  const npCap = Number(npsRule?.monthlyMax) || _npsMonthlyCap(period);
+  const npEmployerRate = Number(npsRule?.employerRate) || 0.0475;
+  const healthEmployerRate = Number(healthRule?.employerHealthRate) || 0.03595;
+  const ltcRatio = Number(healthRule?.longTermCareToHealthRatio) || (0.9448 / 7.19);
+  const employerUnemploymentRate = Number(employmentRule?.employerUnemploymentRate) || 0.009;
+
   const salaryList = Array.isArray(monthlySalaries)
     ? monthlySalaries.map(Number).filter(Number.isFinite).map(value => Math.max(0, value))
     : null;
-  const payroll = salaryList ? salaryList.reduce((sum, value) => sum + value, 0) : Math.max(0, totalMonthlySalary);
+  const payroll = salaryList ? salaryList.reduce((sum, value) => sum + value, 0) : Math.max(0, Number(totalMonthlySalary) || 0);
   const npAssessmentBase = salaryList
-    ? salaryList.reduce((sum, value) => sum + Math.min(value, npCap), 0)
+    ? salaryList.reduce((sum, value) => value <= 0 ? sum : sum + Math.min(Math.max(value, npMin), npCap), 0)
     : payroll;
 
-  const npEmployer = Math.round(npAssessmentBase * 0.0475);
-  const hiEmployer = Math.round(payroll * 0.03595);
-  const ltcEmployer = Math.round(hiEmployer * 0.1314);
-  const eiEmployer = Math.round(payroll * 0.009);
-  const wcEmployer = Math.round(payroll * accidentRate);
-  const monthlyBurden = npEmployer + hiEmployer + ltcEmployer + eiEmployer + wcEmployer;
+  let employerAdditionalRate = null;
+  if (Number.isFinite(Number(confirmedEmployerEmploymentAdditionalRate))) {
+    employerAdditionalRate = Math.max(0, Number(confirmedEmployerEmploymentAdditionalRate));
+    if (employerAdditionalRate > 1) employerAdditionalRate /= 100;
+  } else {
+    const map = employmentRule?.employerStabilizationTrainingRates || {};
+    if (workforceScale && Number.isFinite(Number(map[workforceScale]))) employerAdditionalRate = Number(map[workforceScale]);
+  }
+  let workersCompRate = null;
+  if (Number.isFinite(Number(confirmedWorkersCompRate))) {
+    workersCompRate = Math.max(0, Number(confirmedWorkersCompRate));
+    if (workersCompRate > 1) workersCompRate /= 100;
+  }
+
+  const npEmployer = Math.round(npAssessmentBase * npEmployerRate);
+  const hiEmployer = Math.round(payroll * healthEmployerRate);
+  const ltcEmployer = Math.round(hiEmployer * ltcRatio);
+  const eiEmployer = Math.round(payroll * employerUnemploymentRate);
+  const employmentAdditional = employerAdditionalRate == null ? 0 : Math.round(payroll * employerAdditionalRate);
+  const workersComp = workersCompRate == null ? 0 : Math.round(payroll * workersCompRate);
+  const monthlyBurden = npEmployer + hiEmployer + ltcEmployer + eiEmployer + employmentAdditional + workersComp;
   const annualBurden = monthlyBurden * 12;
+  const burdenComplete = employerAdditionalRate != null && workersCompRate != null;
   const actualEmployees = salaryList ? salaryList.length : numEmployees;
   const avgMonthly = actualEmployees > 0 ? Math.round(monthlyBurden / actualEmployees) : 0;
 
   let taxSaving;
+  let taxSavingNational = null;
+  let taxSavingLocal = null;
   let marginalRateUsed;
-  if (Number.isFinite(Number(confirmedMarginalRate))) {
+  if (Number.isFinite(Number(taxableIncomeBefore)) && Number(taxableIncomeBefore) > 0) {
+    const beforeBase = Number(taxableIncomeBefore);
+    const delta = _corpTotalTaxDelta(beforeBase, Math.max(0, beforeBase - annualBurden), isSME, taxYear, corpType, __officialRules);
+    taxSavingNational = delta.national;
+    taxSavingLocal = delta.local;
+    taxSaving = delta.total;
+    marginalRateUsed = null;
+  } else if (Number.isFinite(Number(confirmedMarginalRate))) {
     marginalRateUsed = Math.max(0, Number(confirmedMarginalRate));
     if (marginalRateUsed > 1) marginalRateUsed /= 100;
-    taxSaving = annualBurden * marginalRateUsed * 1.1;
-  } else if (Number.isFinite(Number(taxableIncomeBefore)) && Number(taxableIncomeBefore) > 0) {
-    const before = _corpTax(Number(taxableIncomeBefore), isSME, taxYear, corpType);
-    const after = _corpTax(Math.max(0, Number(taxableIncomeBefore) - annualBurden), isSME, taxYear, corpType);
-    taxSaving = (before - after) * 1.1;
-    marginalRateUsed = null;
+    // 확인 한계세율이 국세+지방세 합산인지 알 수 없으므로 사용자가 준 확인값 자체만 적용한다.
+    taxSaving = annualBurden * marginalRateUsed;
   } else {
     marginalRateUsed = null;
     taxSaving = null;
   }
   const warnings = [];
-  if (!salaryList) warnings.push('직원별 월급여가 없어 국민연금 개인별 상한을 적용하지 못한 총급여 기준 추정치입니다.');
+  if (!salaryList) warnings.push('직원별 월급여가 없어 국민연금 개인별 하한·상한을 정확히 적용할 수 없는 총급여 기준 추정치입니다.');
+  if (employerAdditionalRate == null) warnings.push('고용안정·직업능력개발 사업주 추가요율은 사업장 규모 확인값이 없어 합산하지 않았습니다.');
+  if (workersCompRate == null) warnings.push('산재보험료율은 업종명만으로 임의 추정하지 않았습니다. 실제 사업장 산재보험료율을 입력해야 합니다.');
   if (taxSaving === null) warnings.push('과세표준 또는 확인된 한계세율이 없어 사회보험료 손금산입에 따른 법인세 절감액은 계산하지 않았습니다.');
-  warnings.push('고용보험 사업주 추가요율과 산재보험 개별실적요율 등은 실제 사업장 요율에 따라 달라질 수 있습니다.');
+  else if (taxSavingLocal !== null && __officialRules.CORPORATE_LOCAL_INCOME_TAX_BRACKETS?.ordinanceAdjustmentPossible) warnings.push('법인지방소득세 절감액은 지방세법 표준세율 기준이며 납세지 조례의 세율 가감 여부는 별도 확인해야 합니다.');
 
   return {
     calculated: true,
-    totalMonthlySalary: Math.round(payroll),
-    numEmployees: actualEmployees,
-    effectivePeriod: _effectiveYyyymm(period),
-    nationalPensionCap: npCap,
-    taxYear: Number(taxYear),
-    corpType,
-    monthly: {
-      nationalPension: npEmployer,
-      healthInsurance: hiEmployer,
-      longTermCare: ltcEmployer,
-      employment: eiEmployer,
-      accident: wcEmployer,
-      total: monthlyBurden,
-    },
-    annualBurden: Math.round(annualBurden),
-    avgMonthly,
-    taxSaving: taxSaving === null ? null : Math.round(taxSaving),
-    taxSavingCalculated: taxSaving !== null,
-    marginalRateUsed,
-    netAnnualBurden: taxSaving === null ? null : Math.round(annualBurden - taxSaving),
-    estimateOnly: warnings.length > 0,
-    warnings,
+    totalMonthlySalary: Math.round(payroll), numEmployees: actualEmployees,
+    effectivePeriod: _effectiveYyyymm(period), nationalPensionMin: npMin, nationalPensionCap: npCap,
+    taxYear: Number(taxYear), corpType,
+    monthly: { nationalPension: npEmployer, healthInsurance: hiEmployer, longTermCare: ltcEmployer, employment: eiEmployer, employmentAdditional, accident: workersCompRate == null ? null : workersComp, totalKnown: monthlyBurden, total: monthlyBurden, complete: burdenComplete },
+    annualBurden: Math.round(annualBurden), annualBurdenComplete: burdenComplete, avgMonthly,
+    taxSaving: taxSaving === null ? null : Math.round(taxSaving), taxSavingNational: taxSavingNational === null ? null : Math.round(taxSavingNational), taxSavingLocal: taxSavingLocal === null ? null : Math.round(taxSavingLocal), taxSavingCalculated: taxSaving !== null,
+    marginalRateUsed, netAnnualBurden: taxSaving === null ? null : Math.round(annualBurden - taxSaving),
+    officialRuleApplied: Boolean(npsRule || healthRule || employmentRule),
+    estimateOnly: warnings.length > 0, warnings,
     summary: taxSaving === null
-      ? `직원 ${actualEmployees}명 월 급여 ${Math.round(payroll).toLocaleString()}원 → 사업주 4대보험 연 ${Math.round(annualBurden).toLocaleString()}원 (세후 실부담은 과세표준 확인 필요)`
-      : `직원 ${actualEmployees}명 월 급여 ${Math.round(payroll).toLocaleString()}원 → 사업주 4대보험 연 ${Math.round(annualBurden).toLocaleString()}원 (세금절감 후 실부담 ${Math.round(annualBurden - taxSaving).toLocaleString()}원)`,
+      ? `직원 ${actualEmployees}명 월 급여 ${Math.round(payroll).toLocaleString()}원 → 확인가능 사업주 사회보험 연 ${Math.round(annualBurden).toLocaleString()}원 (산재·추가 고용보험요율 및 세후 실부담 확인 필요)`
+      : `직원 ${actualEmployees}명 월 급여 ${Math.round(payroll).toLocaleString()}원 → 확인가능 사업주 사회보험 연 ${Math.round(annualBurden).toLocaleString()}원 (법인세·법인지방소득세 표준세율 절감 추정 후 ${Math.round(annualBurden - taxSaving).toLocaleString()}원)`,
   };
 }
 
@@ -5838,6 +6268,8 @@ function calcWelfareFund(params) {
     deductibilityConfirmed = false,
     confirmedDeductibleAmount,
     confirmedMarginalRate,
+    confirmedLocalMarginalRate,
+    __officialRules = {},
   } = params || {};
 
   const amount = Number(outputAmount);
@@ -5859,16 +6291,24 @@ function calcWelfareFund(params) {
   let taxAfter = null;
   let taxSaving = null;
   let rateUsed = null;
-  if (confirmedDeductible !== null && Number.isFinite(Number(confirmedMarginalRate))) {
-    rateUsed = Math.max(0, Number(confirmedMarginalRate));
-    if (rateUsed > 1) rateUsed /= 100;
-    taxSaving = confirmedDeductible * rateUsed * 1.1;
-  } else if (confirmedDeductible !== null && incomeKnown) {
+  if (confirmedDeductible !== null && incomeKnown) {
     const beforeIncome = Math.max(0, Number(taxableIncomeBefore));
     taxableAfter = Math.max(0, beforeIncome - confirmedDeductible);
-    taxBefore = _corpTax(beforeIncome, isSME, taxYear, corpType) * 1.1;
-    taxAfter = _corpTax(taxableAfter, isSME, taxYear, corpType) * 1.1;
+    taxBefore = _corpTotalTax(beforeIncome, isSME, taxYear, corpType, __officialRules).total;
+    taxAfter = _corpTotalTax(taxableAfter, isSME, taxYear, corpType, __officialRules).total;
     taxSaving = Math.max(0, taxBefore - taxAfter);
+  } else if (confirmedDeductible !== null && Number.isFinite(Number(confirmedMarginalRate))) {
+    rateUsed = Math.max(0, Number(confirmedMarginalRate));
+    if (rateUsed > 1) rateUsed /= 100;
+    let totalRate = rateUsed;
+    if (Number.isFinite(Number(confirmedLocalMarginalRate))) {
+      let localRate = Math.max(0, Number(confirmedLocalMarginalRate));
+      if (localRate > 1) localRate /= 100;
+      totalRate += localRate;
+    } else {
+      warnings.push('확인된 법인지방소득세 한계세율 또는 과세표준이 없어 절감액에는 국세 법인세만 반영했습니다.');
+    }
+    taxSaving = confirmedDeductible * totalRate;
   } else if (confirmedDeductible !== null) {
     warnings.push('출연 전 과세표준 또는 확인된 한계세율이 없어 법인세 절감액을 계산하지 않았습니다.');
   }
@@ -6100,6 +6540,8 @@ function calcHoldingCompany(params) {
     taxYear          = new Date().getFullYear(),
     useTransitionalHoldingRule = false,
     confirmedExemptRatio = null,
+    confirmedLocalMarginalRate,
+    __officialRules = {},
   } = params || {};
 
   const ratio = Math.min(1, Math.max(0, Number(ownershipRatio) || 0));
@@ -6133,24 +6575,30 @@ function calcHoldingCompany(params) {
   let taxWithout = null;
   let taxWith = null;
   let taxSaving = null;
-  if (_isProvidedFinite(params && params.confirmedMarginalRate)) {
-    const rate = Math.min(1, Math.max(0, Number(params.confirmedMarginalRate)));
-    taxWithout = received * rate * 1.1;
-    taxWith = taxableAmount * rate * 1.1;
-    taxSaving = taxWithout - taxWith;
-  } else if (_isProvidedFinite(params && params.taxableIncomeBefore)) {
+  if (_isProvidedFinite(params && params.taxableIncomeBefore)) {
     const beforeIncome = Math.max(0, Number(params.taxableIncomeBefore));
     const isSME = (params && params.isSME) !== false;
     const type = (params && params.corpType) || 'sme';
-    taxWithout = (_corpTax(beforeIncome + received, isSME, taxYear, type) - _corpTax(beforeIncome, isSME, taxYear, type)) * 1.1;
-    taxWith = (_corpTax(beforeIncome + taxableAmount, isSME, taxYear, type) - _corpTax(beforeIncome, isSME, taxYear, type)) * 1.1;
+    const taxBaseNoExemption = _corpTotalTax(beforeIncome + received, isSME, taxYear, type, __officialRules).total;
+    const taxBaseWithExemption = _corpTotalTax(beforeIncome + taxableAmount, isSME, taxYear, type, __officialRules).total;
+    const taxBaseBefore = _corpTotalTax(beforeIncome, isSME, taxYear, type, __officialRules).total;
+    taxWithout = Math.max(0, taxBaseNoExemption - taxBaseBefore);
+    taxWith = Math.max(0, taxBaseWithExemption - taxBaseBefore);
+    taxSaving = Math.max(0, taxWithout - taxWith);
+  } else if (_isProvidedFinite(params && params.confirmedMarginalRate)) {
+    const rate = Math.min(1, Math.max(0, Number(params.confirmedMarginalRate)));
+    let totalRate = rate;
+    if (_isProvidedFinite(confirmedLocalMarginalRate)) totalRate += Math.min(1, Math.max(0, Number(confirmedLocalMarginalRate)));
+    else warnings.push('확인된 법인지방소득세 한계세율 또는 과세표준이 없어 절감액에는 국세 법인세만 반영했습니다.');
+    taxWithout = received * totalRate;
+    taxWith = taxableAmount * totalRate;
     taxSaving = taxWithout - taxWith;
   } else if (params && Object.prototype.hasOwnProperty.call(params, 'corpTaxRate') && _isProvidedFinite(corpTaxRate)) {
     const rate = Math.min(1, Math.max(0, Number(corpTaxRate)));
-    taxWithout = received * rate * 1.1;
-    taxWith = taxableAmount * rate * 1.1;
+    taxWithout = received * rate;
+    taxWith = taxableAmount * rate;
     taxSaving = taxWithout - taxWith;
-    warnings.push('사용자가 명시한 단일 법인세율로 절세액을 계산했습니다.');
+    warnings.push('사용자가 명시한 단일 법인세율(국세)로 절세액을 계산했으며 법인지방소득세는 별도 확인이 필요합니다.');
   } else {
     warnings.push('과세표준 또는 확인된 한계세율이 없어 법인세 절감액은 계산하지 않았습니다.');
   }
@@ -6200,6 +6648,7 @@ function calcMergerTax(params) {
     deferYears,
     discountRate,
     confirmedDeferredTax,
+    __officialRules = {},
   } = params || {};
 
   const values = [bookValue, fairValue, paidInCapital];
@@ -6207,8 +6656,8 @@ function calcMergerTax(params) {
     return { calculated: false, calculator: 'calcMergerTax', missingInputs: [], invalidInputs: ['amount'], warnings: ['장부가액·시가·납입자본금은 0 이상의 유한한 숫자여야 합니다.'] };
   }
   const mergerGain = Math.max(0, Number(fairValue) - Number(bookValue));
-  const nonQualTax = _corpTax(mergerGain, isSME, taxYear, corpType);
-  const nonQualLocal = nonQualTax * 0.1;
+  const nonQualTax = _corpTax(mergerGain, isSME, taxYear, corpType, __officialRules);
+  const nonQualLocal = _corpLocalTax(mergerGain, taxYear, corpType, __officialRules);
   const nonQualTotal = nonQualTax + nonQualLocal;
 
   const warnings = [];
@@ -6423,8 +6872,12 @@ function _dividendTax(dividend, otherIncome) {
   return Math.round(nat * LOCAL);
 }
 // 공통: 증여세 누진세율(상증법 §26, 공제 전 산출세액)
-function _giftTaxProgressive(base) {
+function _giftTaxProgressive(base, officialRules = null) {
   if (base <= 0) return 0;
+  const official = _officialRuleValue(officialRules, 'GIFT_TAX_BRACKETS');
+  if (Array.isArray(official?.brackets) && official.brackets.length) {
+    return _progressiveByBrackets(base, official.brackets);
+  }
   if (base <= 100000000)   return base * 0.10;
   if (base <= 500000000)   return 10000000 + (base - 100000000) * 0.20;
   if (base <= 1000000000)  return 90000000 + (base - 500000000) * 0.30;
@@ -6538,7 +6991,7 @@ function calcInventionCompensation(params) {
  * @param {number} params.corpTaxableIncome - 법인 과세표준(원, 절감 한계세율용)
  */
 function calcPatentCapitalization(params) {
-  const { transferPrice = 0, otherIncome = 0, corpTaxableIncome = 0, taxYear = new Date().getFullYear(), corpType = 'sme' } = params || {};
+  const { transferPrice = 0, otherIncome = 0, corpTaxableIncome = 0, taxYear = new Date().getFullYear(), corpType = 'sme', __officialRules = {} } = params || {};
   const LOCAL = 1.1;
   const otherIncomeAmt = Math.round(transferPrice * 0.4); // 기타소득금액 = 양도가 × 40%(필요경비 60%)
 
@@ -6554,8 +7007,9 @@ function calcPatentCapitalization(params) {
   }
 
   // 법인 감가상각 누적 절감(양도가 × 법인 한계세율, 지방포함)
-  const corpMarginal = (_corpTax(corpTaxableIncome + 1000000, true, taxYear, corpType) - _corpTax(corpTaxableIncome, true, taxYear, corpType)) / 1000000;
-  const corpTaxSaving = Math.round(transferPrice * corpMarginal * LOCAL);
+  const corpTaxBase = Math.max(0, Number(corpTaxableIncome) || 0);
+  const corpMarginal = (_corpTotalTax(corpTaxBase + 1000000, true, taxYear, corpType, __officialRules).total - _corpTotalTax(corpTaxBase, true, taxYear, corpType, __officialRules).total) / 1000000;
+  const corpTaxSaving = Math.round(transferPrice * corpMarginal);
 
   // 같은 금액을 급여로 인출 시 개인 세부담(비교)
   const salaryTax = Math.round(Math.max(0, _incomeTax(otherIncome + transferPrice) - _incomeTax(otherIncome)) * LOCAL);
@@ -6592,13 +7046,12 @@ function calcPatentCapitalization(params) {
  * @param {boolean} params.isSME           - 중소기업 여부(true=100% 한도)
  */
 function calcCarryforwardLoss(params) {
-  const { carryforwardLoss = 0, currentIncome = 0, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme' } = params || {};
-  const LOCAL = 1.1;
+  const { carryforwardLoss = 0, currentIncome = 0, isSME = true, taxYear = new Date().getFullYear(), corpType = 'sme', __officialRules = {} } = params || {};
 
   const deductLimit = isSME ? currentIncome : Math.floor(currentIncome * 0.8); // 공제한도
   const actualDeduction = Math.max(0, Math.min(carryforwardLoss, deductLimit));  // 실제 공제액
   const taxBaseAfter = currentIncome - actualDeduction;                          // 공제 후 과세표준
-  const taxSaving = Math.round(Math.max(0, _corpTax(currentIncome, isSME, taxYear, corpType) - _corpTax(taxBaseAfter, isSME, taxYear, corpType)) * LOCAL); // 법인세 절감(지방포함)
+  const taxSaving = Math.round(_corpTotalTaxDelta(currentIncome, taxBaseAfter, isSME, taxYear, corpType, __officialRules).total); // 법인세+법인지방소득세 절감
   const remainingLoss = Math.max(0, carryforwardLoss - actualDeduction);         // 잔여 이월결손금
 
   return {
@@ -6704,8 +7157,35 @@ module.exports = {
 // ═══════════════════════════════════════════════════════════
 // 유틸: 소득세 누진세율 (소득세법 제55조)
 // ═══════════════════════════════════════════════════════════
-function _incomeTax(taxBase) {
+function _ruleValue(rules, key) {
+  return rules && rules[key] && typeof rules[key] === 'object' ? rules[key] : null;
+}
+
+function _progressiveByBrackets(taxBase, brackets) {
+  let remaining = Math.max(0, Number(taxBase) || 0);
+  let prevCap = 0;
+  let tax = 0;
+  for (const b of Array.isArray(brackets) ? brackets : []) {
+    const rate = Number(b?.rate);
+    if (!Number.isFinite(rate) || rate < 0) continue;
+    const cap = b?.cap == null ? Infinity : Number(b.cap);
+    const taxable = Math.min(remaining, cap - prevCap);
+    if (taxable <= 0) break;
+    tax += taxable * rate;
+    remaining -= taxable;
+    prevCap = cap;
+    if (remaining <= 0) break;
+  }
+  return Math.round(tax);
+}
+
+// 유틸: 소득세 누진세율 (소득세법 제55조) — OFFICIAL_RULE 우선
+function _incomeTax(taxBase, officialRules = null) {
   if (taxBase <= 0) return 0;
+  const official = _ruleValue(officialRules, 'INCOME_TAX_BRACKETS');
+  if (Array.isArray(official?.brackets) && official.brackets.length) {
+    return _progressiveByBrackets(taxBase, official.brackets);
+  }
   if (taxBase <= 14000000)   return taxBase * 0.06;
   if (taxBase <= 50000000)   return taxBase * 0.15 - 1260000;
   if (taxBase <= 88000000)   return taxBase * 0.24 - 5760000;
@@ -6716,9 +7196,13 @@ function _incomeTax(taxBase) {
   return taxBase * 0.45 - 65940000;
 }
 
-// 유틸: 상속·증여세 누진세율 (상속세및증여세법 제26조)
-function _giftTax(taxBase) {
+// 유틸: 상속·증여세 누진세율 — OFFICIAL_RULE 우선
+function _giftTax(taxBase, officialRules = null) {
   if (taxBase <= 0) return 0;
+  const official = _ruleValue(officialRules, 'GIFT_TAX_BRACKETS');
+  if (Array.isArray(official?.brackets) && official.brackets.length) {
+    return _progressiveByBrackets(taxBase, official.brackets);
+  }
   if (taxBase <= 100000000)   return taxBase * 0.1;
   if (taxBase <= 500000000)   return taxBase * 0.2 - 10000000;
   if (taxBase <= 1000000000)  return taxBase * 0.3 - 60000000;
@@ -7345,38 +7829,53 @@ function calcDeemedInterestFull(params) {
   const {
     loanAmount       = 0,
     actualRate       = 0,
-    deemedRate       = 0.046,
+    deemedRate,
     ceoSalary        = 0,
     ceoOtherIncome   = 0,
     shareRatio       = 1.0,
     corpTaxableIncome = 0,
     corpType         = 'sme',   // 'sme'|'general'|'sme_realty'
+    confirmedAdditionalSocialInsurance,
+    confirmedDividendTax,
+    confirmedCorpTaxOnDividend,
+    confirmedTreasuryTax,
+    confirmedRealEstateTransferTax,
+    confirmedAcquisitionTax,
+    __officialRules = {},
   } = params || {};
 
-  if (![loanAmount, actualRate, deemedRate, ceoSalary, ceoOtherIncome, shareRatio, corpTaxableIncome].every(value => Number.isFinite(Number(value)))) {
+  const deemedRule = _ruleValue(__officialRules, 'DEEMED_INTEREST_RATE');
+  const explicitDeemedRate = deemedRate !== undefined && deemedRate !== null && !(typeof deemedRate === 'string' && deemedRate.trim() === '')
+    && Number.isFinite(Number(deemedRate));
+  const selectedDeemedRate = explicitDeemedRate ? Number(deemedRate) : (Number.isFinite(Number(deemedRule?.overdraftLoanRate)) ? Number(deemedRule.overdraftLoanRate) : null);
+
+  if (selectedDeemedRate === null) {
+    return { calculated: false, missingInputs: ['deemedRate|OFFICIAL_RULE.DEEMED_INTEREST_RATE'], invalidInputs: [], warnings: ['확인된 인정이자율 또는 공식 Rule이 없어 4.6%를 임의 적용하지 않았습니다.'] };
+  }
+  if (![loanAmount, actualRate, selectedDeemedRate, ceoSalary, ceoOtherIncome, shareRatio, corpTaxableIncome].every(value => Number.isFinite(Number(value)))) {
     return { calculated: false, missingInputs: [], invalidInputs: ['numericInputs'], warnings: ['가지급금 계산 입력은 유한한 숫자여야 합니다.'] };
   }
-  if (loanAmount < 0 || actualRate < 0 || deemedRate < 0 || shareRatio < 0 || shareRatio > 1) {
+  if (loanAmount < 0 || actualRate < 0 || selectedDeemedRate < 0 || shareRatio < 0 || shareRatio > 1) {
     return { calculated: false, missingInputs: [], invalidInputs: ['loanAmount/rates/shareRatio'], warnings: ['가지급금 잔액·이자율은 음수가 아니어야 하며 지분율은 0~1이어야 합니다.'] };
   }
 
   // ── 현황 진단 ──
   const actualInterest = Math.round(loanAmount * actualRate);
-  const deemedInterest = Math.round(loanAmount * deemedRate);
+  const deemedInterest = Math.round(loanAmount * selectedDeemedRate);
   const difference = Math.max(0, deemedInterest - actualInterest);
 
   // 상여처분 시 세부담 (차액이 대표이사 근로소득에 가산)
   const totalIncome = ceoSalary + ceoOtherIncome + difference;
-  const taxOnTotal = _incomeTax(totalIncome) * 1.1; // 지방세 포함
-  const taxWithout = _incomeTax(ceoSalary + ceoOtherIncome) * 1.1;
+  const taxOnTotal = _incomeTax(totalIncome, __officialRules) * 1.1; // 지방세 포함
+  const taxWithout = _incomeTax(ceoSalary + ceoOtherIncome, __officialRules) * 1.1;
   const additionalIncomeTax = Math.round(taxOnTotal - taxWithout);
 
-  // 4대보험 추가 부담 (상여처분분에 대해 약 9.5% 사업주+근로자 합산)
-  const insuranceCap = 120000000; // 건보 상한
-  const insurableAmount = Math.min(difference, Math.max(0, insuranceCap - ceoSalary));
-  const additionalInsurance = Math.round(insurableAmount * 0.095);
-
-  const annualBurden = additionalIncomeTax + additionalInsurance;
+  // 상여처분에 따른 사회보험 추가부담은 보수월액 상·하한, 가입자 지위, 정산방식 등 사실관계가 필요하다.
+  // 확인값이 없으면 임의의 일괄요율을 적용하지 않는다.
+  const additionalInsurance = Number.isFinite(Number(confirmedAdditionalSocialInsurance))
+    ? Math.max(0, Math.round(Number(confirmedAdditionalSocialInsurance)))
+    : null;
+  const annualBurden = additionalInsurance === null ? null : additionalIncomeTax + additionalInsurance;
 
   // ── 정리 방안별 비교 ──
 
@@ -7387,8 +7886,8 @@ function calcDeemedInterestFull(params) {
     const years = Math.ceil(loanAmount / annualRepay * 10) / 10;
     // 상환 급여에 대한 소득세 추가분
     const newTotalIncome = ceoSalary + ceoOtherIncome + annualRepay;
-    const taxNew = _incomeTax(newTotalIncome) * 1.1;
-    const taxOld = _incomeTax(ceoSalary + ceoOtherIncome) * 1.1;
+    const taxNew = _incomeTax(newTotalIncome, __officialRules) * 1.1;
+    const taxOld = _incomeTax(ceoSalary + ceoOtherIncome, __officialRules) * 1.1;
     const additionalTax = Math.round(taxNew - taxOld);
     return {
       monthlyAmount: monthly,
@@ -7399,71 +7898,100 @@ function calcDeemedInterestFull(params) {
     };
   });
 
-  // 방안2: 배당 상계
+  // 방안2: 배당 상계 — 금융소득 Rule을 사용하되 배당가산·배당세액공제 요건은 확인 전 자동 가정하지 않는다.
   const dividendAmount = loanAmount;
+  const financialRule = _ruleValue(__officialRules, 'FINANCIAL_INCOME_AGGREGATION') || {};
+  const threshold = Number(financialRule.aggregationThreshold ?? 20000000);
+  const nationalWithholding = Number(financialRule.standardNationalWithholdingRate ?? 0.14);
+  const localSurtaxRate = Number(financialRule.localIncomeTaxSurtaxRate ?? 0.10);
   let dividendTax;
-  if (dividendAmount <= 20000000) {
-    dividendTax = Math.round(dividendAmount * 0.154); // 15.4% 분리과세
+  let dividendTaxEstimated = false;
+  if (Number.isFinite(Number(confirmedDividendTax))) {
+    dividendTax = Math.max(0, Math.round(Number(confirmedDividendTax)));
+  } else if (dividendAmount <= threshold) {
+    dividendTax = Math.round(dividendAmount * nationalWithholding * (1 + localSurtaxRate));
+    dividendTaxEstimated = true;
   } else {
-    // 종합과세: Gross-up (배당가산 11%)
-    const grossUp = dividendAmount * 0.11;
-    const grossIncome = ceoSalary + ceoOtherIncome + dividendAmount + grossUp;
-    dividendTax = Math.round((_incomeTax(grossIncome) - _incomeTax(ceoSalary + ceoOtherIncome)) * 1.1);
+    const baseNational = _incomeTax(ceoSalary + ceoOtherIncome, __officialRules);
+    const method1 = _incomeTax(ceoSalary + ceoOtherIncome + dividendAmount - threshold, __officialRules) + threshold * nationalWithholding;
+    const method2 = baseNational + dividendAmount * nationalWithholding;
+    const attributableNational = Math.max(0, Math.max(method1, method2) - baseNational);
+    dividendTax = Math.round(attributableNational * (1 + localSurtaxRate));
+    dividendTaxEstimated = true;
   }
-  // 배당 전 법인세 (배당재원 = 세후이익이어야 함) — 2026 기본세율 20% 기준 역산
-  const corpTaxOnDividend = Math.round(_estimateCorpTax(dividendAmount / (1 - 0.20), undefined, corpType) - _estimateCorpTax(0, undefined, corpType));
+  const corpTaxOnDividend = Number.isFinite(Number(confirmedCorpTaxOnDividend))
+    ? Math.max(0, Math.round(Number(confirmedCorpTaxOnDividend)))
+    : null;
 
-  // 방안3: 자기주식 취득 후 소각 (의제배당)
-  // 주주에게 취득대가 지급 → 의제배당 과세
-  const treasuryDividendTax = dividendTax; // 의제배당 세율은 배당과 동일
+  // 방안3: 자기주식 취득 후 소각 — 취득가액·소각재원·주주별 과세가 달라 확인세액 없이는 배당세와 동일시하지 않는다.
+  const treasuryDividendTax = Number.isFinite(Number(confirmedTreasuryTax))
+    ? Math.max(0, Math.round(Number(confirmedTreasuryTax)))
+    : null;
 
-  // 방안4: 부동산 현물출자 (대표 → 법인)
-  // 양도소득세 + 취득세 발생
-  const realEstateTransferTax = Math.round(loanAmount * 0.30); // 양도세 약 30% 추정
-  const acquisitionTax = Math.round(loanAmount * 0.046); // 취득세 4.6%
-  const realEstateTotalCost = realEstateTransferTax + acquisitionTax;
+  // 방안4: 부동산 현물출자 — 자산종류·취득원인·보유기간·감면요건에 따라 세율이 달라 확인세액만 사용한다.
+  const realEstateTransferTax = Number.isFinite(Number(confirmedRealEstateTransferTax))
+    ? Math.max(0, Math.round(Number(confirmedRealEstateTransferTax)))
+    : null;
+  const acquisitionTax = Number.isFinite(Number(confirmedAcquisitionTax))
+    ? Math.max(0, Math.round(Number(confirmedAcquisitionTax)))
+    : null;
+  const realEstateTotalCost = realEstateTransferTax === null || acquisitionTax === null
+    ? null : realEstateTransferTax + acquisitionTax;
 
   // ── 방안별 비교 정리 ──
   const plans = [
     {
       name: '급여 분할상환 (월500만원)',
       totalCost: salaryRepayPlans[1].totalCost,
+      costScope: '추가 소득세만',
+      costComplete: false,
       duration: salaryRepayPlans[1].completionYears + '년',
       pros: '점진적 정리, 현금흐름 부담 분산',
-      cons: '정리기간 중 인정이자 계속 발생',
+      cons: '사회보험·인정이자 지속분 등을 추가 확인해야 함',
     },
     {
       name: '배당 상계',
       totalCost: dividendTax,
+      costScope: dividendTaxEstimated ? '배당소득세 추정' : '확인된 배당세액',
+      costComplete: Number.isFinite(Number(confirmedDividendTax)) && corpTaxOnDividend !== null,
       duration: '즉시',
-      pros: '일시 정리 가능, 배당소득세율이 상여처분보다 낮을 수 있음',
-      cons: '배당재원(이익잉여금) 필요, 금융소득종합과세 주의',
+      pros: '일시 정리 가능',
+      cons: '배당가능이익·금융소득종합과세·배당세액공제 등을 확인해야 함',
     },
     {
       name: '자기주식 취득 후 소각',
       totalCost: treasuryDividendTax,
+      costScope: treasuryDividendTax === null ? '세액 미확인' : '확인된 세액',
+      costComplete: treasuryDividendTax !== null,
       duration: '즉시',
       pros: '자본 구조 정리 동시 가능',
-      cons: '절차 복잡, 상법상 자기주식 취득 제한',
+      cons: '취득가액·소각재원·상법 절차·부당행위 여부 확인 필요',
     },
     {
       name: '부동산 현물출자',
       totalCost: realEstateTotalCost,
+      costScope: realEstateTotalCost === null ? '양도세/취득세 미확인' : '확인된 세액 합계',
+      costComplete: realEstateTotalCost !== null,
       duration: '1~3개월',
-      pros: '법인 자산 확충, 감가상각 활용 가능',
-      cons: '양도세+취득세 이중부담, 적정 부동산 보유 시만 가능',
+      pros: '법인 자산 확충 가능',
+      cons: '자산별 양도세·취득세 및 적격 현물출자 요건 확인 필요',
     },
   ];
 
-  // 최적안 추천 (비용이 가장 낮은 방안)
-  plans.sort((a, b) => a.totalCost - b.totalCost);
+  // 서로 같은 범위의 확정 비용이 아니므로 확인 전 자동 순위·추천을 만들지 않는다.
+  const comparablePlans = plans.filter(x => x.costComplete && Number.isFinite(Number(x.totalCost)));
+
+  const officialWarnings = [];
+  if (!explicitDeemedRate) officialWarnings.push('인정이자율은 가중평균차입이자율 적용 여부를 먼저 확인해야 하며, 현재 계산은 OFFICIAL_RULE의 당좌대출이자율 대체기준을 사용했습니다.');
 
   return {
+    deemedRateUsed: selectedDeemedRate,
+    officialRuleApplied: Boolean(deemedRule),
     // 현황 진단
     diagnosis: {
       loanAmount,
       actualRate,
-      deemedRate,
+      deemedRate: selectedDeemedRate,
       actualInterest:     Math.round(actualInterest),
       deemedInterest:     Math.round(deemedInterest),
       difference:         Math.round(difference),
@@ -7489,16 +8017,21 @@ function calcDeemedInterestFull(params) {
     },
     // 비교 요약
     planComparison: plans,
-    recommendation: `추정 최소비용안: ${plans[0].name}`,
-    lowestEstimatedCostOption: plans[0].name,
+    recommendation: comparablePlans.length >= 2 ? '확인된 동일범위 비용끼리 추가 비교 필요' : null,
+    lowestEstimatedCostOption: null,
     calculated: true,
     estimateOnly: true,
     warnings: [
-      '4대보험 추가부담률 9.5%, 부동산 양도세율 30%, 취득세율 4.6%는 단순 비교용 가정입니다.',
+      ...officialWarnings,
+      ...(additionalInsurance === null ? ['상여처분에 따른 사회보험 추가부담 확인값이 없어 임의 요율을 적용하지 않았습니다.'] : []),
+      ...(dividendTaxEstimated ? ['배당세액은 금융소득 일반 규칙에 따른 추정치이며 배당가산·배당세액공제 등 개별 요건은 미반영입니다.'] : []),
+      ...(corpTaxOnDividend === null ? ['배당재원 형성에 수반되는 법인세 귀속액은 확인값이 없어 별도 계산하지 않았습니다.'] : []),
+      ...(treasuryDividendTax === null ? ['자기주식 취득·소각 세액은 취득가액·소각재원 등 사실관계 미확인으로 자동 계산하지 않았습니다.'] : []),
+      ...(realEstateTotalCost === null ? ['부동산 현물출자의 양도세·취득세는 자산·요건별 세율이 달라 확인세액 없이는 자동 계산하지 않았습니다.'] : []),
       '배당·자기주식·현물출자는 배당가능이익, 상법 절차, 시가·부당행위계산 및 개인별 종합소득을 확인해야 합니다.',
-      '비용이 가장 낮은 안은 자동 추천이 아니라 입력 가정상 추정 최소비용안입니다.',
+      '서로 비용 범위가 다른 안을 단순 합계로 순위화하지 않으며, 확인 가능한 동일 범위의 세액·비용을 확보한 뒤 비교해야 합니다.',
     ],
-    summary: `가지급금 ${loanAmount.toLocaleString()}원 → 연간 추가 세부담 ${annualBurden.toLocaleString()}원 발생 중. 최적 정리방안: ${plans[0].name} (비용 ${plans[0].totalCost.toLocaleString()}원)`,
+    summary: `가지급금 ${loanAmount.toLocaleString()}원 → 인정이자 차액 ${difference.toLocaleString()}원. 사회보험·배당·자기주식·현물출자 세액의 확인 범위가 서로 달라 자동 최저비용 추천은 보류합니다.`,
   };
 }
 
@@ -7541,6 +8074,7 @@ function calcBusinessSuccession(params) {
     priorGifts      = 0,
     assetRequirementConfirmed = false,
     businessRequirementConfirmed = false,
+    __officialRules = {},
   } = params || {};
 
   if (![netAssets, earningsValue, totalShares, ceoShares, ceoAge, successorAge, yearsInBusiness, revenue, assetTotal, annualGrowth, priorGifts].every(value => Number.isFinite(Number(value)))) {
@@ -7551,26 +8085,36 @@ function calcBusinessSuccession(params) {
   }
 
   // ── 1. 현재 비상장주식 평가 (상증령 제54조) ──
+  const stockRule = _ruleValue(__officialRules, 'UNLISTED_STOCK_VALUATION');
+  const weights = industry === 'realty' ? stockRule?.realty : stockRule?.general;
   let ew, aw;
-  if (industry === 'realty') { ew = 2; aw = 3; }
+  if (weights && Number.isFinite(Number(weights.earningsWeight)) && Number.isFinite(Number(weights.assetWeight))) {
+    ew = Number(weights.earningsWeight);
+    aw = Number(weights.assetWeight);
+  } else if (industry === 'realty') { ew = 2; aw = 3; }
   else { ew = 3; aw = 2; }
+  const navFloorRatio = Number(stockRule?.navFloorRatio) || 0.8;
 
   // ★ 회사 전체 가치 가중평균
   const totalWeightedValue = (earningsValue * ew + netAssets * aw) / (ew + aw);
   // ★ 주당 가치 = 전체 가중평균 ÷ 총 발행주식수
   const safeTotalShares = Math.max(1, totalShares);
   const weightedValuePerShare = totalWeightedValue / safeTotalShares;
-  const floorPerShare = (netAssets * 0.8) / safeTotalShares;
+  const floorPerShare = (netAssets * navFloorRatio) / safeTotalShares;
   const perShareValue = Math.max(weightedValuePerShare, floorPerShare);
   // 대표 지분 평가액 = 주당가치 × 대표 보유 주식수
   const ceoSharesValue = perShareValue * ceoShares;
   const totalValuation = perShareValue * safeTotalShares;
 
   // ── 2. 현재 일반증여 시 증여세 (상증법 §69 신고세액공제 3%) ──
-  const giftDeduction = 50000000; // 성인 직계비속 5천만원
+  const giftRule = _ruleValue(__officialRules, 'GIFT_TAX_DEDUCTIONS');
+  const creditRule = _ruleValue(__officialRules, 'INHERITANCE_GIFT_SURCHARGE_CREDIT');
+  const giftDeduction = Number(giftRule?.relation?.lineal_ascendant) || 50000000; // 부모→성년 자녀 기준
+  const filingCreditRate = Number(creditRule?.filingCreditRate);
+  const filingCredit = Number.isFinite(filingCreditRate) ? filingCreditRate : 0.03;
   const normalGiftBase = Math.max(0, ceoSharesValue - giftDeduction - priorGifts);
-  const _normalCalc = _giftTax(normalGiftBase);
-  const normalGiftTax = Math.round(Math.max(0, _normalCalc - _normalCalc * 0.03)); // 신고세액공제 3% 적용 (상속·증여세는 지방세 없음)
+  const _normalCalc = _giftTax(normalGiftBase, __officialRules);
+  const normalGiftTax = Math.round(Math.max(0, _normalCalc - _normalCalc * filingCredit)); // 신고세액공제 3% 적용 (상속·증여세는 지방세 없음)
 
   // ── 3. 가업승계 증여 특례 (조특법 §30조의6) ──
   // 요건 (2026-05-15 기준 현행):
@@ -7608,8 +8152,8 @@ function calcBusinessSuccession(params) {
     // 600억 초과분: 일반 증여세 추가 (신고세액공제 3% 적용)
     if (ceoSharesValue > successionLimit) {
       const excessBase = Math.max(0, ceoSharesValue - successionLimit - giftDeduction);
-      const _excess = _giftTax(excessBase);
-      excessGiftTax = Math.round(Math.max(0, _excess - _excess * 0.03));
+      const _excess = _giftTax(excessBase, __officialRules);
+      excessGiftTax = Math.round(Math.max(0, _excess - _excess * filingCredit));
     }
   }
   const totalSuccessionTax = successionTax + excessGiftTax;
@@ -7626,30 +8170,30 @@ function calcBusinessSuccession(params) {
   else inheritanceDeductionLimit = 0;
 
   // 상속 시 세금 (공제 전 vs 후) — 신고세액공제 3% 적용, 지방세 없음
-  const _itBefore = _giftTax(ceoSharesValue);
-  const inheritanceTaxBefore = Math.round(Math.max(0, _itBefore - _itBefore * 0.03));
+  const _itBefore = _giftTax(ceoSharesValue, __officialRules);
+  const inheritanceTaxBefore = Math.round(Math.max(0, _itBefore - _itBefore * filingCredit));
   const deductedAmount = Math.min(ceoSharesValue, inheritanceDeductionLimit);
-  const _itAfter = _giftTax(Math.max(0, ceoSharesValue - deductedAmount));
-  const inheritanceTaxAfter = Math.round(Math.max(0, _itAfter - _itAfter * 0.03));
+  const _itAfter = _giftTax(Math.max(0, ceoSharesValue - deductedAmount), __officialRules);
+  const inheritanceTaxAfter = Math.round(Math.max(0, _itAfter - _itAfter * filingCredit));
   const inheritanceSaving = inheritanceTaxBefore - inheritanceTaxAfter;
 
   // ── 5. 미래 주식가치 예측 (5년, 10년 후) — 신고세액공제 3% 적용, 지방세 없음 ──
   const futureValue5y  = Math.round(ceoSharesValue * Math.pow(1 + annualGrowth, 5));
   const futureValue10y = Math.round(ceoSharesValue * Math.pow(1 + annualGrowth, 10));
-  const _ft5  = _giftTax(Math.max(0, futureValue5y - giftDeduction));
-  const futureTax5y    = Math.round(Math.max(0, _ft5 - _ft5 * 0.03));
-  const _ft10 = _giftTax(Math.max(0, futureValue10y - giftDeduction));
-  const futureTax10y   = Math.round(Math.max(0, _ft10 - _ft10 * 0.03));
+  const _ft5  = _giftTax(Math.max(0, futureValue5y - giftDeduction), __officialRules);
+  const futureTax5y    = Math.round(Math.max(0, _ft5 - _ft5 * filingCredit));
+  const _ft10 = _giftTax(Math.max(0, futureValue10y - giftDeduction), __officialRules);
+  const futureTax10y   = Math.round(Math.max(0, _ft10 - _ft10 * filingCredit));
 
   // ── 6. 단계적 증여 전략 (신고세액공제 3% 적용, 지방세 없음) ──
   // 10년마다 5천만원 공제 활용: 지금 + 10년 후 분할 증여
   const halfShares = Math.floor(ceoShares / 2);
   const halfValue = perShareValue * halfShares;
-  const _g1 = _giftTax(Math.max(0, halfValue - giftDeduction));
-  const gift1st = Math.round(Math.max(0, _g1 - _g1 * 0.03));
+  const _g1 = _giftTax(Math.max(0, halfValue - giftDeduction), __officialRules);
+  const gift1st = Math.round(Math.max(0, _g1 - _g1 * filingCredit));
   const futureHalfValue = Math.round(halfValue * Math.pow(1 + annualGrowth, 10));
-  const _g2 = _giftTax(Math.max(0, futureHalfValue - giftDeduction));
-  const gift2nd = Math.round(Math.max(0, _g2 - _g2 * 0.03));
+  const _g2 = _giftTax(Math.max(0, futureHalfValue - giftDeduction), __officialRules);
+  const gift2nd = Math.round(Math.max(0, _g2 - _g2 * filingCredit));
   const splitTotal = gift1st + gift2nd;
   const splitSaving = normalGiftTax - splitTotal;
 
@@ -7706,10 +8250,12 @@ function calcBusinessSuccession(params) {
       savingVsNow: Math.round(splitSaving),
     },
     calculated: true,
+    officialRuleApplied: Boolean(stockRule || giftRule || creditRule || _ruleValue(__officialRules, 'GIFT_TAX_BRACKETS')),
     estimateOnly: true,
     warnings: [
       ...(!assetRequirementConfirmed ? ['자산총액 요건이 확인되지 않아 가업승계 증여특례 적격으로 판정하지 않았습니다.'] : []),
       ...(!businessRequirementConfirmed ? ['가업 업종·지분·대표자·수증자·사후관리 등 법정요건이 확인되지 않아 적격으로 판정하지 않았습니다.'] : []),
+      '가업승계 특례·가업상속공제의 복합 적격요건과 경과규정은 OFFICIAL_RULE 수치와 별개로 전문가 확인이 필요합니다.',
       '가업상속공제는 가업상속재산 비율, 피상속인·상속인 요건 및 사후관리 조건을 반영하지 않은 한도 시뮬레이션입니다.',
     ],
     summary: successionEligible
@@ -8700,6 +9246,8 @@ function _corporateTaxAdvancedInput(p) {
     taxableIncome: p.taxableIncome,
     taxYear: p.taxYear,
     corpType: p.corpType,
+    effectiveDate: _firstDefined(p.effectiveDate, p.baseDate, p.valuationDate),
+    __officialRules: p.__officialRules,
   }, _sectionInput(p, 'corporateTax'));
 }
 
@@ -8726,6 +9274,9 @@ function _inheritanceAdvancedInput(p) {
     debts: p.debts,
     valuationDate: p.valuationDate,
     taxYear: p.taxYear,
+    effectiveDate: _firstDefined(p.effectiveDate, p.inheritanceDate, p.deathDate, p.valuationDate),
+    inheritanceDate: p.inheritanceDate, deathDate: p.deathDate,
+    __officialRules: p.__officialRules,
   }, _sectionInput(p, 'inheritanceTax', ['inheritance']));
 }
 
@@ -8739,6 +9290,8 @@ function _unlistedAdvancedInput(p) {
     financialYear: p.financialYear,
     statementType: p.statementType,
     valuationDate: p.valuationDate,
+    effectiveDate: _firstDefined(p.effectiveDate, p.valuationDate),
+    __officialRules: p.__officialRules,
   }, _sectionInput(p, 'unlistedStock', ['unlistedStockValue']));
 }
 
@@ -8752,6 +9305,11 @@ function _socialInsurancePersonalAdvancedInput(p) {
     effectiveDate: p.effectiveDate,
     effectivePeriod: p.effectivePeriod,
     rateProfile: p.rateProfile,
+    workforceScale: p.workforceScale,
+    confirmedEmployerEmploymentAdditionalRate: p.confirmedEmployerEmploymentAdditionalRate,
+    confirmedWorkersCompRate: p.confirmedWorkersCompRate,
+    confirmedEmployeeSocialInsurance: p.confirmedEmployeeSocialInsurance,
+    __officialRules: p.__officialRules,
   }, _sectionInput(p, 'socialInsurance', ['socialInsurancePersonal']));
 }
 
@@ -8767,6 +9325,10 @@ function _socialInsuranceCorpAdvancedInput(p) {
     corpType: p.corpType,
     rateProfile: p.rateProfile,
     assessmentBaseProfile: p.assessmentBaseProfile,
+    workforceScale: p.workforceScale,
+    confirmedEmployerEmploymentAdditionalRate: p.confirmedEmployerEmploymentAdditionalRate,
+    confirmedWorkersCompRate: p.confirmedWorkersCompRate,
+    __officialRules: p.__officialRules,
   }, _sectionInput(p, 'socialInsuranceCorp'));
 }
 
@@ -9183,10 +9745,10 @@ Object.assign(_INTERNAL_CALCS, {
   calcKeyPersonLossNeed: input => _compatCall('keyPersonLossNeed', _allCalcs.calcCorpKeymanNeed, input, ['monthlyOperatingShortfall']),
   calcShareBuyoutNeed: _calcShareBuyoutNeed,
   calcDeemedLoanResolutionOptions: input => _compatCall('deemedLoanResolutionOptions', _allCalcs.calcDeemedInterestFull, input, ['loanAmount']),
-  calcOwnerCompensationMix: input => _compatCall('ownerCompensationMix', _allCalcs.calcSalaryVsDividend, {
+  calcOwnerCompensationMix: input => _compatCall('ownerCompensationMix', _allCalcs.calcSalaryVsDividend, _mergeDefined(input, {
     totalAmount: _firstDefined(input.totalAmount, input.ceoSalary, input.distributableAmount),
     corpTaxableIncome: _firstDefined(input.corpTaxableIncome, input.taxableIncome, 0),
-  }, ['totalAmount']),
+  }), ['totalAmount']),
   calcSuccessionFundingNeed: _calcSuccessionFundingNeed,
   validateFinancialStatements: _validateFinancialStatements,
   calcFinancialTrendAdvanced: _calcFinancialTrendAdvanced,
@@ -9464,9 +10026,14 @@ const RUN = {
     },
     pension: () => {
       const structured = _sectionInput(p, 'pension');
-      const base = Math.min(p.monthlySalary || 0, _resolveNpsMonthlyCap(p));
+      const npsRule = _isPlainObject(p.__officialRules) ? p.__officialRules.NATIONAL_PENSION_CONTRIBUTION : null;
+      const npsCap = Number(npsRule?.monthlyMax) || _resolveNpsMonthlyCap(p);
+      const npsMin = Number(npsRule?.monthlyMin) || 0;
+      const npsRate = Number(npsRule?.employeeRate) || 0.0475;
+      const rawSalary = Math.max(0, Number(p.monthlySalary) || 0);
+      const base = rawSalary > 0 ? Math.min(Math.max(rawSalary, npsMin), npsCap) : 0;
       const legacyInput = {
-        monthlyPmt: Math.round(base * 0.0475),
+        monthlyPmt: Math.round(base * npsRate),
         accumYears: Math.max(0, 65 - (p.age || 0)),
         receiveYears: (p.lifeExpectancy || 85) - 65,
       };
@@ -9483,7 +10050,7 @@ const RUN = {
       advancedFn: C.calcSocialInsurancePersonalAdvanced,
       advancedInput: _socialInsurancePersonalAdvancedInput(p),
       legacyFn: C.calcSocialInsurancePersonal,
-      legacyInput: { monthlySalary: p.monthlySalary, employeeType: 'employee' },
+      legacyInput: { monthlySalary: p.monthlySalary, employeeType: 'employee', effectiveDate: p.effectiveDate, workforceScale: p.workforceScale, confirmedEmployerEmploymentAdditionalRate: p.confirmedEmployerEmploymentAdditionalRate, confirmedWorkersCompRate: p.confirmedWorkersCompRate, confirmedEmployeeSocialInsurance: p.confirmedEmployeeSocialInsurance, __officialRules: p.__officialRules },
       legacyRequired: ['monthlySalary'],
       structuredAliases: ['socialInsurancePersonal'],
     }),
@@ -9580,7 +10147,7 @@ const RUN = {
     corporateTax: () => choose({
       name: 'corporateTax', advancedFn: C.calcCorporateTaxAdvanced,
       advancedInput: _corporateTaxAdvancedInput(p), legacyFn: C.calcCorporateTax,
-      legacyInput: { taxableIncome: p.taxableIncome, corpType: p.corpType || 'sme' },
+      legacyInput: { taxableIncome: p.taxableIncome, corpType: p.corpType || 'sme', taxYear: p.taxYear, effectiveDate: p.effectiveDate, __officialRules: p.__officialRules },
       legacyRequired: ['taxableIncome'],
     }),
     severanceTax: () => choose({
@@ -9598,9 +10165,10 @@ const RUN = {
       name: 'deemedInterest', advancedFn: C.calcDeemedInterestAdvanced,
       advancedInput: _deemedInterestAdvancedInput(p), legacyFn: C.calcDeemedInterest,
       legacyInput: {
-        loanAmount: p.loanAmount, interestRate: p.loanRate || 0, deemedRate: 0.046,
+        loanAmount: p.loanAmount, interestRate: p.loanRate || 0, deemedRate: p.deemedRate,
         corpTaxableIncome: p.taxableIncome, corpType: p.corpType || 'sme',
-        marginalRate: p.incomeMarginalRate,
+        marginalRate: p.incomeMarginalRate, taxYear: p.taxYear, effectiveDate: p.effectiveDate,
+        __officialRules: p.__officialRules,
       },
       legacyRequired: ['loanAmount'],
     }),
@@ -9625,7 +10193,7 @@ const RUN = {
         tryCalc('salaryVsDividend', C.calcOwnerCompensationMix, advancedInput, 'advanced');
       } else {
         tryCalc('salaryVsDividend', C.calcSalaryVsDividend,
-          { totalAmount: p.ceoSalary, corpTaxableIncome: p.taxableIncome || 0 },
+          { totalAmount: p.ceoSalary, corpTaxableIncome: p.taxableIncome || 0, otherIncome: p.otherIncome || 0, taxYear: p.taxYear, corpType: p.corpType || 'sme', effectiveDate: p.effectiveDate, confirmedDividendTax: p.confirmedDividendTax, confirmedEmployeeSocialInsurance: p.confirmedEmployeeSocialInsurance, salaryDeductibilityConfirmed: p.salaryDeductibilityConfirmed, corpTaxableIncomeBeforeSalaryConfirmed: p.corpTaxableIncomeBeforeSalaryConfirmed, __officialRules: p.__officialRules },
           'legacy');
       }
     },
@@ -9634,8 +10202,9 @@ const RUN = {
       advancedInput: _inheritanceAdvancedInput(p), legacyFn: C.calcInheritanceTax,
       legacyInput: {
         totalAssets: p.totalAssets, debts: p.debts || 0,
-        hasSpouse: p.hasSpouse !== false, numChildren: (p.numChildren != null ? p.numChildren : 2),
-        financialAssets: p.financialAssets || 0,
+        hasSpouse: typeof p.hasSpouse === 'boolean' ? p.hasSpouse : null, numChildren: p.numChildren,
+        financialAssets: p.financialAssets || 0, effectiveDate: _firstDefined(p.effectiveDate, p.inheritanceDate, p.deathDate, p.valuationDate),
+        majorShareholderSurchargeApplies: p.majorShareholderSurchargeApplies, __officialRules: p.__officialRules,
       },
       legacyRequired: ['totalAssets'], structuredAliases: ['inheritance'],
     }),
@@ -9652,7 +10221,7 @@ const RUN = {
       legacyInput: {
         netAssets: p.netAssets, earningsValue: p.netProfitValue || ((p.annualProfit || 0) / 0.1),
         industry: p.industry, totalShares: p.totalShares || 10000,
-        targetShares: p.ceoShares || p.totalShares || 10000,
+        targetShares: p.ceoShares || p.totalShares || 10000, effectiveDate: _firstDefined(p.effectiveDate, p.valuationDate), __officialRules: p.__officialRules,
       },
       legacyRequired: ['netAssets'],
       structuredAliases: ['unlistedStockValue'],
@@ -9682,7 +10251,7 @@ const RUN = {
     socialInsuranceCorp: () => choose({
       name: 'socialInsuranceCorp', advancedFn: C.calcSocialInsuranceCorpAdvanced,
       advancedInput: _socialInsuranceCorpAdvancedInput(p), legacyFn: C.calcSocialInsuranceCorp,
-      legacyInput: { totalMonthlySalary: Math.round((p.ceoSalary || 0) / 12), numEmployees: p.numEmployees || 10 },
+      legacyInput: { totalMonthlySalary: Math.round((p.ceoSalary || 0) / 12), numEmployees: p.numEmployees || 1, taxYear: p.taxYear, effectiveDate: p.effectiveDate, workforceScale: p.workforceScale, confirmedEmployerEmploymentAdditionalRate: p.confirmedEmployerEmploymentAdditionalRate, confirmedWorkersCompRate: p.confirmedWorkersCompRate, __officialRules: p.__officialRules },
       legacyRequired: ['totalMonthlySalary'],
     }),
 
