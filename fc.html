@@ -1249,7 +1249,7 @@ a{color:inherit;text-decoration:none}
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,signInAnonymously,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,orderBy,limit,startAfter,getDocs,addDoc,onSnapshot,serverTimestamp,increment,getCountFromServer}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,orderBy,limit,startAfter,getDocs,addDoc,onSnapshot,serverTimestamp,increment,getCountFromServer,writeBatch}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getStorage,ref as storageRef,getBlob,deleteObject,uploadBytes,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
@@ -6213,6 +6213,17 @@ window.fccBridge={
       const nameAny={};
       snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};});
       const outIds=[];
+      /* ★ [2026-08-29] writeBatch 200건 묶음 — 기존에는 건당 await updateDoc/setDoc 순차 호출이라
+         2,000명이면 왕복 2,000회(수 분)였고, 함수 전체가 try/catch 하나여서 한 건만 실패해도
+         나머지가 통째로 버려졌다(조용한 유실). 이제 배치 단위로 커밋하고 실패는 배치 단위로 격리한다.
+         200건인 이유: Firestore 배치 상한(500)에 여유를 두고, 중단 시 손실을 최소화하기 위함. */
+      const B_MAX=200;let _b=writeBatch(db),_bn=0,_okN=0,_failN=0;
+      const _flush=async function(){
+        if(!_bn)return;
+        const n=_bn;const bb=_b;_b=writeBatch(db);_bn=0;
+        try{await bb.commit();_okN+=n;}
+        catch(e){_failN+=n;console.warn('fccBridge.upsert batch',e);}
+      };
       for(const s of list){
         if(!s.name){outIds.push(null);continue;}
         let exId=null,exCt=[];
@@ -6225,18 +6236,22 @@ window.fccBridge={
         if(exId){
           if(s.replaceContracts){core.contracts=inc.slice(0,20);}
           else if(inc.length){const merged=(exCt||[]).slice();inc.forEach(ct=>{const i2=merged.findIndex(x=>x.productName===ct.productName);if(i2>=0){merged[i2]=Object.assign({},merged[i2],{maturityDate:ct.maturityDate||merged[i2].maturityDate,insType:ct.insType||merged[i2].insType,yearly:(ct.yearly!=null)?ct.yearly:merged[i2].yearly,insurer:(ct.insurer!=null&&ct.insurer!=='')?ct.insurer:(merged[i2].insurer||''),premium:(ct.premium!=null&&ct.premium!=='')?ct.premium:(merged[i2].premium||'')});}else merged.push(ct);});core.contracts=merged.slice(0,20);}
-          await updateDoc(doc(db,'fc_clients',exId),core);
+          _b.update(doc(db,'fc_clients',exId),core);_bn++;
+          if(_bn>=B_MAX)await _flush();
           outIds.push(exId);
         }else{
           /* ★ 중복 가드 (2026-07-18): 생일 없는 신규 등록인데 같은 이름의 문서(생일 보유 포함)가 이미 있으면 생성하지 않음
              — 명함 고객(무생일)과 기존 고객(생일)이 동일인일 가능성이 높아, 빈 중복 문서 생성을 원천 차단. 편입 단계의 생일 승격이 자연 병합 처리 */
           if(!s.birthDate&&nameAny[s.name]){outIds.push(null);continue;}
           const ref=doc(collection(db,'fc_clients'));
-          await setDoc(ref,Object.assign({fcAuthUid:fcUid,fcLoginId:(typeof loginId!=='undefined'&&loginId)||'',contracts:inc.slice(0,20),createdAt:serverTimestamp()},core));
+          _b.set(ref,Object.assign({fcAuthUid:fcUid,fcLoginId:(typeof loginId!=='undefined'&&loginId)||'',contracts:inc.slice(0,20),createdAt:serverTimestamp()},core));_bn++;
+          if(_bn>=B_MAX)await _flush();
           byKey[s.name+'|'+(s.birthDate||'')]={id:ref.id,contracts:inc};byId[ref.id]={contracts:inc};
           outIds.push(ref.id);
         }
       }
+      await _flush();
+      outIds.ok=_okN;outIds.fail=_failN;   /* ★ 배열에 결과 부가 — 기존 호출부(배열 사용)와 호환 유지 */
       return outIds;
     }catch(e){console.warn('fccBridge.upsert',e);return null;}
   },
@@ -12571,30 +12586,61 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       c.contracts=c.contracts||[];
       it.contracts.forEach(function(ct){var ex=c.contracts.findIndex(function(x){return x.product===ct.product;});if(ex>=0){var old=c.contracts[ex];c.contracts[ex]={insurer:ct.insurer||old.insurer,product:ct.product,ptype:ct.ptype||old.ptype,expiry:ct.expiry||old.expiry,premium:ct.premium||old.premium};}else c.contracts.push(ct);});
       c.createdAt=Date.now();return c;}
+    /* ★ [2026-08-29] 서버(fc_clients) 저장을 200건마다 중간 커밋한다.
+       기존: 지도 등록을 2,000건 다 돈 뒤 맨 마지막에 upsert 1회, 그것도 await 없이 호출.
+             → "업로드 완료" 알림 뒤에도 서버 저장이 백그라운드로 돌았고, 그 사이 탭을 닫거나
+               PC가 꺼지면 서버에는 0명이 남았다(지도 204명 / 서버 0명 사례).
+       변경: 지도 저장과 보조를 맞춰 200건마다 서버에 커밋 → 중단되어도 양쪽 숫자가 어긋나지 않는다.
+       비용: 커밋 때마다 fccBridge.upsert가 기존 목록을 1회 조회하므로 읽기가 늘어난다.
+             (2,000명 기준 약 9천 읽기) 중단 시 데이터 유실을 막는 값으로 감수한다. */
+    var CORE_FLUSH=200,corePend=[],srvOk=0,srvFail=0;
+    var coreOf=function(x){return {name:x.name,birthDate:x.birthDate,contracts:(x.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(y){return y.productName;})};};
+    var flushCore=function(cb){
+      if(!corePend.length||!window.fccBridge){cb&&cb();return;}
+      var batch=corePend.splice(0,corePend.length).map(coreOf);
+      var fin=function(r){
+        if(r&&typeof r.ok==="number"){srvOk+=r.ok;srvFail+=r.fail||0;}
+        else if(r)srvOk+=batch.length;
+        else srvFail+=batch.length;
+        cb&&cb();
+      };
+      try{window.fccBridge.upsert(batch).then(fin).catch(function(){srvFail+=batch.length;cb&&cb();});}
+      catch(_e){srvFail+=batch.length;cb&&cb();}
+    };
     ensureKakao(function(){(function step(){
       if(mpcXlsxStop||i>=items.length){
-        /* 코어(이름·생일·계약) → fc_clients 분기 업서트 — ★ 처리 완료분만 (중지 시 미처리분 제외) */
-        try{var core=coreArr.map(function(x){return {name:x.name,birthDate:x.birthDate,contracts:(x.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(y){return y.productName;})};});
-          if(core.length&&window.fccBridge)window.fccBridge.upsert(core);}catch(_e){}
-        mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr);return;}
+        /* ★ [2026-08-29] 남은 분을 커밋하고, 커밋이 끝난 뒤에 완료 알림을 띄운다.
+           (기존에는 알림이 먼저 뜨고 저장이 뒤따라서 사용자가 성공으로 오인했다) */
+        if($("mpcProgSub"))$("mpcProgSub").textContent="서버에 저장하는 중… 잠시만요";
+        flushCore(function(){mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail);});
+        return;}
       var it=items[i];
       var geo2=function(cb){/* ★ [2026-07-29] 주소② 좌표 — 기존 좌표 재사용 → 정확 결과만 채택 */
         if(it.lat2&&it.lng2){cb();return;}
         var exx=findExisting(it);
         if(!(it.addr2&&String(it.addr2).trim().length>=4)){if(exx&&exx.lat2&&exx.lng2){it.lat2=exx.lat2;it.lng2=exx.lng2;}cb();return;}
         if(exx&&exx.lat2&&exx.lng2&&String(exx.addr2||"")===String(it.addr2||"")){it.lat2=exx.lat2;it.lng2=exx.lng2;cb();return;}
-        mpcGeocode(it.addr2).then(function(g){if(g.ok&&!g.approx){it.lat2=g.lat;it.lng2=g.lng;}cb();});};
+        it._geoCalled=1;mpcGeocode(it.addr2).then(function(g){if(g.ok&&!g.approx){it.lat2=g.lat;it.lng2=g.lng;}cb();});};
       var _save0=function(){
         var ex=findExisting(it);
         if(ex){mergeInto(ex,it);custPut(ex);nUp++;}
         else{var o={id:"c_"+Date.now()+"_"+i+"_"+Math.random().toString(36).slice(2,6),name:it.name,birthDate:it.birthDate||"",birthUnknown:!it.birthDate,company:it.company,title:it.title,job:it.job||"",phone:it.phone,email:it.email,status:it.status,referrer:it.referrer,addr:it.addr,addrLabel:it.addrLabel||"",addr2:it.addr2||"",addr2Label:it.addr2?(it.addr2Label||"직장"):"",lat2:it.lat2||0,lng2:it.lng2||0,/* ★ [2026-07-29] 신규 고객 주소② — 1단계 누락 정정 */lat:it.lat||0,lng:it.lng||0,rels:it.rels,memo:it.memo,needs:it.needs||[],nextContact:it.nextContact||"",contracts:it.contracts,createdAt:Date.now()+i};if(it.extra&&Object.keys(it.extra).length)o.extra=it.extra;if(it.geoApprox)o.geoApprox=1;custPut(o);customers.push(o);nNew++;if(!it.birthDate)nNoBirth++;}
-        coreArr.push(it);   /* ★ [2026-07-28] 생일 없어도 fc_clients 코어 생성 → 마이페이지 명단 누락 제로화. 동명 기존문서 존재 시엔 브리지 중복가드가 생성 보류(동일인 가능성 보호) */
+        coreArr.push(it);corePend.push(it);   /* ★ [2026-07-28] 생일 없어도 fc_clients 코어 생성 → 마이페이지 명단 누락 제로화. 동명 기존문서 존재 시엔 브리지 중복가드가 생성 보류(동일인 가능성 보호) */
         if(it.lat&&it.lng){geoOk++;if(it.geoApprox)geoApx++;}else if(it.addr&&String(it.addr).trim().length>=4){geoFail++;}else{noAddr++;}   /* ★ [2026-07-24] 주소 미입력은 '못 찾음'과 분리 */
         i++;$("mpcProgFill").style.width=Math.round(i/items.length*100)+"%";$("mpcProgSub").textContent=i+" / "+items.length+" (갱신 "+nUp+"·신규 "+nNew+")";
-        setTimeout(step,(it.lat&&it.lng)?0:220);};
+        /* ★ [2026-08-29] 대기는 지도 API를 실제로 호출한 건에만 준다.
+           기존에는 좌표가 없으면 무조건 220ms를 쉬어, 주소가 아예 없는 고객까지 대기했다
+           (2,000명 = 7분 이상). 이제 지오코딩을 부른 건만 220ms 간격을 유지한다. */
+        var _wait=it._geoCalled?220:0;
+        if(corePend.length>=CORE_FLUSH){
+          if($("mpcProgSub"))$("mpcProgSub").textContent=i+" / "+items.length+" · 서버에 저장하는 중…";
+          flushCore(function(){setTimeout(step,_wait);});
+          return;
+        }
+        setTimeout(step,_wait);};
       var save=function(){geo2(_save0);};/* ★ [2026-07-29] 주소② 좌표 확보 후 저장 */
       if(it.lat&&it.lng){save();}
-      else if(it.addr&&it.addr.length>=4){var ex0=findExisting(it);if(ex0&&ex0.lat&&ex0.lng&&ex0.addr===it.addr){it.lat=ex0.lat;it.lng=ex0.lng;it.geoApprox=ex0.geoApprox?1:0;save();}else{mpcGeocode(it.addr).then(function(g){if(g.ok){it.lat=g.lat;it.lng=g.lng;it.geoApprox=g.approx?1:0;it.addr=mpcFixSido(it.addr,g.matched);}save();});}}   /* ★ [2026-07-24] 추정 플래그 저장 · 재사용 시 기존 플래그 승계 · 시/도 누락 자동 보정 */
+      else if(it.addr&&it.addr.length>=4){var ex0=findExisting(it);if(ex0&&ex0.lat&&ex0.lng&&ex0.addr===it.addr){it.lat=ex0.lat;it.lng=ex0.lng;it.geoApprox=ex0.geoApprox?1:0;save();}else{it._geoCalled=1;mpcGeocode(it.addr).then(function(g){if(g.ok){it.lat=g.lat;it.lng=g.lng;it.geoApprox=g.approx?1:0;it.addr=mpcFixSido(it.addr,g.matched);}save();});}}   /* ★ [2026-07-24] 추정 플래그 저장 · 재사용 시 기존 플래그 승계 · 시/도 누락 자동 보정 */
       else{var ex1=findExisting(it);if(ex1&&ex1.lat&&ex1.lng){it.lat=ex1.lat;it.lng=ex1.lng;it.geoApprox=ex1.geoApprox?1:0;}save();}
     })();});}
   /* ═══ ★ [2026-07-24] 위치 재계산 — 주소는 맞는데 핀이 틀린 고객을 한 번에 복구 ═══
@@ -12643,7 +12689,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if($("mpcProgSub"))$("mpcProgSub").textContent="0 / "+list.length;
     step();
   }
-  function mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr){$("mpcXlsxProg").classList.remove("show");mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();
+  function mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail){$("mpcXlsxProg").classList.remove("show");mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();
     var msg="업로드 완료\n· 갱신 "+nUp+"명 · 신규 "+nNew+"명";
     if(mpcFoldNote)msg+="\n· 🔗 "+mpcFoldNote+" (1행=1계약 원장 자동 병합)";   /* ★ [2026-07-28] */
     if(mpcNeedSkip)msg+="\n· 관심항목 중 표준 15개로 인식되지 않은 값 "+mpcNeedSkip+"건 — 그대로 저장되어 '직접 추가' 항목으로 표시됩니다";   /* ★ [2026-08-29] 조용한 유실 금지 */
@@ -12652,6 +12698,9 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(geoFail)msg+="\n\n⚠️ 주소 위치를 찾지 못한 고객 "+geoFail+"명 — 지도에 표시되지 않습니다\n— 엑셀 주소에 시·도를 붙여보세요 (예: ‘송파구 …’ → ‘서울 송파구 …’)\n— 개별 확인: 고객 상세 → [위치 점검]";
     if(geoApx)msg+="\n\n⚠️ 비슷한 장소로 추정 등록 "+geoApx+"명 — 고객 상세 → [위치 점검]으로 핀 위치를 확인해 주세요";
     if(noAddr)msg+="\n· 주소 미입력 "+noAddr+"명 — 주소를 채우면 지도에 표시됩니다";
+    /* ★ [2026-08-29] 서버(fc_clients) 저장 결과를 함께 알린다 — 지도만 되고 서버가 비는 상태를 사용자가 알 수 있게 */
+    if(srvFail)msg+="\n\n🚨 서버 저장 실패 "+srvFail+"명 — 이 고객들은 생일·만기 알림과 마이페이지 명단에서 빠집니다.\n인터넷 연결을 확인한 뒤 같은 파일을 다시 올려주세요 (중복 없이 갱신됩니다).";
+    else if(srvOk)msg+="\n\n✅ 서버 저장 "+srvOk+"명 완료 — 생일·만기 알림과 마이페이지 명단에 반영됩니다.";
     alert(msg);}
   /* ═══ ★ [2026-08-29] 양식 내려받기 — 정적 파일 + 안내 팝업으로 교체 ═══
      기존: SheetJS(xlsx 0.18.5 커뮤니티 빌드)로 코드에서 조립.
