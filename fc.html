@@ -11315,13 +11315,20 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   /* ★ [2026-07-24] 고객입력 화면(엑셀·붙여넣기) 진입 브리지.
      ⚠️ 기존 고객 목록이 로드되지 않은 채 엑셀을 올리면 전건이 신규로 등록돼 대량 중복이 생긴다.
      반드시 기기 로드 → 드라이브 동기화까지 마친 뒤에만 업로드 화면을 연다. */
+  /* ★ [2026-08-29] 타임아웃 후 뒤늦게 도착한 드라이브 병합이 방금 저장한 고객을 덮어쓰던 문제.
+     증상: 좌표를 포함한 파일은 업로드가 10초대로 끝나는데, 12초 타임아웃으로 먼저 등록을 시작한 뒤
+           14초쯤 드라이브 응답이 도착해 mpcMergeRemote 가 예전 값으로 되돌렸다.
+           그래서 파일 앞부분(먼저 처리된) 고객만 이전 주소가 남았다(2,000명 중 앞 17명).
+     대응: 타임아웃으로 진행한 경우 window.__mpcGdStale 을 세워, 늦게 온 응답의 '병합'만 건너뛴다.
+           (업로드 자체는 그대로 진행 — 타임아웃의 원래 목적인 무한 대기 방지는 유지) */
   function _mpcInputReady(cb){
     try{
+      window.__mpcGdStale=false;
       custLoad().then(function(){
         if(!mpcGdOn()){cb();return;}
-        var done=false,fin=function(){if(done)return;done=true;cb();};
-        setTimeout(fin,12000);   /* 드라이브 지연 시에도 12초 후 진행 — 무한 대기 방지 */
-        mpcGdPull(function(){fin();});
+        var done=false,fin=function(late){if(done)return;done=true;if(late){window.__mpcGdStale=true;window.__mpcGdLate=true;}cb();};
+        setTimeout(function(){fin(true);},12000);   /* 드라이브 지연 시에도 12초 후 진행 — 무한 대기 방지 */
+        mpcGdPull(function(){fin(false);});
       }).catch(function(){cb();});
     }catch(_e){cb();}
   }
@@ -12806,6 +12813,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(geoApx)msg+="\n\n⚠️ 비슷한 장소로 추정 등록 "+geoApx+"명 — 고객 상세 → [위치 점검]으로 핀 위치를 확인해 주세요";
     if(noAddr)msg+="\n· 주소 미입력 "+noAddr+"명 — 주소를 채우면 지도에 표시됩니다";
     /* ★ [2026-08-29] 서버(fc_clients) 저장 결과를 함께 알린다 — 지도만 되고 서버가 비는 상태를 사용자가 알 수 있게 */
+    if(window.__mpcGdLate){window.__mpcGdLate=false;msg+="\n\n⚠️ 내 드라이브 확인이 늦어 이번 등록에는 반영되지 않았습니다 — 다른 기기에서 최근 수정한 내용이 있다면 [동기화]를 한 번 눌러주세요";}
     if(srvFail)msg+="\n\n🚨 서버 저장 실패 "+srvFail+"명 — 이 고객들은 생일·만기 알림과 마이페이지 명단에서 빠집니다.\n인터넷 연결을 확인한 뒤 같은 파일을 다시 올려주세요 (중복 없이 갱신됩니다).";
     else if(srvOk)msg+="\n\n✅ 서버 저장 "+srvOk+"명 완료 — 생일·만기 알림과 마이페이지 명단에 반영됩니다.";
     alert(msg);}
@@ -12935,6 +12943,9 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           if(!mpcGdOn()){cb&&cb(false);return;}
         }
         var d=null;try{d=await window.ccStorage.loadJson('고객관리','내고객');}catch(_e){d=null;}
+        /* ★ [2026-08-29] 12초 타임아웃으로 이미 업로드가 시작된 뒤 도착한 응답이면 병합하지 않는다.
+           그대로 병합하면 방금 저장한 고객이 드라이브의 예전 값으로 되돌아간다. */
+        if(window.__mpcGdStale){window.__mpcGdStale=false;try{console.warn('드라이브 응답이 늦어 이번 병합은 건너뜁니다');}catch(_e2){}cb&&cb(false);return;}
         if(d&&d.customers&&d.customers.length){var _np=await mpcMergeRemote(d.customers);var _dirty=false;try{_dirty=!!localStorage.getItem("mpc_dirty");}catch(_e){}if(_np||_dirty)mpcGdPush();cb&&cb(true);return;}
         if(customers.length){mpcGdPush();}   /* Drive 비어있고 로컬만 있음 → 최초 백업 */
         /* 레거시 평문 파일 1회 마이그레이션 */
