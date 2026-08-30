@@ -4551,9 +4551,20 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
     /* ★ PDF.js는 'EBITDA 마진율', '영업이익증가 율'처럼 라벨 중간에 공백을 넣을 수 있다.
        진단/비교 32~35p는 공백 제거 텍스트로 정확한 전용 페이지를 선택한다. */
     const DIAG=finPageFindCompact(pages,/재무진단/,/성장성/,/수익성/,/부채상환능력/,/활동성/);
-    const GROW=finPageFindCompact(pages,/성장성기준일자/,/수익성기준일자/,/매출액증가율/,/영업이익률/);
-    const BENCH=finPageFindCompact(pages,/재무구조기준일자/,/부채상환능력기준일자/,/차입금의존도/,/이자보상배수/);
-    const ACT=finPageFindCompact(pages,/활동성기준일자/,/매출채권회전/,/자기자본회전/);
+    /* ★ 2026-08-30: 조건 4개 AND(제목+기준일자 인접 포함)는 PDF.js 텍스트 조각 순서에 취약해
+       한 곳만 어긋나도 페이지 전체를 놓치고, 그 결과 업종평균 15개 지표와 '수익성' 평가가
+       한꺼번에 사라졌다(에버그린텍 실증). 제목·기준일자 인접 조건을 떼고
+       '그 면에만 등장하는 지표명'으로 1차 판정한 뒤, 실패 시 지표명 조합으로 재시도한다. */
+    const GROW=finPageFindCompact(pages,/성장성/,/수익성/,/매출액증가율/,/영업이익률/)
+             ||finPageFindCompact(pages,/매출액증가율/,/영업이익률/,/업종평균/)
+             ||finPageFindCompact(pages,/매출액증가율/,/EBITDA마진율/);
+    const BENCH=finPageFindCompact(pages,/재무구조/,/부채상환능력/,/차입금의존도/,/이자보상배수/)
+             ||finPageFindCompact(pages,/차입금의존도/,/부채비율/,/유동비율/,/업종평균/)
+             ||finPageFindCompact(pages,/차입금의존도/,/이자보상배수/);
+    const ACT=finPageFindCompact(pages,/활동성/,/매출채권회전/,/자기자본회전/)
+             ||finPageFindCompact(pages,/총자본회전율/,/자기자본회전율/,/업종평균/)
+             ||finPageFindCompact(pages,/매출채권회전율/,/자기자본회전율/);
+    try{console.log('[finParse][bench] GROW',!!GROW,'BENCH',!!BENCH,'ACT',!!ACT,'DIAG',!!DIAG);}catch(_e){}
 
     if(INFO){
       const tx=finNormText(INFO.text), cp=finCompactText(INFO.text);
@@ -5172,11 +5183,20 @@ function finStockMethodText(){
   /* 계산기는 industry를 반환하지 않고 earningsWeight/assetWeight를 반환한다 — 실제 적용 가중치를 그대로 읽는다 */
   const ew=Number.isFinite(S.earningsWeight)?S.earningsWeight:3;
   const aw=Number.isFinite(S.assetWeight)?S.assetWeight:2;
+  /* ★ 2026-08-30: 계산기는 항상 industry:'general'(3:2)로 호출되므로 부동산과다보유법인이어도
+     화면 문구는 3:2로 단정된다. [주의사항] 블록의 경고는 mode==='data'에서 잘려 사용자에게 보이지 않으므로,
+     보이는 데이터 줄 자체에 판정 유보를 넣어 잘못된 설명을 원천 차단한다.
+     w는 3곳에 재사용되므로 이 문구는 w에 넣지 않고 문장 끝에 1회만 덧붙인다. */
+  const _reR=(FIN.data&&Number.isFinite(FIN.data.부동산비중))?FIN.data.부동산비중:null;
+  const _realty=(_reR!=null&&_reR>=50)
+    ? ` · 적용 비율 주의 — 토지·건물이 자산총계의 약 ${_reR}%(장부 취득가 기준)로 부동산과다보유법인(순손익 2 : 순자산 3)에 해당할 수 있다. 위 ${ew}:${aw}는 일반법인 기준이므로 비율은 별도 확인이 필요하다고 표기할 것`
+    : '';
   const w=`순손익가치 ${ew} : 순자산가치 ${aw}`;
-  if(!S.usedFloor)return `상증세법 시행령 §54, ${w} 가중평균`;
+  if(!S.usedFloor)return `상증세법 시행령 §54, ${w} 가중평균${_realty}`;
   return `상증세법 시행령 §54 — 순자산가치 ${Math.round((S.floorRate||0.8)*100)}% 하한이 적용된 값`
     +`(${w} 가중평균은 ${Number(S.weightedValue).toLocaleString()}원으로 하한 ${Number(S.floorValue).toLocaleString()}원보다 낮아 하한을 채택)`
-    +`. ★ 이 평가액을 '${w}로 가중평균해 평가했다'고 서술하면 틀린다 — 하한 규정이 적용된 사실을 반드시 함께 밝힐 것`;
+    +`. ★ 이 평가액을 '${w}로 가중평균해 평가했다'고 서술하면 틀린다 — 하한 규정이 적용된 사실을 반드시 함께 밝힐 것`
+    +_realty;
 }
 
 /* 표시·리스크 판정용 요약치 — 반드시 계산기 결과에서만 읽는다 */
@@ -5692,6 +5712,14 @@ function finSignals(D){
   if(F(D.차입금,0)&&F(D.차입금,1)){
     if(D.차입금[1]===0&&D.차입금[0]>0)S.push(`차입금 신규 발생: ${fmt(D.차입금[0])}`);
     else if(D.차입금[1]>0&&D.차입금[0]>=D.차입금[1]*1.8)S.push(`차입금 급증: ${pair(D.차입금)}`);
+    /* ★ 2026-08-30: 배수(1.8x) 기준만으로는 규모가 큰 회사의 의미 있는 증감을 통째로 놓친다.
+       (에버그린텍: 43.6억→49.1억 = 1.13배라 미검출됐으나 절대액은 +5.5억)
+       절대액 3억 AND 비율 10%를 동시 충족할 때만 잡아 노이즈는 차단한다. */
+    else if(D.차입금[1]>0){
+      const _bd=D.차입금[0]-D.차입금[1];
+      if(Math.abs(finToEok(_bd))>=3&&Math.abs(_bd)>=D.차입금[1]*0.10)
+        S.push(`차입금 ${_bd>0?'증가':'감소'} ${fmt(Math.abs(_bd))}: ${pair(D.차입금)}`);
+    }
   }
   if(F(D.가지급금,0)&&F(D.가지급금,1)&&D.가지급금[1]===0&&D.가지급금[0]>0)
     S.push(`단기대여금 신규 발생: ${fmt(D.가지급금[0])} (가지급금 여부 확인 필요)`);
@@ -5710,7 +5738,37 @@ function finSignals(D){
   }
   if(F(D.재고자산,0)&&F(D.재고자산,1)&&D.재고자산[1]>0&&D.재고자산[0]>=D.재고자산[1]*1.5)
     S.push(`재고자산 급증: ${pair(D.재고자산)}`);
-  return S.slice(0,10);   /* ★ B1: 배당·자사주 신호 추가로 상한 8→10 (2026-08-22) */
+  /* ★ 2026-08-30: '설비투자 → 차입 조달 → 투자활동 현금흐름 반전'이라는 핵심 서사가 통째로 누락되던 문제.
+     종전에는 현금 잔액 급증 1건만 잡혀 "현금 사정이 좋아졌다"는 정반대 해석을 유발했다.
+     아래 5종은 모두 이미 파싱된 값(D.토지·D.건물·D.매출채권·D.재고자산·D.기업Facts.cashFlow)만 사용한다.
+     수동 입력 경로(FIN.data=D2)에는 이 필드들이 없을 수 있으므로 전부 존재 가드 후 접근한다. */
+  if(F(D.토지,0)&&F(D.토지,1)&&F(D.건물,0)&&F(D.건물,1)){
+    const _re=(D.토지[0]+D.건물[0])-(D.토지[1]+D.건물[1]);
+    if(finToEok(_re)>=2)S.push(`유형자산(토지·건물) 취득 ${fmt(_re)} — 설비투자 진행`);
+  }
+  if(F(D.매출채권,0)&&F(D.매출채권,1)&&D.매출채권[1]>0){
+    const _rg=(D.매출채권[0]-D.매출채권[1])/D.매출채권[1];
+    if(Math.abs(_rg)>=0.3)S.push(`매출채권 ${_rg>0?'증가':'감소'} ${Math.round(_rg*100)}%: ${pair(D.매출채권)}`);
+  }
+  if(F(D.재고자산,0)&&F(D.재고자산,1)&&D.재고자산[1]>0&&D.재고자산[0]<=D.재고자산[1]*0.7)
+    S.push(`재고자산 감소: ${pair(D.재고자산)}`);
+  const _CF=(D&&D.기업Facts&&D.기업Facts.cashFlow)||null;
+  if(_CF&&Array.isArray(_CF.afterInvesting)){
+    const _ai=_CF.afterInvesting;
+    if(Number.isFinite(_ai[0])&&Number.isFinite(_ai[1])&&_ai[1]>=0&&_ai[0]<0)
+      S.push(`투자활동후 현금흐름 마이너스 전환: ${_ai[1].toLocaleString()}백만원 → ${_ai[0].toLocaleString()}백만원`);
+  }
+  if(_CF&&Array.isArray(_CF.grades)&&_CF.grades.length>=2){
+    /* grades는 파싱 경로에 따라 reverse()가 걸려 순서가 뒤집힐 수 있으므로 연도로 정렬해 비교한다.
+       KODATA 척도는 CR-6(미흡) ~ CR-1(양호) — 숫자가 작을수록 우수하다. */
+    const _gs=_CF.grades.filter(x=>x&&Number.isFinite(+x.year)).slice().sort((a,b)=>(+a.year)-(+b.year));
+    const _cur=_gs[_gs.length-1], _prv=_gs[_gs.length-2];
+    const _gn=v=>{const m=String((v&&v.grade)||'').match(/CR\s*-?\s*(\d)/i);return m?+m[1]:null;};
+    const _c=_gn(_cur), _p=_gn(_prv);
+    if(_c!=null&&_p!=null&&_c!==_p)
+      S.push(`현금흐름등급 ${_prv.year} ${_prv.grade} → ${_cur.year} ${_cur.grade} (${_c<_p?'개선':'하락'})`);
+  }
+  return S.slice(0,12);   /* ★ 2026-08-30: 투자·현금흐름 신호 5종 추가로 상한 10→12 */
 }
 
 /* ★ 최우선 현안 (2026-07-30, 마스터교본 §7 이식): 나열형 → 우선순위형 제안서의 심장.
@@ -5914,6 +5972,13 @@ function finToText(mode){   /* ★ D2 (2026-08-27): mode==='data' → 입력창 
     groups.forEach(g=>{const rows=g[1].filter(z=>{const x=BM[z[0]];return x&&Number.isFinite(x.industry)&&Number.isFinite(x.company);});if(!rows.length)return;L.push(`- ${g[0]}`);rows.forEach(z=>{const x=BM[z[0]];L.push(`  · ${z[1]}: 조회기업 ${x.company}${z[2]} / 업종평균 ${x.industry}${z[2]}`);});});
   }else if(F.sourceExcerpts&&F.sourceExcerpts.industryComparison){
     L.push('');L.push('[업종평균 비교 — 구조화 확인 필요]');L.push('- 보고서에 업종평균 비교가 있으나 자동 구조화가 완료되지 않았습니다. 원문 대조 후 활용할 것.');
+  }else{
+    /* ★ 2026-08-30: 종전에는 BENCH 페이지 미검출 시 한 줄도 출력되지 않아(무성 실패)
+       컨설턴트가 업종평균 누락 사실 자체를 인지할 수 없었다. 회사 단독 수치만으로
+       강점·약점을 단정하면 실제와 정반대 서사가 나올 수 있으므로 반드시 고지한다. */
+    L.push('');L.push('[업종평균 비교 — 미추출]');
+    L.push('- 첨부 보고서에 업종평균 비교표가 있더라도 자동 구조화가 되지 않았습니다.');
+    L.push('- 업종평균 없이 회사 단독 수치만으로 우수·미흡을 단정하지 말 것. 필요하면 원문의 재무진단·성장성·재무구조·활동성 면을 직접 대조할 것.');
   }
   if((!F.assessments||!Object.keys(F.assessments).length)&&F.sourceExcerpts&&F.sourceExcerpts.financialDiagnosis){L.push('');L.push('[보고서 재무진단 — 구조화 확인 필요]');L.push('- 보고서에 재무진단 의견이 있으나 자동 구조화가 완료되지 않았습니다. 원문 대조 후 활용할 것.');}
   if(F.trading&&Array.isArray(F.trading.customers)&&F.trading.customers.length){
