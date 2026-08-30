@@ -4343,9 +4343,34 @@ function finText(items,labels,stop){
   return '';
 }
 
-/** 정확 일치 라벨 전용 숫자 추출 — KODATA_WEB에서 '매출액(*)'과 '제품매출액(*)' 혼동 방지 */
+/** 정확한 '행 라벨 + 숫자 n개'를 병합 텍스트에서 다시 읽는다.
+    좌표행이 흔들려도 '매출액(*)'을 '제품매출액(*)' 내부 문자열로 오인하지 않도록 토큰 완전일치만 허용. */
+function finExactTextRowNums(items,label,n){
+  if(!items)return null;
+  const need=n||3;
+  const key=String(label).replace(/\s+/g,'');
+  const src=String(items.text||(Array.isArray(items)?items.map(i=>i&&i.s||'').join(' '):''));
+  const toks=src.replace(/\s+/g,' ').trim().split(' ');
+  for(let i=0;i<toks.length;i++){
+    if(String(toks[i]||'').replace(/\s+/g,'')!==key)continue;
+    const vals=[];
+    for(let j=i+1;j<toks.length&&j<=i+need+4;j++){
+      const t=String(toks[j]||'').replace(/\s/g,'');
+      if(t==='-'){vals.push(0);}
+      else if(/^-?[\d,]+$/.test(t)){vals.push(Number(t.replace(/,/g,'')));}
+      else break;
+      if(vals.length>=need)return vals.slice(0,need);
+    }
+  }
+  return null;
+}
+
+/** 정확 일치 라벨 전용 숫자 추출 — KODATA_WEB에서 '매출액(*)'과 '제품매출액(*)' 혼동 방지.
+    ★ 2026-08-30 최종: 텍스트 완전행을 1순위로 사용하고 좌표행은 폴백으로 둔다. */
 function finCellsExact(items,label,n){
   if(!items)return null;
+  const byText=finExactTextRowNums(items,label,n||3);
+  if(byText)return byText;
   const key=String(label).replace(/\s+/g,'');
   const hits=items.filter(i=>String(i.s).replace(/\s+/g,'')===key);
   for(const L of hits){
@@ -4367,6 +4392,11 @@ function finCompactText(v){return String(v||'').replace(/\s+/g,'');}
 function finPageFind(pages){
   const rxs=[...arguments].slice(1);
   return pages.find(p=>rxs.every(r=>r.test(p.text||'')))||null;
+}
+/** PDF.js가 표 제목/라벨을 여러 아이템으로 나눠 공백을 끼워도 페이지 선택이 실패하지 않게 한다. */
+function finPageFindCompact(pages){
+  const rxs=[...arguments].slice(1);
+  return pages.find(p=>{const t=finCompactText(p.text||'');return rxs.every(r=>r.test(t));})||null;
 }
 function finExcerpt(pg,startRx,endRx,maxLen){
   if(!pg)return '';
@@ -4451,12 +4481,15 @@ function finNearbyNumericRow(items,labels,minCount,maxDy){
     좌표가 겹치는 경우 2개 숫자행만 채택해 두 표를 혼동하지 않는다. */
 function finBenchmarkPair(items,labels){
   if(!items)return null;
-  const hits=finFindAll(items,labels); if(!hits.length)return null;
+  const arr=Array.isArray(labels)?labels:[labels];
+  const hits=finFindAll(items,arr);
+  /* 1순위: 좌측 '업종평균/조회기업' 비교표를 좌표로 읽는다.
+     2줄 라벨(영업이익증가율·ROA·활동성·이자보상배수 등)을 위해 y 허용폭을 20pt로 넓힌다. */
   for(const L of hits){
     const x0=L.x+Math.max(L.w||0,6)-2;
-    const nextSame=hits.filter(h=>h!==L&&h.x>L.x&&Math.abs(h.y-L.y)<=20).sort((a,b)=>a.x-b.x)[0];
+    const nextSame=hits.filter(h=>h!==L&&h.x>L.x&&Math.abs(h.y-L.y)<=24).sort((a,b)=>a.x-b.x)[0];
     const x1=nextSame?nextSame.x-4:Infinity;
-    const nums=items.filter(i=>i!==L&&i.x>=x0&&i.x<x1&&Math.abs(i.y-L.y)<=12)
+    const nums=items.filter(i=>i!==L&&i.x>=x0&&i.x<x1&&Math.abs(i.y-L.y)<=20)
       .map(i=>({it:i,t:String(i.s||'').replace(/[,%]/g,'').trim()}))
       .filter(x=>x.t==='-'||/^-?\d+(?:\.\d+)?$/.test(x.t));
     const groups=[];
@@ -4464,6 +4497,20 @@ function finBenchmarkPair(items,labels){
     groups.forEach(g=>g.arr.sort((a,b)=>a.it.x-b.it.x));
     const good=groups.filter(g=>g.arr.filter(x=>x.t!=='-').length===2).sort((a,b)=>Math.abs(a.y-L.y)-Math.abs(b.y-L.y));
     if(good.length){const row=good[0].arr.filter(x=>x.t!=='-').map(x=>Number(x.t));if(row.length===2&&row.every(Number.isFinite))return {industry:row[0],company:row[1]};}
+  }
+  /* 2순위: 페이지 텍스트 폴백. 같은 지표가 좌측 비교표/우측 3개년표에 두 번 나오므로
+     첫 번째 지표명과 두 번째 동일 지표명 사이만 읽어 3개년 숫자와 섞이지 않게 한다. */
+  const cp=finCompactText(items.text||(Array.isArray(items)?items.map(i=>i&&i.s||'').join(' '):''));
+  for(const lb of arr){
+    const key=finCompactText(lb); if(!key)continue;
+    const pos=cp.indexOf(key); if(pos<0)continue;
+    const next=cp.indexOf(key,pos+key.length);
+    const seg=cp.slice(pos+key.length,next>pos?next:Math.min(cp.length,pos+key.length+120));
+    const m=seg.match(/^[^0-9-]*(-?\d+(?:\.\d+)?)(?:▲증가|▼감소|▲|▼|-)?(-?\d+(?:\.\d+)?)/);
+    if(m){
+      const industry=Number(m[1]), company=Number(m[2]);
+      if(Number.isFinite(industry)&&Number.isFinite(company))return {industry,company};
+    }
   }
   return null;
 }
@@ -4473,7 +4520,7 @@ function finParseTradeRows(text,startLabel,endLabel){
   const s=t.indexOf(startLabel); if(s<0)return [];
   t=t.slice(s);
   if(endLabel){const e=t.indexOf(endLabel,startLabel.length);if(e>0)t=t.slice(0,e);}
-  t=t.replace(/([가-힣A-Za-z0-9])\s+\(주\)/g,'$1(주)');
+  t=t.replace(/([가-힣A-Za-z0-9._-]+)\s*\(\s*주\s*\)/g,'$1(주)');
   const out=[];
   const re=/((?:\(주\))?[가-힣A-Za-z0-9._-]+(?:\(주\))?)\s+\d{3}-\d{2}-\d{5}\s+[가-힣A-Za-z]+\s+(\d+(?:\.\d+)?)/g;
   let m,guard=0;
@@ -4501,11 +4548,12 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
     const REL=finPageFind(pages,/관계회사현황/,/지분율/);
     const SITE=finPageFind(pages,/사업장\s*현황/,/담보제공여부/);
     const TRADE=finPageFind(pages,/구매처현황/,/판매처현황/);
-    const DIAG=finPageFind(pages,/재무진단/,/부채상환능력/,/활동성/);
-    /* 33p·34p·35p를 종합진단 32p와 혼동하지 않도록 고유 지표까지 요구한다. */
-    const GROW=finPageFind(pages,/성장성/,/매출액증가율/,/EBITDA마진율/);
-    const BENCH=finPageFind(pages,/재무구조/,/차입금의존도/,/이자보상배수/);
-    const ACT=finPageFind(pages,/활동성/,/매출채권회전/,/자기자본회전/);
+    /* ★ PDF.js는 'EBITDA 마진율', '영업이익증가 율'처럼 라벨 중간에 공백을 넣을 수 있다.
+       진단/비교 32~35p는 공백 제거 텍스트로 정확한 전용 페이지를 선택한다. */
+    const DIAG=finPageFindCompact(pages,/재무진단/,/성장성/,/수익성/,/부채상환능력/,/활동성/);
+    const GROW=finPageFindCompact(pages,/성장성기준일자/,/수익성기준일자/,/매출액증가율/,/영업이익률/);
+    const BENCH=finPageFindCompact(pages,/재무구조기준일자/,/부채상환능력기준일자/,/차입금의존도/,/이자보상배수/);
+    const ACT=finPageFindCompact(pages,/활동성기준일자/,/매출채권회전/,/자기자본회전/);
 
     if(INFO){
       const tx=finNormText(INFO.text), cp=finCompactText(INFO.text);
@@ -4564,9 +4612,9 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
       F.businessSite.owner=finText(SITE,'소유자',S2)||'';
       F.businessSite.ownership=finText(SITE,'자가소유여부',S2)||'';
       F.businessSite.collateral=finText(SITE,'담보제공여부',S2)||'';
-      const tx=finNormText(SITE.text);
-      let mm=tx.match(/대지\s*([\d,]+)㎡(?:\(([\d,]+)평\))?/);if(mm){F.businessSite.landSqm=+mm[1].replace(/,/g,'');if(mm[2])F.businessSite.landPyeong=+mm[2].replace(/,/g,'');}
-      mm=tx.match(/건물\s*([\d,]+)㎡(?:\(([\d,]+)평\))?/);if(mm){F.businessSite.buildingSqm=+mm[1].replace(/,/g,'');if(mm[2])F.businessSite.buildingPyeong=+mm[2].replace(/,/g,'');}
+      const tx=finCompactText(SITE.text);
+      let mm=tx.match(/대지([\d,]+)㎡(?:\(([\d,]+)평\))?/);if(mm){F.businessSite.landSqm=+mm[1].replace(/,/g,'');if(mm[2])F.businessSite.landPyeong=+mm[2].replace(/,/g,'');}
+      mm=tx.match(/건물([\d,]+)㎡(?:\(([\d,]+)평\))?/);if(mm){F.businessSite.buildingSqm=+mm[1].replace(/,/g,'');if(mm[2])F.businessSite.buildingPyeong=+mm[2].replace(/,/g,'');}
       F.sourceExcerpts.businessSite=finExcerpt(SITE,/사업장\s*세부현황|구분\s*본사/,null,700);
     }
 
@@ -4575,12 +4623,22 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
       F.cashFlow.unit='백만원'; F.cashFlow.toManScale=100;
       const gradeHits=finFindAll(CFS,'현금흐름등급');
       for(const L of gradeHits){
-        const gs=CFS.filter(i=>i!==L&&i.x>=L.x+Math.max(L.w||0,6)-2&&Math.abs(i.y-L.y)<=10)
+        const gs=CFS.filter(i=>i!==L&&i.x>=L.x+Math.max(L.w||0,6)-2&&Math.abs(i.y-L.y)<=18)
           .sort((a,b)=>a.x-b.x).map(i=>String(i.s||'').trim().toUpperCase()).filter(x=>/^CR[1-6]$/.test(x));
         if(gs.length>=3&&D.years&&D.years.length>=3){
           const reportYears=[...D.years].reverse();
           F.cashFlow.grades=reportYears.map((y,i)=>({year:y,grade:gs[i]})).reverse();
           break;
+        }
+      }
+      /* 좌표행이 실패해도 '현금흐름등급 CR2 CR4 CR2' 텍스트를 2순위로 복원한다. */
+      if((!F.cashFlow.grades||F.cashFlow.grades.length<3)&&D.years&&D.years.length>=3){
+        const cp=finCompactText(CFS.text||'');
+        const gm=cp.match(/현금흐름등급(CR[1-6])(CR[1-6])(CR[1-6])/i);
+        if(gm){
+          const reportYears=[...D.years].reverse();
+          const gs=[gm[1].toUpperCase(),gm[2].toUpperCase(),gm[3].toUpperCase()];
+          F.cashFlow.grades=reportYears.map((y,i)=>({year:y,grade:gs[i]})).reverse();
         }
       }
       const get3=labels=>{const a=finNearbyNumericRow(CFS,labels,3,18);return a.length>=3?ord(a.slice(0,3).map(v=>v==null?0:v)):null;};
@@ -4599,11 +4657,11 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
     const growText=finCompactText(GROW?GROW.text:'');
     const benchText=finCompactText(BENCH?BENCH.text:'');
     const actText=finCompactText(ACT?ACT.text:'');
-    if(/성장역량은양호함/.test(growText)||/양호한성장역량/.test(diagText))F.assessments.growth='양호';
-    if(/수익창출능력은양호함/.test(growText)||/양호한수익창출능력/.test(diagText))F.assessments.profitability='양호';
-    if(/재무안정성은양호함/.test(benchText)||/양호한재무안정성/.test(diagText))F.assessments.financialStability='양호';
-    if(/부채상환능력은양호함/.test(benchText)||/양호한부채상환능력/.test(diagText))F.assessments.debtRepayment='양호';
-    if(/재무효율성은보통이하/.test(actText)||/재무효율성이보통이하/.test(diagText))F.assessments.activity='보통 이하';
+    if(/성장역량은?양호/.test(growText)||/성장역량.*양호/.test(growText)||/양호한성장역량/.test(diagText))F.assessments.growth='양호';
+    if(/수익창출능력은?양호/.test(growText)||/수익창출능력.*양호/.test(growText)||/양호한수익창출능력/.test(diagText))F.assessments.profitability='양호';
+    if(/재무안정성은?양호/.test(benchText)||/재무안정성.*양호/.test(benchText)||/양호한재무안정성/.test(diagText))F.assessments.financialStability='양호';
+    if(/부채상환능력은?양호/.test(benchText)||/부채상환능력.*양호/.test(benchText)||/양호한부채상환능력/.test(diagText))F.assessments.debtRepayment='양호';
+    if(/재무효율성(?:은|이)?보통이하/.test(actText)||/재무효율성(?:은|이)?보통이하/.test(diagText))F.assessments.activity='보통 이하';
 
     const addBM=(pg,k,labels)=>{const x=finBenchmarkPair(pg,labels);if(x)F.industryBenchmarks[k]=x;};
     if(GROW){
@@ -4611,8 +4669,8 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
       addBM(GROW,'operatingProfitGrowth',['영업이익증가율','영업이익증가']);
       addBM(GROW,'assetGrowth','총자산증가율');
       addBM(GROW,'operatingMargin','영업이익률');
-      addBM(GROW,'ebitdaMargin','EBITDA마진율');
-      addBM(GROW,'roa',['총자산순이익률','총자산순이익']);
+      addBM(GROW,'ebitdaMargin',['EBITDA마진율','EBITDA마진']);
+      addBM(GROW,'roa',['총자산순이익률(ROA)','총자산순이익률','총자산순이익']);
     }
     if(BENCH){
       addBM(BENCH,'borrowingDependency','차입금의존도');
@@ -4623,9 +4681,9 @@ function finBuildCorporateFacts(pages,fmt,D,ord){
       addBM(BENCH,'borrowingsToSales','차입금/매출액');
     }
     if(ACT){
-      addBM(ACT,'receivableTurnover',['매출채권회전율','매출채권회전']);
-      addBM(ACT,'totalAssetTurnover',['총자본회전율','총자본회전율(']);
-      addBM(ACT,'equityTurnover',['자기자본회전율','자기자본회전']);
+      addBM(ACT,'receivableTurnover',['매출채권회전율(회)','매출채권회전율','매출채권회전']);
+      addBM(ACT,'totalAssetTurnover',['총자본회전율(회)','총자본회전율','총자본회전율(']);
+      addBM(ACT,'equityTurnover',['자기자본회전율(회)','자기자본회전율','자기자본회전']);
     }
     const _bmNames={revenueGrowth:'매출증가율',operatingProfitGrowth:'영업이익증가율',assetGrowth:'총자산증가율',operatingMargin:'영업이익률',ebitdaMargin:'EBITDA마진율',roa:'ROA',borrowingDependency:'차입금의존도',debtRatio:'부채비율',currentRatio:'유동비율',interestCoverage:'이자보상배수',ebitdaToBorrowings:'EBITDA/총차입금',borrowingsToSales:'차입금/매출액',receivableTurnover:'매출채권회전율',totalAssetTurnover:'총자본회전율',equityTurnover:'자기자본회전율'};
     const _bmSummary=Object.keys(F.industryBenchmarks).map(k=>{const x=F.industryBenchmarks[k];return `${_bmNames[k]||k} 회사 ${x.company} / 업종 ${x.industry}`;});
@@ -4776,6 +4834,19 @@ function finParse(pages,fmt){
     토지:ord(finCells(BS,['토지'])),
     건물:ord(finCells(BS,['건물 및 부속설비','건물및부속설비','건물및구축물','건물']))
   };
+  /* ★ KODATA_WEB 총매출 2중 검산: 임대수익이 별도 존재하는 기업에서 제품매출을 총매출로 오인하지 않도록
+     병합 텍스트의 '매출액(*)' 완전행을 한 번 더 우선 반영한다. */
+  if(fmt==='KODATA_WEB'){
+    const _salesExact=finExactTextRowNums(IS,'매출액(*)',3);
+    if(_salesExact)D.매출액=ord(_salesExact);
+    if(D.임대수익&&D.제품매출액&&D.매출액){
+      for(let i=0;i<Math.min(3,D.매출액.length);i++){
+        if(Number.isFinite(D.임대수익[i])&&D.임대수익[i]!==0&&D.매출액[i]===D.제품매출액[i]){
+          console.warn('[finParse] 총매출액과 제품매출액이 동일하나 임대수익 존재 — 총매출 정확행 확인 필요',i,D.매출액[i]);
+        }
+      }
+    }
+  }
   for(const k of ['자산총계','부채총계','자본총계','매출액','영업이익','순이익'])
     if(!D[k])throw new Error(`'${k}' 항목을 읽지 못했습니다. 보고서 양식이 다를 수 있습니다.`);
 
