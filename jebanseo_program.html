@@ -2192,6 +2192,10 @@ function autoAttachMiniSims(){
   var cur=topic||'';
   var spec=MINISIM_CATALOG[cur]; if(!spec)return;
   var count=0, MAX=2;   // 한 자료에 미니 시뮬은 최대 2개 (보수적)
+  /* ★ [2026-08-31] 중복 검사가 '같은 슬라이드 안'뿐이라, 덱 다른 장에 상속·유동성 고정 시뮬이 있어도
+     '승계' 한 단어로 자회사 장에 상속세 미니위젯이 또 붙던 결함 — 같은 도메인 estate 고정 시뮬이 덱 어디든 있으면 생략(우선순위: 고정>미니) */
+  var deckHasEstateSim=deck.slides.some(function(x){return ((x&&x.content)||[]).some(function(c){return c&&c.type==='sim'&&c.domain===spec.d&&c.mode==='estate';});});
+  if(spec.d==='corporate'&&deckHasEstateSim)return;
   deck.slides.forEach(function(s){
     if(count>=MAX)return;
     if(!s||s.region==='cover'||s.region==='toc')return;
@@ -2519,7 +2523,9 @@ function renderSim(it){const cfg=(it.mode==='custom')?buildCustomSimCfg(it):(SIM
     const bl=cfg.bl||['필요','수령'];
     const bar=cfg.bar?'<div class="simcmp"><div class="simcmprow"><span>'+bl[0]+'</span><div class="simtrk"><i data-bar="need"></i></div></div><div class="simcmprow"><span>'+bl[1]+'</span><div class="simtrk"><i class="g" data-bar="recv"></i></div></div><div class="simgap" data-o="gapnote"></div></div>':'';
     w.innerHTML='<div class="simh">🎚 '+cfg.t+' — 조건을 바꿔보세요</div><div class="simctl">'+ctl+'</div><div class="simout">'+out+'</div>'+bar+
-      '<div class="simwarn" data-simwarn></div><div class="simfoot">※ 공용 계산기 기반 시뮬레이션 — 조절 시 즉시 재계산됩니다. 계산 범위와 경고를 함께 확인해 주세요.</div>';
+      '<div class="simwarn" data-simwarn></div><div class="simfoot">※ 공용 계산기 기반 시뮬레이션 — 조절 시 즉시 재계산됩니다. 계산 범위와 경고를 함께 확인해 주세요.'
+      +((dom==='corporate'&&engineView==='estate'&&it.stockOnly===true)?' 현재 초기값은 주식(지분) 기준입니다 — 개인 부동산·금융자산 합산 시 상속세가 크게 늘어납니다.':'')   /* ★ [2026-08-31] 서버 stockOnly 플래그 기반 단서(개인자산 유입 시 자동 소멸) */
+      +'</div>';
   }
   try{if(window.JEBSIM)JEBSIM.update(w);}catch(_){}
   ['click','mousedown','pointerdown','touchstart'].forEach(ev=>w.addEventListener(ev,e=>e.stopPropagation()));
@@ -2527,7 +2533,7 @@ function renderSim(it){const cfg=(it.mode==='custom')?buildCustomSimCfg(it):(SIM
 /* 분야별 기본 모드 / 시작값 */
 function simDefaultMode(){return ({'연금설계':'full','보험설계':'cover','자산관리':'tax','기업컨설팅':'estate'})[topic]||'full';}
 function simDefaults(){const p=params||{};const o={ca:+p.age||40,ra:+p.retire||65,le:+p.lifeExpectancy||90,assetEok:(+p.asset>0?Math.round((+p.asset/10000)*10)/10:1),exp:+p.desiredMonthlyExpense||300,pen:+p.ssMonthly||120,rate:+p.expectedReturn||5,rrate:+p.receiveRate||3.5,infl:+p.inflationRate||2.5};const E=v=>(+v>0?Math.round((+v/10000)*10)/10:null);const set=(k,v)=>{if(v!=null&&!Number.isNaN(v))o[k]=v;};/* 보험: 값이 있을 때만 채움(없으면 SIM_DEF 기본값 유지) */set('loanEok',E(p.loanAmount));set('reEok',E(p.realEstate));set('fasset',E(p.financialAssets));   /* ★ C2 시드 */
-set('surv',+p.survivorMonthly||null);set('supy',+p.supportYears||null);set('edu',E(p.eduCost));set('cover',E(p.existingCover));set('debtEok',E(p.debt));set('liquidEok',E(p.asset));set('emergencyEok',(function(){var v=+p.emergencyFund||0;if(v>=1e6)v=v/10000;return v>0?Math.round(v/10000*10)/10:null;})());set('irate',+p.discountRate||null);set('iinfl',+p.inflationRate||null);set('ciTreat',+p.treatmentCost||null);set('ciRecov',+p.recoveryMonths||null);set('ciIncome',+p.monthlySalary||null);set('ciLossRate',+p.incomeLossRate||null);set('ciExisting',+p.existingDiagnosisBenefit||null);set('affIncome',+p.monthlySalary||null);set('affProt',+p.protectionPremium||null);set('affSav',+p.savingsPremium||null);set('chDiag',+p.childDiagnosisCost||null);set('medAnnual',+p.annualMedicalCost||null);set('wholePrem',+p.wholeLifePremium||null);set('termPrem',+p.termPremium||null);set('payY',+p.payYears||null);/* 기업: 값이 있을 때만 채움 */set('tasset',(function(){var eq=+p.ceoEquityValueEok||0,per=(+p.estateFinancial||0)+(+p.estateRealEstate||0);return eq>0?Math.round((eq+per/10000)*10)/10:E(p.totalAsset);})());   /* ★ c안: 기업=지분+개인자산(억). 자산관리 개인 totalAsset 경로는 폴백으로 보존 */set('svSal',E(p.ceoSalary));set('svYears',+p.serviceYears||+p.ceoTenureYears||+p.yearsInBusiness||null);set('svMult',(+p.severanceMultiple>=1&&+p.severanceMultiple<=3)?+p.severanceMultiple:null);set('cash',(+p.cashRatio>=0?+p.cashRatio:(function(){var eq=+p.ceoEquityValueEok||0,fin=+p.estateFinancial||0,t=eq*10000+fin+(+p.estateRealEstate||0);return t>0?Math.round(fin/t*1000)/10:null;})()));   /* ★ c안: 회사 현금비중 파생 철회 → 상속재산 중 금융 비중 */if(p.hasSpouse===true||p.hasSpouse==='true')o.spouse=1;else if(p.hasSpouse===false||p.hasSpouse==='false')o.spouse=0;set('child',+p.numChildren||null);set('fasset',E(p.estateFinancial));/* 상속 금융재산 만원→억 */set('estateDebt',E(p.estateDebt));/* 피상속인 채무 만원→억 */set('funeral',(+p.funeralCost>0?+p.funeralCost:null));/* 장례비(만원) — 슬라이더 단위 동일 *//* 연금: 월납입·납입기간 */set('dep',+p.monthlyDeposit||null);set('depy',+p.depositYears||null);/* 자산: 금융소득 분해 */var _intr=+p.interestIncome||+p.finIncome||0;if(_intr>0||+p.dividendIncome>0){set('interest',_intr);set('dividend',+p.dividendIncome||0);set('oth',+p.otherIncome||0);}return o;}
+set('surv',+p.survivorMonthly||null);set('supy',+p.supportYears||null);set('edu',E(p.eduCost));set('cover',E(p.existingCover));set('debtEok',E(p.debt));set('liquidEok',E(p.asset));set('emergencyEok',(function(){var v=+p.emergencyFund||0;if(v>=1e6)v=v/10000;return v>0?Math.round(v/10000*10)/10:null;})());set('irate',+p.discountRate||null);set('iinfl',+p.inflationRate||null);set('ciTreat',+p.treatmentCost||null);set('ciRecov',+p.recoveryMonths||null);set('ciIncome',+p.monthlySalary||null);set('ciLossRate',+p.incomeLossRate||null);set('ciExisting',+p.existingDiagnosisBenefit||null);set('affIncome',+p.monthlySalary||null);set('affProt',+p.protectionPremium||null);set('affSav',+p.savingsPremium||null);set('chDiag',+p.childDiagnosisCost||null);set('medAnnual',+p.annualMedicalCost||null);set('wholePrem',+p.wholeLifePremium||null);set('termPrem',+p.termPremium||null);set('payY',+p.payYears||null);/* 기업: 값이 있을 때만 채움 */set('tasset',(function(){var eq=+p.ceoEquityValueEok||0,per=(+p.estateFinancial||0)+(+p.estateRealEstate||0);return eq>0?Math.round((eq+per/10000)*10)/10:E(p.totalAsset);})());   /* ★ c안: 기업=지분+개인자산(억). 자산관리 개인 totalAsset 경로는 폴백으로 보존 */set('svSal',E(p.ceoSalary));set('svYears',+p.serviceYears||((+p.ceoAppointedYear>1900&&+p.ceoAppointedYear<=new Date().getFullYear())?new Date().getFullYear()-(+p.ceoAppointedYear):null));/* ★ [2026-08-31] 취임연도 파생 · 미생산 별칭(ceoTenureYears·yearsInBusiness) 제거 */set('svMult',(+p.severanceMultiple>=1&&+p.severanceMultiple<=3)?+p.severanceMultiple:null);set('cash',(+p.cashRatio>=0?+p.cashRatio:(function(){var eq=+p.ceoEquityValueEok||0,fin=+p.estateFinancial||0,t=eq*10000+fin+(+p.estateRealEstate||0);return t>0?Math.round(fin/t*1000)/10:null;})()));   /* ★ c안: 회사 현금비중 파생 철회 → 상속재산 중 금융 비중 */if(p.hasSpouse===true||p.hasSpouse==='true')o.spouse=1;else if(p.hasSpouse===false||p.hasSpouse==='false')o.spouse=0;set('child',+p.numChildren||null);set('fasset',E(p.estateFinancial));/* 상속 금융재산 만원→억 */set('estateDebt',E(p.estateDebt));/* 피상속인 채무 만원→억 */set('funeral',(+p.funeralCost>0?+p.funeralCost:null));/* 장례비(만원) — 슬라이더 단위 동일 *//* 연금: 월납입·납입기간 */set('dep',+p.monthlyDeposit||null);set('depy',+p.depositYears||null);/* 자산: 금융소득 분해 */var _intr=+p.interestIncome||+p.finIncome||0;if(_intr>0||+p.dividendIncome>0){set('interest',_intr);set('dividend',+p.dividendIncome||0);set('oth',+p.otherIncome||0);}return o;}
 /* 분야별 시뮬레이터 메뉴 [모드, 이름, 설명, 배지] */
 /* ═══ ★ C3 (2026-08-22): 자료 목적·용도 — 서버 domainKnowledge.PURPOSES/STAGES와 "문구 동일" 복제.
    서버가 화이트리스트로 검증하므로 여기 문구를 바꾸면 반드시 서버 상수도 함께 바꿀 것. */
@@ -5562,7 +5568,7 @@ function finToPending(){
   Object.keys(_AL).forEach(k=>{if(F.assessments&&F.assessments[k])sourceAssessments.push({label:_AL[k],value:F.assessments[k]});});
   return {
     baseYear:D.years[0], comparisonYear:D.years[1], statementType:FIN.stmtType||'별도', unit:finUnit(),
-    ceoBirthYear:D.대표생년||undefined, ceoAppointedYear:D.대표취임년||undefined,
+    ceoBirthYear:D.대표생년||undefined, ceoAppointedYear:D.대표취임년||undefined, foundedYear:D.설립년||undefined,   /* ★ [2026-08-31] 설립연도 → 서버 업력·근속 폴백 */
     source:'첨부 기업종합보고서 PDF 자동추출(표 좌표 + 기업 Facts) · 회계 항등식 검산 완료',
     sourceAssessments, uncertain:unc, facts, comparative,
     extracted:{
@@ -6629,7 +6635,7 @@ async function startSession(){
   }
   origRequest=rawInput;
   // ★ 입구 잔액 하드 게이트 — 무료도 없고 포인트+잔액도 부족하면 진입(생성) 자체를 막고 충전 유도
-  if(!isDevMode() && !(TRIAL&&TRIAL.on)){
+  if(!(TRIAL&&TRIAL.on)){
     const _q=await requestQuota();
     if(_q && _q.ok && !_q.unlimited){
       const _price=_q.paid?5000:10000;                                   // 정규 5,000 / 일반 10,000 (maybePromptCharge와 동일 기준)
@@ -7031,7 +7037,7 @@ var TRIAL={on:false,token:'',consumed:false};
 (function(){try{var t=new URLSearchParams(location.search).get('trial');if(t){TRIAL.on=true;TRIAL.token=t;}}catch(_){}})();
 function wonFmt(n){return (Number(n)||0).toLocaleString('ko-KR')+'원';}
 function ptFmt(n){return (Number(n)||0).toLocaleString('ko-KR')+'P';}
-function isDevMode(){ return false; }  // ★ dev 무과금 우회 제거 — 무제한은 서버측 _aiProposalAllowed(gildong·admin·role=admin)로만 판정
+// ★ dev 무과금 우회는 제거됨 — 무제한은 서버측 _aiProposalAllowed(gildong·admin·role=admin)로만 판정 (isDevMode 죽은 분기 6곳 정리 2026-08-31)
 // ★ 보안: 과금·회원 메시지는 신뢰하는 출처(JARVIA 플랫폼)만 주고받는다.
 //   앱과 JARVIA가 같은 출처(github.io)라 location.origin이 곧 신뢰 출처. JARVIA가 별도 도메인이면 아래 목록에 추가.
 const JB_TRUSTED_ORIGINS=(function(){const s=new Set();try{s.add(location.origin);}catch(_){}
@@ -7243,7 +7249,7 @@ function chargeFailMsg(err){
   if(err==='NOT_LOGGED_IN')return '로그인이 필요합니다. 자비아에서 로그인 후 이용해 주세요.';
   return '결제 처리 오류: '+(err||'');
 }
-// ★ 자료 생성 시 1건 차감 (4종: 월4건 무료→5,000원 / 일반: 10,000원)
+// ★ 자료 저장(이용확정) 시 1건 차감 — A안(2026-07-13): 생성 시점엔 차감하지 않고 저장 시 chargeGenerate 호출. 함수명은 호환 유지 (4종: 월4건 무료→5,000원 / 일반: 10,000원)
 async function chargeGenerate(){
   if(TRIAL.on){
     if(TRIAL.consumed)return {ok:false,error:'TRIAL_DONE'};
@@ -7253,7 +7259,6 @@ async function chargeGenerate(){
     if(r.used){TRIAL.consumed=true;return {ok:false,error:'TRIAL_USED'};}
     return {ok:false,error:r.error||'TRIAL_ERR'};
   }
-  if(isDevMode())return {ok:true,dev:true};
   const res=await requestCharge('generate',{domain:topic,client:clientName||'',kind:'자료생성'});
   if(!res.ok)return {ok:false,error:res.error};
   return {ok:true,unlimited:res.unlimited,charged:res.charged,price:res.price,balance:res.balance,point:res.point,used:res.used,freeQuota:res.freeQuota};
@@ -7267,7 +7272,6 @@ async function chargeSlideOp(kindLabel,n){
     return {ok:true,charged:false,trial:true,count:aiOpCount};
   }
   if(aiOpCount<=AI_FREE_OPS)return {ok:true,charged:false,count:aiOpCount};
-  if(isDevMode())return {ok:true,charged:true,dev:true,count:aiOpCount};
   const res=await requestCharge('slide',{kind:kindLabel,n:n,qty:1});
   if(!res.ok){aiOpCount--;return {ok:false,error:res.error};}
   return {ok:true,charged:true,price:res.price||AI_SLIDE_PRICE,balance:res.balance,count:aiOpCount};
@@ -7277,7 +7281,6 @@ async function precheckSlideOp(){
   if(!_deckSaved)return {ok:false,error:'NOT_SAVED'};   // ★ 저장 전엔 편집 잠금 (먼저 저장)
   if(TRIAL.on)return aiOpCount<AI_FREE_OPS?{ok:true}:{ok:false,error:'TRIAL_OPS_DONE'};
   if(aiOpCount<AI_FREE_OPS)return {ok:true};      // 무료 구간 → 통과(차감 없음)
-  if(isDevMode())return {ok:true};
   const q=await requestQuota();
   if(!q.ok)return {ok:false,error:q.error};
   if(q.unlimited)return {ok:true};
@@ -7308,12 +7311,6 @@ async function refreshQuota(seed){
   if(!el && !hb && !st)return;
   const set=function(node,base,cls,html){ if(!node)return; node.innerHTML=html; node.className=base+(cls?' '+cls:''); };
   const clear=function(){ if(el){el.textContent='';el.className='qstat';} if(hb){hb.textContent='';hb.className='hbal';} if(st){st.textContent='';st.className='squota';} };
-  if(isDevMode()){
-    set(el,'qstat','dev','🛠 개발모드 — 미과금 테스트');
-    set(st,'squota','dev','🛠 개발모드 · 미과금 테스트');
-    set(hb,'hbal','dev','🛠 개발모드 · 미과금');
-    return;
-  }
   if(!window.opener){ clear(); return; }      // 직접 열림 → 표시 안 함
   // ★ 저장 직후 차감 결과(seed)가 오면 서버 재조회 없이 즉시 반영 — read-after-write 경합 회피(건수 즉시 갱신)
   const q=(seed && seed.ok!==false && (seed.unlimited || seed.freeQuota!=null || seed.used!=null))
