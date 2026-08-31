@@ -71,6 +71,7 @@ td a.fund:hover{color:var(--act)}
 .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 .src{font-size:12px;color:var(--mute);margin-top:8px;line-height:1.5}
 .note{background:var(--warnbg);border-left:3px solid var(--warn);padding:9px 12px;border-radius:0 6px 6px 0;font-size:13px;color:var(--ink2)}
+.stale-banner{display:none;background:var(--warnbg);border-bottom:1px solid #EAD9A8;color:var(--warn);font-size:13px;padding:8px 22px;font-weight:600}   /* 기준가 신선도 경고 — [2026-09-01] */
 .overlay{position:fixed;inset:0;background:rgba(27,42,65,.96);z-index:100;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#fff;text-align:center;padding:28px}
 .overlay a{background:var(--gold);color:var(--ink);font-weight:700;text-decoration:none;padding:12px 24px;border-radius:10px}
 .spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--act);border-radius:50%;animation:sp .7s linear infinite;margin:20px auto}
@@ -111,6 +112,7 @@ td a.fund:hover{color:var(--act)}
   </nav>
   <div class="me"><span id="meName"></span><a href="./index.html">자비아 홈</a></div>
 </header>
+<div id="staleBanner" class="stale-banner"></div>   <!-- 기준가 신선도 경고 — [2026-09-01] -->
 
 <div class="wrap">
 
@@ -250,7 +252,7 @@ async function loadFunds(){
     if(cached){const c=JSON.parse(cached);if(Date.now()-c.at<6*3600000){FUNDS=c.funds;META=c.meta;initFilters();applyFilters();return;}}
     const r=await call('vulFundList');
     if(!r.success){toast(r.error||'펀드 목록을 불러오지 못했습니다');return;}
-    FUNDS=r.funds;META={latestApi:r.latestApi,latestExcel:r.latestExcel};
+    FUNDS=r.funds;META={latestApi:r.latestApi,latestExcel:r.latestExcel,excelLagBizDays:r.excelLagBizDays??null,excelStale:!!r.excelStale};   /* 신선도 — [2026-09-01] */
     try{sessionStorage.setItem('vulFundList',JSON.stringify({at:Date.now(),funds:FUNDS,meta:META}));}catch(_){}
     initFilters();applyFilters();
   }catch(e){toast('오류: '+e.message);}
@@ -260,6 +262,10 @@ function initFilters(){
   const cos=[...new Set(FUNDS.map(f=>f.co))].sort();$('fCo').innerHTML='<option value="">보험사 전체</option>'+cos.map(c=>`<option>${esc(c)}</option>`).join('');
   const smalls=[...new Set(FUNDS.map(f=>f.small).filter(Boolean))].sort();$('fSmall').innerHTML='<option value="">소유형 전체</option>'+smalls.map(c=>`<option>${esc(c)}</option>`).join('');
   $('dataDates').textContent=`엑셀 기준 ${ymdFmt(META.latestExcel)} · API 기준 ${ymdFmt(META.latestApi)}`;
+  /* [2026-09-01] freshness rule — 마지막 엑셀 적재가 3영업일 이상 경과하면 상단 경고 배너 */
+  const sb=$('staleBanner');
+  if(META.excelStale){sb.textContent=`⚠ 기준가 데이터가 최신이 아닙니다 — 마지막 엑셀 적재 ${ymdFmt(META.latestExcel)}${META.excelLagBizDays!=null?` (${META.excelLagBizDays}영업일 경과)`:''}. 적립금·수익률이 실제와 다를 수 있으니 관리자 화면에서 공시실 엑셀 업로드 후 새로고침하세요.`;sb.style.display='block';}
+  else sb.style.display='none';
 }
 const getR=(f,k)=>f.ret?f.ret[k]:null;
 const val=(f,k)=>({r1:getR(f,'y1'),r3:getR(f,'y3'),r5:getR(f,'y5'),rc:getR(f,'cum'),nav:f.nav==null?null:f.nav/1e8,fee:f.fee,price:f.price,setDt:f.setDt,co:f.co,nm:f.nm,small:f.small})[k];
