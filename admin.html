@@ -3571,7 +3571,7 @@ async function vulBackfillRun(retryFailed){
   _vulBfRunning=true;$('vul-bf-btn').disabled=true;
   try{
     for(let i=0;i<60&&_vulBfRunning;i++){
-      const r=(await httpsCallable(functions,'vulBackfillStep')({batch:150,retryFailed:!!retryFailed})).data;
+      const r=(await httpsCallable(functions,'vulBackfillStep',{timeout:600000})({batch:150,retryFailed:!!retryFailed})).data;   /* 스텝 최대 9분 — 기본 70초 타임아웃이면 루프가 끊김 */
       if(!r.success){toast(r.error||'백필 오류','error');break;}
       _vulRenderBf({total:r.total,next:r.next??r.done,done:r.done,failedCount:r.failedCount,failed:{},finished:r.finished,latestDate:r.latestDate,updatedAt:new Date().toISOString()});
       if(r.finished||retryFailed||r.processed===0){toast(r.finished?'백필 완료':'스텝 완료','success');break;}
@@ -3583,12 +3583,12 @@ function vulBackfillStop(){_vulBfRunning=false;toast('현재 스텝이 끝나면
 async function vulBackfillReset(){
   if(!confirm('백필 커서를 초기화하고 처음부터 다시 받습니다. 이미 저장된 기준가는 덮어써질 뿐 삭제되지 않습니다. 계속할까요?'))return;
   _vulBfRunning=true;$('vul-bf-btn').disabled=true;
-  try{const r=(await httpsCallable(functions,'vulBackfillStep')({reset:true,batch:150})).data;if(!r.success)toast(r.error,'error');else toast('초기화 후 첫 스텝 완료','success');}catch(e){toast(e.message,'error');}
+  try{const r=(await httpsCallable(functions,'vulBackfillStep',{timeout:600000})({reset:true,batch:150})).data;if(!r.success)toast(r.error,'error');else toast('초기화 후 첫 스텝 완료','success');}catch(e){toast(e.message,'error');}
   _vulBfRunning=false;$('vul-bf-btn').disabled=false;vulRefreshStatus();
 }
 async function vulMonthlyNow(){
   if(!confirm('API 최신일 기준으로 모든 펀드의 누락 구간을 보충합니다 (최대 8분). 실행할까요?'))return;
-  try{const r=(await httpsCallable(functions,'vulMonthlySyncNow')({})).data;toast(r.success?`동기화: ${r.ok}/${r.targets} 완료, 실패 ${r.fail}, 신규 ${r.newFunds}${r.stopped?' (시간 초과로 일부 남음 — 다시 실행)':''}`:(r.error||'실패'),r.success?'success':'error');}catch(e){toast(e.message,'error');}
+  try{const r=(await httpsCallable(functions,'vulMonthlySyncNow',{timeout:600000})({})).data;toast(r.success?`동기화: ${r.ok}/${r.targets} 완료, 실패 ${r.fail}, 신규 ${r.newFunds}${r.stopped?' (시간 초과로 일부 남음 — 다시 실행)':''}`:(r.error||'실패'),r.success?'success':'error');}catch(e){toast(e.message,'error');}
   vulRefreshStatus();
 }
 async function vulUploadFunds(){
@@ -3601,7 +3601,7 @@ async function vulUploadFunds(){
     if(!rows.length){_vulSetMsg('vul-f-msg','펀드 행을 찾지 못했습니다 (펀드현황 파일인지 확인)',false);return;}
     const data=rows.map(r=>({co:r[0],cd:r[1],nm:r[2],setDt:r[3],price:_vulNum(r[4]),r1:_vulNum(r[5]),r3:_vulNum(r[6]),r5:_vulNum(r[7]),r7:_vulNum(r[8]),r10:_vulNum(r[9]),r15:_vulNum(r[10]),rc:_vulNum(r[11]),feeOp:_vulNum(r[12]),feeEnt:_vulNum(r[13]),feeTr:_vulNum(r[14]),feeAd:_vulNum(r[15]),feeTot:_vulNum(r[16]),wStock:_vulNum(r[17]),wBond:_vulNum(r[18]),wFund:_vulNum(r[19]),wLiq:_vulNum(r[20]),wEtc:_vulNum(r[21]),cls:r[22],big:r[23],small:r[24],navEok:_vulNum(r[25]),mgr:r[26],trustee:r[27],feeEtc:_vulNum(r[28]),feeFof:_vulNum(r[29])}));
     _vulSetMsg('vul-f-msg',`${data.length}개 펀드 파싱 완료 — 서버 적재 중…`);
-    const r=(await httpsCallable(functions,'vulImportFunds')({date,rows:data})).data;
+    const r=(await httpsCallable(functions,'vulImportFunds',{timeout:300000})({date,rows:data})).data;
     if(!r.success){_vulSetMsg('vul-f-msg',r.error,false);return;}
     _vulSetMsg('vul-f-msg',`적재 완료: ${r.date} 기준 ${r.saved}개 (신규 펀드 ${r.newFunds}, 건너뜀 ${r.skipped})`,true);$('vul-f-file').value='';vulRefreshStatus();
   }catch(e){_vulSetMsg('vul-f-msg','오류: '+e.message,false);}
@@ -3620,7 +3620,7 @@ async function vulUploadProducts(){
     const data=aoa.slice(hi+1).filter(r=>String(r[iCo]||'').trim()&&String(r[iNm]||'').trim()).map(r=>({co:String(r[iCo]).trim(),name:String(r[iNm]).trim(),kind:String(r[iK]||'').trim(),ptype:String(r[iT]||'').trim(),start:String(r[iS]||'').trim(),end:String(r[iE]||'').trim(),fundCnt:_vulNum(r[iC])}));
     if(!data.length){_vulSetMsg('vul-p-msg','상품 행이 없습니다',false);return;}
     _vulSetMsg('vul-p-msg',`${data.length}개 상품 파싱 완료 — 서버 적재 중…`);
-    const r=(await httpsCallable(functions,'vulImportProducts')({rows:data})).data;
+    const r=(await httpsCallable(functions,'vulImportProducts',{timeout:300000})({rows:data})).data;
     if(!r.success){_vulSetMsg('vul-p-msg',r.error,false);return;}
     _vulSetMsg('vul-p-msg',`적재 완료: ${r.saved}개 (건너뜀 ${r.skipped})`,true);$('vul-p-file').value='';vulRefreshStatus();
   }catch(e){_vulSetMsg('vul-p-msg','오류: '+e.message,false);}
