@@ -3223,6 +3223,16 @@
         <p style="font-size:11px;color:#9CA3AF;margin:0 0 10px;line-height:1.5">고객 관리에 등록한 고객에게 멘트(카톡·복사)로 보낸 브리핑을 누가 열람했는지 표시됩니다. 선택한 기간 기준이며, 활동이 최근인 순서로 정렬됩니다.</p>
         <div id="fcv-clients" style="display:flex;flex-direction:column;gap:6px"><div style="font-size:12px;color:#9CA3AF">불러오는 중...</div></div>
       </div>
+      <!-- ── 🕒 열람 타임라인 (fc_view_logs 원본 — 비콘 1건 = 1행) — 2026-09-01 ── -->
+      <div style="background:#fff;border:0.5px solid #E1E8EE;border-radius:12px;padding:14px 16px;margin-top:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+          <span style="font-size:13px;font-weight:700;color:#1B3A6B">🕒 열람 타임라인</span>
+          <select id="fvt-client" onchange="fvtReload()" style="font-size:12px;padding:5px 8px;border:1px solid #E1E8EE;border-radius:8px;color:#374151;background:#fff"><option value="">전체</option><option value="__anon">익명만</option></select>
+        </div>
+        <p style="font-size:11px;color:#9CA3AF;margin:0 0 8px;line-height:1.5">누가·언제·어떤 기기로 무엇을 눌렀는지 건별로 표시됩니다(최근 6개월, 100건씩). 고객 식별이 없는 열람은 「익명 · 기기 코드」로 표시되며, 같은 기기 30분 내 재방문은 서버에서 제외됩니다.</p>
+        <div id="fvt-list" style="display:flex;flex-direction:column"><div style="font-size:12px;color:#9CA3AF">불러오는 중...</div></div>
+        <div style="text-align:center;margin-top:8px"><button type="button" id="fvt-more" onclick="fvtMore()" style="display:none;font-size:12px;font-weight:700;padding:6px 18px;border:1px solid #E1E8EE;border-radius:8px;background:#fff;color:#1B3A5C;cursor:pointer">더 보기</button></div>
+      </div>
     </div>
     <!-- ═══ /📊 열람 현황 탭 ═══ -->
 
@@ -10140,6 +10150,7 @@ async function loadFcViews(){
   }
   _fcvAuthWait=0;
   loadFcClientViews();
+  if(!_fvtLoaded)loadFcViewTimeline(false);   /* ★ [2026-09-01] 열람 타임라인 — 기간 토글과 무관, 최초 1회 */
   const nav=$('fcv-month-nav');if(nav)nav.style.display=fcvMode==='month'?'flex':'none';
   const dates=fcvDates();
   if(fcvMode==='month')$('fcv-ym').textContent=fcvY+'.'+fccD2(fcvM);
@@ -10324,6 +10335,89 @@ window.fcvToggleClient=function(head){
     if(arr)arr.style.transform=open?'rotate(0deg)':'rotate(90deg)';
   }catch(e){}
 };
+/* ── 🕒 열람 타임라인 (fc_view_logs 원본 로그) — 2026-09-01 ──
+   고객별 열람(일별 합산)과 달리 비콘 1건 = 1행. 시각(초)·고객명/익명(기기코드 4자리)·기기·페이지·이벤트.
+   최근 180일, 100건씩 [더 보기] (마지막 행 createdAt 미만 조건으로 이어 읽음 — startAfter import 불필요).
+   색인: fcAuthUid+createdAt(desc) / fcAuthUid+clientId+createdAt(desc) */
+let _fvtLoaded=false,_fvtCursor=null,_fvtNames={},_fvtRows=[];
+const FVT_DAYS=180,FVT_PAGE=100;
+function fvtDevice(ua){
+  ua=String(ua||'');
+  const app=/KAKAOTALK/i.test(ua)?' 카톡':/NAVER\(inapp/i.test(ua)?' 네이버':'';
+  if(/iPhone|iPad/.test(ua))return '📱 iPhone'+app;
+  if(/Android/.test(ua))return '📱 Android'+app;
+  if(/Windows|Macintosh|Linux/.test(ua))return '💻 PC';
+  return '❔ 기타';
+}
+function fvtEvLabel(e){
+  const id=String(e&&e.id||'');
+  if(e.t==='channel_visit'||e.t==='daily_visit')return '방문';
+  if(id.indexOf('선택·')===0)return id.replace(/_/g,' ').replace('-',' → ');
+  if(e.t==='card')return FCV_CARD_LABELS[id]||id.replace(/_/g,' ');
+  return id.replace(/_/g,' ');
+}
+function fvtFmtTs(ts){
+  const ms=ts&&ts.toMillis?ts.toMillis():0;if(!ms)return '-';
+  const k=new Date(ms+9*3600000);
+  return (k.getUTCMonth()+1)+'/'+k.getUTCDate()+' '+fccD2(k.getUTCHours())+':'+fccD2(k.getUTCMinutes())+':'+fccD2(k.getUTCSeconds());
+}
+function fvtRowHtml(v){
+  const cid=v.clientId||'';
+  const who=cid?('<b style="color:#1F2937">'+fccEsc(_fvtNames[cid]||'삭제된 고객')+'</b>')
+               :('<span style="color:#6B7280">익명 · 기기 '+fccEsc(String(v.viewerKey||'').slice(0,4))+'</span>');
+  const nw=v.isNew?' <span style="font-size:10px;color:#B45309;background:#FEF3C7;border-radius:6px;padding:1px 5px">첫방문</span>':'';
+  const ch=v.page==='channel';
+  const evs=(v.events||[]).map(e=>'<span style="display:inline-block;font-size:11px;color:#374151;background:#F1F5F9;border-radius:10px;padding:2px 8px;margin:2px 4px 2px 0">'+fccEsc(fvtEvLabel(e))+'</span>').join('');
+  return '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:7px 0;border-top:0.5px solid #EEF2F6">'
+    +'<span style="flex:0 0 auto;font-size:12px;font-weight:700;color:#1B3A6B;font-variant-numeric:tabular-nums">'+fvtFmtTs(v.createdAt)+'</span>'
+    +'<span style="flex:0 0 auto;font-size:12px;min-width:110px">'+who+nw+'</span>'
+    +'<span style="flex:0 0 auto;font-size:11px;color:#6B7280">'+fvtDevice(v.ua)+'</span>'
+    +'<span style="flex:0 0 auto;font-size:11px;font-weight:700;color:'+(ch?'#0F6E56':'#1B3A5C')+'">'+(ch?'내채널':'데일리')+'</span>'
+    +'<span style="flex:1;min-width:160px">'+(evs||'<span style="font-size:11px;color:#C5CAD6">-</span>')+'</span>'
+    +'</div>';
+}
+async function loadFcViewTimeline(more){
+  const box=$('fvt-list'),btn=$('fvt-more'),sel=$('fvt-client');if(!box)return;
+  if(!me){box.innerHTML='<div style="font-size:12px;color:#9CA3AF">로그인 후 이용 가능합니다.</div>';return;}
+  _fvtLoaded=true;
+  if(!more){
+    _fvtCursor=null;_fvtRows=[];
+    box.innerHTML='<div style="font-size:12px;color:#9CA3AF">불러오는 중...</div>';
+    try{
+      const cs=await fccFetch();_fvtNames={};(cs||[]).forEach(c=>{_fvtNames[c.id]=c.name||'고객';});
+      if(sel&&sel.options.length<=2){   /* 고객 옵션 최초 1회 채움 — 「익명만」 앞에 가나다순 삽입 */
+        const cur=sel.value;
+        (cs||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ko'))
+          .forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.name||'고객';sel.insertBefore(o,sel.lastElementChild);});
+        sel.value=cur;
+      }
+    }catch(_e){}
+  }
+  const pick=sel?sel.value:'';
+  try{
+    const from=Timestamp.fromMillis(Date.now()-FVT_DAYS*86400000);
+    const cond=[collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid)];
+    if(pick==='__anon')cond.push(where('clientId','==',null));
+    else if(pick)cond.push(where('clientId','==',pick));
+    cond.push(where('createdAt','>=',from));
+    if(_fvtCursor)cond.push(where('createdAt','<',_fvtCursor));
+    cond.push(orderBy('createdAt','desc'),limit(FVT_PAGE));
+    const snap=await getDocs(query(...cond));
+    const rows=snap.docs.map(d=>d.data());
+    _fvtRows=_fvtRows.concat(rows);
+    if(rows.length)_fvtCursor=rows[rows.length-1].createdAt;
+    box.innerHTML=_fvtRows.length?_fvtRows.map(fvtRowHtml).join(''):'<div style="font-size:12px;color:#9CA3AF">최근 6개월 열람 기록이 없습니다.</div>';
+    if(btn)btn.style.display=rows.length===FVT_PAGE?'inline-block':'none';
+  }catch(e){
+    console.error('loadFcViewTimeline error:',e);
+    const idx=/index/i.test(String(e&&e.message||''));
+    box.innerHTML='<div style="font-size:12px;color:#DC2626">열람 타임라인을 불러오지 못했습니다.'+(idx?' (Firestore 색인 생성 필요 — 콘솔 오류의 링크 참조)':'')+'</div>';
+    if(btn)btn.style.display='none';
+  }
+}
+window.fvtReload=function(){loadFcViewTimeline(false);};
+window.fvtMore=function(){loadFcViewTimeline(true);};
+
 window.fcvSetMode=function(mode){
   fcvMode=mode;
   document.querySelectorAll('#fcv-seg [data-fcv]').forEach(b=>{
