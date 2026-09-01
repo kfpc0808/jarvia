@@ -1116,7 +1116,7 @@ const dateParam=params.get('d')||'';
    k    : 서명 키 <b36날짜>.<서명10자> — 서버(dailyShareKey)만 발급·검증 가능
    _cSig: 서명 검증용 고객ID — 키가 봉인한 값은 URL의 c 그대로여야 하므로
           localStorage 복원값(_jvCID)이 아니라 URL 원본만 쓴다 */
-const keyParam=(params.get('k')||'').trim();
+let keyParam=(params.get('k')||'').trim();   /* ★ [2026-09-01] const→let — 키 없는 링크는 cdGatePass에서 오늘 키(today)로 채운다 */
 const _cSig=(function(){const v=(params.get('c')||'').trim();return /^[A-Za-z0-9_-]{1,40}$/.test(v)?v:'';})();
 /* 발효일: 이 날(KST)부터 서명 없는 링크는 잠금 화면. 킬스위치 겸용 —
    문제 발생 시 이 값을 미래 날짜로 바꿔 배포하면 게이트가 즉시 풀린다.
@@ -1508,6 +1508,15 @@ async function cdGatePass(){
     }
     if(today<DAILY_KEY_FROM)return true;    /* 발효 전 — 구형 링크 그대로 동작 */
     if(await _jvOwnerP)return true;         /* 컨설턴트 본인(로그인) — 항상 통과 */
+    /* ★ [2026-09-01] 키 없는 ?fc= 링크 → 서버에서 오늘 키를 받아 서명 링크로 승격(내채널·소개카드·주소창 복사·북마크 전부 정상).
+       d= 지정(지난 호)은 대상 아님. 실패 시에만 잠금. 재진입은 keyParam 분기에서 반드시 return 하므로 최대 1회. */
+    if(!dateParam){
+      try{
+        const r=await httpsCallable(fns,'dailyShareKey')({mode:'today',fc:fcId});
+        const k=(r&&r.data&&r.data.success)?String(r.data.key||''):'';
+        if(k){keyParam=k;return cdGatePass();}
+      }catch(_e){}
+    }
     await cdShowLocked(dateParam?'expired':'nokey');
     return false;
   }catch(e){ console.warn('[gate] 오류 — 페일오픈:',e&&e.message); return true; }
@@ -1525,7 +1534,7 @@ async function cdShowLocked(kind){
   const nm=(f&&f.name)||'담당 컨설턴트', co=(f&&f.company)||'';
   const T=(kind==='invalid')
     ? ['유효하지 않은 링크예요','링크가 손상되었거나 잘못 전달되었습니다.']
-    : ['링크 유효기간이 지났어요','리포트 링크는 받으신 날부터 '+DAILY_GRACE_DAYS+'일간 열어보실 수 있습니다.'];
+    : ['이 링크로는 열 수 없어요','담당 컨설턴트가 보내드린 링크로 열어주세요.'];   /* ★ [2026-09-01] 일수 미노출 — nokey 실패·d= 무키 공통 문구 */
   try{document.getElementById('mainContent').style.display='none';}catch(_e){}
   try{document.getElementById('errorState').style.display='none';}catch(_e){}
   const el=document.getElementById('loadingState');if(!el)return;
