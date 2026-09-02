@@ -1279,7 +1279,7 @@ function renderOrgCard(){
   }
   /* 알림톡 수신 토글 */
   const ph=_myPhone.length>=10?_myPhone.slice(0,3)+'-****-'+_myPhone.slice(-4):'';
-  const tog=`<div class="tog${o.me.alimOk?' on':''}" onclick="wlOrgAlim(${o.me.alimOk?'false':'true'})"><span>상위자 코멘트·공지를 <b>알림톡</b>으로 받기</span><span class="sw"><i></i></span></div><div class="onote" style="margin-top:5px">카카오 "한국FP센터" 채널${ph?` → <b style="color:var(--navy)">${ph}</b> (자비아 가입 번호)`:''} 로 수신<br>비용은 보내는 사람이 부담합니다</div>`;
+  const tog=`<div class="tog${o.me.alimOk?' on':''}" onclick="wlOrgAlim(${o.me.alimOk?'false':'true'})"><span>상위자 코멘트·공지를 <b>알림톡</b>으로 받기</span><span class="sw"><i></i></span></div><div class="onote" style="margin-top:5px">카카오 "한국FP센터" 채널${ph?` → <b style="color:var(--navy)">${ph}</b>`:''} 수신 · 비용은 보내는 사람 부담</div>`;
   el.innerHTML=`<div class="ttl"><b>내 조직</b>${st}</div>${body}${down}${tog}`;   /* 가이드 진입은 헤더 '이용안내' 하나로 통일 [2026-09-02] */
   renderUpStrat();   /* ★ [2026-09-02] */
 }
@@ -1751,7 +1751,12 @@ async function ckiSave(payload,msg){
     loadCki().catch(()=>{});   /* 좌표 포함 전체 문서 재로드 — 이후 위치 수정 시 시작점으로 사용 */
     if(_view==='vTeam'&&_orgMe&&_orgMe.isUpline)loadTeam();
     return true;
-  }catch(e){console.warn('cki',e);toast('저장하지 못했습니다');return false;}
+  }catch(e){
+    console.warn('cki',e);
+    const c=(e&&e.code)||'';
+    toast(c.includes('not-found')||c.includes('unimplemented')?'서버에 출첵 기능(wlCheckin)이 아직 배포되지 않았습니다':'저장하지 못했습니다'+(c?' ('+c+')':''));
+    return false;
+  }
 }
 window.wlCkiOffice=function(){ckiSave({mode:'office'},'🏢 사무실 출첵 완료');};
 window.wlCkiField=function(){
@@ -1771,10 +1776,12 @@ function loadKakao(){
   });
   return _kkP;
 }
-function ckiGeo(){return new Promise((res)=>{
+function ckiGeo(fast){return new Promise((res)=>{
   if(!navigator.geolocation)return res(null);
-  navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lng:p.coords.longitude}),()=>res(null),{enableHighAccuracy:true,timeout:6000,maximumAge:60000});
+  const opt=fast?{enableHighAccuracy:false,timeout:4000,maximumAge:300000}:{enableHighAccuracy:true,timeout:9000,maximumAge:0};
+  navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lng:p.coords.longitude}),()=>res(null),opt);
 });}
+async function ckiGeo2(){return (await ckiGeo(true))||(await ckiGeo(false));}
 async function ckiInitMap(){
   const el=$('ckiMap');if(!el)return;
   try{await loadKakao();}catch(e){
@@ -1782,7 +1789,7 @@ async function ckiInitMap(){
     const ae=$('ckiAddr');if(ae)ae.textContent='지도 로드 실패 — 주소 없이 체크됩니다';
     _ckiPos={lat:null,lng:null,addr:''};return;
   }
-  const start=(_cki&&_cki.lat!=null)?{lat:_cki.lat,lng:_cki.lng}:(await ckiGeo())||{lat:37.5665,lng:126.978};
+  const start=(_cki&&_cki.lat!=null)?{lat:_cki.lat,lng:_cki.lng}:(await ckiGeo2())||{lat:37.5665,lng:126.978};
   const kk=window.kakao.maps;
   let map;
   try{
@@ -1810,8 +1817,13 @@ async function ckiInitMap(){
   kk.event.addListener(map,'idle',upd);upd();
 }
 window.wlCkiHere=async function(){
-  const p=await ckiGeo();
-  if(!p){toast('현위치를 가져올 수 없습니다. 위치 권한을 확인해 주세요');return;}
+  const ae=$('ckiAddr');if(ae)ae.textContent='◎ 현위치 확인 중…';
+  const p=await ckiGeo2();
+  if(!p){
+    if(ae)ae.textContent='현위치 사용 불가 — 지도를 움직이거나 검색으로 선택하세요';
+    toast('위치 권한이 꺼져 있습니다.\n브라우저 주소창 자물쇠 → 권한 → 위치 허용 후 다시 시도해 주세요');
+    return;
+  }
   if(_ckiMap)_ckiMap.setCenter(new window.kakao.maps.LatLng(p.lat,p.lng));
 };
 window.wlCkiSrch=function(){
