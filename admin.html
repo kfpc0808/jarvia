@@ -18081,7 +18081,12 @@ async function loadAccessStats(){
     _asRows=Object.keys(data).filter(uid=>!_exUids.has(uid)).map(uid=>{const m=members[uid];const am=adminMap[uid];let nm,co;if(m){nm=m.name;co=m.company;}else if(am){nm=am.name;co=({superadmin:'총괄관리자',admin:'관리자'}[am.role]||'관리자');}else{nm=uid;co='(비회원)';}return{uid,name:nm,company:co,cols:data[uid].cols,client:data[uid].client||{},daily:data[uid].daily,total:data[uid].total};});
     const totAccess=_asRows.reduce((s,r)=>s+(r.cols['main_access']||0),0);
     const totEvent=_asRows.reduce((s,r)=>s+r.total,0);
-    $('as-summary').innerHTML=`<div class="dash-c"><span>활동 회원수</span><strong>${fmt(_asRows.length)}</strong></div><div class="dash-c"><span>총 메인노출</span><strong>${fmt(totAccess)}</strong></div><div class="dash-c"><span>총 이벤트</span><strong>${fmt(totEvent)}</strong></div>`;
+    /* ★ [2026-09-02] 접속 회원수 = 본인이 자비아에 접속(total>0)한 회원.
+       고객이 채널·데일리를 방문한 기록(addClient)은 total을 올리지 않으므로,
+       본인 접속 없이 고객 방문만 있는 회원은 접속 인원에서 제외한다. */
+    const accUsers=_asRows.filter(r=>r.total>0).length;
+    const cliOnly=_asRows.length-accUsers;
+    $('as-summary').innerHTML=`<div class="dash-c"><span>접속 회원수</span><strong>${fmt(accUsers)}</strong>${cliOnly?`<em style="display:block;margin-top:4px">고객방문만 ${fmt(cliOnly)}명 별도 (합계 ${fmt(_asRows.length)}명)</em>`:''}</div><div class="dash-c"><span>총 메인노출</span><strong>${fmt(totAccess)}</strong></div><div class="dash-c"><span>총 이벤트</span><strong>${fmt(totEvent)}</strong></div>`;
     renderAccessPage(1);
     renderAsChart();   /* ★ [2026-07-31] 접속 추이 그래프 갱신 */
   }catch(e){console.error('접속통계 로드 실패:',e);tb.innerHTML=`<tr><td colspan="40" class="tc" style="color:var(--danger)">로드 실패: ${esc(e.message)}</td></tr>`;}
@@ -18133,8 +18138,16 @@ function renderAsChart(){
   if(ubox){
     renderApsBars('as-users-chart',buckets.map((b,i)=>({label:b.label,value:usets[i].size})),true);
     const totU=new Set();usets.forEach(s=>s.forEach(u=>totU.add(u)));
+    /* ★ [2026-09-02] 지표마다 "인원"의 정의가 다르다 — 특히 client는 회원 접속이 아니라 고객 방문 기준 */
+    const AS_UDESC={
+      all:'접속 인원 — 그날 활동 기록이 있는 회원 수',
+      main:'메인화면에 접속한 회원 수',
+      content:'콘텐츠를 열람한 회원 수',
+      tool:'도구·서비스를 이용한 회원 수',
+      client:'⚠️ 고객 방문이 발생한 컨설턴트 수 — 회원 본인의 접속과 무관합니다'
+    };
     const inf=$('as-users-info');
-    if(inf)inf.innerHTML=`위 [접속 추이]와 동일한 기간 단위·지표 기준, 중복 제외 회원 수 &nbsp;·&nbsp; 기간 전체 실인원 <b style="color:var(--primary)">${fmt(totU.size)}명</b>`;
+    if(inf)inf.innerHTML=`${AS_UDESC[metric]||'인원'} (중복 제외) &nbsp;·&nbsp; 기간 전체 <b style="color:var(--primary)">${fmt(totU.size)}명</b>`;
   }
 }
 function renderAccessPage(page){
@@ -18157,7 +18170,9 @@ function renderAccessPage(page){
   paged.forEach((r,i)=>{
     const cells=AS_COLS.map(c=>{const v=r.cols[c.key]||0;return `<td style="text-align:center${v?'':';color:#ccc'}">${v||'·'}</td>`;}).join('');
     const ccells=AS_CLIENT_COLS.map(c=>{const v=(r.client&&r.client[c.key])||0;return `<td style="text-align:center;background:#FFF7ED${v?'':';color:#ccc'}">${v||'·'}</td>`;}).join('');
-    html+=`<tr style="cursor:pointer" onclick="toggleAccessDetail('${r.uid}',this)"><td class="asfix asfix1">${start+i+1}</td><td class="asfix asfix2" style="white-space:nowrap">${esc(r.name)}</td><td class="ov">${esc(r.company)}</td><td style="text-align:center;font-weight:700;color:var(--accent)">${fmt(r.total)}</td>${cells}${ccells}</tr>`;
+    /* ★ [2026-09-02] 본인 접속 없이 고객 방문만 있는 회원 — 합계 0으로 보이는 이유를 행에서 바로 알린다 */
+    const cliBadge=(r.total===0)?' <span style="font-size:10.5px;font-weight:600;color:#9A3412;background:#FFF7ED;border:1px solid #FDBA74;border-radius:4px;padding:1px 5px;white-space:nowrap">고객방문만</span>':'';
+    html+=`<tr style="cursor:pointer" onclick="toggleAccessDetail('${r.uid}',this)"><td class="asfix asfix1">${start+i+1}</td><td class="asfix asfix2" style="white-space:nowrap">${esc(r.name)}${cliBadge}</td><td class="ov">${esc(r.company)}</td><td style="text-align:center;font-weight:700;color:var(--accent)">${fmt(r.total)}</td>${cells}${ccells}</tr>`;
   });
   tb.innerHTML=html;
   // 계 행 (검색 필터 적용된 전체 합계, 페이지 무관)
@@ -18167,7 +18182,10 @@ function renderAccessPage(page){
   const _csum={};AS_CLIENT_COLS.forEach(c=>_csum[c.key]=0);
   rows.forEach(r=>{AS_CLIENT_COLS.forEach(c=>_csum[c.key]+=((r.client&&r.client[c.key])||0));});
   const _footClient=AS_CLIENT_COLS.map(c=>`<td style="text-align:center;font-weight:700;background:#FFF7ED">${_csum[c.key]?fmt(_csum[c.key]):'·'}</td>`).join('');
-  $('as-tfoot').innerHTML=`<tr style="background:#EEF2FF;border-top:2px solid var(--primary)"><td colspan="3" class="asfix" style="text-align:center;font-weight:800">계 (${rows.length}명)</td><td style="text-align:center;font-weight:800;color:var(--accent)">${fmt(_grand)}</td>${_footCells}${_footClient}</tr>`;
+  /* ★ [2026-09-02] 계 행 — 표에 남은 '고객방문만' 회원과 실제 접속자를 구분해 표기 */
+  const _accCnt=rows.filter(r=>r.total>0).length;
+  const _accLbl=(_accCnt===rows.length)?`계 (${rows.length}명)`:`계 (${rows.length}명 · 접속 ${_accCnt}명)`;
+  $('as-tfoot').innerHTML=`<tr style="background:#EEF2FF;border-top:2px solid var(--primary)"><td colspan="3" class="asfix" style="text-align:center;font-weight:800">${_accLbl}</td><td style="text-align:center;font-weight:800;color:var(--accent)">${fmt(_grand)}</td>${_footCells}${_footClient}</tr>`;
   $('as-page-info').textContent=`총 ${rows.length}명 / ${_asPage}·${totalPages}p`;
   let pg='';for(let p=1;p<=totalPages;p++){if(totalPages>9&&Math.abs(p-_asPage)>3&&p!==1&&p!==totalPages){if(p===2||p===totalPages-1)pg+='<span style="padding:0 4px">…</span>';continue;}pg+=`<button class="btn btn-sm ${p===_asPage?'':'btn-sec'}" onclick="renderAccessPage(${p})">${p}</button>`;}
   $('as-pager').innerHTML=pg;
@@ -18193,7 +18211,9 @@ function exportAccessCSV(){
   _asRows.slice().sort((a,b)=>b.total-a.total).forEach(r=>{csv+=`"${(r.name||'').replace(/"/g,'""')}","${(r.company||'').replace(/"/g,'""')}",${r.total},`+AS_COLS.map(c=>r.cols[c.key]||0).join(',')+','+AS_CLIENT_COLS.map(c=>(r.client&&r.client[c.key])||0).join(',')+`\n`;});
   const _cs={};let _cg=0;AS_COLS.forEach(c=>_cs[c.key]=0);_asRows.forEach(r=>{AS_COLS.forEach(c=>_cs[c.key]+=(r.cols[c.key]||0));_cg+=r.total;});
   const _ccs={};AS_CLIENT_COLS.forEach(c=>_ccs[c.key]=0);_asRows.forEach(r=>{AS_CLIENT_COLS.forEach(c=>_ccs[c.key]+=((r.client&&r.client[c.key])||0));});
-  csv+=`"계","${_asRows.length}명",${_cg},`+AS_COLS.map(c=>_cs[c.key]).join(',')+','+AS_CLIENT_COLS.map(c=>_ccs[c.key]).join(',')+`\n`;
+  /* ★ [2026-09-02] 화면 계 행과 동일 기준 — 접속 인원과 고객방문만 회원을 구분 */
+  const _csvAcc=_asRows.filter(r=>r.total>0).length;
+  csv+=`"계","${_asRows.length}명 (접속 ${_csvAcc}명)",${_cg},`+AS_COLS.map(c=>_cs[c.key]).join(',')+','+AS_CLIENT_COLS.map(c=>_ccs[c.key]).join(',')+`\n`;
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='access_stats_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
 }
 function asSyncTopScroll(){
