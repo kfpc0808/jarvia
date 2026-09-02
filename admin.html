@@ -2181,6 +2181,10 @@
         <div id="smstpl-list" style="display:flex;flex-direction:column;gap:6px;max-height:460px;overflow-y:auto"></div>
       </div>
       <div class="form-box" style="margin-top:12px">
+        <!-- ★ [2026-09-02] LMS 제목(subject) — 비워두면 본문 앞 40바이트가 제목으로 표시된다 -->
+        <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">제목 <span style="font-weight:500;font-size:12px;color:var(--text-lt)">(선택 · 입력 시 LMS로 전환)</span></label>
+        <input id="sms-subject" maxlength="20" oninput="updateSmsCost()" placeholder="예: 자비아 멤버십 안내" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:var(--font);box-sizing:border-box">
+        <div id="sms-subject-info" style="font-size:12px;color:var(--text-lt);margin:6px 0 14px">0 / 40 바이트 · 비워두면 본문 앞부분이 제목처럼 표시됩니다</div>
         <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">메시지 내용</label>
         <textarea id="sms-msg" rows="5" oninput="updateSmsCost()" placeholder="문자 내용을 입력하세요..." style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:var(--font);resize:vertical;box-sizing:border-box;overflow:hidden;min-height:120px"></textarea>
         <!-- ★ [2026-08-22] 발송 방식 (즉시 / 예약) -->
@@ -13642,6 +13646,15 @@ function _smsHasTag(msg){
   return true;
 }
 
+/* ★ [2026-09-02] LMS 제목(subject) — 즉시·예약 발송 공통 */
+function _smsSubject(){ return ($('sms-subject')?.value||'').trim(); }
+/* ★ [2026-09-02] 이통사 기준 바이트 (한글·전각 2byte) — 제목 40byte 한도 판정용 */
+function _smsSubBytes(s){
+  let n=0;
+  for(const ch of String(s||'')){const c=ch.codePointAt(0);n+=c>0xFFFF?4:(c>127?2:1);}
+  return n;
+}
+
 function smsTplApply(id){
   const t=_smsTpl.find(x=>x.id===id);if(!t)return;
   /* ★ [2026-08-25] 시스템 문구는 자동발송 전용 — 수동 발송 시 #{이름}이 치환되지 않는다 */
@@ -13673,8 +13686,15 @@ function updateSmsCost(){
   if(_ta){_ta.style.height='auto';_ta.style.height=Math.max(120,_ta.scrollHeight+2)+'px';}   // ★ [2026-08-15] 내용 길이에 맞춰 자동 확장
   const msg=($('sms-msg').value||'');
   const bytes=new Blob([msg]).size;
-  const isLMS=bytes>90;
-  $('sms-byte-info').textContent=`${bytes} 바이트 (${isLMS?'LMS':'SMS'})`;
+  /* ★ [2026-09-02] 제목 입력 시 Solapi가 자동으로 LMS 전환 → 단가 50원 */
+  const sub=_smsSubject(), sBytes=_smsSubBytes(sub);
+  const si=$('sms-subject-info');
+  if(si){
+    si.textContent=`${sBytes} / 40 바이트`+(sub?(sBytes>40?' · ⚠️ 40바이트를 초과했습니다':' · LMS로 발송됩니다 (50원)'):' · 비워두면 본문 앞부분이 제목처럼 표시됩니다');
+    si.style.color=sBytes>40?'var(--danger)':'var(--text-lt)';
+  }
+  const isLMS=bytes>90||!!sub;
+  $('sms-byte-info').textContent=`${bytes} 바이트 (${isLMS?'LMS':'SMS'})`+(sub?' · 제목 있음':'');
   const checked=_smsSel.size+_smsManual.length;
   const unitCost=isLMS?50:20;
   const total=checked*unitCost;
@@ -13684,28 +13704,32 @@ function updateSmsCost(){
 async function doSendAdminSMS(){
   if(_smsMode==='rsv')return doScheduleAdminSMS();   /* ★ [2026-08-22] 예약 모드 분기 */
   const msg=$('sms-msg').value.trim();
-  if(_smsHasTag(msg))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
+  const subject=_smsSubject();   /* ★ [2026-09-02] LMS 제목 */
+  if(_smsHasTag(msg)||_smsHasTag(subject))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
   if(!msg){toast('메시지 내용을 입력하세요.','error');return;}
+  if(_smsSubBytes(subject)>40){toast('제목은 40바이트(한글 20자) 이내여야 합니다.','error');return;}
   const recipients=[];
   _smsSel.forEach(m=>recipients.push({name:m.name,phone:m.phone,loginId:m.loginId}));
   _smsManual.forEach(m=>recipients.push({name:m.name,phone:m.phone,loginId:''}));
   if(recipients.length===0){toast('발송 대상을 선택하세요.','error');return;}
   const bytes=new Blob([msg]).size;
-  const unitCost=bytes>90?50:20;
+  const isLMS=bytes>90||!!subject;   /* ★ [2026-09-02] 제목 있으면 강제 LMS */
+  const unitCost=isLMS?50:20;
   const totalCost=recipients.length*unitCost;
-  if(!confirm(`${recipients.length}명에게 문자를 발송합니다.\n유형: ${bytes>90?'LMS':'SMS'}\n예상 금액: ${totalCost.toLocaleString()}원\n\n발송하시겠습니까?`))return;
+  if(!confirm(`${recipients.length}명에게 문자를 발송합니다.\n유형: ${isLMS?'LMS':'SMS'}${subject?`\n제목: ${subject}`:''}\n예상 금액: ${totalCost.toLocaleString()}원\n\n발송하시겠습니까?`))return;
   const btn=$('sms-send-btn');
   btn.disabled=true;btn.textContent='발송 중...';
   try{
     const fn=httpsCallable(functions,'sendAdminSMS');
-    const res=await fn({recipients,message:msg});
+    const res=await fn({recipients,message:msg,subject});   /* ★ [2026-09-02] */
     const d=res.data;
     const resultEl=$('sms-result');
     resultEl.classList.remove('hidden');
     resultEl.innerHTML=`<div style="font-size:15px;font-weight:600;margin-bottom:8px">✅ 발송 완료</div><div style="font-size:14px">총 ${d.totalCount}건 — 성공 <b style="color:#238636">${d.successCount}</b>건, 실패 <b style="color:#DA3633">${d.failCount}</b>건</div><div style="font-size:13px;color:var(--text-lt);margin-top:4px">예상 비용: ${(d.successCount*unitCost).toLocaleString()}원 (성공 건 기준)</div>`;
-    $('sms-msg').value='';
+    $('sms-msg').value='';$('sms-subject').value='';   /* ★ [2026-09-02] 제목도 초기화 */
     _smsSel.clear();_smsManual=[];
     renderSmsManual();renderSmsMembers();
+    updateSmsCost();
     loadSmsLogs();
   }catch(e){
     toast('발송 실패: '+(e.message||'오류'),'error');
@@ -13728,7 +13752,7 @@ async function loadSmsLogs(){
       const dateStr=dt.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
       const unitCost=l.type==='LMS'?50:20;
       const cost=(l.successCount||0)*unitCost;
-      const msgPreview=(l.message||'').substring(0,30)+(l.message?.length>30?'...':'');
+      const msgPreview=(l.subject?`[${l.subject}] `:'')+(l.message||'').substring(0,30)+(l.message?.length>30?'...':'');   /* ★ [2026-09-02] 제목 표시 */
       const hasDetail=Array.isArray(l.recipients)&&l.recipients.length>0;
       return `<tr style="cursor:pointer" onclick="showSmsLogDetail(${idx})" title="${hasDetail?'클릭 시 성공·실패 상세 보기':'상세 명단 없음(구버전 이력)'}"><td>${dateStr}</td><td>${l.sentBy||''}</td><td>${l.type||'SMS'}</td><td>${l.totalCount||0}명</td><td style="color:#238636;font-weight:600">${l.successCount||0}</td><td style="color:#DA3633;font-weight:600">${l.failCount||0}</td><td>${cost.toLocaleString()}원</td><td title="${(l.message||'').replace(/"/g,'&quot;')}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${msgPreview}</td></tr>`;
     }).join('');
@@ -13753,7 +13777,7 @@ function showSmsLogDetail(idx){
   $('sms-detail-meta').innerHTML=
     `<b>발송일시</b> ${dateStr} &nbsp;|&nbsp; <b>발송자</b> ${_smsEsc(log.sentBy)} &nbsp;|&nbsp; <b>유형</b> ${log.type||'SMS'}<br>`+
     `<b>대상</b> ${log.totalCount||recips.length}명 · 성공 <span style="color:#238636;font-weight:700">${ok.length}</span> · 실패 <span style="color:#DA3633;font-weight:700">${ng.length}</span>`+
-    `<div style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border-radius:6px;white-space:pre-wrap;color:#333">${_smsEsc(log.message)}</div>`;
+    `<div style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border-radius:6px;white-space:pre-wrap;color:#333">${log.subject?`<b>[${_smsEsc(log.subject)}]</b>\n`:''}${_smsEsc(log.message)}</div>`;   /* ★ [2026-09-02] 제목 표시 */
 
   // 실패 사유 집계 (구버전 이력은 recipients 없음)
   if(recips.length===0){
@@ -13823,7 +13847,7 @@ async function resendSmsFails(){
   btn.disabled=true;btn.textContent='재발송 중...';
   try{
     const fn=httpsCallable(functions,'sendAdminSMS');
-    const res=await fn({recipients,message:log.message||''});
+    const res=await fn({recipients,message:log.message||'',subject:log.subject||''});   /* ★ [2026-09-02] 제목 유지 */
     const d=res.data;
     toast(`재발송 완료 — 성공 ${d.successCount}건 / 실패 ${d.failCount}건`, d.failCount>0?'warning':'success');
     closeSmsLogDetail();
@@ -13869,8 +13893,10 @@ function smsRsvQuick(n){
 
 async function doScheduleAdminSMS(){
   const msg=$('sms-msg').value.trim();
+  const subject=_smsSubject();   /* ★ [2026-09-02] 즉시 발송과 동일 구성 */
   if(!msg){toast('메시지 내용을 입력하세요.','error');return;}
-  if(_smsHasTag(msg))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
+  if(_smsHasTag(msg)||_smsHasTag(subject))return;   /* ★ [2026-08-25] 치환 태그 잔존 차단 */
+  if(_smsSubBytes(subject)>40){toast('제목은 40바이트(한글 20자) 이내여야 합니다.','error');return;}
   const dt=($('sms-rsv-dt').value||'').trim();
   if(!dt){toast('예약 일시를 선택하세요.','error');return;}
   const when=new Date(dt);
@@ -13882,17 +13908,18 @@ async function doScheduleAdminSMS(){
   if(recipients.length===0){toast('발송 대상을 선택하세요.','error');return;}
 
   const bytes=new Blob([msg]).size;
-  const unitCost=bytes>90?50:20;
+  const isLMS=bytes>90||!!subject;   /* ★ [2026-09-02] 제목 있으면 강제 LMS */
+  const unitCost=isLMS?50:20;
   const totalCost=recipients.length*unitCost;
   const whenStr=when.toLocaleString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'short',hour:'2-digit',minute:'2-digit'});
 
-  if(!confirm(`아래 내용으로 예약 등록합니다.\n\n예약 일시: ${whenStr}\n발송 대상: ${recipients.length}명\n유형/금액: ${bytes>90?'LMS':'SMS'} · 약 ${totalCost.toLocaleString()}원\n\n※ 예약 후에는 내용·대상 변경이 불가합니다.\n※ 수정하려면 취소 후 다시 등록하세요.\n\n진행하시겠습니까?`))return;
+  if(!confirm(`아래 내용으로 예약 등록합니다.\n\n예약 일시: ${whenStr}\n발송 대상: ${recipients.length}명${subject?`\n제목: ${subject}`:''}\n유형/금액: ${isLMS?'LMS':'SMS'} · 약 ${totalCost.toLocaleString()}원\n\n※ 예약 후에는 내용·대상 변경이 불가합니다.\n※ 수정하려면 취소 후 다시 등록하세요.\n\n진행하시겠습니까?`))return;
 
   const btn=$('sms-send-btn');
   btn.disabled=true;btn.textContent='예약 등록 중...';
   try{
     const fn=httpsCallable(functions,'scheduleAdminSMS');
-    const res=await fn({recipients,message:msg,scheduledAt:dt});
+    const res=await fn({recipients,message:msg,scheduledAt:dt,subject});   /* ★ [2026-09-02] */
     const d=res.data;
     const el=$('sms-result');
     el.classList.remove('hidden');
@@ -13901,9 +13928,10 @@ async function doScheduleAdminSMS(){
       warn=`<div style="margin-top:10px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;font-size:13px;color:#E65100"><b>⚠️ 잔액 확인 필요</b> — 현재 잔액 ${Number(d.balance||0).toLocaleString()}원 / 미발송 예약 총액 ${Number(d.pendingTotal||0).toLocaleString()}원<br>발송 시점에 잔액이 부족하면 해당 예약은 전체 실패합니다.</div>`;
     }
     el.innerHTML=`<div style="font-size:15px;font-weight:600;margin-bottom:8px">🕒 예약 등록 완료</div><div style="font-size:14px">${whenStr} · ${d.count}건 (${d.type}) · 약 ${Number(d.estCost||0).toLocaleString()}원</div>${d.invalidCount?`<div style="font-size:13px;color:var(--danger);margin-top:4px">유효하지 않은 번호 ${d.invalidCount}건은 제외되었습니다.</div>`:''}${warn}`;
-    $('sms-msg').value='';
+    $('sms-msg').value='';$('sms-subject').value='';   /* ★ [2026-09-02] 제목도 초기화 */
     _smsSel.clear();_smsManual=[];
     renderSmsManual();renderSmsMembers();
+    updateSmsCost();
     setSmsMode('now');
     loadScheduledSms();
     toast('예약이 등록되었습니다.','success');
@@ -13949,7 +13977,10 @@ async function loadScheduledSms(){
       }
     }
     const prev=(it.message||'').substring(0,26)+((it.message||'').length>26?'...':'');
-    return `<tr><td style="font-weight:600">${dateStr}</td><td>${left}</td><td>${_smsEscH(it.createdBy)}</td><td>${it.type||'SMS'}</td><td>${it.validCount||0}명</td><td>${Number(it.estCost||0).toLocaleString()}원</td><td title="${_smsEscH(it.message)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_smsEscH(prev)}</td><td>${isSent
+    /* ★ [2026-09-02] 제목이 있으면 본문 미리보기 앞에 [제목] 형태로 표시 */
+    const subPrev=it.subject?`<b>[${_smsEscH(it.subject)}]</b> `:'';
+    const tipTxt=(it.subject?`[${it.subject}]\n`:'')+(it.message||'');
+    return `<tr><td style="font-weight:600">${dateStr}</td><td>${left}</td><td>${_smsEscH(it.createdBy)}</td><td>${it.type||'SMS'}</td><td>${it.validCount||0}명</td><td>${Number(it.estCost||0).toLocaleString()}원</td><td title="${_smsEscH(tipTxt)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${subPrev}${_smsEscH(prev)}</td><td>${isSent
       ?`<button class="btn btn-sm" style="background:var(--accent);white-space:nowrap" onclick="collectScheduledSmsNow('${it.id}')" title="Solapi에서 발송 결과를 즉시 가져와 발송 이력에 기록합니다.">🔄 결과 확인</button>`
       :`<button class="btn-danger" onclick="cancelScheduledSms('${it.id}')">취소</button>`}</td></tr>`;
   }).join('');
