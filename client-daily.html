@@ -4439,7 +4439,7 @@ document.addEventListener('click',function(e){
    ═══════════════════════════════════════════════════════ */
 const CD_TTS_ENDPOINT='https://ttsspeak-cvmdsjgzxa-du.a.run.app';
 const CD_TTS_VOICE='ko-KR-Chirp3-HD-Despina';
-const CD_TTS_MIN=60;
+const CD_TTS_MIN=50;
 const CD_TTS_MAX=5500;                     /* 서버 한도 6000자 — 초과 시 문단 단위로 나눠 이어 재생 */
 /* 낭독 대상 — sel: 섹션, body: 본문(빈 값이면 섹션 자신), pos: 바 위치 */
 const CD_TTS_TARGETS=[
@@ -4447,10 +4447,11 @@ const CD_TTS_TARGETS=[
   {sel:'.sec-body',          body:'', id:'',        title:'',            pos:'start'}
 ];
 const _cdTMap={};
-const _cdT={id:null,url:null,audio:null,rate:1,hooked:false,queue:[],qi:0};
+const _cdT={id:null,url:null,audio:null,rate:1,hooked:false,queue:[],qi:0,pre:{}};
 
 function cdTtsInit(){
   try{cdTtsStop();}catch(e){}   /* 재렌더 시 재생 중단 — 바가 사라진 채 소리만 남는 것 방지 */
+  try{_cdT.pre=(reportData&&reportData.ttsUrls)||{};}catch(e){_cdT.pre={};}   /* 파이프라인 사전 생성 음원 맵 */
   for(const k in _cdTMap)delete _cdTMap[k];
   const root=document.getElementById('sectionsContainer')||document.body;
   /* 재렌더·중복 호출 방어 — 남아 있는 바를 먼저 제거 */
@@ -4512,18 +4513,23 @@ function cdTtsPauseMain(){
        블록 태그를 개행, 인라인 span 을 공백으로 치환해 문장이 붙어 읽히는 것을 막는다. */
 function cdTtsText(body){
   const c=body.cloneNode(true);
-  c.querySelectorAll('.cd-tts-bar,.en-learn-block,.en-speak-btn,.secTileGrid,button,textarea,input,select,script,style').forEach(el=>{
+  c.querySelectorAll('.cd-tts-bar,.en-learn-block,.en-speak-btn,.secTileGrid,.nd-bar,.bs-src,button,textarea,input,select,script,style').forEach(el=>{
     if(el.parentNode)el.parentNode.removeChild(el);
+  });
+  /* 구조적 span(뉴스 태그·NEW 배지)만 뒤에 공백을 넣는다.
+     </span> 를 일괄 공백으로 바꾸면 "그동안 <span>1분 뉴스</span>와" 가
+     "1분 뉴스 와" 로 낭독된다(2851행 실제 사례). */
+  c.querySelectorAll('.news-tag,.bs-new,.nd-bar-t,.nd-bar-s').forEach(el=>{
+    try{el.insertAdjacentText('afterend',' ');}catch(e){}
   });
   const raw=c.innerHTML
     .replace(/<br\s*\/?>/gi,'\n')
     .replace(/<\/(div|p|li|ol|ul|h[1-6]|tr|summary|details|section)>/gi,'\n')
-    .replace(/<\/span>/gi,' ')
     .replace(/<[^>]*>/g,'');
   const ta=document.createElement('textarea');ta.innerHTML=raw;
   return ta.value
     /* 이모지·화살표는 낭독에서 제거 — 그대로 읽히거나 침묵으로 끊긴다(dailyReport ttsPlain 과 동일 정책) */
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu,'')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{25A0}-\u{25FF}\u{2022}]/gu,'')
     .replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 
@@ -4578,6 +4584,15 @@ function cdTtsHit(id){
   const text=cdTtsText(m.body);
   if(!text)return;
   _cdT.id=id;_cdT.queue=[];_cdT.qi=0;
+  /* ★ 사전 생성 음원이 있으면 합성 대기 없이 바로 재생 (dailyReport DR_TTS_URLS 와 동일 방식) */
+  const pre=(_cdT.pre||{})[id];
+  if(pre){
+    const q=Array.isArray(pre)?pre:[pre];
+    _cdT.queue=q;_cdT.qi=0;
+    cdTtsMiniShow(m.title,true);
+    cdTtsPlayUrl(id,q[0]);
+    return;
+  }
   cdTtsSet(id,'load');
   cdTtsMiniShow(m.title,true);
   const fd=String((typeof fileDate!=='undefined'&&fileDate)||'').replace(/\D/g,'');
@@ -4689,6 +4704,14 @@ function cdTtsMiniHide(){
   document.getElementById('cdTmFill').style.width='0%';
 }
 window.addEventListener('pagehide',()=>{try{cdTtsStopAudio();}catch(e){}});
+/* 모닝 컨센서스 오버레이는 consensus.html 을 iframe 으로 띄우며 자체 낭독을 갖는다.
+   열기 직전 이쪽 재생을 끊어 두 음성이 겹치지 않게 한다(기존 함수는 수정하지 않고 감싼다). */
+try{
+  const _mcOpen=window.mcOverlayOpen;
+  if(typeof _mcOpen==='function'){
+    window.mcOverlayOpen=function(){try{cdTtsStop();}catch(e){}return _mcOpen.apply(this,arguments);};
+  }
+}catch(e){}
 </script>
   <button id="btnTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="맨 위로">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>

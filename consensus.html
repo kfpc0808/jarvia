@@ -517,7 +517,7 @@ function show(){
       : `<div class="report-card" id="capArea">${renderConsensus(r)}</div>`;
     const _dl=!(r.status==='done'&&r.ko);
     _setShareDisabled(_dl);
-    try{ mcTtsInit(r.id); }catch(_e){ console.warn('[MC-TTS] 주입 실패',_e); }   /* ★ [2026-09-02] 섹션 낭독 바 주입 */
+    try{ mcTtsInit(r.id,r.ttsUrls); }catch(_e){ console.warn('[MC-TTS] 주입 실패',_e); }   /* ★ [2026-09-02] 섹션 낭독 바 주입 */
   }else{
     const _f=fmtDate(r),_ck=r.id;
     _setShareDisabled(true);   /* 미결제 상태 — 아래 _setShareDisabled 정책 스위치 참조 */
@@ -886,10 +886,11 @@ const MC_TTS_TARGETS=[
   {sel:'.mc-tip',        body:'',             id:'tip',   title:'상담 활용 Tip',      pos:'end'}
 ];
 const _mcTMap={};                          /* {섹션id: {sec, body, title}} */
-const _mcT={id:null,url:null,audio:null,rate:1,date:'',title:'',queue:[],qi:0};
+const _mcT={id:null,url:null,audio:null,rate:1,date:'',title:'',queue:[],qi:0,pre:{}};
 
-function mcTtsInit(dateId){
+function mcTtsInit(dateId,preUrls){
   _mcT.date=String(dateId||'').replace(/\D/g,'');
+  _mcT.pre=preUrls||{};   /* 파이프라인 사전 생성 음원 맵 — 있으면 서버 왕복 없이 즉시 재생 */
   for(const k in _mcTMap)delete _mcTMap[k];
   const root=document.getElementById('main');
   if(!root)return;
@@ -931,18 +932,27 @@ function mcTtsInit(dateId){
        블록 태그를 개행, 인라인 span 을 공백으로 치환해 문장이 붙어 읽히는 것을 막는다. */
 function mcTtsText(body){
   const c=body.cloneNode(true);
-  c.querySelectorAll('.mc-tts-bar,.mc-fold,.mc-fbrow.nc,.mc-dots,.mc-tip span[style*="display:block"],button,script,style').forEach(el=>{
+  c.querySelectorAll('.mc-tts-bar,.mc-fold,.mc-fbrow.nc,.mc-dots,.scd,.mc-tip span[style*="display:block"],button,script,style').forEach(el=>{
     if(el.parentNode)el.parentNode.removeChild(el);
+  });
+  /* 구조적 span(태그·배지·회사명)만 뒤에 공백을 넣는다.
+     </span> 를 일괄 공백으로 바꾸면 문장 중간 강조 span 뒤에서 "1분 뉴스 와" 처럼
+     조사 앞이 띄어져 낭독이 어색해진다(dailyReport ttsPlain 주석과 동일한 이유). */
+  c.querySelectorAll('.mc-tag,.mc-prev-badge,.fbf,.fbd,.gk span,.sh span,.mg-k span').forEach(el=>{
+    try{el.insertAdjacentText('afterend',' ');}catch(e){}
+  });
+  /* 업종 칩은 쉼표로 이어 읽는다("반도체 3개사, 은행 2개사") — 서버 사전 생성 원고와 동일 */
+  c.querySelectorAll('.mc-sector:not(:last-child)').forEach(el=>{
+    try{el.insertAdjacentText('afterend',', ');}catch(e){}
   });
   const raw=c.innerHTML
     .replace(/<br\s*\/?>/gi,'\n')
     .replace(/<\/(div|p|li|ol|ul|h[1-6]|tr|summary|details|section)>/gi,'\n')
-    .replace(/<\/span>/gi,' ')
     .replace(/<[^>]*>/g,'');
   const ta=document.createElement('textarea');ta.innerHTML=raw;
   return ta.value
     /* 이모지·화살표는 낭독에서 제거 — 그대로 읽히거나 침묵으로 끊긴다(dailyReport ttsPlain 과 동일 정책) */
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu,'')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{25A0}-\u{25FF}\u{2022}]/gu,'')
     .replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 
@@ -999,6 +1009,15 @@ function mcTtsHit(id){
   const text=mcTtsText(m.body);
   if(!text){alert('읽을 내용이 없습니다.');return;}
   _mcT.id=id;_mcT.queue=[];_mcT.qi=0;
+  /* ★ 사전 생성 음원이 있으면 합성 대기 없이 바로 재생 (dailyReport DR_TTS_URLS 와 동일 방식) */
+  const pre=(_mcT.pre||{})[id];
+  if(pre){
+    const q=Array.isArray(pre)?pre:[pre];
+    _mcT.queue=q;_mcT.qi=0;
+    mcTtsMiniShow(m.title,true);
+    mcTtsPlayUrl(id,q[0]);
+    return;
+  }
   mcTtsSet(id,'load');
   mcTtsMiniShow(m.title,true);
   const parts=mcTtsSplit(text,MC_TTS_MAX);
