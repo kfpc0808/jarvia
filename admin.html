@@ -2666,6 +2666,12 @@
       </select>
     </div>
     <div id="as-chart" class="aps-chart mt"><div class="tc" style="color:#999;padding:30px">[조회]를 누르면 추이 그래프가 표시됩니다.</div></div>
+    <!-- ★ [2026-09-02] 인원현황 — 위 접속 추이와 동일한 기간 단위·지표 기준, 실제 접속 회원 수(중복 제외) -->
+    <div class="toolbar mt" style="align-items:center">
+      <label style="font-weight:700">👥 인원현황:</label>
+      <span id="as-users-info" style="font-size:12.5px;color:var(--text-lt)">위 [접속 추이]에서 고른 기간 단위·지표 기준으로, 실제 접속한 회원 수를 셉니다(중복 제외).</span>
+    </div>
+    <div id="as-users-chart" class="aps-chart mt"><div class="tc" style="color:#999;padding:30px">[조회]를 누르면 인원 그래프가 표시됩니다.</div></div>
     <p style="font-size:12px;color:#888;margin:8px 0">💡 회원 행을 클릭하면 일자별 상세가 펼쳐집니다. 콘텐츠 열은 실제 열람(view_logs), 도구·서비스 열은 진입 기록(service_logs/calc_logs) 기준입니다. 기간 내 활동이 있는 회원만 표시되며, 관리자·직원 계정은 집계에서 제외됩니다.</p>
     <span id="as-page-info" style="font-size:13px;color:var(--text-lt)"></span>
     <style>
@@ -18089,7 +18095,12 @@ function setAsChartUnit(u){
 }
 function renderAsChart(){
   const box=$('as-chart');if(!box)return;
-  if(!_asRows.length){box.innerHTML='<div class="tc" style="color:#999;padding:30px">기간 내 데이터가 없습니다.</div>';return;}
+  const ubox=$('as-users-chart');   /* ★ [2026-09-02] 인원현황 */
+  if(!_asRows.length){
+    box.innerHTML='<div class="tc" style="color:#999;padding:30px">기간 내 데이터가 없습니다.</div>';
+    if(ubox)ubox.innerHTML='<div class="tc" style="color:#999;padding:30px">기간 내 데이터가 없습니다.</div>';
+    return;
+  }
   const metric=($('as-chart-metric')&&$('as-chart-metric').value)||'all';
   const CLIENT_KEYS=new Set(AS_CLIENT_COLS.map(c=>c.key));
   const pick=k=>{   /* 지표별 키 판정 */
@@ -18100,23 +18111,31 @@ function renderAsChart(){
     if(metric==='client')return k==='channelVisit'||k==='dailyVisit';
     return false;
   };
-  /* 전 회원 daily 합산 → 일별 합계 */
-  const byDay={};
-  _asRows.forEach(r=>{Object.keys(r.daily||{}).forEach(day=>{const o=r.daily[day];let s=0;Object.keys(o).forEach(k=>{if(pick(k))s+=o[k];});if(s)byDay[day]=(byDay[day]||0)+s;});});
+  /* 전 회원 daily 합산 → 일별 합계 (+ ★ [2026-09-02] 일별 접속 회원 uid 집합) */
+  const byDay={},byDayU={};
+  _asRows.forEach(r=>{Object.keys(r.daily||{}).forEach(day=>{const o=r.daily[day];let s=0;Object.keys(o).forEach(k=>{if(pick(k))s+=o[k];});if(s){byDay[day]=(byDay[day]||0)+s;(byDayU[day]||(byDayU[day]=new Set())).add(r.uid);}});});
   /* 조회 기간 내 빈 날짜 0 채움 */
   const from=new Date($('as-from').value+'T00:00:00'),to=new Date($('as-to').value+'T00:00:00');
   const days=[];for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1))days.push(_asYmd(d));
   /* 단위별 버킷 */
-  const buckets=[];const idx={};
+  const buckets=[];const idx={};const usets=[];   /* ★ [2026-09-02] usets = 버킷별 회원 uid 집합 */
   days.forEach(ymd=>{
     let key,label;
     if(_asChartUnit==='day'){key=ymd;label=parseInt(ymd.slice(5,7),10)+'/'+parseInt(ymd.slice(8,10),10);}
     else if(_asChartUnit==='week'){const d=new Date(ymd+'T00:00:00');const mon=new Date(d);mon.setDate(d.getDate()-((d.getDay()+6)%7));key=_asYmd(mon);label=(mon.getMonth()+1)+'/'+mon.getDate()+'~';}
     else{key=ymd.slice(0,7);label=ymd.slice(0,4)+'.'+ymd.slice(5,7);}
-    if(idx[key]===undefined){idx[key]=buckets.length;buckets.push({label,value:0});}
+    if(idx[key]===undefined){idx[key]=buckets.length;buckets.push({label,value:0});usets.push(new Set());}
     buckets[idx[key]].value+=byDay[ymd]||0;
+    if(byDayU[ymd])byDayU[ymd].forEach(u=>usets[idx[key]].add(u));   /* ★ [2026-09-02] */
   });
   renderApsBars('as-chart',buckets,true);
+  /* ★ [2026-09-02] 인원현황 — 주·월 단위는 해당 기간 내 중복을 제외한 실인원 */
+  if(ubox){
+    renderApsBars('as-users-chart',buckets.map((b,i)=>({label:b.label,value:usets[i].size})),true);
+    const totU=new Set();usets.forEach(s=>s.forEach(u=>totU.add(u)));
+    const inf=$('as-users-info');
+    if(inf)inf.innerHTML=`위 [접속 추이]와 동일한 기간 단위·지표 기준, 중복 제외 회원 수 &nbsp;·&nbsp; 기간 전체 실인원 <b style="color:var(--primary)">${fmt(totU.size)}명</b>`;
+  }
 }
 function renderAccessPage(page){
   if(page)_asPage=page;
