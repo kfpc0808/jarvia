@@ -568,6 +568,7 @@
         </div>
         <div id="zs-sum" class="dash-row mt"></div>
         <div id="zs-refsum" style="font-size:12.5px;color:#5F6E78;line-height:1.8;margin:8px 0 4px"></div>
+        <div id="zs-rolesum" style="font-size:12.5px;color:#5F6E78;line-height:1.8;margin:2px 0 4px"></div>
         <div class="tbl-wrap mt"><table class="tbl" style="min-width:1020px"><thead><tr><th style="width:130px">신청일시</th><th style="width:70px">대상월</th><th style="width:80px">성명</th><th style="width:130px">소속사</th><th style="width:80px">직함</th><th style="width:110px">지역</th><th style="width:120px">연락처</th><th style="width:90px">추천인</th><th style="width:120px">참석회차</th><th style="width:70px">회원</th><th style="width:70px">관리</th></tr></thead><tbody id="zs-tb"><tr><td colspan="11" style="text-align:center;color:#999">[🔄 조회] 를 누르면 표시됩니다.</td></tr></tbody></table></div>
       </div>
     </div>
@@ -8121,6 +8122,26 @@ const ZS_WK=['일','월','화','수','목','금','토'];
 const ZS_TOPIC={1:'자비아 outline & 매일 쓰는 기능',2:'고객관리 / 고객접점',3:'PT & 클로징',4:'유용한 프로그램들'};
 let _zsSess=[{no:1,date:'',time:''},{no:2,date:'',time:''},{no:3,date:'',time:''},{no:4,date:'',time:''}];
 let _zsApps=[];
+/* ★ [2026-09-02] 신청자 회원유형 집계 — seminar_applications 에는 role 이 없어 loginId → users 역조회 후 캐시 */
+let _zsRoleMap={};
+const ZS_ROLE_LABEL={free_user:'자비아(기간제)',user:'일반회원',jarvia_member:'JARVIA멤버십',jarvia_inner:'자비아멤버십(이너서클)',inner_circle:'이너서클',con_homepage:'컨홈페이지',branch_manager:'지사장',jarvia_report:'리포트회원'};
+const ZS_ROLE_ORDER=['jarvia_member','jarvia_inner','inner_circle','jarvia_report','con_homepage','branch_manager','user','free_user','_group','_none','_gone'];
+function zsRoleLabel(k){return k==='_group'?'단체':k==='_none'?'유형없음':k==='_gone'?'유형미확인':(ZS_ROLE_LABEL[k]||k);}
+function zsRoleOf(a){if(!a||!a.isMember)return'';const k=String(a.loginId||'').trim();return(k&&_zsRoleMap[k])||'_gone';}
+async function zsFetchRoles(){
+  const ids=Array.from(new Set(_zsApps.filter(a=>a.isMember&&a.loginId).map(a=>String(a.loginId).trim()).filter(Boolean)))
+    .filter(id=>_zsRoleMap[id]===undefined);
+  if(!ids.length)return;
+  try{
+    for(let i=0;i<ids.length;i+=30){
+      const part=ids.slice(i,i+30);
+      const snap=await getDocs(query(collection(db,'users'),where('loginId','in',part)));
+      snap.docs.forEach(d=>{const u=d.data();const k=String(u.loginId||'').trim();
+        if(k)_zsRoleMap[k]=u.isGroup?'_group':(u.role||'_none');});
+      part.forEach(k=>{if(_zsRoleMap[k]===undefined)_zsRoleMap[k]='_gone';});
+    }
+  }catch(e){console.warn('줌설명회 회원유형 조회 실패:',e);}
+}
 function zsWeekday(ymd){try{return /^\d{4}-\d{2}-\d{2}$/.test(ymd)?ZS_WK[new Date(ymd+'T12:00:00+09:00').getDay()]:'';}catch(_){return'';}}
 function zsMd(ymd){const p=String(ymd||'').split('-');return p.length===3?((+p[1])+'/'+(+p[2])):'';}
 function zsSetDate(i,v){if(_zsSess[i]){_zsSess[i].date=v;}zsRenderSess();}
@@ -8198,6 +8219,7 @@ async function zsLoadApps(){
       sel.innerHTML='<option value="">전체 기간</option>'+months.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
       if(cur&&months.includes(cur))sel.value=cur;
     }
+    await zsFetchRoles();
     zsRender();
   }catch(e){
     if(tb)tb.innerHTML='<tr><td colspan="11" style="text-align:center;color:#C0392B">조회 실패: '+esc(e.message)+'</td></tr>';
@@ -8233,6 +8255,13 @@ function zsRender(){
   const rk=Object.keys(refs).sort((x,y)=>refs[y]-refs[x]).slice(0,12);
   const rs=$('zs-refsum');
   if(rs)rs.innerHTML=rk.length?('<b>추천인 유입</b> — '+rk.map(k=>esc(k)+' '+refs[k]+'명').join(' · ')):'<b>추천인 유입</b> — 없음';
+  /* ★ [2026-09-02] 회원 유형별 인원수 (현재 필터 결과 기준) */
+  const rc={};let nonMem=0;
+  rows.forEach(a=>{if(!a.isMember){nonMem++;return;}const k=zsRoleOf(a);rc[k]=(rc[k]||0)+1;});
+  const rkeys=ZS_ROLE_ORDER.filter(k=>rc[k]).concat(Object.keys(rc).filter(k=>!ZS_ROLE_ORDER.includes(k)));
+  const rr=$('zs-rolesum');
+  if(rr)rr.innerHTML='<b>회원 유형별</b> — '+rkeys.map(k=>esc(zsRoleLabel(k))+' <b>'+rc[k]+'</b>명').join(' · ')
+    +(rkeys.length?' · ':'')+'비회원 <b>'+nonMem+'</b>명';
   if(!tb)return;
   if(!rows.length){tb.innerHTML='<tr><td colspan="11" style="text-align:center;color:#999">신청 내역이 없습니다.</td></tr>';return;}
   tb.innerHTML=rows.map(a=>{
@@ -8242,7 +8271,7 @@ function zsRender(){
     return `<tr><td style="font-size:12px;white-space:nowrap">${zsWhen(a.createdAt)}</td><td style="text-align:center;font-size:12px">${esc(a.monthKey||'')}</td>`
       +`<td style="font-weight:700">${esc(a.name||'')}</td><td>${esc(a.company||'')}</td><td>${esc(a.title||'')}</td><td>${esc(a.region||'')}</td>`
       +`<td style="white-space:nowrap">${esc(zsPhoneFmt(a.phone))}</td><td>${esc(a.referrer||'')}</td><td>${badge||'-'}</td>`
-      +`<td style="text-align:center;font-size:12px">${a.isMember?('회원'+(a.loginId?('<br><span style="color:#7F8C8D;font-size:11px">'+esc(a.loginId)+'</span>'):'')):'비회원'}</td>`
+      +`<td style="text-align:center;font-size:12px">${a.isMember?('회원'+(a.loginId?('<br><span style="color:#7F8C8D;font-size:11px">'+esc(a.loginId)+'</span>'):'')+'<br><span style="color:#2E86AB;font-size:11px;font-weight:700">'+esc(zsRoleLabel(zsRoleOf(a)))+'</span>'):'비회원'}</td>`
       +`<td style="text-align:center"><button class="btn btn-sm btn-danger" onclick="zsDelApp('${esc(a._id)}')">삭제</button></td></tr>`;
   }).join('');
 }
@@ -8282,12 +8311,13 @@ function zsExcel(){
         '참석회차수':ss.length,
         '전체참석':a.allSessions?'O':'',
         '회원여부':a.isMember?'회원':'비회원',
+        '회원유형':a.isMember?zsRoleLabel(zsRoleOf(a)):'',
         '회원아이디':a.loginId||''
       };
     });
     const ws=XLSX.utils.json_to_sheet(out);
     ws['!cols']=[{wch:5},{wch:17},{wch:9},{wch:10},{wch:18},{wch:10},{wch:14},{wch:15},{wch:10},
-                 {wch:7},{wch:7},{wch:7},{wch:7},{wch:10},{wch:9},{wch:9},{wch:12}];
+                 {wch:7},{wch:7},{wch:7},{wch:7},{wch:10},{wch:9},{wch:9},{wch:20},{wch:12}];
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'줌설명회신청');
     const mk=$('zs-f-month')?.value||'전체';
