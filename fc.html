@@ -6217,7 +6217,8 @@ window.fccBridge={
       const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',fcUid)));
       const byId={},byKey={};
       const nameAny={};
-      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};});
+      const byName={};   /* ★ [2026-09-02] 이름 유일성 — 이름만으로 기존 문서를 찾는 색인 */
+      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};const nk=String(x.name||'').replace(/\s+/g,'');if(nk){if(!byName[nk])byName[nk]={id:d.id,contracts:x.contracts||[],n:0};byName[nk].n++;}});
       const outIds=[];
       /* ★ [2026-08-29] writeBatch 200건 묶음 — 기존에는 건당 await updateDoc/setDoc 순차 호출이라
          2,000명이면 왕복 2,000회(수 분)였고, 함수 전체가 try/catch 하나여서 한 건만 실패해도
@@ -6236,9 +6237,15 @@ window.fccBridge={
         if(s.fccId&&byId[s.fccId]){exId=s.fccId;exCt=byId[s.fccId].contracts;}
         if(!exId&&!s.forceCreate){const k=s.name+'|'+(s.birthDate||'');if(byKey[k]){exId=byKey[k].id;exCt=byKey[k].contracts;}}
         if(!exId&&s.prevBirthDate){const pk=s.name+'|'+s.prevBirthDate;if(byKey[pk]){exId=byKey[pk].id;exCt=byKey[pk].contracts;delete byKey[pk];}}
+        /* ★ [2026-09-02] 이름이 열쇠 — 생일이 달라도(한쪽이 비었어도) 같은 이름이면 같은 사람. 새 문서를 만들지 않고 갱신한다 */
+        let _byNameOnly=false;
+        if(!exId&&!s.forceCreate){const nk=String(s.name||'').replace(/\s+/g,'');if(nk&&byName[nk]&&byName[nk].n===1){exId=byName[nk].id;exCt=byName[nk].contracts;_byNameOnly=true;}}
         const inc=(s.contracts||[]);
         const core={name:s.name,birthDate:s.birthDate||'',birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',sangryeongMmdd:s.birthDate?fccBridgeSang(s.birthDate):'',updatedAt:serverTimestamp()};
         if(s.mgTitle!=null)core.mgTitle=String(s.mgTitle);
+        /* ★ [2026-09-02] 이름만으로 맞춘 경우, 들어온 생일이 비어 있으면 서버의 생일·생일MMDD·상령일을 덮어쓰지 않는다
+           (음성 입력처럼 생일 없는 갱신이 알림 기준을 지워버리는 것을 막는다) */
+        if(_byNameOnly&&!s.birthDate){delete core.birthDate;delete core.birthMmdd;delete core.sangryeongMmdd;}
         if(exId){
           if(s.replaceContracts){core.contracts=inc.slice(0,20);}
           else if(inc.length){const merged=(exCt||[]).slice();inc.forEach(ct=>{const i2=merged.findIndex(x=>x.productName===ct.productName);if(i2>=0){merged[i2]=Object.assign({},merged[i2],{maturityDate:ct.maturityDate||merged[i2].maturityDate,insType:ct.insType||merged[i2].insType,yearly:(ct.yearly!=null)?ct.yearly:merged[i2].yearly,insurer:(ct.insurer!=null&&ct.insurer!=='')?ct.insurer:(merged[i2].insurer||''),premium:(ct.premium!=null&&ct.premium!=='')?ct.premium:(merged[i2].premium||'')});}else merged.push(ct);});core.contracts=merged.slice(0,20);}
@@ -11086,7 +11093,7 @@ init();
       </div>
       <div class="mp-tbl-pg" id="mpTblPg"></div>
     </div>
-    <div class="mp-custbar" id="mpCustBar"><div class="mpcb-top"><div class="mpcb-count" id="mpcbCount">이 화면: 총 0명</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%"><button type="button" class="mpcb-xlsx" id="mpcExportBtn">내보내기</button><button type="button" class="mpcb-xlsx" id="mpcRegeoBtn" title="주소를 기준으로 지도 위치를 다시 계산합니다">📍 위치 재계산</button><button type="button" class="mpcb-guide" id="mpcGuideBtn" style="margin-left:auto">＋ 이용 가이드</button></div></div><div class="mpcb-filters" id="mpcbFilters"></div></div>
+    <div class="mp-custbar" id="mpCustBar"><div class="mpcb-top"><div class="mpcb-count" id="mpcbCount">이 화면: 총 0명</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%"><button type="button" class="mpcb-xlsx" id="mpcExportBtn">내보내기</button><button type="button" class="mpcb-xlsx" id="mpcRegeoBtn" title="주소를 기준으로 지도 위치를 다시 계산합니다">📍 위치 재계산</button><button type="button" class="mpcb-xlsx" id="mpcGdReloadBtn" title="이 기기의 고객 사본을 지우고 드라이브(원본)에서 통째로 다시 받습니다" style="display:none">☁️ 드라이브에서 다시 불러오기</button><button type="button" class="mpcb-guide" id="mpcGuideBtn" style="margin-left:auto">＋ 이용 가이드</button></div></div><div class="mpcb-filters" id="mpcbFilters"></div></div>
     <input type="file" id="mpcXlsxFile" accept=".xlsx,.xls,.csv" style="display:none">
     <div id="mpcXlsxProg" class="mpc-prog"><div class="mpc-prog-box"><div class="mpc-prog-tit" id="mpcProgTit">엑셀 처리 중…</div><div class="mpc-prog-bar"><div class="mpc-prog-fill" id="mpcProgFill"></div></div><div class="mpc-prog-sub" id="mpcProgSub">0 / 0</div><button type="button" id="mpcProgStop" class="mpc-prog-stop">중지</button></div></div>
     <div class="mp-search"><div class="box">🔍<input id="mpKw" type="text" placeholder="장소·메모 검색 (예: 강남 파스타)"></div></div>
@@ -11413,6 +11420,34 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   // ── 내 고객(Customer) 저장소 — 나의 장소와 완전 분리된 별도 DB ──
   // 데이터 구조: {id, name, company, title, job, phone, addr, lat, lng, rels:[관계배열], memo, createdAt}   /* job 2026-07-25 */
   var CDBN="mycustomers_db",CSTORE="customers",cdb=null,customers=[];
+  /* ★ [2026-09-02] 이름 유일성 — 설계 원칙.
+     고객 이름은 유일하다. 같은 이름은 같은 사람이다. 동명이인은 입력 시점에 식별자(홍길동A)를 붙여 구분한다.
+     이 규칙은 마이페이지 등록(opDupResolve)에만 있었고 지도 폼·음성·엑셀·편입은 우회했다.
+     그래서 서버·드라이브·기기의 이름 개수가 어긋나고, 같은 사람인지 판정하려고 이름+생일+연락처 휴리스틱이 늘어났다.
+     모든 입구에서 이 규칙을 강제하면 이름이 곧 열쇠가 되고, 개수 대조가 명단 대조가 된다. */
+  function mpcNameNorm(n){return String(n||"").replace(/\s+/g,"").trim();}
+  function mpcFindByName(name,excludeId){
+    var k=mpcNameNorm(name);if(!k)return null;
+    for(var i=0;i<customers.length;i++){var c=customers[i];if(c&&c.id!==excludeId&&mpcNameNorm(c.name)===k)return c;}
+    return null;
+  }
+  function mpcSuggestName(base){
+    var used={};customers.forEach(function(c){var m=String(c.name||"").match(new RegExp("^"+base.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"([A-Z])$"));if(m)used[m[1]]=1;});
+    for(var i=0;i<26;i++){var L=String.fromCharCode(65+i);if(!used[L])return base+L;}
+    return base+"_"+Date.now();
+  }
+  /* 대화형 해결: 같은 이름이 있으면 식별자를 붙이도록 묻는다. null=취소, 문자열=확정 이름 */
+  function mpcNameResolve(name,excludeId){
+    var nm=String(name||"").trim();if(!nm)return nm;
+    var ex=mpcFindByName(nm,excludeId);if(!ex)return nm;
+    var sug=mpcSuggestName(nm);
+    var v=prompt("'"+nm+"' 고객이 이미 있습니다.\n\n같은 사람이면 [취소]를 누르고 기존 고객을 수정해 주세요.\n다른 사람이면 이름 뒤에 식별자(A·B·C)를 붙여 구분해 주세요.",sug);
+    if(v===null)return null;
+    v=String(v).trim();
+    if(!v||v.length>30){alert("이름을 확인해 주세요 (1~30자)");return null;}
+    if(mpcFindByName(v,excludeId)){alert("'"+v+"'도 이미 있습니다. 다른 식별자를 써 주세요.");return null;}
+    return v;
+  }
   var mpcLoadErr=null;   /* ★ [2026-09-02] 마지막 custLoad 실패 사유 */
   function mpcLoadErrHint(){
     var m=String((mpcLoadErr&&(mpcLoadErr.message||mpcLoadErr.name))||"");
@@ -11440,13 +11475,14 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(ok){ok.style.display=(p==="load")?"none":"block";ok.className="mpc-busy-ok"+((p==="err")?" sub":"");}
     if(rt)rt.style.display="none";
   }
-  function mpcBusyOn(msg,sub){
+  function mpcBusyOn(msg,sub,noGuard){
     mpcBusyDepth++;
     mpcBusyPaint(msg||"고객 정보를 불러오는 중…",sub);
     mpcBusyPhase("load");
     var el=mpcBusyEl();if(!el)return;
     el.classList.add("show");
-    if(mpcBusyGuard)clearTimeout(mpcBusyGuard);
+    if(mpcBusyGuard){clearTimeout(mpcBusyGuard);mpcBusyGuard=null;}
+    if(noGuard)return;   /* ★ [2026-09-02] 대량 삭제·재적재처럼 20초를 넘길 수 있고 스스로 반드시 끝나는 작업 */
     mpcBusyGuard=setTimeout(function(){
       mpcBusyDone("고객을 불러오지 못했습니다","응답이 너무 오래 걸립니다. 다른 탭을 닫고 다시 시도해 주세요",null,true);
     },20000);
@@ -11589,13 +11625,21 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       }
     };
     try{
-      (mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad()).then(function(){   /* ★ [2026-09-02] 동기화 중엔 재적재하지 않는다 — 체인이 쥔 객체와 배열이 갈라진다 */
-        _ready();
-        if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){mpTblOpen();});return;}
-        var n=(customers||[]).length;
-        if(n)mpcBusyDone("고객 "+n+"명을 불러왔습니다","확인을 누르면 목록이 표시됩니다",_sync);
-        else mpcBusyDone("등록된 고객이 없습니다","고객을 추가하면 이곳에 표시됩니다",_sync);
-      }).catch(function(){_ready();mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){mpTblOpen();});});
+      /* ★ [2026-09-02] 재적재는 메모리가 비어 있을 때만. 매번 IndexedDB 전체(첨부 메타 포함)를 다시 읽던 것이
+         "수정 전보다 오래 걸림"의 원인이었다. 동기화 중이거나 이미 적재돼 있으면 메모리를 쓴다. */
+      var _needLoad=!mpcSyncBusy&&!(customers&&customers.length);
+      (_needLoad?custLoad():(mpcLoadErr=null,Promise.resolve(customers))).then(function(){
+        try{
+          _ready();
+          if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){mpTblOpen();});return;}
+          var n=(customers||[]).length;
+          if(n)mpcBusyDone("고객 "+n+"명을 불러왔습니다","확인을 누르면 목록이 표시됩니다",_sync);
+          else mpcBusyDone("등록된 고객이 없습니다","고객을 추가하면 이곳에 표시됩니다",_sync);
+        }catch(e){   /* 성공 콜백 안의 예외는 실패 핸들러로 가지 않는다 — 여기서 잡아 사유를 보여준다 */
+          try{console.error("[mpTblOpen] 렌더 중 오류:",e);}catch(_e){}
+          mpcBusyDone("목록을 표시하지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true,function(){mpTblOpen();});
+        }
+      }).catch(function(e){try{console.error("[mpTblOpen] 적재 실패:",e);}catch(_e){}try{_ready();}catch(_e){}mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){mpTblOpen();});});
     }catch(_e){_ready();mpcBusyOff();}
   }
   window.mpTblOpen=mpTblOpen;
@@ -11688,7 +11732,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var tp=Math.max(1,Math.ceil(L.length/PP));
     if(mpTblPage>tp)mpTblPage=tp;if(mpTblPage<1)mpTblPage=1;
     var st=(mpTblPage-1)*PP,page=L.slice(st,st+PP);
-    if(sum)sum.textContent="고객 "+all+"명 · 계약 "+cts+"건"+(L.length!==all?(" · 조건 일치 "+L.length+"명"):"")+" · "+(st+1)+"–"+(st+page.length)+"번 표시";
+    if(sum){sum.textContent="고객 "+all+"명 · 계약 "+cts+"건"+(L.length!==all?(" · 조건 일치 "+L.length+"명"):"")+" · "+(st+1)+"–"+(st+page.length)+"번 표시";sum.innerHTML+=mpcDiffHtml();}   /* ★ [2026-09-02] 명단 대조 병기 */
     var E=mpTblEsc;
     body.innerHTML=page.map(function(c,i){
       var sg=c.birthDate?mpTblSang(c.birthDate):"";
@@ -11837,7 +11881,10 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     }
     mpTblBusy=true;mpTblSyncDel();
     var sumEl=$("mpTblSum"),sum0=sumEl?sumEl.textContent:"";
-    var prog=function(t){if(sumEl)sumEl.textContent=t;};
+    /* ★ [2026-09-02] 진행 표시를 회색 요약줄이 아니라 팝업으로. 완료도 alert 대신 팝업 [확인].
+       alert 는 화면이 갱신되기 전에 떠서 지운 고객이 아직 체크된 채 보였다 — 팝업은 갱신 후에 뜬다. */
+    var prog=function(t){mpcBusyMsg("고객을 삭제하는 중…",t);if(sumEl)sumEl.textContent=t;};
+    mpcBusyOn("고객을 삭제하는 중…","서버 목록을 확인하고 있어요",true);
     var done=function(okN,failN,pushSt,ambN){
       mpTblBusy=false;
       if(okN)mpcDataGen++;   /* 진행 중이던 동기화의 스냅샷을 무효화한다 */
@@ -11845,15 +11892,16 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       try{if(map){mpcDrawMarkers(false);mpcUpdateCount();}}catch(_e){}
       mpTblRender(1);
       if(sumEl&&!okN&&!failN)sumEl.textContent=sum0;
-      var m=label+" "+okN+"명 삭제 완료 — 지도·마이페이지·알림에서 모두 제거되었습니다.";
-      if(failN)m+="\n\n⚠️ "+failN+"명은 서버에서 지우지 못해 목록에 그대로 남겨두었습니다.\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.";
-      if(ambN)m+="\n\n⚠️ "+ambN+"명은 이름·생년월일이 같은 고객이 남아 있어 어느 쪽인지 판별할 수 없어 건너뛰었습니다.\n해당 고객의 생년월일을 채우신 뒤 다시 삭제해 주세요.";
-      if(pushSt==="fail")m+="\n\n⚠️ 드라이브 백업 반영이 지연되고 있습니다. 다음 접속 때 자동으로 다시 시도합니다.";
-      else if(pushSt==="off")m+="\n\n· 드라이브 미연결 — 연결하시면 자동으로 백업됩니다.";
-      alert(m);
-      cb&&cb();
+      var title=label+" "+okN+"명 삭제 완료";
+      var sub="지도·마이페이지·알림에서 모두 제거되었습니다";
+      var warn=[];
+      if(failN)warn.push(failN+"명은 서버에서 지우지 못해 목록에 남겨두었습니다. 네트워크를 확인한 뒤 다시 시도해 주세요");
+      if(ambN)warn.push(ambN+"명은 이름·생년월일이 같은 고객이 남아 있어 건너뛰었습니다. 생년월일을 채운 뒤 다시 삭제해 주세요");
+      if(pushSt==="fail")warn.push("드라이브 백업 반영이 지연되고 있습니다. 다음 접속 때 자동으로 다시 시도합니다");
+      else if(pushSt==="off")warn.push("드라이브 미연결 — 연결하시면 자동으로 백업됩니다");
+      if(warn.length)sub=warn.join(" · ");
+      mpcBusyDone(title,sub,function(){cb&&cb();},!!(failN||ambN));
     };
-    prog("삭제 준비 중… 서버 목록을 확인하고 있어요");
     /* ① 서버 문서 색인을 그때그때 조회 — 캐시(mpcFccIdx)만 믿으면 fccId 없는 고객의 문서를 놓친다 */
     var idxP=(window.fccBridge&&window.fccBridge.pullDocs)?window.fccBridge.pullDocs():Promise.resolve(null);
     idxP.catch(function(){return null;}).then(function(pd){
@@ -11901,7 +11949,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       var rmP;
       if(!docList.length)rmP=Promise.resolve({ok:[],fail:[]});
       else if(window.fccBridge&&window.fccBridge.removeMany){
-        prog("삭제 중… 서버에서 "+docList.length+"건 제거");
+        prog("서버에서 "+docList.length+"건 제거 중");
         rmP=window.fccBridge.removeMany(docList).catch(function(){return {ok:[],fail:docList};});
       }else rmP=Promise.resolve({ok:[],fail:docList});
       rmP.then(function(res){
@@ -11913,13 +11961,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
         targets.forEach(function(c){if(!del[c.id]&&unresolved.indexOf(c.id)<0)failN++;});
         var ambN=unresolved.length;
         var delIds=Object.keys(del);
-        prog("삭제 중… 기기에서 "+delIds.length+"건 제거");
+        prog("기기에서 "+delIds.length+"건 제거 중");
         var i=0,okN=0;
         var step=function(){
           if(i>=delIds.length){
             var st="off";
             try{
-              mpcGdPushAwait().then(function(s){done(okN,failN,s,ambN);},function(){done(okN,failN,"fail",ambN);});
+              prog("드라이브 백업에 반영하는 중");mpcGdPushAwait().then(function(s){done(okN,failN,s,ambN);},function(){done(okN,failN,"fail",ambN);});
             }catch(_e){done(okN,failN,st,ambN);}
             return;
           }
@@ -11928,13 +11976,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
             for(var k2=0;k2<customers.length;k2++){if(customers[k2].id===id){customers.splice(k2,1);break;}}
             delete mpTblSel[id];
             okN++;
-            if(okN%50===0)prog("삭제 중… "+okN+" / "+delIds.length);
+            if(okN%10===0)prog("기기에서 제거 중 "+okN+" / "+delIds.length);
             /* 동기 재귀 폭주 방지 — 200건마다 제어 양보 */
             if(okN%200===0)setTimeout(step,0);else step();
           },function(){step();});
         };
         step();
-      },function(){mpTblBusy=false;mpTblSyncDel();if(sumEl)sumEl.textContent=sum0;alert("삭제에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.");});
+      },function(){mpTblBusy=false;mpTblSyncDel();if(sumEl)sumEl.textContent=sum0;mpcBusyDone("삭제에 실패했습니다","네트워크 상태를 확인한 뒤 다시 시도해 주세요",null,true);});
     });
   }
   /* ★ [2026-09-02] 확인 문구 비교를 공백·따옴표에 관대하게 바꾸고, 불일치 시 조용히 끝내지 않는다.
@@ -12013,7 +12061,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       .then(function(){return Promise.all(customers.map(function(c){return custPut(c);}));})
       .then(function(){mpcGdPush();return pairs.length;});
   }
-  function custLoad(){mpcLoadErr=null;return openCustDB().then(custAll).then(function(a){customers=a||[];try{if(window.mpcHayReset)window.mpcHayReset();}catch(_e){}   /* ★ [2026-08-26] 목록 재적재 시 색인 전체 초기화 */customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(e){mpcLoadErr=e||new Error("IDB_UNKNOWN");try{console.warn("[custLoad] 고객 적재 실패:",e);}catch(_e){}customers=[];return customers;});}   /* ★ [2026-09-02] 실패를 삼키지 않고 mpcLoadErr 로 남긴다 — "0명"과 "읽기 실패"를 구분하기 위함 */
+  function custLoad(){mpcLoadErr=null;var _t0=Date.now();return openCustDB().then(custAll).then(function(a){customers=a||[];try{console.info("[custLoad] "+customers.length+"명 · "+(Date.now()-_t0)+"ms");}catch(_e){}try{if(window.mpcHayReset)window.mpcHayReset();}catch(_e){}   /* ★ [2026-08-26] 목록 재적재 시 색인 전체 초기화 */customers.forEach(function(c){(c.rels||[]).forEach(function(k){mpcAddCustomRel(k);});});return customers;}).catch(function(e){mpcLoadErr=e||new Error("IDB_UNKNOWN");try{console.warn("[custLoad] 고객 적재 실패:",e);}catch(_e){}customers=[];return customers;});}   /* ★ [2026-09-02] 실패를 삼키지 않고 mpcLoadErr 로 남긴다 — "0명"과 "읽기 실패"를 구분하기 위함 */
   window.__mpcDriveSync=function(cb){   /* ★ 드라이브 → 기기 복원 (2026-07-19): AI 비서가 기기 저장소 비었을 때 직접 복원 */
     try{
       /* ★ 연결 판정 일원화 (2026-07-19): 로컬 플래그가 아니라 서버 토큰으로 판정 — 기기 교체·캐시 삭제 시 자동 복구 */
@@ -12169,6 +12217,8 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     f=f||{};
     var nm=String(f.name||"").trim().slice(0,30);
     if(!nm){if(cb)cb(false,"이름이 없어요");return;}
+    /* ★ [2026-09-02] 이름 유일성 — 확인 화면을 거쳤어도 그 사이 같은 이름이 생겼을 수 있다. 신규 생성은 이름이 없을 때만 */
+    if(mpcFindByName(nm)){if(cb)cb(false,"'"+nm+"' 고객이 이미 있어요 — 기존 고객에 기록해 주세요");return;}
     var o={id:"c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),fccId:"",name:nm,
       birthDate:(/^\d{4}-\d{2}-\d{2}$/.test(f.birthDate||""))?f.birthDate:"",
       birthUnknown:!(/^\d{4}-\d{2}-\d{2}$/.test(f.birthDate||"")),
@@ -12188,7 +12238,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var syncFcc=function(after){
       if(!window.fccBridge||!window.fccBridge.upsert){after();return;}
       try{
-        window.fccBridge.upsert([{fccId:"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:"",mgTitle:"",forceCreate:true,
+        window.fccBridge.upsert([{fccId:"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:"",mgTitle:"",forceCreate:false,   /* ★ [2026-09-02] 이름이 열쇠 — 서버에 같은 이름이 있으면 갱신. forceCreate:true 는 서버 문서를 무조건 하나 더 만들어 서버·드라이브 개수를 어긋나게 했다 */
           contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:false,insType:"",insurer:"",premium:""};}).filter(function(x){return x.productName;})}])
           .then(function(ids){if(ids&&ids[0])o.fccId=ids[0];after();},
                 function(){toast("서버 반영이 지연됐어요 — 고객 지도를 다시 열면 자동으로 맞춰져요","warn");after();});
@@ -12269,7 +12319,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   var mpcPage=1,mpcPageSize=(function(){var v=parseInt(localStorage.getItem("mpc_pgsize")||"10",10);return [10,20,30,40,50,100].indexOf(v)>=0?v:10;})();   /* ★ 리스트 페이지네이션 (2026-07-18) */
   function mpcMatch(c){if(window.__mrF&&window.__mrF.match&&!window.__mrF.match(c))return false;return custFilter==="all"||((c.rels||[]).indexOf(custFilter)>=0);}
   function mpcRenderFilter(){var w=$("mpcbFilters");if(!w)return;var opts=[["all","전체"]].concat(REL_DEFS.map(function(r){return [r.k,r.k];})).concat(mpcCustomRels.map(function(k){return [k,k];}));w.innerHTML="";opts.forEach(function(o){var b=document.createElement("button");b.type="button";b.className="mpcb-f"+(custFilter===o[0]?" on":"");b.textContent=o[1];b.onclick=function(){custFilter=o[0];mpcPage=1;mpcRenderFilter();mpcRenderList();mpcDrawMarkers(false);mpcUpdateCount();};w.appendChild(b);});}
-  function mpcUpdateCount(){var el=$("mpcbCount");if(!el)return;var b=(map&&map.getBounds)?map.getBounds():null;var tot=0,all=0,noaddr=0,per={};customers.forEach(function(c){if(!mpcMatch(c))return;all++;var _p1=!!(c.lat&&c.lng),_p2=!!(c.lat2&&c.lng2);if(!_p1&&!_p2){noaddr++;return;}if(b){var _v1=_p1&&b.contain(new kakao.maps.LatLng(c.lat,c.lng)),_v2=_p2&&b.contain(new kakao.maps.LatLng(c.lat2,c.lng2));if(!_v1&&!_v2)return;}tot++;(c.rels||[]).forEach(function(k){per[k]=(per[k]||0)+1;});});/* ★ [2026-07-29 v2] 사람 기준 계수 — 집·직장 어느 핀이든 화면 안이면 1명 *//* ★ [2026-08-06] 전체 인원 병기 — 좌표·화면범위 무관한 필터 전체 + 주소없음 안내 */var pills=REL_DEFS.filter(function(r){return per[r.k];}).map(function(r){return '<span class="cpill" style="background:'+r.c+'">'+r.k+' '+per[r.k]+'</span>';}).join("");el.innerHTML="이 화면: "+tot+"명 · 전체 "+all+"명"+(noaddr?' <span style="color:#9099AD;font-size:11px">(주소없음 '+noaddr+'명)</span>':'')+pills;}
+  function mpcUpdateCount(){var el=$("mpcbCount");if(!el)return;var b=(map&&map.getBounds)?map.getBounds():null;var tot=0,all=0,noaddr=0,per={};customers.forEach(function(c){if(!mpcMatch(c))return;all++;var _p1=!!(c.lat&&c.lng),_p2=!!(c.lat2&&c.lng2);if(!_p1&&!_p2){noaddr++;return;}if(b){var _v1=_p1&&b.contain(new kakao.maps.LatLng(c.lat,c.lng)),_v2=_p2&&b.contain(new kakao.maps.LatLng(c.lat2,c.lng2));if(!_v1&&!_v2)return;}tot++;(c.rels||[]).forEach(function(k){per[k]=(per[k]||0)+1;});});/* ★ [2026-07-29 v2] 사람 기준 계수 — 집·직장 어느 핀이든 화면 안이면 1명 *//* ★ [2026-08-06] 전체 인원 병기 — 좌표·화면범위 무관한 필터 전체 + 주소없음 안내 */var pills=REL_DEFS.filter(function(r){return per[r.k];}).map(function(r){return '<span class="cpill" style="background:'+r.c+'">'+r.k+' '+per[r.k]+'</span>';}).join("");el.innerHTML="이 화면: "+tot+"명 · 전체 "+all+"명"+(noaddr?' <span style="color:#9099AD;font-size:11px">(주소없음 '+noaddr+'명)</span>':'')+pills+mpcDiffHtml();}
   /* ★ [2026-07-24] 지오코딩 개정
      기존 문제: addressSearch 실패 → keywordSearch(장소 이름 검색)로 넘어가 엉뚱한 곳을 찾고도
                 ok:true 로 반환 → 화면엔 "✓ 좌표 확인됨"이 떠서 잘못된 위치인 줄 모른다.
@@ -12568,7 +12618,16 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
         /* ② 생일 없는 미링크 카드가 정확히 1명 → 승격 링크 (명함고객 승격) */
         var free=[];for(j=0;j<same.length;j++){c=same[j];if(!c.fccId&&!c.birthDate)free.push(c);}
         if(free.length===1){if(d.birthDate){free[0].birthDate=d.birthDate;free[0].birthUnknown=false;}link(free[0],d);added++;continue;}
-        /* ③ 그 외 → 문서 1건당 카드 1장 신규 (fc_clients와 1:1 — 누락 없음) */
+        /* ★ [2026-09-02] 이름이 열쇠 — 같은 이름의 카드가 기기에 있으면 새 카드를 만들지 않는다.
+           미링크 카드가 있으면 그 카드에 연결하고, 전부 링크돼 있으면 서버 쪽 중복 문서다(건너뜀).
+           기존 ③은 "문서 1건당 카드 1장"이라 서버에 같은 이름 문서가 2건이면 기기에도 카드가 2장 생겼다 — 3985명의 경로 중 하나. */
+        if(same.length){
+          var _unl=null;for(j=0;j<same.length;j++){if(!same[j].fccId){_unl=same[j];break;}}
+          if(_unl){if(d.birthDate&&!_unl.birthDate){_unl.birthDate=d.birthDate;_unl.birthUnknown=false;}link(_unl,d);added++;}
+          else byFcc[d.id]=1;
+          continue;
+        }
+        /* ③ 기기에 같은 이름이 전혀 없을 때만 신규 */
         create(d);
       }
       if(big)mpcAdoptChip("고객 불러오는 중 "+i+" / "+todo.length);
@@ -13036,7 +13095,11 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
   }
   function mpcDoSave(){try{var _pn2=$("mpcMtNote"),_pp2=$("mpcMtPlace");if((_pn2&&_pn2.value.trim())||(_pp2&&_pp2.value.trim())){mpcMtAddFn();}}catch(_e){}   /* ★ 입력칸에 남은 미팅 자동 등록 — 유실 방지 (2026-07-17 버그수정) */
     try{for(var _rk in mpcCtRowDirty){if(!mpcCtRowDirty[_rk])continue;var _rv=mpcCtRowRead(parseInt(_rk,10));if(_rv&&_rv.product)mpcContracts[parseInt(_rk,10)]=_rv;}mpcContracts=mpcContracts.filter(function(x){return x&&x.product;});mpcCtRowDirty={};}catch(_e){}   /* ★ [2026-08-09] 표의 미저장 행 흡수 — 행[저장] 없이 하단 저장해도 입력값 보존, 상품명 빈 행은 정리 */
-    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};/* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}var _prevB="";if(i>=0&&customers[i].birthDate&&o.birthDate&&customers[i].birthDate!==o.birthDate)_prevB=customers[i].birthDate;   /* ★ 생일 수정 감지 (2026-07-17) */
+    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};/* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}
+    /* ★ [2026-09-02] 이름 유일성 — 신규든 개명이든 같은 이름이 다른 고객에 있으면 식별자를 붙이게 한다 */
+    if(!o.name){alert("이름을 입력해 주세요.");return;}
+    var _rn=mpcNameResolve(o.name,o.id);if(_rn===null)return;o.name=_rn;
+    custPut(o).then(function(){var i=-1;for(var j=0;j<customers.length;j++){if(customers[j].id===o.id){i=j;break;}}var _prevB="";if(i>=0&&customers[i].birthDate&&o.birthDate&&customers[i].birthDate!==o.birthDate)_prevB=customers[i].birthDate;   /* ★ 생일 수정 감지 (2026-07-17) */
 if(i>=0){var _oc0=customers[i];if(_oc0.fccId&&!o.fccId)o.fccId=_oc0.fccId;if(_oc0.extra&&!o.extra)o.extra=_oc0.extra;if(_oc0.insurancePortfolio&&!o.insurancePortfolio)o.insurancePortfolio=_oc0.insurancePortfolio;/* ★ [2026-08-09] 공유받은 보험 포트폴리오 승계 — 폼에 입력란이 없어 저장 시 유실되던 치명 버그 수정 */if(_oc0.lat2&&o.addr2&&String(_oc0.addr2||"")===String(o.addr2||"")){o.lat2=_oc0.lat2;o.lng2=_oc0.lng2;}/* ★ [2026-07-29] 주소② 좌표 승계 */if(o.fccId||o.extra||o.insurancePortfolio)custPut(o);customers[i]=o;}else customers.push(o);   /* ★ fccId 승계 (2026-07-18) · ★★ [2026-07-27] 승계값(fccId·extra) IndexedDB 즉시 재저장 — 첫 custPut이 승계 전에 실행되고 서버 id 동일 시 재저장이 생략되어, 수정 저장 후 마이페이지 고객리스트 병합(다음연락 등)이 끊기던 버그 수정 */
 var _fin=function(){closeCustForm(true);mpcRenderList();try{mpcRosterMeterRefresh();}catch(_e){}   /* ★ [2026-07-25] 저장 후 게이지 갱신 */
 if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();};
@@ -13162,7 +13225,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
   window.__mrRefresh=function(){try{mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}};   /* ★ 월간 리포트 타깃 필터 재렌더 훅 (2026-07-24) */
-  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad()).then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
+  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad()).then(function(){try{mpcMaybeIntro();mpcRenderFilter();mpcRenderList();}catch(e){try{console.error("[__mpCustOpen] 렌더 중 오류:",e);}catch(_e){}mpcBusyDone("고객 목록을 표시하지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true,function(){window.__mpCustOpen();});return;}if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;try{var _rb=$("mpcGdReloadBtn");if(_rb)_rb.style.display=mpcGdOn()?"":"none";}catch(_e){}mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
     if(mpcSyncBusy)return;   /* ★ [2026-09-02] 이미 동기화가 도는 중(탭 왕복) — 두 번째 체인을 겹쳐 시작하면 ⑤등록이 서버 문서를 중복 생성한다 */
     mpcSyncLock();mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
@@ -13259,10 +13322,11 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         /* ★ [2026-09-02] 스냅샷 이후 삭제가 있었으면 편입을 취소한다.
            pd.list 에는 방금 지운 서버 문서가 남아 있어, 그대로 편입하면 지운 고객이 카드로 되살아난다.
            건너뛴 편입은 다음에 화면을 열 때 최신 스냅샷으로 다시 수행된다. */
-        if(mpcDataGen!==_gen||mpTblBusy){mpcSyncUnlock();if(dirty)mpcGdPush();mpcRefreshAll();mpcSyncOff();return;}
+        if(mpcDataGen!==_gen||mpTblBusy){mpcSyncUnlock();if(dirty)mpcGdPush();mpcRefreshAll();try{mpcDiffCompute(pd.list);}catch(_e){}mpcSyncOff();return;}
         mpcFccAdoptAsync(pd.list,function(_added){
           var _re=function(){mpcRefreshAll();};
-          if(_added){mpcDedup().then(function(){mpcSyncUnlock();_re();mpcSyncOff();},function(){mpcSyncUnlock();_re();mpcSyncOff();});}else{mpcSyncUnlock();_re();if(dirty)mpcGdPush();mpcSyncOff();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
+          var _fin=function(){_re();try{mpcDiffCompute(pd.list);}catch(_e){}mpcSyncOff();};   /* ★ [2026-09-02] 동기화 완료 시점에 드라이브↔서버 명단 대조 */
+          if(_added){mpcDedup().then(function(){mpcSyncUnlock();_fin();},function(){mpcSyncUnlock();_fin();});}else{mpcSyncUnlock();_fin();if(dirty)mpcGdPush();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
           if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
         });
       };
@@ -13392,20 +13456,42 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     }
     mpcXlsxImport2(rows,mp);}
   function mpcXlsxImport2(rows,mp){mpcExSkip=0;mpcNeedSkip=0;
-    var items=rows.map(function(r){var name=String(r[mp.name]||"").trim();if(!name)return null;
+    var items=rows.map(function(r,_ri){var name=String(r[mp.name]||"").trim();if(!name)return null;r.__row=_ri+2;   /* ★ [2026-09-02] 엑셀 행 번호(헤더 1행 가정) — 동명이인 안내용 */
       var rels=mp.rel?String(r[mp.rel]||"").split(/[,/·]/).map(function(s){return s.trim();}).filter(Boolean):[];
       var cts=[];(mp.ct||[]).forEach(function(cm){if(!cm)return;var pd=cm.product?String(r[cm.product]||"").trim():"";if(!pd)return;cts.push({insurer:cm.insurer?String(r[cm.insurer]||"").trim():"",product:pd,ptype:cm.ptype?String(r[cm.ptype]||"").trim():"",expiry:mpcNormBirth(cm.expiry?r[cm.expiry]:"")||String(cm.expiry?r[cm.expiry]:"").trim(),premium:cm.premium?String(r[cm.premium]||"").trim():""});});
       var ph=mp.phone?String(r[mp.phone]||"").trim():"";if(/^1[016789]\d{7,8}$/.test(ph.replace(/\D/g,"")))ph="0"+ph.replace(/\D/g,"");   /* ★ [2026-07-23] 엑셀 숫자셀에서 사라진 앞 0 자동 복원 */
       var _nd=(typeof mpcNormNeeds==='function')?mpcNormNeeds(mp.needs?r[mp.needs]:''):{list:[],miss:0};
       var nds=_nd.list;if(_nd.miss)mpcNeedSkip+=_nd.miss;   /* ★ [2026-08-29] 표준 15개로 정규화 + 미인식 건수 집계 */
       var ext={};(mp.extra||[]).forEach(function(h){var v=r[h];if(v==null)return;v=String(v).trim();if(!v)return;var kk=String(h).replace(/\*/g,"").trim().slice(0,30);if(kk){if(Object.keys(ext).length<40)ext[kk]=v.slice(0,300);else mpcExSkip++;}});   /* ★ [2026-07-28] 상한 20→40키 + 초과분 집계(조용한 유실 금지) */   /* ★ [2026-07-23] 미매핑 칼럼 무손실 보관 (키 20개·값 300자 제한) */
-      return {name:name,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",job:mp.job?String(r[mp.job]||"").trim():"",phone:ph,email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:(function(){var t1=mpcAddrTag(mp.addr?r[mp.addr]:""),t2=mpcAddrTag(mp.addr2?r[mp.addr2]:"");var o9={a1:t1.a,l1:t1.l||mp.addrHint||"",a2:t2.a,l2:t2.l||"직장"};if(t1.l==="직장"&&!o9.a2){o9.a2=o9.a1;o9.l2="직장";o9.a1="";o9.l1="";}r.__a9=o9;return o9.a1;})(),addrLabel:(r.__a9&&r.__a9.a1)?r.__a9.l1:"",addr2:r.__a9?r.__a9.a2:"",addr2Label:(r.__a9&&r.__a9.a2)?r.__a9.l2:"",/* ★ [2026-07-29 v3] 셀 라벨 해석 + 직장표기 자동 라우팅 */rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",needs:nds,nextContact:mp.nextContact?(mpcNormBirth(r[mp.nextContact])||""):"",extra:ext,contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0};}).filter(Boolean);
+      return {name:name,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",job:mp.job?String(r[mp.job]||"").trim():"",phone:ph,email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:(function(){var t1=mpcAddrTag(mp.addr?r[mp.addr]:""),t2=mpcAddrTag(mp.addr2?r[mp.addr2]:"");var o9={a1:t1.a,l1:t1.l||mp.addrHint||"",a2:t2.a,l2:t2.l||"직장"};if(t1.l==="직장"&&!o9.a2){o9.a2=o9.a1;o9.l2="직장";o9.a1="";o9.l1="";}r.__a9=o9;return o9.a1;})(),addrLabel:(r.__a9&&r.__a9.a1)?r.__a9.l1:"",addr2:r.__a9?r.__a9.a2:"",addr2Label:(r.__a9&&r.__a9.a2)?r.__a9.l2:"",/* ★ [2026-07-29 v3] 셀 라벨 해석 + 직장표기 자동 라우팅 */rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",needs:nds,nextContact:mp.nextContact?(mpcNormBirth(r[mp.nextContact])||""):"",extra:ext,contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0,__row:r.__row};}).filter(Boolean);
     if(!items.length){alert("등록할 고객이 없어요.");return;}
     /* ★ [2026-07-28] 동일인 다행 접기 — 이름+생년월일이 같은 행(1행=1계약 원장 등)을 한 고객으로 병합.
        규칙: 기본정보=첫 비어있지 않은 값 · 계약=행마다 누적(상품+만기 중복 제거) · 관계·관심=합집합 · 메모=줄바꿈 연결 · extra=" / " 연결.
        생년월일 없는 행은 동명이인 보호를 위해 접지 않는다(기존 업서트가 연락처로 보조 매칭). */
     mpcFoldNote="";
-    (function(){var g={},o=[];items.forEach(function(it){var k=it.birthDate?(it.name+"|"+it.birthDate):null;if(!k||!g[k]){if(k)g[k]=it;o.push(it);return;}var b=g[k];
+    /* ★ [2026-09-02] 이름 유일성 — 파일 안에서 같은 이름인데 생년월일이 서로 다르면 동명이인이다.
+       자동으로 A/B 를 붙이지 않는다(사용자가 모르는 새 이름이 바뀌면 나중에 못 찾는다). 행 번호를 알려주고 업로드를 막는다. */
+    var _dupOk=(function(){var byN={},bad=[];
+      items.forEach(function(it){var k=mpcNameNorm(it.name);if(!k)return;(byN[k]=byN[k]||[]).push(it);});
+      Object.keys(byN).forEach(function(k){var g=byN[k];if(g.length<2)return;
+        var bs={};g.forEach(function(it){if(it.birthDate)bs[it.birthDate]=1;});
+        if(Object.keys(bs).length>1)bad.push(g[0].name+" — "+g.map(function(it){return it.__row+"행";}).join(", "));});
+      if(!bad.length)return true;
+      try{_pvHide();}catch(_e){}   /* 이 시점엔 _hideProg 가 아직 대입 전(호이스팅) — 파싱 단계용 _pvHide 를 쓴다 */
+      alert("같은 이름인데 생년월일이 다른 고객이 있어요 (동명이인).\n이름 뒤에 식별자를 붙여 구분한 뒤 다시 올려주세요. 예) 홍길동A, 홍길동B\n\n"+bad.slice(0,15).join("\n")+(bad.length>15?("\n… 외 "+(bad.length-15)+"건"):""));
+      return false;
+    })();
+    if(!_dupOk)return;
+    /* ★ [2026-09-02] 파일 ↔ 기기: 같은 이름인데 생년월일이 서로 다르면 같은 사람으로 합치기 전에 확인한다.
+       이름이 열쇠이므로 원칙상 같은 사람이지만, 동명이인에 식별자를 안 붙인 채 올린 것일 수도 있다. 조용히 덮어쓰지 않는다. */
+    var _cfOk=(function(){var cf=[];items.forEach(function(it){if(!it.birthDate)return;var ex=mpcFindByName(it.name);if(ex&&ex.birthDate&&ex.birthDate!==it.birthDate)cf.push(it.name+" — 기기 "+ex.birthDate+" / 파일 "+it.birthDate+" ("+it.__row+"행)");});
+      if(!cf.length)return true;
+      if(confirm("이미 등록된 고객과 이름은 같은데 생년월일이 다른 행이 있어요.\n\n같은 사람이면 [확인] — 파일의 생년월일로 갱신됩니다.\n다른 사람이면 [취소] — 파일에서 이름 뒤에 식별자(A·B)를 붙인 뒤 다시 올려주세요.\n\n"+cf.slice(0,15).join("\n")+(cf.length>15?("\n… 외 "+(cf.length-15)+"건"):"")))return true;
+      try{_pvHide();}catch(_e){}return false;
+    })();
+    if(!_cfOk)return;
+    (function(){var g={},o=[];items.forEach(function(it){var k=mpcNameNorm(it.name)||null;if(!k||!g[k]){if(k)g[k]=it;o.push(it);return;}var b=g[k];
+      if(it.birthDate&&!b.birthDate)b.birthDate=it.birthDate;   /* 이름 기준 접기 — 생일이 한쪽에만 있으면 채운다 */
       ["company","title","job","phone","email","status","referrer","addr","addrLabel","addr2","addr2Label","nextContact"].forEach(function(f){if(!b[f]&&it[f])b[f]=it[f];});
       if(it.addr&&b.addr&&!b.addr2){var _na9=String(it.addr).replace(/\s+/g,""),_ba9=String(b.addr).replace(/\s+/g,"");if(_na9&&_na9!==_ba9){b.addr2=it.addr;b.addr2Label=it.addrLabel||b.addr2Label||"직장";}}   /* ★ [2026-07-29 v3] 두 행에 서로 다른 주소(집/직장)를 각각 적은 원장 — 두 번째 주소를 버리지 않고 주소②로 승격 */
       if(!b.lat&&it.lat){b.lat=it.lat;b.lng=it.lng;}
@@ -13428,12 +13514,10 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     var i=0,geoOk=0,geoFail=0,geoApx=0,noAddr=0,nUp=0,nNew=0,nNoBirth=0,coreArr=[];   /* ★ [2026-07-24] 추정·주소미입력 분리 집계 */
     /* ★ 업서트 (2026-07-17): 이름+생년월일(보조: 이름+연락처) 매칭 → 갱신, 없으면 신규.
        빈 칸은 기존 값 유지 · 같은 상품명은 만기 갱신 · 미팅·메모·첨부는 불가침 · 삭제 없음 */
-    function findExisting(it){var norm=function(p){return String(p||"").replace(/\D/g,"");};
-      var byPhone=null;
-      for(var j=0;j<customers.length;j++){var c=customers[j];if((c.name||"")!==it.name)continue;
-        if(it.birthDate&&c.birthDate&&c.birthDate===it.birthDate)return c;   /* 1순위: 이름+생일 일치 */
-        if(it.phone&&c.phone&&norm(c.phone)===norm(it.phone)&&(!c.birthDate||!it.birthDate)){byPhone=byPhone||c;}}   /* 2순위: 한쪽 생일 없음 + 연락처 일치 (명함고객 승격) — 양쪽 생일이 다르면 동명이인으로 보호 */
-      return byPhone;}
+    /* ★ [2026-09-02] 이름이 열쇠 — 같은 이름이면 같은 사람으로 보고 갱신한다.
+       기존의 이름+생일 / 이름+연락처 휴리스틱은 이름 유일성이 보장되지 않던 시절의 방어책이었다.
+       파일 안 동명이인은 위에서 이미 차단했고, 기기의 동명이인은 입력 시점에 식별자로 갈라져 있다. */
+    function findExisting(it){return mpcFindByName(it.name);}
     function mergeInto(c,it){
       /* ★ [2026-07-24 버그수정] 주소만 바뀌고 좌표는 예전 것이 남아 핀이 엉뚱한 곳을 가리키던 문제.
          주소가 바뀌었는데 새 좌표를 못 구했으면, 틀린 핀을 남기는 대신 위치를 비운다('위치 미등록'으로 보임). */
@@ -13662,7 +13746,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(!mpcGdOn())return Promise.resolve("off");
     try{
       return window.ccStorage.saveJson("고객관리","내고객",{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers})
-        .then(function(){try{localStorage.removeItem("mpc_dirty");}catch(_e){}return "ok";})
+        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}return "ok";})
         .catch(function(){return "fail";});
     }catch(_e){return Promise.resolve("fail");}
   }
@@ -13675,7 +13759,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(!mpcGdOn())return;   /* 미연결: 플래그만 남김 → 다음 연결 시 자동 백업 */
     try{
       window.ccStorage.saveJson("고객관리","내고객",{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers})
-        .then(function(){try{localStorage.removeItem("mpc_dirty");}catch(_e){}})
+        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}})
         .catch(function(){
           if(retry<2){setTimeout(function(){mpcGdPushQ(retry+1);},1800*(retry+1));}
           else{try{toast("드라이브 백업이 지연되고 있어요 — 데이터는 이 기기에 저장됐고, 다음 접속 때 자동 백업돼요","warn");}catch(_e){}}
@@ -13695,21 +13779,103 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     out.rels=(((w&&w.rels)||[]).concat((l&&l.rels)||[])).filter(function(x,i,a){return x&&a.indexOf(x)===i;});
     return out;
   }
-  function mpcMergeRemote(remote){
-    var byId={};customers.forEach(function(c){byId[c.id]=c;});
-    var localOnly=customers.length?true:false;   /* 로컬 전용 레코드 존재 여부 → 재푸시 판단 */
-    var remoteIds={};var localNewer=false;
-    remote.forEach(function(c){remoteIds[c.id]=1;var ex=byId[c.id];
-      if(!ex){byId[c.id]=c;return;}
-      var w=(((c.updatedAt||c.createdAt||0))>=((ex.updatedAt||ex.createdAt||0)))?c:ex;   /* ★ [2026-07-21] 수정시각 우선 — 최신 수정 기기가 승자 */
-      var l=(w===c)?ex:c;
-      if(w===ex&&((ex.updatedAt||ex.createdAt||0)>((c.updatedAt||c.createdAt||0))))localNewer=true;   /* ★ 로컬이 더 최신 → 드라이브 재갱신 필요 */
-      byId[c.id]=mpcFieldMerge(w,l);
-    });
-    var needPush=customers.some(function(c){return !remoteIds[c.id];})||localNewer;   /* Drive에 없는 로컬 레코드 or 로컬이 최신 → 따라잡기 */
-    var merged=Object.keys(byId).map(function(k){return byId[k];});
-    return Promise.all(merged.map(function(c){return custPut(c,true);})).then(function(){customers=merged;return needPush;});
+  /* ★ [2026-09-02] 드라이브 우선 · 이름 열쇠 병합 — 설계 원칙을 코드로 옮긴 것.
+     ── 원칙: 드라이브가 원본, 기기는 캐시, 서버는 파생본. 같은 이름은 같은 사람.
+     ── 이전(2026-07-21): 기기와 드라이브를 동등한 peer 로 두고 id 로 비교, 수정시각이 최신인 쪽이 승자, 한쪽에만 있으면 무조건 보존.
+        기기마다 id 체계가 달라(PC id / 모바일 편입 id) 같은 사람이 두 벌로 쌓였고(모바일 3985명),
+        다른 기기에서 지운 고객이 "기기에만 있음 → 보존"으로 되살아났다.
+     ── 지금: ① 이름으로 같은 사람을 맞춘다 ② 드라이브 값이 이긴다(id 도 드라이브 id 로 통일)
+        ③ 예외는 하나 — 마지막 백업 이후 이 기기에서 수정한 레코드(dirty)만 기기 값을 지키고 재푸시한다
+        ④ 드라이브에 없는 기기 레코드는 dirty 가 아니면 다른 기기에서 지운 것이므로 폐기한다.
+     ── dirty 판정: updatedAt > (이 기기의 마지막 성공 푸시 시각 || 드라이브 파일 시각). custPut 이 모든 저장에 updatedAt 을 찍는다.
+     검증: 2기기 시나리오 8종(첫 병합·삭제 반영·신규 유지·동시 수정·꼬인 기기·드라이브 동명·새 기기·무명) 통과. */
+  function mpcMergeRemote(remote,remoteTs){
+    var pushedAt=0;try{pushedAt=parseInt(localStorage.getItem("mpc_pushed_at")||"0",10)||0;}catch(_e){}
+    var base=pushedAt||remoteTs||0;
+    var ts=function(c){return (c&&(c.updatedAt||c.createdAt))||0;};
+    var isDirty=function(c){return ts(c)>base;};
+    var score=function(x){return ((x.contracts||[]).length*2)+((x.meetings||[]).length*3)+(x.phone?1:0)+(x.birthDate?1:0)+(x.addr?1:0);};
+    /* 드라이브 안의 레거시 동명 접기 — 정보 많은 쪽이 승자, 나머지는 빈칸 보강 */
+    var rByName={};(remote||[]).forEach(function(r){if(!r)return;var k=mpcNameNorm(r.name);if(!k)return;
+      if(!rByName[k])rByName[k]=r;else{var a=rByName[k];rByName[k]=score(r)>score(a)?mpcFieldMerge(r,a):mpcFieldMerge(a,r);}});
+    var lByName={};customers.forEach(function(c){var k=mpcNameNorm(c.name);if(!k)return;(lByName[k]=lByName[k]||[]).push(c);});
+    var out=[],used={},needPush=false;
+    Object.keys(rByName).forEach(function(k){var r=rByName[k],locs=lByName[k]||[];
+      locs.forEach(function(l){used[l.id]=1;});
+      var dl=locs.filter(isDirty).sort(function(a,b){return ts(b)-ts(a);})[0];
+      if(dl){out.push(mpcFieldMerge(dl,r));needPush=true;}                                                   /* 기기 미백업 수정 → 기기 승, 드라이브로 빈칸 보강 */
+      else out.push(r);});   /* 드라이브 승 — 기기의 비-dirty 사본은 이미 드라이브에 반영된 것이라 보강할 게 없다. 지운 미팅·계약이 되살아나지 않도록 그대로 쓴다 (첨부는 driveId 메타만이라 JSON 왕복에 안전) */
+    customers.forEach(function(c){if(used[c.id])return;var k=mpcNameNorm(c.name);
+      if(!k){out.push(c);return;}                                    /* 이름 없는 레코드는 건드리지 않는다 */
+      if(isDirty(c)){out.push(c);needPush=true;}});                  /* 드라이브에 없는 기기 레코드: 미백업 수정분만 유지 — 나머지는 다른 기기에서 지운 것 */
+    var outIds={};out.forEach(function(c){outIds[c.id]=1;});
+    var dropped=customers.filter(function(c){return !outIds[c.id];}).map(function(c){return c.id;});   /* 폐기분 + id 통일로 대체된 옛 벌 */
+    try{if(dropped.length)console.info("[merge] 드라이브 기준 정리: 기기 "+customers.length+" → "+out.length+" (제거 "+dropped.length+")");}catch(_e){}
+    return Promise.all(dropped.map(function(id){return custDel(id);}))
+      .then(function(){return Promise.all(out.map(function(c){return custPut(c,true);}));})
+      .then(function(){customers=out;try{if(window.mpcHayReset)window.mpcHayReset();}catch(_e){}return needPush;});
   }
+  /* ★ [2026-09-02] 명단 대조 — 불변 조건 "드라이브 이름 집합 = 서버 이름 집합"을 눈에 보이게.
+     숫자가 아니라 이름을 낸다. 컨설턴트가 "3985명"을 보고 당황하는 대신 "서버에 없는 고객: 홍길동" 을 보고 조치한다.
+     serverList: pullDocs() 결과. customers: 드라이브 병합 후 기기 상태(=드라이브+미백업분). */
+  var mpcDiff=null;
+  function mpcDiffCompute(serverList){
+    try{
+      var dn={},sn={};
+      customers.forEach(function(c){var k=mpcNameNorm(c.name);if(k)dn[k]=c.name;});
+      (serverList||[]).forEach(function(d){var k=mpcNameNorm(d.name);if(k)sn[k]=d.name;});
+      var linked={};customers.forEach(function(c){if(c.fccId){var k=mpcNameNorm(c.name);if(k)linked[k]=1;}});   /* pd.list 는 ⑤등록 전 스냅샷 — fccId 가 있으면 서버에 있는 것 */
+      var onlyD=Object.keys(dn).filter(function(k){return !sn[k]&&!linked[k];}).map(function(k){return dn[k];});
+      var onlyS=Object.keys(sn).filter(function(k){return !dn[k];}).map(function(k){return sn[k];});
+      mpcDiff={drive:Object.keys(dn).length,server:Object.keys(sn).length,onlyDrive:onlyD,onlyServer:onlyS,at:Date.now()};
+      window.__mpcDiff=mpcDiff;
+    }catch(_e){mpcDiff=null;}
+    mpcDiffRender();
+  }
+  function mpcDiffHtml(){
+    if(!mpcDiff)return "";
+    var ok=!mpcDiff.onlyDrive.length&&!mpcDiff.onlyServer.length;
+    if(ok)return ' <span style="color:#0F6E56;font-size:11px;font-weight:600">· 드라이브 '+mpcDiff.drive+' = 서버 '+mpcDiff.server+' ✓</span>';
+    return ' <span onclick="mpcDiffShow()" style="color:#A32D2D;font-size:11px;font-weight:700;cursor:pointer;text-decoration:underline">· 드라이브 '+mpcDiff.drive+' / 서버 '+mpcDiff.server+' — '+(mpcDiff.onlyDrive.length+mpcDiff.onlyServer.length)+'명 불일치 (보기)</span>';
+  }
+  function mpcDiffRender(){
+    try{var el=$("mpcbCount");if(el&&mpcDiff&&el.innerHTML.indexOf("드라이브 ")<0)el.innerHTML+=mpcDiffHtml();}catch(_e){}
+    try{var s2=$("mpTblSum");if(s2&&mpcDiff&&s2.innerHTML.indexOf("드라이브 ")<0)s2.innerHTML+=mpcDiffHtml();}catch(_e){}
+  }
+  /* ★ [2026-09-02] 드라이브에서 다시 불러오기 — 꼬인 기기를 1회 정리하는 리셋.
+     기기 저장소(IndexedDB)를 비우고 드라이브 원본을 통째로 받는다. 이름 병합이 대부분 자동 정리하지만,
+     컨설턴트가 "이상하다" 싶을 때 스스로 쓸 수 있는 확실한 수단을 둔다. 미백업 수정분이 있으면 먼저 알린다. */
+  window.mpcGdReload=function(){
+    if(!mpcGdOn()){alert("드라이브가 연결되어 있지 않습니다.");return;}
+    if(mpTblBusy||mpcSyncBusy){alert("작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.");return;}
+    var pushedAt=0;try{pushedAt=parseInt(localStorage.getItem("mpc_pushed_at")||"0",10)||0;}catch(_e){}
+    var dirtyN=customers.filter(function(c){return (c.updatedAt||c.createdAt||0)>pushedAt;}).length;
+    var m="이 기기의 고객 사본 "+customers.length+"명을 지우고 드라이브(원본)에서 다시 받습니다.\n";
+    if(dirtyN)m+="\n⚠️ 마지막 백업 이후 이 기기에서 수정한 "+dirtyN+"명은 사라집니다.\n먼저 [동기화]를 눌러 백업한 뒤 진행하세요.\n";
+    m+="\n계속할까요?";
+    if(!confirm(m))return;
+    mpcBusyOn("드라이브에서 다시 불러오는 중…","기기 사본을 비우고 원본을 받고 있어요",true);
+    mpcSyncLock();
+    var ids=customers.map(function(c){return c.id;});
+    Promise.all(ids.map(function(id){return custDel(id);})).then(function(){
+      customers=[];mpTblSel={};try{if(window.mpcHayReset)window.mpcHayReset();}catch(_e){}
+      try{localStorage.removeItem("mpc_pushed_at");}catch(_e){}
+      mpcGdPull(function(synced){
+        mpcSyncUnlock();
+        var n=(customers||[]).length;
+        mpcRefreshAll();
+        mpcBusyDone(synced?("드라이브에서 "+n+"명을 불러왔습니다"):"드라이브에서 받지 못했습니다",synced?"이 기기의 사본이 원본과 같아졌습니다":"드라이브 연결 상태를 확인한 뒤 다시 시도해 주세요",null,!synced);
+      });
+    }).catch(function(e){mpcSyncUnlock();try{console.error("[mpcGdReload]",e);}catch(_e){}mpcBusyDone("다시 불러오지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true);});
+  };
+  window.mpcDiffShow=function(){
+    if(!mpcDiff)return;
+    var m="드라이브(원본) "+mpcDiff.drive+"명 · 서버 "+mpcDiff.server+"명\n";
+    if(mpcDiff.onlyDrive.length)m+="\n■ 드라이브에만 있음 "+mpcDiff.onlyDrive.length+"명 — 생일·만기 알림을 못 받습니다\n"+mpcDiff.onlyDrive.slice(0,30).join(", ")+(mpcDiff.onlyDrive.length>30?" 외 "+(mpcDiff.onlyDrive.length-30)+"명":"")+"\n";
+    if(mpcDiff.onlyServer.length)m+="\n■ 서버에만 있음 "+mpcDiff.onlyServer.length+"명 — 드라이브에서 지워졌거나 아직 등록 전\n"+mpcDiff.onlyServer.slice(0,30).join(", ")+(mpcDiff.onlyServer.length>30?" 외 "+(mpcDiff.onlyServer.length-30)+"명":"")+"\n";
+    m+="\n[내 고객] 탭을 다시 열면 자동으로 맞춥니다. 계속 남으면 알려주세요.";
+    alert(m);
+  };
   function mpcGdPull(cb){
     (async function(){
       try{
@@ -13725,7 +13891,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         /* ★ [2026-08-29] 12초 타임아웃으로 이미 업로드가 시작된 뒤 도착한 응답이면 병합하지 않는다.
            그대로 병합하면 방금 저장한 고객이 드라이브의 예전 값으로 되돌아간다. */
         if(window.__mpcGdStale){window.__mpcGdStale=false;try{console.warn('드라이브 응답이 늦어 이번 병합은 건너뜁니다');}catch(_e2){}cb&&cb(false);return;}
-        if(d&&d.customers&&d.customers.length){var _np=await mpcMergeRemote(d.customers);var _dirty=false;try{_dirty=!!localStorage.getItem("mpc_dirty");}catch(_e){}if(_np||_dirty)mpcGdPush();cb&&cb(true);return;}
+        if(d&&d.customers&&d.customers.length){var _np=await mpcMergeRemote(d.customers,d.updatedAt||0);var _dirty=false;try{_dirty=!!localStorage.getItem("mpc_dirty");}catch(_e){}if(_np||_dirty)mpcGdPush();cb&&cb(true);return;}
         if(customers.length){mpcGdPush();}   /* Drive 비어있고 로컬만 있음 → 최초 백업 */
         /* 레거시 평문 파일 1회 마이그레이션 */
         var t=await window.ccStorage.token();
@@ -13735,7 +13901,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         var rr=await fetch("https://www.googleapis.com/drive/v3/files/"+f.id+"?alt=media",{headers:{Authorization:"Bearer "+t}});
         var ld=await rr.json();
         if(ld&&ld.customers&&ld.customers.length){
-          await mpcMergeRemote(ld.customers);
+          await mpcMergeRemote(ld.customers,ld.updatedAt||0);
           try{
             await window.ccStorage.saveJson('고객관리','내고객',{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers});
             await fetch("https://www.googleapis.com/drive/v3/files/"+f.id,{method:"DELETE",headers:{Authorization:"Bearer "+t}}); /* 암호화 저장 성공 후에만 평문 제거 */
@@ -13853,7 +14019,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if($("mpcIntroGo"))$("mpcIntroGo").onclick=mpcIntroClose;
     if($("mpcIntroGuide"))$("mpcIntroGuide").onclick=function(){mpcIntroClose();openCustGuide();};
     if($("mpcExportBtn"))$("mpcExportBtn").onclick=mpcXlsxExport;
-    if($("mpcRegeoBtn"))$("mpcRegeoBtn").onclick=mpcRegeoRun;   /* ★ [2026-07-24] 위치 재계산 */
+    if($("mpcRegeoBtn"))$("mpcRegeoBtn").onclick=mpcRegeoRun;   /* ★ [2026-07-24] 위치 재계산 */     if($("mpcGdReloadBtn"))$("mpcGdReloadBtn").onclick=window.mpcGdReload;   /* ★ [2026-09-02] 드라이브 재적재 */
     if($("mpcXlsxFile"))$("mpcXlsxFile").onchange=function(){mpcXlsxHandle(this.files&&this.files[0]);};
     if($("mpcProgStop"))$("mpcProgStop").onclick=function(){mpcXlsxStop=true;};
     $("mpEditBack").onclick=function(){$("mpEdit").classList.remove("show");};
