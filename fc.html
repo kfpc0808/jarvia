@@ -11440,13 +11440,14 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     if(ok){ok.style.display=(p==="load")?"none":"block";ok.className="mpc-busy-ok"+((p==="err")?" sub":"");}
     if(rt)rt.style.display="none";
   }
-  function mpcBusyOn(msg,sub){
+  function mpcBusyOn(msg,sub,noGuard){
     mpcBusyDepth++;
     mpcBusyPaint(msg||"고객 정보를 불러오는 중…",sub);
     mpcBusyPhase("load");
     var el=mpcBusyEl();if(!el)return;
     el.classList.add("show");
-    if(mpcBusyGuard)clearTimeout(mpcBusyGuard);
+    if(mpcBusyGuard){clearTimeout(mpcBusyGuard);mpcBusyGuard=null;}
+    if(noGuard)return;   /* ★ [2026-09-02] 대량 삭제처럼 20초를 넘길 수 있고 스스로 반드시 끝나는 작업 */
     mpcBusyGuard=setTimeout(function(){
       mpcBusyDone("고객을 불러오지 못했습니다","응답이 너무 오래 걸립니다. 다른 탭을 닫고 다시 시도해 주세요",null,true);
     },20000);
@@ -11837,7 +11838,10 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     }
     mpTblBusy=true;mpTblSyncDel();
     var sumEl=$("mpTblSum"),sum0=sumEl?sumEl.textContent:"";
-    var prog=function(t){if(sumEl)sumEl.textContent=t;};
+    /* ★ [2026-09-02] 진행 표시를 회색 요약줄이 아니라 팝업으로. 완료도 alert 대신 팝업 [확인].
+       alert 는 화면이 갱신되기 전에 떠서 지운 고객이 아직 체크된 채 보였다 — 팝업은 갱신 후에 뜬다. */
+    var prog=function(t,sub){mpcBusyMsg("고객을 삭제하는 중…",t);if(sumEl)sumEl.textContent=t;};
+    mpcBusyOn("고객을 삭제하는 중…","서버 목록을 확인하고 있어요",true);
     var done=function(okN,failN,pushSt,ambN){
       mpTblBusy=false;
       if(okN)mpcDataGen++;   /* 진행 중이던 동기화의 스냅샷을 무효화한다 */
@@ -11845,15 +11849,16 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       try{if(map){mpcDrawMarkers(false);mpcUpdateCount();}}catch(_e){}
       mpTblRender(1);
       if(sumEl&&!okN&&!failN)sumEl.textContent=sum0;
-      var m=label+" "+okN+"명 삭제 완료 — 지도·마이페이지·알림에서 모두 제거되었습니다.";
-      if(failN)m+="\n\n⚠️ "+failN+"명은 서버에서 지우지 못해 목록에 그대로 남겨두었습니다.\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.";
-      if(ambN)m+="\n\n⚠️ "+ambN+"명은 이름·생년월일이 같은 고객이 남아 있어 어느 쪽인지 판별할 수 없어 건너뛰었습니다.\n해당 고객의 생년월일을 채우신 뒤 다시 삭제해 주세요.";
-      if(pushSt==="fail")m+="\n\n⚠️ 드라이브 백업 반영이 지연되고 있습니다. 다음 접속 때 자동으로 다시 시도합니다.";
-      else if(pushSt==="off")m+="\n\n· 드라이브 미연결 — 연결하시면 자동으로 백업됩니다.";
-      alert(m);
-      cb&&cb();
+      var title=label+" "+okN+"명 삭제 완료";
+      var sub="지도·마이페이지·알림에서 모두 제거되었습니다";
+      var warn=[];
+      if(failN)warn.push(failN+"명은 서버에서 지우지 못해 목록에 남겨두었습니다. 네트워크를 확인한 뒤 다시 시도해 주세요");
+      if(ambN)warn.push(ambN+"명은 이름·생년월일이 같은 고객이 남아 있어 건너뛰었습니다. 생년월일을 채운 뒤 다시 삭제해 주세요");
+      if(pushSt==="fail")warn.push("드라이브 백업 반영이 지연되고 있습니다. 다음 접속 때 자동으로 다시 시도합니다");
+      else if(pushSt==="off")warn.push("드라이브 미연결 — 연결하시면 자동으로 백업됩니다");
+      if(warn.length)sub=warn.join(" · ");
+      mpcBusyDone(title,sub,function(){cb&&cb();},!!(failN||ambN));
     };
-    prog("삭제 준비 중… 서버 목록을 확인하고 있어요");
     /* ① 서버 문서 색인을 그때그때 조회 — 캐시(mpcFccIdx)만 믿으면 fccId 없는 고객의 문서를 놓친다 */
     var idxP=(window.fccBridge&&window.fccBridge.pullDocs)?window.fccBridge.pullDocs():Promise.resolve(null);
     idxP.catch(function(){return null;}).then(function(pd){
@@ -11901,7 +11906,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       var rmP;
       if(!docList.length)rmP=Promise.resolve({ok:[],fail:[]});
       else if(window.fccBridge&&window.fccBridge.removeMany){
-        prog("삭제 중… 서버에서 "+docList.length+"건 제거");
+        prog("서버에서 "+docList.length+"건 제거 중");
         rmP=window.fccBridge.removeMany(docList).catch(function(){return {ok:[],fail:docList};});
       }else rmP=Promise.resolve({ok:[],fail:docList});
       rmP.then(function(res){
@@ -11913,13 +11918,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
         targets.forEach(function(c){if(!del[c.id]&&unresolved.indexOf(c.id)<0)failN++;});
         var ambN=unresolved.length;
         var delIds=Object.keys(del);
-        prog("삭제 중… 기기에서 "+delIds.length+"건 제거");
+        prog("기기에서 "+delIds.length+"건 제거 중");
         var i=0,okN=0;
         var step=function(){
           if(i>=delIds.length){
             var st="off";
             try{
-              mpcGdPushAwait().then(function(s){done(okN,failN,s,ambN);},function(){done(okN,failN,"fail",ambN);});
+              prog("드라이브 백업에 반영하는 중");mpcGdPushAwait().then(function(s){done(okN,failN,s,ambN);},function(){done(okN,failN,"fail",ambN);});
             }catch(_e){done(okN,failN,st,ambN);}
             return;
           }
@@ -11928,13 +11933,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
             for(var k2=0;k2<customers.length;k2++){if(customers[k2].id===id){customers.splice(k2,1);break;}}
             delete mpTblSel[id];
             okN++;
-            if(okN%50===0)prog("삭제 중… "+okN+" / "+delIds.length);
+            if(okN%10===0)prog("기기에서 제거 중 "+okN+" / "+delIds.length);
             /* 동기 재귀 폭주 방지 — 200건마다 제어 양보 */
             if(okN%200===0)setTimeout(step,0);else step();
           },function(){step();});
         };
         step();
-      },function(){mpTblBusy=false;mpTblSyncDel();if(sumEl)sumEl.textContent=sum0;alert("삭제에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.");});
+      },function(){mpTblBusy=false;mpTblSyncDel();if(sumEl)sumEl.textContent=sum0;mpcBusyDone("삭제에 실패했습니다","네트워크 상태를 확인한 뒤 다시 시도해 주세요",null,true);});
     });
   }
   /* ★ [2026-09-02] 확인 문구 비교를 공백·따옴표에 관대하게 바꾸고, 불일치 시 조용히 끝내지 않는다.
