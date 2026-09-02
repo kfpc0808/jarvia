@@ -877,6 +877,7 @@ onAuthStateChanged(auth,async u=>{
 const MC_TTS_ENDPOINT='https://ttsspeak-cvmdsjgzxa-du.a.run.app';
 const MC_TTS_VOICE='ko-KR-Chirp3-HD-Despina';
 const MC_TTS_MIN=50;                       /* 이 글자 수 미만이면 바를 넣지 않음 */
+const MC_TTS_MAX=5500;                     /* 서버 한도 6000자 — 초과 시 문단 단위로 나눠 이어 재생 */
 /* 낭독 대상 — sel: 섹션, body: 본문(빈 값이면 섹션 자신), pos: 바 위치 */
 const MC_TTS_TARGETS=[
   {sel:'.mg-card',       body:'.mg-bd',       id:'guide', title:'오늘의 읽기 가이드', pos:'start'},
@@ -885,7 +886,7 @@ const MC_TTS_TARGETS=[
   {sel:'.mc-tip',        body:'',             id:'tip',   title:'상담 활용 Tip',      pos:'end'}
 ];
 const _mcTMap={};                          /* {섹션id: {sec, body, title}} */
-const _mcT={id:null,url:null,audio:null,rate:1,date:'',title:''};
+const _mcT={id:null,url:null,audio:null,rate:1,date:'',title:'',queue:[],qi:0};
 
 function mcTtsInit(dateId){
   _mcT.date=String(dateId||'').replace(/\D/g,'');
@@ -939,7 +940,32 @@ function mcTtsText(body){
     .replace(/<\/span>/gi,' ')
     .replace(/<[^>]*>/g,'');
   const ta=document.createElement('textarea');ta.innerHTML=raw;
-  return ta.value.replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return ta.value
+    /* 이모지·화살표는 낭독에서 제거 — 그대로 읽히거나 침묵으로 끊긴다(dailyReport ttsPlain 과 동일 정책) */
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu,'')
+    .replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+/** 6000자 서버 한도 대응 — 문단(없으면 문장) 경계로 나눈다 */
+function mcTtsSplit(text,max){
+  if(text.length<=max)return [text];
+  const parts=[];let cur='';
+  text.split(/\n\n+/).forEach(p=>{
+    if(p.length>max){
+      if(cur){parts.push(cur);cur='';}
+      let s2='';
+      (p.match(/[^.!?]+[.!?]*\s*/g)||[p]).forEach(sen=>{
+        if(s2&&(s2.length+sen.length)>max){parts.push(s2);s2='';}
+        s2+=sen;
+      });
+      if(s2)cur=s2;
+      return;
+    }
+    if(cur&&(cur.length+p.length+2)>max){parts.push(cur);cur='';}
+    cur=cur?cur+'\n\n'+p:p;
+  });
+  if(cur)parts.push(cur);
+  return parts;
 }
 function mcTtsEsc(t){return String(t||'').replace(/[<>&]/g,m=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[m]));}
 /** Despina 실측 기준 대략 초당 5.9자 */
@@ -972,23 +998,35 @@ function mcTtsHit(id){
   if(m.sec.tagName==='DETAILS'&&!m.sec.open)m.sec.open=true;   /* 접힌 블록 자동 펼침 */
   const text=mcTtsText(m.body);
   if(!text){alert('읽을 내용이 없습니다.');return;}
-  _mcT.id=id;
+  _mcT.id=id;_mcT.queue=[];_mcT.qi=0;
   mcTtsSet(id,'load');
   mcTtsMiniShow(m.title,true);
-  fetch(MC_TTS_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:text,date:_mcT.date,section:'mc-'+id,voice:MC_TTS_VOICE,lang:'ko-KR'})})
-    .then(r=>{
-      if(!r.ok)return r.text().then(t=>{throw new Error(r.status+' '+t.slice(0,120));});
-      const ct=r.headers.get('content-type')||'';
-      return ct.indexOf('application/json')>=0?r.json().then(j=>j.url):r.blob().then(b=>URL.createObjectURL(b));
-    })
-    .then(url=>{if(_mcT.id!==id)return;mcTtsPlayUrl(id,url);})
+  const parts=mcTtsSplit(text,MC_TTS_MAX);
+  Promise.all(parts.map((t,pi)=>mcTtsFetch(t,'mc-'+id+(parts.length>1?'-p'+(pi+1):''))))
+    .then(urls=>{if(_mcT.id!==id)return;_mcT.queue=urls;_mcT.qi=0;mcTtsPlayUrl(id,urls[0]);})
     .catch(e=>{
       console.warn('[MC-TTS] 실패:',e.message);
       if(_mcT.id!==id)return;
       _mcT.id=null;mcTtsSet(id,null);mcTtsMiniHide();
-      alert('음성을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      mcTtsWarn('음성을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     });
+}
+
+/** 한 조각을 합성/캐시 조회해 재생 URL 을 돌려준다 */
+function mcTtsFetch(text,section){
+  return fetch(MC_TTS_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:text,date:_mcT.date,section:section,voice:MC_TTS_VOICE,lang:'ko-KR'})})
+    .then(r=>{
+      if(!r.ok)return r.text().then(t=>{throw new Error(r.status+' '+t.slice(0,120));});
+      const ct=r.headers.get('content-type')||'';
+      return ct.indexOf('application/json')>=0?r.json().then(j=>j.url):r.blob().then(b=>URL.createObjectURL(b));
+    });
+}
+function mcTtsWarn(msg){
+  const t=document.getElementById('capToast');
+  if(t){const o=t.textContent;t.textContent=msg;t.style.display='block';
+        setTimeout(()=>{t.style.display='none';t.textContent=o;},2600);}
+  else alert(msg);
 }
 
 function mcTtsPlayUrl(id,url){
@@ -1002,9 +1040,17 @@ function mcTtsPlayUrl(id,url){
     if(c)c.textContent=mcTtsFmt(a.currentTime);
     if(f&&a.duration)f.style.width=(a.currentTime/a.duration*100)+'%';
   });
-  a.addEventListener('ended',()=>mcTtsStop());
+  a.addEventListener('ended',()=>{
+    if(_mcT.qi+1<_mcT.queue.length){_mcT.qi++;mcTtsPlayUrl(id,_mcT.queue[_mcT.qi]);}
+    else mcTtsStop();
+  });
   a.addEventListener('error',()=>{mcTtsSet(id,null);mcTtsMiniHide();_mcT.id=null;});
-  a.play().then(()=>{mcTtsSet(id,'play');mcTtsMiniShow((_mcTMap[id]||{}).title,false);mcTtsMiniBtn('❚❚');})
+  a.play().then(()=>{
+    mcTtsSet(id,'play');
+    const t=(_mcTMap[id]||{}).title||'';
+    mcTtsMiniShow(_mcT.queue.length>1?(t+' ('+(_mcT.qi+1)+'/'+_mcT.queue.length+')'):t,false);
+    mcTtsMiniBtn('❚❚');
+  })
           .catch(()=>{mcTtsSet(id,null);});
 }
 function mcTtsStopAudio(){
@@ -1012,7 +1058,7 @@ function mcTtsStopAudio(){
     if(_mcT.url&&_mcT.url.indexOf('blob:')===0){try{URL.revokeObjectURL(_mcT.url);}catch(e){}}}
   _mcT.audio=null;_mcT.url=null;
 }
-function mcTtsStop(){mcTtsStopAudio();_mcT.id=null;mcTtsClearAll();mcTtsMiniHide();}
+function mcTtsStop(){mcTtsStopAudio();_mcT.id=null;_mcT.queue=[];_mcT.qi=0;mcTtsClearAll();mcTtsMiniHide();}
 function mcTtsToggle(){
   if(!_mcT.audio||!_mcT.id)return;
   if(_mcT.audio.paused){_mcT.audio.play();mcTtsSet(_mcT.id,'play');mcTtsMiniBtn('❚❚');}

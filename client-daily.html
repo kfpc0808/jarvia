@@ -4440,13 +4440,14 @@ document.addEventListener('click',function(e){
 const CD_TTS_ENDPOINT='https://ttsspeak-cvmdsjgzxa-du.a.run.app';
 const CD_TTS_VOICE='ko-KR-Chirp3-HD-Despina';
 const CD_TTS_MIN=60;
+const CD_TTS_MAX=5500;                     /* 서버 한도 6000자 — 초과 시 문단 단위로 나눠 이어 재생 */
 /* 낭독 대상 — sel: 섹션, body: 본문(빈 값이면 섹션 자신), pos: 바 위치 */
 const CD_TTS_TARGETS=[
   {sel:'.indicator-insight', body:'', id:'insight', title:'한 줄 해석',  pos:'end'},
   {sel:'.sec-body',          body:'', id:'',        title:'',            pos:'start'}
 ];
 const _cdTMap={};
-const _cdT={id:null,url:null,audio:null,rate:1,hooked:false};
+const _cdT={id:null,url:null,audio:null,rate:1,hooked:false,queue:[],qi:0};
 
 function cdTtsInit(){
   try{cdTtsStop();}catch(e){}   /* 재렌더 시 재생 중단 — 바가 사라진 채 소리만 남는 것 방지 */
@@ -4520,7 +4521,32 @@ function cdTtsText(body){
     .replace(/<\/span>/gi,' ')
     .replace(/<[^>]*>/g,'');
   const ta=document.createElement('textarea');ta.innerHTML=raw;
-  return ta.value.replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return ta.value
+    /* 이모지·화살표는 낭독에서 제거 — 그대로 읽히거나 침묵으로 끊긴다(dailyReport ttsPlain 과 동일 정책) */
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu,'')
+    .replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+/** 6000자 서버 한도 대응 — 문단(없으면 문장) 경계로 나눈다 */
+function cdTtsSplit(text,max){
+  if(text.length<=max)return [text];
+  const parts=[];let cur='';
+  text.split(/\n\n+/).forEach(p=>{
+    if(p.length>max){
+      if(cur){parts.push(cur);cur='';}
+      let s2='';
+      (p.match(/[^.!?]+[.!?]*\s*/g)||[p]).forEach(sen=>{
+        if(s2&&(s2.length+sen.length)>max){parts.push(s2);s2='';}
+        s2+=sen;
+      });
+      if(s2)cur=s2;
+      return;
+    }
+    if(cur&&(cur.length+p.length+2)>max){parts.push(cur);cur='';}
+    cur=cur?cur+'\n\n'+p:p;
+  });
+  if(cur)parts.push(cur);
+  return parts;
 }
 function cdTtsEsc(t){return String(t||'').replace(/[<>&]/g,m=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[m]));}
 /** Despina 실측 기준 대략 초당 5.9자 */
@@ -4551,24 +4577,35 @@ function cdTtsHit(id){
   cdTtsStop();
   const text=cdTtsText(m.body);
   if(!text)return;
-  _cdT.id=id;
+  _cdT.id=id;_cdT.queue=[];_cdT.qi=0;
   cdTtsSet(id,'load');
   cdTtsMiniShow(m.title,true);
   const fd=String((typeof fileDate!=='undefined'&&fileDate)||'').replace(/\D/g,'');
-  fetch(CD_TTS_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:text,date:fd,section:'cd-'+id,voice:CD_TTS_VOICE,lang:'ko-KR'})})
-    .then(r=>{
-      if(!r.ok)return r.text().then(t=>{throw new Error(r.status+' '+t.slice(0,120));});
-      const ct=r.headers.get('content-type')||'';
-      return ct.indexOf('application/json')>=0?r.json().then(j=>j.url):r.blob().then(b=>URL.createObjectURL(b));
-    })
-    .then(url=>{if(_cdT.id!==id)return;cdTtsPlayUrl(id,url);})
+  const parts=cdTtsSplit(text,CD_TTS_MAX);
+  Promise.all(parts.map((t,pi)=>cdTtsFetch(t,fd,'cd-'+id+(parts.length>1?'-p'+(pi+1):''))))
+    .then(urls=>{if(_cdT.id!==id)return;_cdT.queue=urls;_cdT.qi=0;cdTtsPlayUrl(id,urls[0]);})
     .catch(e=>{
       console.warn('[CD-TTS] 실패:',e.message);
       if(_cdT.id!==id)return;
       _cdT.id=null;cdTtsSet(id,null);cdTtsMiniHide();
-      alert('음성을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      cdTtsWarn('음성을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     });
+}
+
+/** 한 조각을 합성/캐시 조회해 재생 URL 을 돌려준다 */
+function cdTtsFetch(text,fd,section){
+  return fetch(CD_TTS_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:text,date:fd,section:section,voice:CD_TTS_VOICE,lang:'ko-KR'})})
+    .then(r=>{
+      if(!r.ok)return r.text().then(t=>{throw new Error(r.status+' '+t.slice(0,120));});
+      const ct=r.headers.get('content-type')||'';
+      return ct.indexOf('application/json')>=0?r.json().then(j=>j.url):r.blob().then(b=>URL.createObjectURL(b));
+    });
+}
+/** 고객 화면이므로 alert 대신 기존 토스트를 쓴다 */
+function cdTtsWarn(msg){
+  try{if(typeof toast==='function'){toast(msg,'warning');return;}}catch(e){}
+  alert(msg);
 }
 
 function cdTtsPlayUrl(id,url){
@@ -4583,9 +4620,17 @@ function cdTtsPlayUrl(id,url){
     if(c)c.textContent=cdTtsFmt(a.currentTime);
     if(f&&a.duration)f.style.width=(a.currentTime/a.duration*100)+'%';
   });
-  a.addEventListener('ended',()=>cdTtsStop());
+  a.addEventListener('ended',()=>{
+    if(_cdT.qi+1<_cdT.queue.length){_cdT.qi++;cdTtsPlayUrl(id,_cdT.queue[_cdT.qi]);}
+    else cdTtsStop();
+  });
   a.addEventListener('error',()=>{cdTtsSet(id,null);cdTtsMiniHide();_cdT.id=null;});
-  a.play().then(()=>{cdTtsSet(id,'play');cdTtsMiniShow((_cdTMap[id]||{}).title,false);cdTtsMiniBtn('❚❚');})
+  a.play().then(()=>{
+    cdTtsSet(id,'play');
+    const t=(_cdTMap[id]||{}).title||'';
+    cdTtsMiniShow(_cdT.queue.length>1?(t+' ('+(_cdT.qi+1)+'/'+_cdT.queue.length+')'):t,false);
+    cdTtsMiniBtn('❚❚');
+  })
           .catch(()=>{cdTtsSet(id,null);});
 }
 function cdTtsStopAudio(){
@@ -4593,7 +4638,7 @@ function cdTtsStopAudio(){
     if(_cdT.url&&_cdT.url.indexOf('blob:')===0){try{URL.revokeObjectURL(_cdT.url);}catch(e){}}}
   _cdT.audio=null;_cdT.url=null;
 }
-function cdTtsStop(){cdTtsStopAudio();_cdT.id=null;cdTtsClearAll();cdTtsMiniHide();}
+function cdTtsStop(){cdTtsStopAudio();_cdT.id=null;_cdT.queue=[];_cdT.qi=0;cdTtsClearAll();cdTtsMiniHide();}
 function cdTtsToggle(){
   if(!_cdT.audio||!_cdT.id)return;
   if(_cdT.audio.paused){cdTtsPauseMain();_cdT.audio.play();cdTtsSet(_cdT.id,'play');cdTtsMiniBtn('❚❚');}
