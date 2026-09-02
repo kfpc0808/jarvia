@@ -11533,6 +11533,41 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
      이제 페이지·검색·정렬을 바꿔도 선택이 유지된다. */
   var mpTblSel={};
   var mpTblBusy=false;   /* 삭제 진행 중 중복 실행 차단 */
+  /* ★ [2026-09-02] 삭제 ↔ 백그라운드 동기화 상호 배제.
+     __mpCustOpen 의 동기화 체인(⑤등록·④편입)은 pullDocs 시점의 스냅샷 pd.list 를 그대로 쓴다.
+     그 사이에 삭제가 일어나면 이미 지운 서버 문서가 스냅샷에는 남아 있어,
+     ④편입이 "로컬 카드가 없는 문서"로 판단하고 create() 로 카드를 다시 만든다 → 인원수가 출렁인다.
+     ① 동기화 중에는 삭제를 막고 ② 삭제 중에는 동기화를 건너뛰며
+     ③ 스냅샷을 뜬 뒤 데이터가 바뀌었으면(mpcDataGen 변화) 편입을 취소한다. */
+  var mpcSyncBusy=false,mpcDataGen=0,mpcSyncWd=null;
+  /* 잠금이 풀리지 않으면 이후 삭제가 영구히 막힌다.
+     동기화 체인에는 끝까지 도달하지 못할 수 있는 지점이 있다 —
+     mpcGdPull 의 fetch/token 은 자체 타임아웃이 없고, mpcDedup 은 거부 핸들러가 없어
+     custDel/custPut 이 실패하면 체인이 그대로 끊긴다. 그래서 워치독으로 반드시 회수한다.
+     (일찍 풀려도 mpcDataGen 세대 검사가 고객 부활을 막는다) */
+  function mpcSyncLock(){
+    mpcSyncBusy=true;
+    if(mpcSyncWd)clearTimeout(mpcSyncWd);
+    mpcSyncWd=setTimeout(function(){
+      mpcSyncWd=null;
+      if(!mpcSyncBusy)return;
+      try{console.warn("[sync] 동기화가 끝나지 않아 잠금을 회수합니다");}catch(_e){}
+      mpcSyncBusy=false;try{mpcSyncOff();}catch(_e){}
+    },25000);
+  }
+  function mpcSyncUnlock(){
+    mpcSyncBusy=false;
+    if(mpcSyncWd){clearTimeout(mpcSyncWd);mpcSyncWd=null;}
+  }
+  /* 목록·지도·리스트가 같은 시점의 customers 를 보도록 한 번에 갱신한다 */
+  function mpcRefreshAll(){
+    try{mpcRenderFilter();mpcRenderList();}catch(_e){}
+    try{if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}
+    try{
+      var o=document.getElementById("mpOverlay");
+      if(o&&o.classList.contains("listMode")&&window.mpTblRender)mpTblRender(mpTblPage);   /* 현재 페이지 유지 */
+    }catch(_e){}
+  }
   function mpTblOpen(){
     var o=$("mpOverlay");if(!o)return;
     o.classList.remove("custMode");o.classList.add("listMode");
@@ -11784,11 +11819,25 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
      실패분은 기기에 그대로 남겨 화면과 서버 상태를 일치시킨다(조용한 불일치 금지). */
   function mpTblDelRun(ids,label,cb){
     if(mpTblBusy)return;
+    /* ★ [2026-09-02] 동기화 중이면 거부하지 않고 끝날 때까지 기다렸다 이어서 진행한다.
+       거부하면 "삭제가 안 된다"가 되고, 그냥 진행하면 스냅샷 충돌로 고객이 되살아난다. */
+    if(mpcSyncBusy){
+      mpcBusyOn("고객 정보를 맞추는 중입니다","동기화가 끝나면 삭제를 이어서 진행합니다");
+      var t0=Date.now();
+      var wait=function(){
+        if(!mpcSyncBusy){mpcBusyOff();mpTblDelRun(ids,label,cb);return;}
+        if(Date.now()-t0>15000){mpcBusyDone("지금은 삭제할 수 없습니다","고객 정보를 맞추는 중입니다. 잠시 후 다시 시도해 주세요",null,true);return;}
+        setTimeout(wait,300);
+      };
+      setTimeout(wait,300);
+      return;
+    }
     mpTblBusy=true;mpTblSyncDel();
     var sumEl=$("mpTblSum"),sum0=sumEl?sumEl.textContent:"";
     var prog=function(t){if(sumEl)sumEl.textContent=t;};
     var done=function(okN,failN,pushSt,ambN){
       mpTblBusy=false;
+      if(okN)mpcDataGen++;   /* 진행 중이던 동기화의 스냅샷을 무효화한다 */
       try{mpcRenderList();}catch(_e){}
       try{if(map){mpcDrawMarkers(false);mpcUpdateCount();}}catch(_e){}
       mpTblRender(1);
@@ -13110,13 +13159,14 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
   window.__mrRefresh=function(){try{mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}};   /* ★ 월간 리포트 타깃 필터 재렌더 훅 (2026-07-24) */
-  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
+  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
+    mpcSyncLock();mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
     mpcSyncOn("중복 고객을 정리하는 중…");
     mpcDedup().then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
     /* ★ 100% 동기화 조인 v5 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
        ①fccId 마이그레이션 → ①b 최초링크 계약 합집합 통일(충돌 시 지도 우선) → ②조인 → ③역방향 삭제 → ⑤미링크 전원 등록 → ④신규 편입 */
-    if(window.fccBridge&&window.fccBridge.pullDocs){mpcSyncOn("서버 고객 정보를 대조하는 중…");window.fccBridge.pullDocs().then(function(pd){if(!pd){mpcSyncOff();return;}
+    if(window.fccBridge&&window.fccBridge.pullDocs){mpcSyncOn("서버 고객 정보를 대조하는 중…");window.fccBridge.pullDocs().then(function(pd){if(!pd){mpcSyncUnlock();mpcSyncOff();return;}
       var dirty=false,removed=0,firstLink={};
       /* ⓪ 중복 자동 정리 (2026-07-18): ⑤단계 결함으로 생성된 빈 고아 문서(무생일·무계약·무호칭 + 동명의 생일 문서 존재) 삭제.
          고아에 링크된 지도 카드는 — 데이터 없고 동명·생일 카드가 따로 있으면 카드도 삭제(편입 부산물), 데이터 있으면 링크만 해제해 재연결 유도 */
@@ -13190,24 +13240,30 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       for(var di=customers.length-1;di>=0;di--){var dc=customers[di];if(dc.fccId&&!byId[dc.fccId]){custDel(dc.id);customers.splice(di,1);removed++;dirty=true;}}
       /* ⑤ 미링크 지도 고객 전원 fc_clients 등록 (100% 동기 — 이름만 있어도 등록). 동명·무생일 중복은 forceCreate로 별도 문서 */
       var _nameCnt={};customers.forEach(function(c){if(!c.fccId&&c.name&&!c.birthDate)_nameCnt[c.name]=(_nameCnt[c.name]||0)+1;});
+      if(!mpTblBusy)   /* ★ [2026-09-02] 삭제 진행 중에는 등록하지 않는다 — 지우는 중인 고객의 서버 문서를 다시 만들어버린다 */
       customers.forEach(function(c){if(c.fccId||!c.name)return;
         var _u5={fccId:"",name:c.name,birthDate:c.birthDate||"",replaceContracts:true,forceCreate:(!c.birthDate&&_nameCnt[c.name]>1),contracts:(c.contracts||[]).map(_toUp).filter(function(x){return x.productName;})};
         if(c.mgTitle!=null&&c.mgTitle!=="")_u5.mgTitle=c.mgTitle;
         upList.push(_u5);upRef.push(c);});
       var upP=(upList.length&&window.fccBridge.upsert)?window.fccBridge.upsert(upList):Promise.resolve(null);
+      var _gen=mpcDataGen;   /* ★ [2026-09-02] 스냅샷을 뜬 시점의 세대 */
       var _after=function(ids){
         if(ids){for(var ui=0;ui<upRef.length;ui++){if(ids[ui]&&upRef[ui].fccId!==ids[ui]){upRef[ui].fccId=ids[ui];custPut(upRef[ui]);dirty=true;}}}
         /* ④ fc_clients에만 있는 고객 편입 — ★ [2026-07-24] 문서 단위·배치 비동기 (누락/정지 방지) */
         if(removed)toast("마이페이지에서 삭제된 고객 "+removed+"명을 지도에서도 정리했어요");
         if(upList.length)toast("지도 고객 "+upList.length+"명의 정보를 내고객관리와 맞췄어요");
+        /* ★ [2026-09-02] 스냅샷 이후 삭제가 있었으면 편입을 취소한다.
+           pd.list 에는 방금 지운 서버 문서가 남아 있어, 그대로 편입하면 지운 고객이 카드로 되살아난다.
+           건너뛴 편입은 다음에 화면을 열 때 최신 스냅샷으로 다시 수행된다. */
+        if(mpcDataGen!==_gen||mpTblBusy){mpcSyncUnlock();if(dirty)mpcGdPush();mpcRefreshAll();mpcSyncOff();return;}
         mpcFccAdoptAsync(pd.list,function(_added){
-          var _re=function(){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}};
-          if(_added){mpcDedup().then(function(){_re();mpcSyncOff();});}else{_re();if(dirty)mpcGdPush();mpcSyncOff();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
+          var _re=function(){mpcRefreshAll();};
+          if(_added){mpcDedup().then(function(){mpcSyncUnlock();_re();mpcSyncOff();},function(){mpcSyncUnlock();_re();mpcSyncOff();});}else{mpcSyncUnlock();_re();if(dirty)mpcGdPush();mpcSyncOff();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
           if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
         });
       };
       upP.then(_after,function(){_after(null);});
-    }).catch(function(){mpcSyncOff();});}else{mpcSyncOff();}
+    }).catch(function(){mpcSyncUnlock();mpcSyncOff();});}else{mpcSyncUnlock();mpcSyncOff();}
     });
   });
   },function(){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});mpcSyncOff();});ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();var _v=document.getElementById("mpcViewOnly");if(_v&&_v.checked){mpcPage=1;mpcRenderList();}}});   /* ★ [2026-07-24] 지도 이동 시 목록도 함께 갱신 (토글 ON일 때만) */mpcCountBound=true;}mpcUpdateCount();}},180);});});};
