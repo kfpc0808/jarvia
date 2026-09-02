@@ -10725,6 +10725,22 @@ init();
   .mp-tbl-act{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
   .mp-tbl-act button{border:0;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit}
   .mp-tbl-sum{font-size:12px;color:#8B93AE;margin-bottom:7px;line-height:1.6}
+  /* ★ [2026-09-02] 고객 불러오기 표시 — ① 차단형 오버레이(초기 적재) ② 비차단형 칩(백그라운드 동기화)
+     .spinner / @keyframes spin 은 페이지 전역 CSS를 재사용한다 */
+  .mpc-busy{position:absolute;inset:0;z-index:14000;display:none;align-items:center;justify-content:center;background:rgba(248,249,251,.86);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+  .mpc-busy.show{display:flex}
+  .mpc-busy-box{background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 10px 30px rgba(21,41,74,.13);padding:22px 26px;min-width:210px;max-width:82%;text-align:center}
+  .mpc-busy-box .spinner{width:30px;height:30px;border-width:3px;margin:0 auto 12px}
+  .mpc-busy-ico{display:none;width:38px;height:38px;margin:0 auto 12px;border-radius:50%;background:#E1F5EE;color:#0F6E56;font-size:21px;font-weight:800;line-height:38px;text-align:center}
+  .mpc-busy-ico.err{background:#FCEBEB;color:#A32D2D}
+  .mpc-busy-ok{display:none;width:100%;margin-top:15px;border:none;background:#15294A;color:#fff;border-radius:11px;padding:11px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+  .mpc-busy-ok:active{opacity:.85}
+  .mpc-busy-msg{font-size:13.5px;font-weight:700;color:#15294A;line-height:1.5}
+  .mpc-busy-sub{font-size:11.5px;color:#8B93AE;margin-top:5px;line-height:1.5;min-height:17px}
+  .mpc-sync{position:absolute;left:50%;transform:translateX(-50%);top:70px;z-index:13900;display:none;align-items:center;gap:7px;background:rgba(21,41,74,.93);color:#fff;border-radius:20px;padding:7px 14px;font-size:11.5px;font-weight:600;box-shadow:0 4px 14px rgba(21,41,74,.22);pointer-events:none;max-width:88%}
+  .mpc-sync.show{display:flex}
+  .mpc-sync .spinner{width:13px;height:13px;border-width:2px;border-color:rgba(255,255,255,.32);border-top-color:#fff;flex:0 0 auto;margin:0}
+  .mpc-sync span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* ★ [2026-08-29] 헤더 고정 — sticky는 '스크롤되는 조상' 안에서만 붙는다.
      기존에는 가로 스크롤만 이 박스가 맡고 세로는 바깥(.mp-scroll)이 맡아,
      100개·500개 보기로 아래로 내리면 헤더가 같이 밀려 올라가 컬럼명이 사라졌다.
@@ -10990,6 +11006,19 @@ init();
 }
 </style>
 <div id="mpOverlay" role="dialog" aria-label="나의 고객/장소">
+  <!-- ★ [2026-09-02] 고객 불러오기 표시 -->
+  <div class="mpc-busy" id="mpcBusy" role="dialog" aria-modal="true" aria-live="polite">
+    <div class="mpc-busy-box">
+      <div class="spinner" id="mpcBusySpin"></div>
+      <div class="mpc-busy-ico" id="mpcBusyIco" aria-hidden="true"></div>
+      <div class="mpc-busy-msg" id="mpcBusyMsg">고객 정보를 불러오는 중…</div>
+      <div class="mpc-busy-sub" id="mpcBusySub"></div>
+      <button type="button" class="mpc-busy-ok" id="mpcBusyOk">확인</button>
+    </div>
+  </div>
+  <div class="mpc-sync" id="mpcSync" role="status" aria-live="polite">
+    <div class="spinner"></div><span id="mpcSyncMsg">동기화 중…</span>
+  </div>
   <div class="mp-hd">
     <button class="bk" id="mpBack" aria-label="닫기"><span class="bkar">‹</span> 이전</button>
     <div class="tt"><b>📍 나의 고객/장소</b><small id="mpSub">내 즐겨찾기 지도</small></div>
@@ -11003,7 +11032,7 @@ init();
   </div>
 
   <div class="mp-scroll">
-    <div class="mp-tabs">
+    <div class="mp-tabs" id="mpTabs">
       <button type="button" class="mp-tab on" id="mpTabPlaces" onclick="var o=document.getElementById('mpOverlay');o.classList.remove('custMode');o.classList.remove('listMode');document.getElementById('mpTabCust').classList.remove('on');document.getElementById('mpTabList').classList.remove('on');this.classList.add('on');if(window.__mpPlacesRedraw)window.__mpPlacesRedraw();if(window.mpTblRedrawMap)window.mpTblRedrawMap();">내 장소</button>
       <button type="button" class="mp-tab" id="mpTabCust" onclick="var o=document.getElementById('mpOverlay');o.classList.add('custMode');o.classList.remove('listMode');document.getElementById('mpTabPlaces').classList.remove('on');document.getElementById('mpTabList').classList.remove('on');this.classList.add('on');if(window.__mpCustOpen)window.__mpCustOpen();if(window.mpTblRedrawMap)window.mpTblRedrawMap();">내 고객</button>
       <button type="button" class="mp-tab" id="mpTabList" onclick="mpTblOpen()">목록</button>
@@ -11365,6 +11394,81 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   // ── 내 고객(Customer) 저장소 — 나의 장소와 완전 분리된 별도 DB ──
   // 데이터 구조: {id, name, company, title, job, phone, addr, lat, lng, rels:[관계배열], memo, createdAt}   /* job 2026-07-25 */
   var CDBN="mycustomers_db",CSTORE="customers",cdb=null,customers=[];
+  /* ★ [2026-09-02] 고객 불러오기 표시 제어
+     ── 차단형(mpcBusyOn → mpcBusyDone): 적재가 끝나면 결과(불러온 인원)를 보여주고,
+        사용자가 [확인]을 눌러야 목록이 보인다. 지연·최소유지 없이 즉시 띄운다 —
+        "불러왔는지 아닌지 모르겠다"는 문제를 없애는 것이 목적이므로 항상 보여야 한다.
+        20초 안에 끝나지 않으면 실패 상태로 전환해 [확인]으로 빠져나갈 수 있게 한다.
+     ── 비차단형(mpcSyncOn): 목록이 이미 보이는데 드라이브·서버 동기화가 계속되는 구간. 조작을 막지 않는다. */
+  var mpcBusyGuard=null,mpcBusyDepth=0;
+  function mpcBusyEl(){return document.getElementById("mpcBusy");}
+  function mpcBusyPaint(msg,sub){
+    var m=document.getElementById("mpcBusyMsg"),s=document.getElementById("mpcBusySub");
+    if(m&&msg!=null)m.textContent=msg;
+    if(s&&sub!==undefined)s.textContent=sub||"";
+  }
+  function mpcBusyPhase(p){   /* "load" | "ok" | "err" */
+    var sp=document.getElementById("mpcBusySpin"),ic=document.getElementById("mpcBusyIco"),ok=document.getElementById("mpcBusyOk");
+    if(sp)sp.style.display=(p==="load")?"block":"none";
+    if(ic){ic.style.display=(p==="load")?"none":"block";ic.textContent=(p==="err")?"!":"✓";ic.className="mpc-busy-ico"+((p==="err")?" err":"");}
+    if(ok)ok.style.display=(p==="load")?"none":"block";
+  }
+  function mpcBusyOn(msg,sub){
+    mpcBusyDepth++;
+    mpcBusyPaint(msg||"고객 정보를 불러오는 중…",sub);
+    mpcBusyPhase("load");
+    var el=mpcBusyEl();if(!el)return;
+    el.classList.add("show");
+    if(mpcBusyGuard)clearTimeout(mpcBusyGuard);
+    mpcBusyGuard=setTimeout(function(){
+      mpcBusyDone("고객을 불러오지 못했습니다","네트워크 상태를 확인한 뒤 다시 열어 주세요",null,true);
+    },20000);
+  }
+  function mpcBusyMsg(msg,sub){if(mpcBusyDepth>0)mpcBusyPaint(msg,sub);}
+  /* 결과 표시 — [확인]을 누를 때까지 유지된다 */
+  function mpcBusyDone(msg,sub,onOk,isErr){
+    mpcBusyDepth=0;
+    if(mpcBusyGuard){clearTimeout(mpcBusyGuard);mpcBusyGuard=null;}
+    var el=mpcBusyEl();if(!el)return;
+    mpcBusyPaint(msg,sub);
+    mpcBusyPhase(isErr?"err":"ok");
+    el.classList.add("show");
+    var ok=document.getElementById("mpcBusyOk");
+    if(ok){
+      ok.onclick=function(){el.classList.remove("show");ok.onclick=null;try{onOk&&onOk();}catch(_e){}};
+      try{ok.focus();}catch(_e){}
+    }
+  }
+  function mpcBusyOff(){   /* 확인 없이 즉시 닫아야 하는 예외 경로용 */
+    mpcBusyDepth=0;
+    if(mpcBusyGuard){clearTimeout(mpcBusyGuard);mpcBusyGuard=null;}
+    var el=mpcBusyEl();if(el)el.classList.remove("show");
+  }
+  var mpcSyncGuard=null;
+  function mpcSyncOn(msg){
+    var el=document.getElementById("mpcSync"),m=document.getElementById("mpcSyncMsg");
+    if(m)m.textContent=msg||"동기화 중…";
+    /* 헤더 높이는 env(safe-area-inset-top) 때문에 기기마다 달라 CSS 고정값으로는 맞출 수 없다.
+       탭 줄의 실제 위치를 재서 그 바로 아래에 띄운다 (헤더 제목을 가리지 않도록). */
+    if(el){
+      try{
+        var ov=document.getElementById("mpOverlay"),tb=document.getElementById("mpTabs");
+        if(ov&&tb){
+          var t=tb.getBoundingClientRect().bottom-ov.getBoundingClientRect().top+8;
+          if(t>0&&t<400)el.style.top=Math.round(t)+"px";
+        }
+      }catch(_e){}
+      el.classList.add("show");
+    }
+    if(mpcSyncGuard)clearTimeout(mpcSyncGuard);
+    mpcSyncGuard=setTimeout(function(){mpcSyncOff();},60000);   /* 안전장치 — 콜백이 끊겨도 칩이 남지 않게 */
+  }
+  function mpcSyncOff(){
+    var el=document.getElementById("mpcSync");if(el)el.classList.remove("show");
+    if(mpcSyncGuard){clearTimeout(mpcSyncGuard);mpcSyncGuard=null;}
+  }
+  window.mpcBusyOn=mpcBusyOn;window.mpcBusyMsg=mpcBusyMsg;window.mpcBusyDone=mpcBusyDone;window.mpcBusyOff=mpcBusyOff;
+  window.mpcSyncOn=mpcSyncOn;window.mpcSyncOff=mpcSyncOff;
   function openCustDB(){return new Promise(function(res,rej){var r=indexedDB.open(CDBN,1);r.onupgradeneeded=function(e){var d=e.target.result;if(!d.objectStoreNames.contains(CSTORE))d.createObjectStore(CSTORE,{keyPath:"id"});};r.onsuccess=function(){cdb=r.result;res(cdb);};r.onerror=function(){rej(r.error);};});}
   function cst(m){return cdb.transaction(CSTORE,m).objectStore(CSTORE);}
   function custAll(){return new Promise(function(res){if(!cdb){res([]);return;}var out=[],c=cst("readonly").openCursor();c.onsuccess=function(e){var x=e.target.result;if(x){out.push(x.value);x.continue();}else res(out);};c.onerror=function(){res([]);};});}
@@ -11394,14 +11498,21 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
        전체삭제가 "삭제할 고객이 없습니다"로 끝났다.
        mpcFccIdx(서버 문서 색인)도 같은 경로에서만 만들어져 삭제 시 서버 문서를 못 찾았다. */
     var _ready=function(){mpTblRender(1);};
+    mpcBusyOn("고객 목록을 불러오는 중…","기기에 저장된 고객을 읽고 있어요");
+    var _sync=function(){
+      if(!mpcFccIdx&&window.fccBridge&&window.fccBridge.pullDocs){
+        mpcSyncOn("서버 고객 정보를 확인하는 중…");
+        window.fccBridge.pullDocs().then(function(pd){if(pd&&pd.idx)mpcFccIdx=pd.idx;mpcSyncOff();}).catch(function(){mpcSyncOff();});
+      }
+    };
     try{
       custLoad().then(function(){
         _ready();
-        if(!mpcFccIdx&&window.fccBridge&&window.fccBridge.pullDocs){
-          window.fccBridge.pullDocs().then(function(pd){if(pd&&pd.idx)mpcFccIdx=pd.idx;}).catch(function(){});
-        }
-      }).catch(_ready);
-    }catch(_e){_ready();}
+        var n=(customers||[]).length;
+        if(n)mpcBusyDone("고객 "+n+"명을 불러왔습니다","확인을 누르면 목록이 표시됩니다",_sync);
+        else mpcBusyDone("등록된 고객이 없습니다","고객을 추가하면 이곳에 표시됩니다",_sync);
+      }).catch(function(){_ready();mpcBusyDone("고객을 불러오지 못했습니다","네트워크 상태를 확인한 뒤 다시 열어 주세요",null,true);});
+    }catch(_e){_ready();mpcBusyOff();}
   }
   window.mpTblOpen=mpTblOpen;
   function mpTblLeave(){var o=$("mpOverlay");if(o)o.classList.remove("listMode");var b=$("mpTabList");if(b)b.classList.remove("on");mpTblRedrawMap();}
@@ -12951,12 +13062,13 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
   window.__mrRefresh=function(){try{mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}};   /* ★ 월간 리포트 타깃 필터 재렌더 훅 (2026-07-24) */
-  window.__mpCustOpen=function(){mpcLoadCustomRels();custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
+  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");custLoad().then(function(){mpcMaybeIntro();mpcRenderFilter();mpcRenderList();var _n=(customers||[]).length;mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
+    mpcSyncOn("중복 고객을 정리하는 중…");
     mpcDedup().then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
     /* ★ 100% 동기화 조인 v5 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
        ①fccId 마이그레이션 → ①b 최초링크 계약 합집합 통일(충돌 시 지도 우선) → ②조인 → ③역방향 삭제 → ⑤미링크 전원 등록 → ④신규 편입 */
-    if(window.fccBridge&&window.fccBridge.pullDocs){window.fccBridge.pullDocs().then(function(pd){if(!pd)return;
+    if(window.fccBridge&&window.fccBridge.pullDocs){mpcSyncOn("서버 고객 정보를 대조하는 중…");window.fccBridge.pullDocs().then(function(pd){if(!pd){mpcSyncOff();return;}
       var dirty=false,removed=0,firstLink={};
       /* ⓪ 중복 자동 정리 (2026-07-18): ⑤단계 결함으로 생성된 빈 고아 문서(무생일·무계약·무호칭 + 동명의 생일 문서 존재) 삭제.
          고아에 링크된 지도 카드는 — 데이터 없고 동명·생일 카드가 따로 있으면 카드도 삭제(편입 부산물), 데이터 있으면 링크만 해제해 재연결 유도 */
@@ -13042,14 +13154,15 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         if(upList.length)toast("지도 고객 "+upList.length+"명의 정보를 내고객관리와 맞췄어요");
         mpcFccAdoptAsync(pd.list,function(_added){
           var _re=function(){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}};
-          if(_added){mpcDedup().then(_re);}else{_re();if(dirty)mpcGdPush();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
+          if(_added){mpcDedup().then(function(){_re();mpcSyncOff();});}else{_re();if(dirty)mpcGdPush();mpcSyncOff();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
           if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
         });
       };
       upP.then(_after,function(){_after(null);});
-    }).catch(function(){});}
+    }).catch(function(){mpcSyncOff();});}else{mpcSyncOff();}
     });
-  });ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();var _v=document.getElementById("mpcViewOnly");if(_v&&_v.checked){mpcPage=1;mpcRenderList();}}});   /* ★ [2026-07-24] 지도 이동 시 목록도 함께 갱신 (토글 ON일 때만) */mpcCountBound=true;}mpcUpdateCount();}},180);});});};
+  });
+  },function(){mpcBusyDone("고객을 불러오지 못했습니다","네트워크 상태를 확인한 뒤 다시 열어 주세요",null,true);mpcSyncOff();});ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();var _v=document.getElementById("mpcViewOnly");if(_v&&_v.checked){mpcPage=1;mpcRenderList();}}});   /* ★ [2026-07-24] 지도 이동 시 목록도 함께 갱신 (토글 ON일 때만) */mpcCountBound=true;}mpcUpdateCount();}},180);});});};
   window.__mpPlacesRedraw=function(){mpcCloseInfo();mpcClearMarkers();if(map){map.relayout&&map.relayout();drawMarkers();}};
   var mpcdNeedsOpen=false;   /* ★ 지도 상세 니즈 펼침 상태 (2026-07-19) */
   function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title,c.job].filter(Boolean).join(" · ")||"-";   /* ★ [2026-07-25] 직업 표시 */$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
