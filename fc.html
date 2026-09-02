@@ -11388,7 +11388,24 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function stars(n){var s="";for(var i=1;i<=5;i++)s+=i<=n?"★":"☆";return s;}
 
   /* ---------- IndexedDB ---------- */
-  function openDB(){return new Promise(function(res,rej){var r=indexedDB.open(DBN,1);r.onupgradeneeded=function(e){var d=e.target.result;if(!d.objectStoreNames.contains(STORE))d.createObjectStore(STORE,{keyPath:"id"});};r.onsuccess=function(){res(r.result);};r.onerror=function(){rej(r.error);};});}
+  /* ★ [2026-09-02] onblocked 누락 수정 — 고객 DB(openCustDB)와 동일한 결함.
+     indexedDB.open 은 다른 탭이 같은 DB 연결을 쥐고 있으면 onsuccess/onerror 대신 onblocked 를 발생시킨다.
+     핸들러가 없으면 Promise 가 영원히 대기 상태로 남고, myPlacesOpen 의 go() 가 끝내 실행되지 않아
+     오버레이가 빈 화면으로 멈춘다 (컨설턴트 본인 화면에서는 __mpCustOpen 까지 함께 막혀 고객 탭도 비었다).
+     8초 자체 타임아웃으로 어떤 경우에도 반드시 settle 되게 한다. */
+  function openDB(){return new Promise(function(res,rej){
+    var done=false,to=null;
+    var fin=function(fn){return function(){if(done)return;done=true;if(to)clearTimeout(to);fn();};};
+    var r;
+    try{r=indexedDB.open(DBN,1);}catch(e){rej(e);return;}
+    to=setTimeout(function(){if(done)return;done=true;rej(new Error("IDB_TIMEOUT"));},8000);
+    r.onupgradeneeded=function(e){var d=e.target.result;if(!d.objectStoreNames.contains(STORE))d.createObjectStore(STORE,{keyPath:"id"});};
+    r.onsuccess=function(){
+      try{r.result.onversionchange=function(){try{r.result.close();}catch(_e){}db=null;};}catch(_e){}   /* 다른 탭 업그레이드 시 연결을 놓아준다 */
+      fin(function(){res(r.result);})();};
+    r.onerror=fin(function(){rej(r.error||new Error("IDB_ERROR"));});
+    r.onblocked=fin(function(){rej(new Error("IDB_BLOCKED"));});
+  });}
   function st(m){return db.transaction(STORE,m).objectStore(STORE);}
   function dbAll(){return new Promise(function(res){var out=[],c=st("readonly").openCursor();c.onsuccess=function(e){var x=e.target.result;if(x){out.push(x.value);x.continue();}else res(out);};c.onerror=function(){res([]);};});}
   function dbPut(o){return new Promise(function(res,rej){var r=st("readwrite").put(o);r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
@@ -13733,7 +13750,17 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     var go=function(){renderChips();renderList();if(map){setTimeout(function(){map.relayout&&map.relayout();drawMarkers();},120);}else init();gdAutoConnect();
       if(_custFirst){if(window.__mpCustOpen)window.__mpCustOpen();}   /* 고객 탭 자체 안내가 있으므로 장소 인트로는 띄우지 않음 */
       else mpMaybeIntro();};
-    if(db){dbAll().then(function(a){places=a;go();});}else openDB().then(function(d){db=d;return dbAll();}).then(function(a){places=a;go();}).catch(function(){go();});};
+    /* ★ [2026-09-02] 실패를 조용히 넘기지 않는다 — 장소가 사라진 것으로 오해하지 않도록 사유를 알린다.
+       go()는 어떤 경우에도 실행해 화면이 멈추지 않게 한다. */
+    var goFail=function(e){
+      try{console.warn("[myPlacesOpen] 장소 적재 실패:",e);}catch(_e){}
+      var m=String((e&&(e.message||e.name))||"");
+      toast(m.indexOf("BLOCKED")>=0?"다른 탭에서 같은 화면이 열려 있어 장소를 불러오지 못했어요 — 나머지 탭을 닫고 다시 열어 주세요"
+           :m.indexOf("TIMEOUT")>=0?"기기 저장소 응답이 없어 장소를 불러오지 못했어요 — 다른 탭을 닫고 다시 열어 주세요"
+           :"장소를 불러오지 못했어요 — 새로고침한 뒤 다시 열어 주세요");
+      go();
+    };
+    if(db){dbAll().then(function(a){places=a;go();}).catch(goFail);}else openDB().then(function(d){db=d;return dbAll();}).then(function(a){places=a;go();}).catch(goFail);};
   function closeOverlay(){$("mpOverlay").classList.remove("show");document.body.style.overflow="";urlPool.forEach(function(u){try{URL.revokeObjectURL(u);}catch(e){}});urlPool=[];}
 
   /* ---------- 이벤트 바인딩 ---------- */
