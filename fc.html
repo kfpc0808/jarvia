@@ -6265,6 +6265,28 @@ window.fccBridge={
   /* ★ remove (2026-07-18): 지도(비모듈)에서 fc_clients 삭제 — 양방향 완전 삭제 동기 */
   remove:async function(id){
     try{if(!isOwnerView||!fcUid||!id)return false;await deleteDoc(doc(db,'fc_clients',id));try{localStorage.setItem('fcc_changed_at',String(Date.now()));}catch(_e){}return true;}catch(e){console.warn('fccBridge.remove',e);return false;}   /* ★ [2026-08-31] 삭제도 변경 신호 */
+  },
+  /* ★ removeMany (2026-09-02): 대량 삭제 전용 배치 삭제. upsert와 동일하게 writeBatch 200건 단위.
+     기존에는 건당 deleteDoc 순차 호출이라 2,000명 전체삭제 시 왕복 2,000회(수 분)였고,
+     실패해도 호출부가 그대로 진행해 서버 문서가 남았다 → 다음 동기화에서 고객이 되살아났다.
+     반환: {ok:[성공 id], fail:[실패 id]} — 호출부는 ok에 든 문서만 기기에서 지운다. */
+  removeMany:async function(ids){
+    const out={ok:[],fail:[]};
+    try{
+      if(!isOwnerView||!fcUid||!Array.isArray(ids))return out;
+      const list=ids.filter(function(x){return !!x;});
+      if(!list.length)return out;
+      const B_MAX=200;
+      for(let i=0;i<list.length;i+=B_MAX){
+        const chunk=list.slice(i,i+B_MAX);
+        const bb=writeBatch(db);
+        chunk.forEach(function(id){bb.delete(doc(db,'fc_clients',id));});
+        try{await bb.commit();out.ok=out.ok.concat(chunk);}
+        catch(e){console.warn('fccBridge.removeMany batch',e);out.fail=out.fail.concat(chunk);}
+      }
+      if(out.ok.length)try{localStorage.setItem('fcc_changed_at',String(Date.now()));}catch(_e){}
+      return out;
+    }catch(e){console.warn('fccBridge.removeMany',e);return out;}
   }
 };
 
@@ -11354,13 +11376,32 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
      삭제하면 mpcDeleteCust 가 서버·기기·드라이브를 한 번에 정리한다.
      (마이페이지는 서버만 지워 지도에 남던 반쪽 삭제 문제를 이 화면으로 모아 해결) */
   var mpTblPage=1;
+  /* ★ [2026-09-02] 선택 상태를 DOM이 아닌 객체로 보관.
+     기존 mpTblSelIds()는 #mpTblBody의 체크박스만 조회해 현재 페이지(기본 50명)만 잡혔고,
+     페이지를 넘기면 innerHTML 재생성으로 선택이 조용히 초기화됐다.
+     이제 페이지·검색·정렬을 바꿔도 선택이 유지된다. */
+  var mpTblSel={};
+  var mpTblBusy=false;   /* 삭제 진행 중 중복 실행 차단 */
   function mpTblOpen(){
     var o=$("mpOverlay");if(!o)return;
     o.classList.remove("custMode");o.classList.add("listMode");
     ["mpTabPlaces","mpTabCust"].forEach(function(id){var b=$(id);if(b)b.classList.remove("on");});
     var b=$("mpTabList");if(b)b.classList.add("on");
     try{mpTblBindBtns();}catch(_e){}
-    mpTblRender(1);
+    /* ★ [2026-09-02] 목록 탭이 고객 데이터를 로드하지 않던 결함 수정.
+       customers는 __mpCustOpen(내 고객 탭)에서만 채워져서, 지도에서 [목록]으로 직행하거나
+       마이페이지 [삭제하기 →](?open=voice&tab=list) 로 들어오면 표가 비고
+       전체삭제가 "삭제할 고객이 없습니다"로 끝났다.
+       mpcFccIdx(서버 문서 색인)도 같은 경로에서만 만들어져 삭제 시 서버 문서를 못 찾았다. */
+    var _ready=function(){mpTblRender(1);};
+    try{
+      custLoad().then(function(){
+        _ready();
+        if(!mpcFccIdx&&window.fccBridge&&window.fccBridge.pullDocs){
+          window.fccBridge.pullDocs().then(function(pd){if(pd&&pd.idx)mpcFccIdx=pd.idx;}).catch(function(){});
+        }
+      }).catch(_ready);
+    }catch(_e){_ready();}
   }
   window.mpTblOpen=mpTblOpen;
   function mpTblLeave(){var o=$("mpOverlay");if(o)o.classList.remove("listMode");var b=$("mpTabList");if(b)b.classList.remove("on");mpTblRedrawMap();}
@@ -11462,8 +11503,9 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
         : '<span class="mut">—</span>';
       var ad=[c.addr,c.addrDetail].filter(Boolean).join(" ");
       var ex=c.extra?Object.keys(c.extra).length:0;
-      return '<tr data-cid="'+E(c.id)+'" onclick="mpTblRow(event,\''+E(c.id)+'\')">'
-        +'<td class="tc"><input type="checkbox" class="mpTblChk" data-cid="'+E(c.id)+'" onclick="event.stopPropagation();mpTblSyncDel()"></td>'
+      var _on=!!mpTblSel[c.id];   /* ★ [2026-09-02] 페이지를 넘겨도 선택 유지 */
+      return '<tr data-cid="'+E(c.id)+'"'+(_on?' class="sel"':'')+' onclick="mpTblRow(event,\''+E(c.id)+'\')">'
+        +'<td class="tc"><input type="checkbox" class="mpTblChk" data-cid="'+E(c.id)+'"'+(_on?' checked':'')+' onclick="event.stopPropagation();mpTblChk(this)"></td>'
         +'<td class="mut">'+(st+i+1)+'</td>'
         +'<td class="nm">'+E(c.name||"")+'</td>'
         +'<td>'+(c.birthDate?E(c.birthDate):'<span class="mut">—</span>')+'</td>'
@@ -11487,8 +11529,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       h+='<button onclick="mpTblRender('+Math.min(tp,mpTblPage+1)+')"'+(mpTblPage>=tp?" disabled":"")+'>›</button>';
       pgEl.innerHTML=h;
     }
-    var ha=$("mpTblAll");if(ha)ha.checked=false;
-    mpTblSyncDel();
+    mpTblSyncDel();   /* ★ [2026-09-02] 헤더 체크박스 강제 해제 제거 — 선택 상태를 mpTblSyncDel이 반영 */
   };
   window.mpTblRow=function(ev,id){
     var tr=ev&&ev.currentTarget;if(!tr)return;
@@ -11536,78 +11577,204 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===id){c=customers[i];break;}
     if(c){mpTblLeave();var b=$("mpTabCust");if(b)b.click();try{mpcDetailOpen(c);}catch(_e){}}
   };
-  window.mpTblChkAll=function(box){
-    Array.prototype.forEach.call(document.querySelectorAll("#mpTblBody .mpTblChk"),function(cb){cb.checked=box.checked;});
+  /* ★ [2026-09-02] 개별 체크 — 선택을 mpTblSel에 기록해 페이지 이동 후에도 유지 */
+  window.mpTblChk=function(cb){
+    var id=cb.getAttribute("data-cid");
+    if(cb.checked)mpTblSel[id]=1;else delete mpTblSel[id];
+    var tr=cb.closest("tr");if(tr)tr.classList.toggle("sel",cb.checked);
     mpTblSyncDel();
   };
-  function mpTblSelIds(){return Array.prototype.map.call(document.querySelectorAll("#mpTblBody .mpTblChk:checked"),function(cb){return cb.getAttribute("data-cid");});}
-  window.mpTblSyncDel=function(){
-    var n=mpTblSelIds().length,b=$("mpTblDel"),c=$("mpTblDelN"),a=$("mpTblDelAll");
-    if(c)c.textContent=n;
-    if(b){b.disabled=!n;b.style.opacity=n?"1":".45";b.style.cursor=n?"pointer":"not-allowed";}
-    var all=(customers||[]).length;
-    if(a){a.disabled=!all;a.style.opacity=all?"1":".45";a.textContent="🗑 전체 삭제"+(all?(" ("+all+"명)"):"");}
+  /* ★ [2026-09-02] 헤더 전체선택 = 현재 페이지가 아니라 '검색·필터 결과 전체'.
+     기존에는 렌더된 50행만 선택돼, 전체선택 후 삭제해도 50명만 지워졌다. */
+  window.mpTblChkAll=function(box){
+    var L=mpTblList();
+    if(box.checked)L.forEach(function(c){mpTblSel[c.id]=1;});
+    else L.forEach(function(c){delete mpTblSel[c.id];});
     Array.prototype.forEach.call(document.querySelectorAll("#mpTblBody .mpTblChk"),function(cb){
+      cb.checked=!!mpTblSel[cb.getAttribute("data-cid")];
       var tr=cb.closest("tr");if(tr)tr.classList.toggle("sel",cb.checked);
     });
+    mpTblSyncDel();
   };
-  /* 여러 명 삭제 — mpcDeleteCust 는 확인창이 매번 떠서, 여기서는 같은 처리를 배치로 직접 수행한다 */
+  /* 존재하지 않는 고객(이미 삭제됨)은 선택에서 정리한 뒤 반환 */
+  function mpTblSelIds(){
+    var alive={};(customers||[]).forEach(function(c){alive[c.id]=1;});
+    Object.keys(mpTblSel).forEach(function(id){if(!alive[id])delete mpTblSel[id];});
+    return Object.keys(mpTblSel);
+  }
+  window.mpTblSyncDel=function(){
+    var ids=mpTblSelIds(),n=ids.length,b=$("mpTblDel"),c=$("mpTblDelN"),a=$("mpTblDelAll");
+    if(c)c.textContent=n;
+    if(b){b.disabled=(!n||mpTblBusy);b.style.opacity=(n&&!mpTblBusy)?"1":".45";b.style.cursor=(n&&!mpTblBusy)?"pointer":"not-allowed";}
+    var all=(customers||[]).length;
+    if(a){a.disabled=(!all||mpTblBusy);a.style.opacity=(all&&!mpTblBusy)?"1":".45";a.textContent="🗑 전체 삭제"+(all?(" ("+all+"명)"):"");}
+    /* 헤더 체크박스: 필터 결과가 전부 선택됐을 때만 체크, 일부면 중간 상태 */
+    var ha=$("mpTblAll");
+    if(ha){
+      var L=mpTblList(),sel=0;
+      L.forEach(function(x){if(mpTblSel[x.id])sel++;});
+      ha.checked=(L.length>0&&sel===L.length);
+      ha.indeterminate=(sel>0&&sel<L.length);
+    }
+  };
+  /* ★ [2026-09-02] 대량 삭제 전면 재작성.
+     기존 결함: ① 건당 deleteDoc 순차 왕복(2,000명이면 수 분) ② remove()가 실패해도 false를 resolve 하므로
+     서버 문서가 남은 채 기기만 지워짐 → 다음 동기화의 mpcFccAdoptAsync가 카드를 다시 만들어 "삭제한 고객이 부활"
+     ③ fccId가 없으면 서버 삭제를 시도조차 안 함 ④ 드라이브 업로드 완료 전에 완료 alert.
+     새 원칙: 서버 먼저 → 성공한 문서에 대응하는 고객만 기기에서 삭제 → 드라이브 반영 완료 후 알림.
+     실패분은 기기에 그대로 남겨 화면과 서버 상태를 일치시킨다(조용한 불일치 금지). */
   function mpTblDelRun(ids,label,cb){
-    var i=0,ok=0;
-    var step=function(){
-      if(i>=ids.length){
-        try{mpcRenderList();}catch(_e){}
-        try{if(map){mpcDrawMarkers(false);mpcUpdateCount();}}catch(_e){}
-        try{mpcGdPush();}catch(_e){}
-        mpTblRender(1);
-        alert(label+" "+ok+"명 삭제 완료 — 지도·마이페이지·알림에서 모두 제거되었습니다.");
-        cb&&cb();return;
-      }
-      var id=ids[i++],c=null;
-      for(var k=0;k<customers.length;k++)if(customers[k].id===id){c=customers[k];break;}
-      if(!c){step();return;}
-      var fid=c.fccId||"";
-      try{if(!fid&&c.name&&mpcFccIdx){var kk=(c.name||"")+"|"+(c.birthDate||"");if(mpcFccIdx[kk])fid=mpcFccIdx[kk].id;}}catch(_e){}
-      var rm=Promise.resolve();
-      try{if(fid&&window.fccBridge&&window.fccBridge.remove)rm=window.fccBridge.remove(fid);}catch(_e){}
-      rm.then(function(){
-        custDel(id).then(function(){
-          for(var k2=0;k2<customers.length;k2++){if(customers[k2].id===id){customers.splice(k2,1);break;}}
-          ok++;
-          var s3=$("mpTblSum");if(s3&&(ok%20===0))s3.textContent="삭제 중… "+ok+" / "+ids.length;
-          step();
-        });
-      },function(){step();});
+    if(mpTblBusy)return;
+    mpTblBusy=true;mpTblSyncDel();
+    var sumEl=$("mpTblSum"),sum0=sumEl?sumEl.textContent:"";
+    var prog=function(t){if(sumEl)sumEl.textContent=t;};
+    var done=function(okN,failN,pushSt,ambN){
+      mpTblBusy=false;
+      try{mpcRenderList();}catch(_e){}
+      try{if(map){mpcDrawMarkers(false);mpcUpdateCount();}}catch(_e){}
+      mpTblRender(1);
+      if(sumEl&&!okN&&!failN)sumEl.textContent=sum0;
+      var m=label+" "+okN+"명 삭제 완료 — 지도·마이페이지·알림에서 모두 제거되었습니다.";
+      if(failN)m+="\n\n⚠️ "+failN+"명은 서버에서 지우지 못해 목록에 그대로 남겨두었습니다.\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.";
+      if(ambN)m+="\n\n⚠️ "+ambN+"명은 이름·생년월일이 같은 고객이 남아 있어 어느 쪽인지 판별할 수 없어 건너뛰었습니다.\n해당 고객의 생년월일을 채우신 뒤 다시 삭제해 주세요.";
+      if(pushSt==="fail")m+="\n\n⚠️ 드라이브 백업 반영이 지연되고 있습니다. 다음 접속 때 자동으로 다시 시도합니다.";
+      else if(pushSt==="off")m+="\n\n· 드라이브 미연결 — 연결하시면 자동으로 백업됩니다.";
+      alert(m);
+      cb&&cb();
     };
-    step();
+    prog("삭제 준비 중… 서버 목록을 확인하고 있어요");
+    /* ① 서버 문서 색인을 그때그때 조회 — 캐시(mpcFccIdx)만 믿으면 fccId 없는 고객의 문서를 놓친다 */
+    var idxP=(window.fccBridge&&window.fccBridge.pullDocs)?window.fccBridge.pullDocs():Promise.resolve(null);
+    idxP.catch(function(){return null;}).then(function(pd){
+      var byId={},byKey={};
+      if(pd&&pd.list)pd.list.forEach(function(d){
+        byId[d.id]=1;
+        var k=(d.name||"")+"|"+(d.birthDate||"");
+        if(!byKey[k])byKey[k]=[];
+        byKey[k].push(d.id);
+      });
+      /* ② 삭제 대상 고객 ↔ 서버 문서 매핑
+         2-1 fccId 직접 링크 → 확정
+         2-2 링크가 없거나 끊긴 고객은 이름|생일 후보에서 배정하되,
+             그 키를 쓰는 '남는 고객'이 하나라도 있으면 손대지 않는다(동명이인 오삭제 방지).
+             남는 고객이 없으면(=전체삭제·해당 키 전원 삭제) 후보 문서를 전부 지운다. */
+      var byCust={};(customers||[]).forEach(function(c){byCust[c.id]=c;});
+      var delSet={};ids.forEach(function(id){delSet[id]=1;});
+      var targets=[],docIds=[],docOwner={},localOnly=[],unresolved=[];
+      var claimed={},pend=[];
+      ids.forEach(function(id){
+        var c=byCust[id];if(!c)return;
+        targets.push(c);
+        var fid=(c.fccId&&byId[c.fccId])?c.fccId:"";
+        if(fid){claimed[fid]=1;docIds.push(fid);docOwner[fid]=id;return;}
+        pend.push(c);
+      });
+      /* 살아남는 고객이 점유한 키 집계 */
+      var keepKey={};
+      (customers||[]).forEach(function(c){
+        if(delSet[c.id]||!c.name)return;
+        keepKey[c.name+"|"+(c.birthDate||"")]=1;
+        if(c.fccId)claimed[c.fccId]=1;   /* 남는 고객의 링크 문서는 절대 삭제 대상이 아니다 */
+      });
+      pend.forEach(function(c){
+        if(!c.name){localOnly.push(c.id);return;}
+        var k=c.name+"|"+(c.birthDate||"");
+        var cand=(byKey[k]||[]).filter(function(f){return !claimed[f];});
+        if(!cand.length){localOnly.push(c.id);return;}   /* 서버에 대응 문서 없음 → 기기만 삭제해도 안전 */
+        if(keepKey[k]){unresolved.push(c.id);return;}    /* 같은 이름·생일 고객이 남아 있음 → 판별 불가, 보류 */
+        var fid=cand[0];claimed[fid]=1;docIds.push(fid);docOwner[fid]=c.id;
+      });
+      var uniq={},docList=[];
+      docIds.forEach(function(f){if(!uniq[f]){uniq[f]=1;docList.push(f);}});
+      /* ③ 서버 배치 삭제 */
+      var rmP;
+      if(!docList.length)rmP=Promise.resolve({ok:[],fail:[]});
+      else if(window.fccBridge&&window.fccBridge.removeMany){
+        prog("삭제 중… 서버에서 "+docList.length+"건 제거");
+        rmP=window.fccBridge.removeMany(docList).catch(function(){return {ok:[],fail:docList};});
+      }else rmP=Promise.resolve({ok:[],fail:docList});
+      rmP.then(function(res){
+        var okDoc={};(res.ok||[]).forEach(function(f){okDoc[f]=1;});
+        /* ④ 서버에서 확실히 지워진 고객 + 서버에 문서가 없던 고객만 기기에서 삭제 */
+        var del={},failN=0;
+        localOnly.forEach(function(id){del[id]=1;});
+        docList.forEach(function(f){if(okDoc[f])del[docOwner[f]]=1;});
+        targets.forEach(function(c){if(!del[c.id]&&unresolved.indexOf(c.id)<0)failN++;});
+        var ambN=unresolved.length;
+        var delIds=Object.keys(del);
+        prog("삭제 중… 기기에서 "+delIds.length+"건 제거");
+        var i=0,okN=0;
+        var step=function(){
+          if(i>=delIds.length){
+            var st="off";
+            try{
+              mpcGdPushAwait().then(function(s){done(okN,failN,s,ambN);},function(){done(okN,failN,"fail",ambN);});
+            }catch(_e){done(okN,failN,st,ambN);}
+            return;
+          }
+          var id=delIds[i++];
+          custDel(id).then(function(){
+            for(var k2=0;k2<customers.length;k2++){if(customers[k2].id===id){customers.splice(k2,1);break;}}
+            delete mpTblSel[id];
+            okN++;
+            if(okN%50===0)prog("삭제 중… "+okN+" / "+delIds.length);
+            /* 동기 재귀 폭주 방지 — 200건마다 제어 양보 */
+            if(okN%200===0)setTimeout(step,0);else step();
+          },function(){step();});
+        };
+        step();
+      },function(){mpTblBusy=false;mpTblSyncDel();if(sumEl)sumEl.textContent=sum0;alert("삭제에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.");});
+    });
+  }
+  /* ★ [2026-09-02] 확인 문구 비교를 공백·따옴표에 관대하게 바꾸고, 불일치 시 조용히 끝내지 않는다.
+     기존에는 "전체 삭제"처럼 띄어 쓰거나 오타가 나면 아무 안내 없이 return 해서
+     사용자에게는 "버튼을 눌러도 반응이 없다"로 보였다. */
+  function mpTblConfirmWord(input,want){
+    var v=String(input==null?"":input).replace(/[\s"'"'']/g,"");
+    return v===want;
   }
   window.mpTblDelSel=function(){
+    if(mpTblBusy){alert("삭제가 진행 중입니다. 잠시만 기다려 주세요.");return;}
     var ids=mpTblSelIds();if(!ids.length){alert("삭제할 고객을 선택해 주세요.");return;}
     var nm=ids.slice(0,10).map(function(id){for(var i=0;i<customers.length;i++)if(customers[i].id===id)return customers[i].name||"(이름없음)";return id;});
     if(!confirm("아래 "+ids.length+"명을 삭제합니다.\n\n"+nm.join(", ")+(ids.length>10?(" 외 "+(ids.length-10)+"명"):"")+"\n\n지도·마이페이지·생일/만기 알림에서 모두 삭제되며 되돌릴 수 없습니다.\n\n진행할까요?"))return;
     if(ids.length>=100){
       var a=prompt('되돌릴 수 없는 작업입니다.\n계속하려면 아래에 "삭제" 라고 입력해 주세요.\n\n대상: '+ids.length+"명");
-      if((a||"").trim()!=="삭제"){return;}
+      if(a===null)return;
+      if(!mpTblConfirmWord(a,"삭제")){alert("입력한 문구가 달라 삭제를 취소했습니다.\n\n삭제하시려면 '삭제' 두 글자를 정확히 입력해 주세요.");return;}
     }
     mpTblDelRun(ids,"선택");
   };
   window.mpTblDelAll=function(){
+    if(mpTblBusy){alert("삭제가 진행 중입니다. 잠시만 기다려 주세요.");return;}
     var n=(customers||[]).length;if(!n){alert("삭제할 고객이 없습니다.");return;}
     if(!confirm("내 고객 "+n+"명 전체를 삭제합니다.\n\n지도·마이페이지·생일/만기 알림·내 드라이브 백업에서 모두 지워지며 되돌릴 수 없습니다.\n\n계속할까요?"))return;
     var a=prompt('되돌릴 수 없는 작업입니다.\n계속하려면 아래에 "전체삭제" 라고 입력해 주세요.\n\n대상: '+n+"명");
-    if((a||"").trim()!=="전체삭제")return;
+    if(a===null)return;
+    if(!mpTblConfirmWord(a,"전체삭제")){alert("입력한 문구가 달라 삭제를 취소했습니다.\n\n삭제하시려면 '전체삭제' 네 글자를 정확히 입력해 주세요.");return;}
     mpTblDelRun((customers||[]).map(function(c){return c.id;}),"전체");
   };
   function mpcDeleteCust(c,done){
     if(!c)return;
     if(!confirm("이 고객을 삭제할까요?\n지도와 내고객관리(마이페이지)·일정 알림에서 모두 삭제됩니다."))return;
-    var _rm=Promise.resolve();
+    /* ★ [2026-09-02] 서버 삭제 실패 시 기기 삭제를 중단한다.
+       기존에는 remove()가 false를 resolve 해도 그대로 진행해 서버 문서가 남았고,
+       다음에 [내 고객]을 열면 mpcFccAdoptAsync가 그 문서로 카드를 다시 만들어 고객이 되살아났다. */
+    var _fid="";
     try{
-      var _fid=c.fccId||"";
+      _fid=c.fccId||"";
       if(!_fid&&c.name&&mpcFccIdx){var _k=(c.name||"")+"|"+(c.birthDate||"");if(mpcFccIdx[_k])_fid=mpcFccIdx[_k].id;}
-      if(_fid&&window.fccBridge&&window.fccBridge.remove)_rm=window.fccBridge.remove(_fid);
     }catch(_e){}
-    _rm.then(function(){custDel(c.id).then(function(){for(var i=0;i<customers.length;i++){if(customers[i].id===c.id){customers.splice(i,1);break;}}mpcRenderList();if(map){mpcDrawMarkers(false);mpcUpdateCount();}mpcGdPush();if(done)done();});});
+    var _rm=Promise.resolve(true);
+    try{if(_fid&&window.fccBridge&&window.fccBridge.remove)_rm=window.fccBridge.remove(_fid);}catch(_e){}
+    _rm.then(function(_ok){
+      if(_fid&&!_ok){alert("서버에서 삭제하지 못했습니다.\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.\n\n(고객 정보는 그대로 남아 있습니다)");return;}
+      custDel(c.id).then(function(){
+        for(var i=0;i<customers.length;i++){if(customers[i].id===c.id){customers.splice(i,1);break;}}
+        try{delete mpTblSel[c.id];}catch(_e){}
+        mpcRenderList();if(map){mpcDrawMarkers(false);mpcUpdateCount();}mpcGdPush();if(done)done();
+      });
+    },function(){alert("서버에서 삭제하지 못했습니다.\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.\n\n(고객 정보는 그대로 남아 있습니다)");});
   }
   /* ★ 중복 고객 자동 정리 (2026-07-17): 이름+생일 완전 동일 = 동일인 (유실 복구·편입 과정의 id 분리 부산물)
      동명이인 보호: 생일이 없거나 다르면 절대 자동 병합하지 않음. 승자=정보량 많은 쪽, 패자 정보는 mpcFieldMerge로 전부 흡수 */
@@ -13265,6 +13432,19 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   /* ★ 2026-07-17 암호화 전환: 내고객 데이터는 '고객관리/내고객.safe'(AES-GCM)로 저장.
      레거시 평문 내고객.json은 최초 1회 읽어 이전 후 드라이브에서 제거 (Drive-First 암호화 원칙). */
   function mpcGdPush(){mpcGdPushQ(0);}   /* ★ 유실 방지 재작성 (2026-07-17): 실패 무음 금지 — 재시도 + 미완료 플래그 + 알림 */
+  /* ★ [2026-09-02] 완료 대기형 백업 — 결과("ok"/"fail"/"off")를 Promise로 돌려준다.
+     삭제는 업로드 완료 전에 완료 알림이 떠서, 사용자가 바로 창을 닫으면 드라이브에 옛 목록이 남고
+     다음 접속의 mpcGdPull → mpcMergeRemote가 remote-only 레코드를 전부 되살렸다(툼스톤 없음).
+     기존 mpcGdPush(무음·재시도)는 그대로 두고, 결과를 알아야 하는 곳에서만 사용한다. */
+  function mpcGdPushAwait(){
+    try{localStorage.setItem("mpc_dirty","1");}catch(_e){}
+    if(!mpcGdOn())return Promise.resolve("off");
+    try{
+      return window.ccStorage.saveJson("고객관리","내고객",{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers})
+        .then(function(){try{localStorage.removeItem("mpc_dirty");}catch(_e){}return "ok";})
+        .catch(function(){return "fail";});
+    }catch(_e){return Promise.resolve("fail");}
+  }
   var _mpcGdT=null;
   function mpcGdPushSoon(){   /* ★ 묶음 업로드 (2026-07-19): 기기 저장은 즉시. 드라이브 업로드만 0.6초 합쳐 연속 탭 시 중복 업로드를 막는다 */
     try{localStorage.setItem("mpc_dirty","1");}catch(_e){}
