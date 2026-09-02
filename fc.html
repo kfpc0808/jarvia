@@ -13517,7 +13517,10 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     /* ★ [2026-09-02] 이름이 열쇠 — 같은 이름이면 같은 사람으로 보고 갱신한다.
        기존의 이름+생일 / 이름+연락처 휴리스틱은 이름 유일성이 보장되지 않던 시절의 방어책이었다.
        파일 안 동명이인은 위에서 이미 차단했고, 기기의 동명이인은 입력 시점에 식별자로 갈라져 있다. */
-    function findExisting(it){return mpcFindByName(it.name);}
+    var _nameIdx=null;   /* 2,000행 × 2,000명 선형 탐색을 피하기 위한 1회 색인. 파일 안 동명은 위에서 접혔으므로 업로드 중 색인이 낡을 일이 없다 */
+    function findExisting(it){
+      if(!_nameIdx){_nameIdx={};customers.forEach(function(c){var k=mpcNameNorm(c.name);if(k&&!_nameIdx[k])_nameIdx[k]=c;});}
+      return _nameIdx[mpcNameNorm(it.name)]||null;}
     function mergeInto(c,it){
       /* ★ [2026-07-24 버그수정] 주소만 바뀌고 좌표는 예전 것이 남아 핀이 엉뚱한 곳을 가리키던 문제.
          주소가 바뀌었는데 새 좌표를 못 구했으면, 틀린 핀을 남기는 대신 위치를 비운다('위치 미등록'으로 보임). */
@@ -13789,6 +13792,16 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         ④ 드라이브에 없는 기기 레코드는 dirty 가 아니면 다른 기기에서 지운 것이므로 폐기한다.
      ── dirty 판정: updatedAt > (이 기기의 마지막 성공 푸시 시각 || 드라이브 파일 시각). custPut 이 모든 저장에 updatedAt 을 찍는다.
      검증: 2기기 시나리오 8종(첫 병합·삭제 반영·신규 유지·동시 수정·꼬인 기기·드라이브 동명·새 기기·무명) 통과. */
+  /* 기기 레코드가 이겼을 때 드라이브의 값으로 빈칸을 전부 채운다.
+     mpcFieldMerge 의 보강 목록(생일·연락처·주소 등 13개)에 없는 키 — lat/lng·직업·추가정보·가족 등 — 가
+     서버 편입 카드(핵심 3필드만 있고 좌표 0)에 밀려 0·빈값으로 덮이고, 그대로 푸시되면 PC 데이터까지 지워지던 경로를 막는다. */
+  function mpcFillEmpty(m,r){
+    try{Object.keys(r||{}).forEach(function(k){var v=m[k],rv=r[k];
+      var empty=(v==null||v===""||v===0||(Array.isArray(v)&&!v.length)||(v&&typeof v==="object"&&!Array.isArray(v)&&!Object.keys(v).length));
+      var has=!(rv==null||rv===""||rv===0||(Array.isArray(rv)&&!rv.length)||(rv&&typeof rv==="object"&&!Array.isArray(rv)&&!Object.keys(rv).length));
+      if(empty&&has)m[k]=rv;});}catch(_e){}
+    return m;
+  }
   function mpcMergeRemote(remote,remoteTs){
     var pushedAt=0;try{pushedAt=parseInt(localStorage.getItem("mpc_pushed_at")||"0",10)||0;}catch(_e){}
     var base=pushedAt||remoteTs||0;
@@ -13803,7 +13816,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     Object.keys(rByName).forEach(function(k){var r=rByName[k],locs=lByName[k]||[];
       locs.forEach(function(l){used[l.id]=1;});
       var dl=locs.filter(isDirty).sort(function(a,b){return ts(b)-ts(a);})[0];
-      if(dl){out.push(mpcFieldMerge(dl,r));needPush=true;}                                                   /* 기기 미백업 수정 → 기기 승, 드라이브로 빈칸 보강 */
+      if(dl){out.push(mpcFillEmpty(mpcFieldMerge(dl,r),r));needPush=true;}                                    /* 기기 미백업 수정 → 기기 승, 드라이브로 빈칸 보강(모든 키) */
       else out.push(r);});   /* 드라이브 승 — 기기의 비-dirty 사본은 이미 드라이브에 반영된 것이라 보강할 게 없다. 지운 미팅·계약이 되살아나지 않도록 그대로 쓴다 (첨부는 driveId 메타만이라 JSON 왕복에 안전) */
     customers.forEach(function(c){if(used[c.id])return;var k=mpcNameNorm(c.name);
       if(!k){out.push(c);return;}                                    /* 이름 없는 레코드는 건드리지 않는다 */
