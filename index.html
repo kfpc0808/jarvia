@@ -8886,6 +8886,8 @@ let jvMcAll=[];        // ★ [2026-08-29] 지도(IndexedDB) 고객 원본 — �
 let jvMcState='idle';  // idle | ok | empty | fail
 function jvMcRead(){
   return new Promise(function(res){
+    /* ★ [2026-09-03] 드라이브와 같음이 확인되지 않은 기기 상세는 읽지 않는다 — 기기 데이터는 정본이 아니다 */
+    if(_jvMcLast!=='ok'){jvMcIdx=null;jvMcState=(_jvMcLast==='fail')?'fail':(_jvMcLast==='nofile'?'empty':'idle');res(null);return;}
     try{
       if(!window.indexedDB){jvMcState='fail';res(null);return;}
       let fresh=false;   /* ★ DB가 없어서 새로 만들려 한 경우 = '오류'가 아니라 '아직 없음' */
@@ -8940,9 +8942,58 @@ async function _jvMcToken(){
   _jvMcTok=td.accessToken;_jvMcTokAt=Date.now();
   return _jvMcTok;
 }
+/* ═══ ★ [2026-09-03] 고객 DB 진입 게이트 — "고객 DB에 닿는 순간 드라이브부터" ═══
+   고객입력·AI비서·고객현황·생일상령일 네 진입점이 모두 이 검문을 거친다.
+   판정은 기기 플래그가 아니라 서버 보관 토큰으로 실제 발급을 시도한 결과(_jvMcToken).
+   'ok' 통과 / 'connect' 토큰 없음·권한 취소 → 연결 화면 / 'net' 응답 없음 → 인터넷 확인 화면.
+   "나중에·이 기기로 계속" 선택지는 두지 않는다 — 기기 데이터는 정본이 아니다. */
+let _jvGateOkAt=0;
+window.jvDriveGate=async function(){
+  const lid=(meData&&meData.loginId)||'';if(!me||!lid)return 'ok';   /* 로그인·ID 게이트는 호출부가 먼저 처리 */
+  if((Date.now()-_jvGateOkAt)<5*60000)return 'ok';
+  try{await _jvMcToken();_jvGateOkAt=Date.now();return 'ok';}
+  catch(e){
+    const m=String((e&&(e.message||e.code))||'');
+    if(m==='no-token')return 'connect';
+    if(!navigator.onLine||/network|fetch|timeout|deadline|unavailable|internal|aborted/i.test(m))return 'net';
+    return 'connect';
+  }
+};
+window.jvDriveGateModal=function(kind,feature,retry){
+  try{const old=document.getElementById('jvGateOv');if(old)old.remove();}catch(_e){}
+  const lid=(meData&&meData.loginId)||'';
+  const ov=document.createElement('div');ov.id='jvGateOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:18px';
+  const card='background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px 20px;box-shadow:0 12px 40px rgba(0,0,0,.25);font-family:inherit';
+  if(kind==='net'){
+    ov.innerHTML='<div style="'+card+'">'
+      +'<div style="font-size:15px;font-weight:800;color:#15294A;display:flex;align-items:center;gap:8px">📡 인터넷 연결을 확인해 주세요</div>'
+      +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">드라이브에서 최신 고객 목록을 확인하지 못했어요.<br>정확한 정보만 보여드리기 위해 인터넷이 연결된 뒤 열 수 있습니다.</div>'
+      +'<button type="button" id="jvGateRetry" style="width:100%;margin-top:16px;border:1px solid #1B3A5C;background:#fff;color:#1B3A5C;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">다시 시도</button>'
+      +'<button type="button" id="jvGateClose" style="width:100%;margin-top:8px;border:none;background:transparent;color:#8A93A8;padding:8px 0;font-size:12px;font-family:inherit;cursor:pointer">닫기</button>'
+      +'</div>';
+  }else{
+    ov.innerHTML='<div style="'+card+'">'
+      +'<div style="font-size:15px;font-weight:800;color:#15294A;display:flex;align-items:center;gap:8px">☁ 먼저 구글드라이브를 연결해 주세요</div>'
+      +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">고객 정보는 회원님 <b>본인의 구글드라이브</b>에만 저장됩니다.<br>JARVIA 서버에는 이름·생일·계약만 있고, 연락처·주소·메모는 드라이브에 있어요.</div>'
+      +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:8px">연결하면 PC·휴대폰·마이페이지 어디서나 같은 목록을 보게 됩니다.</div>'
+      +'<button type="button" id="jvGateGo" style="width:100%;margin-top:16px;border:none;background:#1B3A5C;color:#fff;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">드라이브 연결하기</button>'
+      +'<div style="font-size:11.5px;color:#8A93A8;text-align:center;margin-top:8px">연결 후 하려던 화면으로 바로 이어집니다</div>'
+      +'<button type="button" id="jvGateClose" style="width:100%;margin-top:4px;border:none;background:transparent;color:#8A93A8;padding:8px 0;font-size:12px;font-family:inherit;cursor:pointer">닫기</button>'
+      +'</div>';
+  }
+  document.body.appendChild(ov);
+  const close=()=>{try{ov.remove();}catch(_e){}};
+  const c=document.getElementById('jvGateClose');if(c)c.onclick=close;
+  const r=document.getElementById('jvGateRetry');if(r)r.onclick=()=>{close();if(typeof retry==='function')retry();};
+  const g=document.getElementById('jvGateGo');if(g)g.onclick=()=>{close();
+    /* 연결은 고객입력(fc.html)의 드라이브 연결 흐름을 쓴다. 성공 후 then= 화면으로 이어진다 (fc.html 처리) */
+    const u='https://jarvia.co.kr/@'+encodeURIComponent(lid)+'?open=drive'+(feature?('&then='+encodeURIComponent(feature)):'');
+    window.open(u,'_blank','noopener');};
+};
 async function jvMcDriveSync(force){
   const lid=(meData&&meData.loginId)||'';if(!me||!lid)return false;   /* meData 미로드 시 다음 호출에서 재시도 */
-  if(!force&&(Date.now()-_jvMcChkAt)<60000)return false;   /* 60초 내 재확인 생략 — 수동 버튼(force)은 통과 */
+  if(!force&&_jvMcLast==='ok'&&(Date.now()-_jvMcChkAt)<60000)return false;   /* 60초 내 재확인 생략 — 직전 확인이 성공했을 때만. 실패 뒤에는 매번 다시 확인 ★ [2026-09-03] */
   _jvMcChkAt=Date.now();_jvMcLast='ok';   /* ★ [2026-09-03] 퀵 모달 상태 줄용 결과 플래그 */
   const el=$('fcc-drive-note');
   const note=(t,c)=>{if(el){el.style.display='block';el.style.color=c||'#1B3A5C';el.innerHTML=t;}};
@@ -8982,10 +9033,11 @@ async function jvMcDriveSync(force){
     return true;
   }catch(e){
     console.warn('[mypage] drive sync:',e&&e.message);_jvMcLast='fail';   /* ★ [2026-09-03] */
-    if(jvMcState==='ok'){   /* 상세가 이미 있는 기기 — 확인 실패만 조용히 알리고 기존 표시는 유지 */
-      note('☁ 드라이브 확인에 실패했습니다 — 지금 표시는 이 기기의 마지막 동기화 기준입니다. <button type="button" onclick="jvMcSyncNow()" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:7px;cursor:pointer">다시 시도</button>','#8B6914');
+    jvMcIdx=null;jvMcState='fail';   /* ★ [2026-09-03] 확인 실패 = 기기 상세를 보여주지 않는다 (종전: 옛 상세 유지 + 경고) */
+    if(String((e&&e.message)||'')==='no-token'){
+      note('☁ 구글드라이브가 연결되어 있지 않아 연락처·주소 등 상세를 표시하지 않습니다. <button type="button" onclick="jvDriveGateModal(\'connect\',\'\')" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#fff;background:#1B3A5C;border:none;border-radius:7px;cursor:pointer">드라이브 연결하기</button>','#8A4B00');
     }else{
-      note('연락처·주소·메모 등 상세 정보가 이 기기에 아직 없습니다. 드라이브를 연결했다면 <b>고객입력(내 채널)</b>을 한 번 열면 자동 복원되고, 아직 연결 전이면 고객입력에서 드라이브를 연결해 주세요 — 연결 후에는 어느 기기에서든 이 화면에 상세가 자동 표시됩니다. <button type="button" onclick="jvGoFc(\'\')" style="margin-left:6px;padding:5px 12px;font-size:11px;font-weight:800;color:#fff;background:#1B3A5C;border:none;border-radius:7px;cursor:pointer">고객입력 열기 →</button>','#8B6914');
+      note('☁ 드라이브 확인에 실패해 상세 정보를 표시하지 않습니다 — 정확한 정보만 보여드리기 위해서예요. <button type="button" onclick="jvMcSyncNow()" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:7px;cursor:pointer">다시 시도</button>','#B42318');
     }
     return false;
   }
@@ -9055,8 +9107,10 @@ async function loadFcClients(){
   /* ★ [2026-08-11] 코어(서버) 선표시 — 드라이브 복원(gdAccessToken 콜드스타트·무타임아웃 fetch)이 느려도
      리스트는 즉시 뜬다. 상세(연락처·주소 등)는 병합 완료 후 재렌더로 채움 (fccRenderTable은 상세 부재 널안전) */
   try{window.fccRenderTable();}catch(e){console.error('fccRenderTable error:',e);$('fcc-tbody').innerHTML='<tr><td colspan="12" class="tc">표시 중 오류가 발생했습니다. <button type="button" onclick="loadFcClients()" style="margin-left:6px;border:1px solid #1B3A6B;background:#fff;color:#1B3A6B;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer">다시 시도</button></td></tr>';return;}
-  try{await jvMcRead();}catch(_e){}   /* ★ [2026-07-24] FC 채널 상세 병합 (읽기 전용 · 실패해도 기본 표는 표시) */
-  try{if(await jvMcDriveSync(false)){await jvMcRead();}}catch(_e){}   /* ★ [2026-08-22] 항상 드라이브 변경 확인(메타 1회) — 달라졌을 때만 내려받아 재판독. 변경 없으면 다운로드 0 */
+  /* ★ [2026-09-03] 순서 교체 — 드라이브 확인이 먼저, 기기 상세는 "드라이브와 같음"이 확인된 뒤에만 읽는다.
+     종전: 기기 상세 먼저 표시 → 뒤에서 드라이브 확인. 확인 전·실패 시에도 기기 것이 보였다(옛 목록 노출). */
+  try{await jvMcDriveSync(false);}catch(_e){}
+  try{await jvMcRead();}catch(_e){}   /* jvMcRead 는 _jvMcLast==='ok' 일 때만 기기 상세를 읽는다 */
   try{window.fccRenderTable();}catch(e){console.error('fccRenderTable(merge) error:',e);}   /* 상세 병합 재렌더 — 실패해도 코어 표는 유지 */
 }
 window.loadFcClients=loadFcClients;   /* ★ [2026-08-11] 재시도 버튼(inline onclick)용 전역 등록 */
@@ -16081,6 +16135,7 @@ window.fcrInsMergeOpen=async function(reqId){
   box.innerHTML='<div style="font-size:11px;color:#8B93AE;padding:6px 0">고객 목록 불러오는 중…</div>';
   const r=(_fcrAllRequests||[]).find(x=>x.id===reqId);
   if(!r){box.innerHTML='<div style="font-size:11px;color:#C0392B">요청 정보를 찾지 못했습니다</div>';return;}
+  try{await jvMcDriveSync(false);}catch(_e){}   /* ★ [2026-09-03] 기기 상세를 읽기 전 드라이브 확인 — jvMcRead 가드와 짝 */
   try{if(!jvMcIdx)await jvMcRead();}catch(_e){}
   const list=jvMcIdx?Object.values(jvMcIdx):[];
   const seen=new Set();const opts=[];
@@ -17511,12 +17566,28 @@ window.addEventListener('load', ()=>{ _actWhenReady(handleClientReportAction); }
     if(_svKey&&typeof logSvc==='function')logSvc(_svKey);
     var url='https://jarvia.co.kr/@'+encodeURIComponent(lid);
     if(feature)url+='?open='+encodeURIComponent(feature);
-    window.open(url,'_blank','noopener');
+    /* ★ [2026-09-03] 드라이브 게이트 — 고객 DB 화면은 연결 확인을 통과해야 열린다.
+       새 탭은 클릭 직후(동기)에만 열 수 있으므로 먼저 빈 탭을 열어 두고, 검문 결과에 따라 이동시키거나 닫는다.
+       (검문은 5분 캐시라 대개 즉시 끝난다) */
+    if(typeof window.jvDriveGate!=='function'){window.open(url,'_blank','noopener');return;}
+    var w=null;try{w=window.open('','_blank');if(w){w.opener=null;try{w.document.write('<title>JARVIA</title><p style="font-family:sans-serif;color:#5C6678;padding:24px">드라이브 연결을 확인하는 중…</p>');}catch(_e){}}}catch(_e){}
+    var go=function(){window.jvDriveGate().then(function(r){
+      if(r==='ok'){if(w){w.location.href=url;}else window.open(url,'_blank','noopener');return;}
+      if(w){try{w.close();}catch(_e){}w=null;}
+      window.jvDriveGateModal(r,feature,function(){go();});
+    }).catch(function(){if(w){try{w.close();}catch(_e){}w=null;}window.jvDriveGateModal('net',feature,function(){go();});});};   /* 예상 밖 오류에도 게이트를 우회하지 않는다 */
+    go();
   }catch(e){}};
   /* ── GNB 콘텐츠 ── */
   window.jmGoContents=function(){try{jmForceArch=false;var allTab=document.querySelector('#cat-tabs .cat-tab:not(#cat-tab-pptgen)');if(typeof window.filterCat==='function')window.filterCat('all',allTab||null);window.jmScroll('jm-searchbar');}catch(e){}};
   /* ── 퀵버튼: 고객 생일·상령일 — 이번달·다음달 리스트 모달 (2026-07-21: 고객관리 직행 → 리스트 표시로 변경) ── */
-  window.jmQuickFcc=function(){try{if(typeof logSvc==='function')logSvc('fcc_quick');if(typeof window.fccQuickList==='function')window.fccQuickList();else if(typeof window.fccOpenTab==='function')window.fccOpenTab();}catch(e){}};
+  window.jmQuickFcc=function(){try{if(typeof logSvc==='function')logSvc('fcc_quick');
+    var open=function(){if(typeof window.fccQuickList==='function')window.fccQuickList();else if(typeof window.fccOpenTab==='function')window.fccOpenTab();};
+    /* ★ [2026-09-03] 드라이브 게이트 — 생일·상령일도 고객 DB(연락처)를 읽으므로 같은 검문 */
+    if(!window.me||typeof window.jvDriveGate!=='function'){open();return;}
+    var go=function(){window.jvDriveGate().then(function(r){if(r==='ok'){open();return;}window.jvDriveGateModal(r,'fcc',function(){go();});}).catch(function(){window.jvDriveGateModal('net','fcc',function(){go();});});};
+    go();
+  }catch(e){}};
   /* ── 요일 발행 바 ── */
   window.jmDay=function(el,cat,titleOverride){try{
     document.querySelectorAll('#jm-days .jm-day').forEach(function(d){d.classList.remove('jm-on');});

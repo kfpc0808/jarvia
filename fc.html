@@ -5753,6 +5753,7 @@ const CC_ROOT='내 홈페이지 금고';
 const CC_FOLDERS=['문서함','문서함/보험·증권','문서함/계약서','문서함/신분증·증명','문서함/세금·영수증','문서함/건강·의료','문서함/가족','문서함/기타','자산관리','머니캘린더','비밀번호금고','나의 장소','대화저장','이용기록','고객관리','고객관리/첨부'];   /* ★ Drive-First: 이용기록(계산·진단·선택·AI프로필)·고객관리(암호화 고객DB·첨부) 2026-07-17 */
 /* ★ 채널 식별자 — 고객: 슬러그 / 컨설턴트 소유자뷰: fc:{loginId} (로그인=소유자). 2026-07 */
 function ccVaultId(){return window._ccSlug||((isOwnerView&&loginId)?('fc:'+loginId):'');}
+window.ccVaultId=ccVaultId;   /* ★ [2026-09-03] 고객 지도(classic 스크립트)의 캐시 키 계산용 노출 */
 window.ccStorage=(function(){
   let _tok='',_exp=0,_key=null,_folders=null;
   const slug=()=>ccVaultId();
@@ -6764,6 +6765,8 @@ function aiGuide(){
   const d=document.getElementById('aiGuideDot');if(d)d.style.display='none';
 }
 function aiOpen(){
+  /* ★ [2026-09-03] 드라이브 게이트 — AI 비서는 고객 기록을 읽는다 */
+  if(window.mpcGated&&window.mpcGateFresh&&!window.mpcGateFresh()){window.mpcGated(function(){aiOpen();});return;}
   aiBillLoad();   /* ★ [2026-07-23] 월 캐시 복원 — 서버 응답 전에도 사용횟수·잔액 즉시 표시 */
   let m=document.getElementById('aiSheet');
   if(m){m.style.display='flex';aiUsageRender();if(aiSideOpen)aiSideLoad(true);if(!aiPinned)aiChkRender();   /* ★ 다시 열면 최신 현황으로 갱신 (2026-07-19) */
@@ -7663,6 +7666,16 @@ function jvDeepLinkOpen(){
     }
     else if(_op==='ai'&&typeof aiOpen==='function')aiOpen();
     else if(_op==='map'){if(window.__mpcQuickAdd)window.__mpcQuickAdd(false);else if(window.myPlacesOpen)window.myPlacesOpen();}
+    else if(_op==='drive'){   /* ★ [2026-09-03] 메인 페이지 연결 화면 → 여기서 실제 연결 → then= 화면으로 */
+      const _then=(new URLSearchParams(location.search).get('then')||'').trim();
+      const _route=function(){
+        if(_then==='voice'&&typeof vmOpen==='function')vmOpen();
+        else if(_then==='ai'&&typeof aiOpen==='function')aiOpen();
+        else if(_then==='map'){if(window.__mpcQuickAdd)window.__mpcQuickAdd(false);else if(window.myPlacesOpen)window.myPlacesOpen();}
+        else{try{if(window.toast)window.toast('드라이브가 연결됐어요 — 원래 화면으로 돌아가 [지금 동기화]를 눌러주세요');}catch(_e){}}
+      };
+      if(window.mpcDriveGate&&window.mpcGateOpen){window.mpcDriveGate(true).then(function(r){if(r==='ok')_route();else window.mpcGateOpen(r,_route,function(){window.mpcDriveGate(true).then(function(r2){if(r2==='ok')_route();else window.mpcGateOpen(r2,_route);});});});}
+    }
     else if(_op==='cust'){   /* ★ [2026-08-26] 업무일지 → 내 고객(수정) 직행 — 모듈 준비 대기 재시도 */
       const _cid=(new URLSearchParams(location.search).get('cid')||'').trim();
       let _n=0;
@@ -7685,6 +7698,8 @@ let vmText='',vmBusy=false,vmData=null,vmPickId=null,vmGen=0,vmCfExtra=[];   /* 
 function vmEl(id){return document.getElementById(id);}
 function vmClose(){vmGen++;vmBusy=false;const s=vmEl('vmSheet');if(s)s.style.display='none';}
 function vmOpen(){
+  /* ★ [2026-09-03] 드라이브 게이트 — 음성 입력도 고객 DB에 쓴다 */
+  if(window.mpcGated&&window.mpcGateFresh&&!window.mpcGateFresh()){window.mpcGated(function(){vmOpen();});return;}
   let m=vmEl('vmSheet');
   if(!m){
     m=document.createElement('div');m.id='vmSheet';
@@ -8255,7 +8270,7 @@ function vmApplyRefine(rf){
     const aux={};
     Object.keys(rf.fields||{}).forEach(k=>{
       let v=String(rf.fields[k]==null?'':rf.fields[k]).trim().slice(0,120);
-      if(okKeys[k]){if(k==='addr'||k==='addr2')v=vmAddrClean(v);if(k==='birthDate'||k==='nextContact')v=vmDateNorm(v);if(v)F[k]=v;}
+      if(okKeys[k]){if(k==='addr'||k==='addr2')v=vmAddrClean(v);if(k==='birthDate'||k==='nextContact')v=vmDateNorm(v);if(k==='phone'&&window.mpcPhoneNorm){var _pp=window.mpcPhoneNorm(v);if(!_pp.flag)v=_pp.val;}/* ★ [2026-09-03] 연락처 표준 형식 */if(v)F[k]=v;}
       else if(auxKeys[k]){if((k==='addrLabel'||k==='addr2Label')&&['집','직장','기타'].indexOf(v)<0)return;if(v)aux[k]=v;}
     });
     if(Object.keys(aux).length)F.__aux=aux;
@@ -13095,7 +13110,7 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
   }
   function mpcDoSave(){try{var _pn2=$("mpcMtNote"),_pp2=$("mpcMtPlace");if((_pn2&&_pn2.value.trim())||(_pp2&&_pp2.value.trim())){mpcMtAddFn();}}catch(_e){}   /* ★ 입력칸에 남은 미팅 자동 등록 — 유실 방지 (2026-07-17 버그수정) */
     try{for(var _rk in mpcCtRowDirty){if(!mpcCtRowDirty[_rk])continue;var _rv=mpcCtRowRead(parseInt(_rk,10));if(_rv&&_rv.product)mpcContracts[parseInt(_rk,10)]=_rv;}mpcContracts=mpcContracts.filter(function(x){return x&&x.product;});mpcCtRowDirty={};}catch(_e){}   /* ★ [2026-08-09] 표의 미저장 행 흡수 — 행[저장] 없이 하단 저장해도 입력값 보존, 상품명 빈 행은 정리 */
-    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:$("mpcPhone").value.trim(),addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};/* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}
+    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:(function(){var _v=$("mpcPhone").value.trim(),_p=mpcPhoneNorm(_v);return _p.flag?_v:_p.val;})(),/* ★ [2026-09-03] 연락처 표준 형식 저장 — 애매하면 입력 그대로 */addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:$("mpcStatus")?$("mpcStatus").value:"",nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};/* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}
     /* ★ [2026-09-02] 이름 유일성 — 신규든 개명이든 같은 이름이 다른 고객에 있으면 식별자를 붙이게 한다 */
     if(!o.name){alert("이름을 입력해 주세요.");return;}
     var _rn=mpcNameResolve(o.name,o.id);if(_rn===null)return;o.name=_rn;
@@ -13104,7 +13119,8 @@ if(i>=0){var _oc0=customers[i];if(_oc0.fccId&&!o.fccId)o.fccId=_oc0.fccId;if(_oc
 var _fin=function(){closeCustForm(true);mpcRenderList();try{mpcRosterMeterRefresh();}catch(_e){}   /* ★ [2026-07-25] 저장 후 게이지 갱신 */
 if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();};
 if(window.fccBridge){try{window.fccBridge.upsert([{fccId:o.fccId||"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:_prevB,replaceContracts:true,mgTitle:o.mgTitle||"",contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(x){return x.productName;})}]).then(function(ids){if(ids&&ids[0]&&o.fccId!==ids[0]){o.fccId=ids[0];custPut(o).then(_fin,_fin);}else _fin();},function(){_fin();});}catch(_e){_fin();}}else _fin();});}
-  function mpcSaveCust(){if(!$("mpcName").value.trim()){alert("이름을 입력하세요.");return;}var addr=$("mpcAddr").value.trim();if(addr.length>=4&&(!mpcCoord||addr!==mpcCoordAddr)){$("mpcAddrStat").textContent="좌표 확인 중…";mpcGeocode(addr).then(function(g){if(g.ok){var _fx=mpcFixSido(addr,g.matched);if(_fx!==addr){addr=_fx;$("mpcAddr").value=_fx;try{toast("주소 앞에 시/도를 붙여 ‘"+_fx+"’로 저장했어요","info");}catch(_e){}}mpcCoord={lat:g.lat,lng:g.lng};mpcCoordAddr=addr;if(g.approx){try{toast("‘"+addr+"’의 정확한 위치를 못 찾아 비슷한 장소로 저장했어요 — 지도에서 위치를 확인해 주세요","warn");}catch(_e){}}}else{try{toast("‘"+addr+"’ 위치를 찾지 못했어요 — 주소 맨 앞에 시/도(서울·경기 등)를 붙여 다시 시도해 주세요. 지금은 지도에 표시되지 않습니다","warn");}catch(_e){}}mpcDoSave();});}else{mpcDoSave();}}
+  function mpcSaveCust(){if(!$("mpcName").value.trim()){alert("이름을 입력하세요.");return;}
+    if(!mpcGateFresh()){mpcGated(function(){mpcSaveCust();});return;}   /* ★ [2026-09-03] 드라이브 게이트 — 통과 후 같은 폼 내용으로 이어서 저장 */var addr=$("mpcAddr").value.trim();if(addr.length>=4&&(!mpcCoord||addr!==mpcCoordAddr)){$("mpcAddrStat").textContent="좌표 확인 중…";mpcGeocode(addr).then(function(g){if(g.ok){var _fx=mpcFixSido(addr,g.matched);if(_fx!==addr){addr=_fx;$("mpcAddr").value=_fx;try{toast("주소 앞에 시/도를 붙여 ‘"+_fx+"’로 저장했어요","info");}catch(_e){}}mpcCoord={lat:g.lat,lng:g.lng};mpcCoordAddr=addr;if(g.approx){try{toast("‘"+addr+"’의 정확한 위치를 못 찾아 비슷한 장소로 저장했어요 — 지도에서 위치를 확인해 주세요","warn");}catch(_e){}}}else{try{toast("‘"+addr+"’ 위치를 찾지 못했어요 — 주소 맨 앞에 시/도(서울·경기 등)를 붙여 다시 시도해 주세요. 지금은 지도에 표시되지 않습니다","warn");}catch(_e){}}mpcDoSave();});}else{mpcDoSave();}}
   /* ★ [2026-08-26] 고객 통합 검색 색인 — 기존에는 이름·회사·직함·전화·주소만 검색되어
    메모("9월 출산")·계약("실손","현대해상")·니즈·가족·소개자가 전혀 걸리지 않았다.
    입력 항목 전체를 하나의 문자열로 만들어 어떤 키워드로도 찾히게 한다.
@@ -13225,7 +13241,17 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustRender=mpcRenderList;
   window.__mpCustDraw=mpcDrawMarkers;
   window.__mrRefresh=function(){try{mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}catch(_e){}};   /* ★ 월간 리포트 타깃 필터 재렌더 훅 (2026-07-24) */
-  window.__mpCustOpen=function(){mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","기기 저장소를 읽고 있어요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad()).then(function(){try{mpcMaybeIntro();mpcRenderFilter();mpcRenderList();}catch(e){try{console.error("[__mpCustOpen] 렌더 중 오류:",e);}catch(_e){}mpcBusyDone("고객 목록을 표시하지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true,function(){window.__mpCustOpen();});return;}if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;try{var _rb=$("mpcGdReloadBtn");if(_rb)_rb.style.display=mpcGdOn()?"":"none";}catch(_e){}mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
+  window.__mpCustOpen=function(){
+    /* ★ [2026-09-03] ① 드라이브 게이트 — 통과 못 하면 고객 화면을 열지 않는다 */
+    if(!mpcGateFresh()){mpcDriveGate().then(function(r){if(r==="ok"){window.__mpCustOpen();return;}mpcGateOpen(r,function(){window.__mpCustOpen();},function(){window.__mpCustOpen();});});return;}
+    mpcLoadCustomRels();mpcBusyOn("고객 정보를 불러오는 중…","드라이브와 맞추고 있어요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
+    /* ★ [2026-09-03] ② 표시 전에 드라이브 꼬리표 확인 — 같으면 즉시, 다르면 내려받은 뒤. 기기 사본을 확인 없이 보여주지 않는다.
+       (종전: 기기 목록을 먼저 보여주고 확인 창 뒤에서 드라이브를 맞췄다 → 옛 목록이 잠깐 보였다) */
+    .then(function(){if(mpcSyncBusy)return null;mpcGdPullLast="";return new Promise(function(res){mpcGdPull(function(){res();});});})
+    .then(function(){
+      if(!mpcSyncBusy&&(mpcGdPullLast==="fail"||mpcGdPullLast==="off")){
+        mpcBusyDone(mpcGdPullLast==="off"?"드라이브 연결이 필요합니다":"드라이브 확인에 실패했습니다","정확한 정보만 보여드리기 위해 이 기기의 목록은 표시하지 않아요. 인터넷을 확인하고 다시 시도해 주세요.",null,true,function(){mpcGateLast="";window.__mpCustOpen();});return;}
+      try{mpcMaybeIntro();mpcRenderFilter();mpcRenderList();}catch(e){try{console.error("[__mpCustOpen] 렌더 중 오류:",e);}catch(_e){}mpcBusyDone("고객 목록을 표시하지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true,function(){window.__mpCustOpen();});return;}if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;try{var _rb=$("mpcGdReloadBtn");if(_rb)_rb.style.display=mpcGdOn()?"":"none";}catch(_e){}mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
     if(mpcSyncBusy)return;   /* ★ [2026-09-02] 이미 동기화가 도는 중(탭 왕복) — 두 번째 체인을 겹쳐 시작하면 ⑤등록이 서버 문서를 중복 생성한다 */
     mpcSyncLock();mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}}
     /* ★ 직렬화 (2026-07-17): fc_clients 편입은 Drive 병합 완료 후에만 — 구본으로 최신본을 덮는 경쟁 차단 */
@@ -13359,6 +13385,42 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(m&&m[0].length<v.length)return {a:v.slice(m[0].length).trim(),l:"직장"};
     return {a:v,l:""};}
   function mpcHeaderMap(row){var m={ct:[],extra:[]};Object.keys(row).forEach(function(h){var k=String(h).replace(/\*/g,"").trim();if(!m.name&&/이름|성명|고객명|성함|계약자|피보험자/.test(k))m.name=h;else if(!m.birth&&/생년월일|생일/.test(k))m.birth=h;else if(!m.addr2&&/^(직장\s*주소|회사\s*주소|근무지\s*주소|근무지|사무실\s*주소|사무실|주소\s*2|주소②|work(\s*address)?|office(\s*address)?|business\s*address|company\s*address|job\s*address)$/i.test(k))m.addr2=h;else if(!m.addr&&/^(집\s*주소|자택\s*주소|자택|home(\s*address)?|house(\s*address)?|address|addr)$/i.test(k)){m.addr=h;m.addrHint="집";}/* ★ [2026-07-29 v3] 집·직장·영문 칼럼명 인식 — 회사명 검사보다 먼저(기존: 회사주소가 회사명으로 오인되던 결함 수정) */else if(!m.company&&/회사|소속|기업/.test(k)&&!/보험|금융|가입/.test(k))m.company=h;/* ★ [2026-08-09] '보험회사'·'금융회사' 열이 회사명으로 오인되던 결함 수정 — 보험사(insurer) 분기로 넘김 */else if(!m.title&&/직함|직위|직책/.test(k))m.title=h;else if(!m.job&&/^(직업|업종|하는일|직종)$/.test(k))m.job=h;/* ★ [2026-08-29] 직업 열 매핑 — 고객 상세 직업 칸(mpcJobF)·통합검색과 연결. 이전에는 추가정보로 빠졌다 */else if(!m.phone&&/연락처|전화|휴대|핸드폰|번호/.test(k)&&!/증권|계좌|사업자|주민|카드|우편/.test(k))m.phone=h;/* ★ [2026-08-09] 증권번호·계좌번호 등이 전화번호로 오인되던 결함 수정 */else if(!m.email&&/이메일|메일/.test(k))m.email=h;else if(!m.addr2&&/^(직장주소|회사주소|근무지주소|근무지|주소2|주소②)$/.test(k))m.addr2=h;else if(!m.addr&&/주소/.test(k))m.addr=h;/* ★ [2026-07-29] 주소② 매핑 — 일반 주소보다 먼저 검사 */else if(!m.rel&&/관계|분류|등급/.test(k))m.rel=h;else if(!m.status&&/상태/.test(k))m.status=h;else if(!m.referrer&&/소개/.test(k))m.referrer=h;else if(!m.needs&&/관심|니즈/.test(k))m.needs=h;else if(!m.nextContact&&/다음연락|연락예정|콜예정/.test(k))m.nextContact=h;else if(!m.memo&&/메모|비고|특이/.test(k))m.memo=h;else if(!m.lat&&/위도|lat/i.test(k))m.lat=h;else if(!m.lng&&/경도|lng|lon/i.test(k))m.lng=h;else{var cm=k.match(/^계약(\d)(상품명?|유형|종류|만기일?|보험사|월?보험료)$/);if(cm){var n=parseInt(cm[1],10)-1;m.ct[n]=m.ct[n]||{};var f={상품:"product",상품명:"product",유형:"ptype",종류:"ptype",만기:"expiry",만기일:"expiry",보험사:"insurer",보험료:"premium",월보험료:"premium"}[cm[2]];if(f)m.ct[n][f]=h;}else{var bf=null;/* ★ [2026-08-09] 동의어 확장 — 컨설턴트 원장의 다양한 보험 열 이름을 별도 정리 없이 그대로 수용. 괄호 단위 표기("월보험료(원)")도 인식 */var k2=k.replace(/\s*[\(\uff08][^\)\uff09]*[\)\uff09]\s*$/,"");if(/^(상품명?|보험상품명?|보험명|가입상품명?|계약상품명?|계약명|증권명|가입보험명?|product)$/i.test(k2))bf="product";else if(/^(보험사명?|보험회사명?|가입회사|원수사|판매사|금융사|insurer|company\s*name)$/i.test(k2))bf="insurer";else if(/^(만기일?|보장만기일?|납입만기일?|만료일|종료일|만기날짜|만기년월일|보험만기|계약만기|보장종료일?|만료일자|만기일자|expiry|maturity)$/i.test(k2))bf="expiry";else if(/^(유형|종류|보험종류|상품유형|상품종류|계약유형|보험유형|보종|종목|담보구분)$/.test(k2))bf="ptype";else if(/^(보험료|월보험료|월납보험료|납입보험료|월납액?|월납입액|납입액|보험료액|월납입금액|premium)$/i.test(k2))bf="premium";else if(/^(증권번호|증권번호?|계약번호|증권No|증권넘버|policy\s*no)$/i.test(k2))bf=null;if(bf){m.ct[0]=m.ct[0]||{};if(!m.ct[0][bf]){m.ct[0][bf]=h;return;}}if(k&&!/^__EMPTY/i.test(String(h)))m.extra.push(h);}}});return m;}   /* ★ [2026-07-28] 번호 없는 계약 칼럼(상품명·보험사·만기 등)도 계약1로 자동 승격 — 타사 원장 그대로 수용 */   /* ★ [2026-07-23] 관심항목·다음연락 매핑 + 미매핑 칼럼은 extra(추가 정보)로 무손실 보관 */
+  /* ★ [2026-09-03] 연락처 정규화 — "확실한 것만 고치고, 애매한 것은 보여준다".
+     숫자만 남긴 뒤 앞자리·자릿수로 판별해 표준 형식(010-1234-5678)으로 다시 쓴다.
+     글자가 섞였거나(소장010-…) 번호가 둘이거나 자릿수가 맞지 않으면 원본을 그대로 두고 flag 로 알린다.
+     반환: {val: 저장값, fixed: 형식이 바뀌었는가, flag: ""|"글자 섞임"|"번호 2개"|"자릿수 이상"} */
+  function mpcPhoneNorm(v){
+    var raw=String(v==null?"":v).trim();
+    if(!raw||/^(없음|모름|없다|미상|x|-|—|none|n\/a)$/i.test(raw))return {val:"",fixed:false,flag:""};
+    var flag="";
+    var parts=raw.split(/\s*[\/,;|]\s*|\n|\s{2,}/).map(function(p){return p.trim();}).filter(Boolean);
+    var nums=parts.filter(function(p){return p.replace(/\D/g,"").length>=7;});
+    if(nums.length>1){flag="번호 2개";raw=nums[0];}
+    var s=raw.replace(/^(h\.?p\.?|hp|tel\.?|mobile|cell|휴대폰|핸드폰|휴대전화|전화번호|전화|연락처|본인|폰)\s*[:.)]?\s*/i,"").replace(/\((?:본인|집|회사|직장|핸드폰|휴대폰|hp|h\.p|tel|mobile)\)/gi,"").trim();
+    if(!flag&&/[A-Za-z가-힣]/.test(s.replace(/\+?82/,"")))flag="글자 섞임";
+    var grp=s.replace(/^\+?82\s*/,"").split(/[-.\s]+/).filter(Boolean);
+    if(grp.length>=2&&/^\d+$/.test(grp[grp.length-1])&&grp[grp.length-1].length<4)return {val:String(v==null?"":v).trim(),fixed:false,flag:flag||"자릿수 이상"};   /* 010-2734-420 처럼 마지막 묶음이 4자리 미만이면 오타 — 손대지 않는다 ("010-82818932" 는 4+4 가 붙은 것이라 통과) */
+    var d=s.replace(/\D/g,"");
+    var bare=(typeof v==="number")||/^\+?\d+$/.test(s);   /* 앞 0 복원은 구분자 없는 순수 숫자(엑셀 숫자셀)에만 — "2734-4204" 를 서울번호로 오판하지 않기 위해 */
+    if(/^82\d{9,10}$/.test(d))d="0"+d.slice(2);                      /* +82 10-… */
+    else if(bare){
+      if(/^1[016789]\d{7,8}$/.test(d))d="0"+d;                        /* 엑셀 숫자셀 앞 0 손실 (휴대폰) */
+      else if(/^2\d{7,8}$/.test(d))d="0"+d;                           /* 서울 */
+      else if(/^(3[1-3]|4[1-4]|5[1-5]|6[1-4])\d{7,8}$/.test(d))d="0"+d; /* 지역 */
+      else if(/^(70|80)\d{7,8}$/.test(d)||/^50\d{9}$/.test(d))d="0"+d;  /* 070·080·050x */
+    }
+    var out="";
+    var m;
+    if((m=d.match(/^(01[016789])(\d{3,4})(\d{4})$/)))out=m[1]+"-"+m[2]+"-"+m[3];
+    else if((m=d.match(/^(02)(\d{3,4})(\d{4})$/)))out=m[1]+"-"+m[2]+"-"+m[3];
+    else if((m=d.match(/^(0(?:3[1-3]|4[1-4]|5[1-5]|6[1-4]|70|80))(\d{3,4})(\d{4})$/)))out=m[1]+"-"+m[2]+"-"+m[3];
+    else if((m=d.match(/^(050\d)(\d{4})(\d{4})$/)))out=m[1]+"-"+m[2]+"-"+m[3];
+    else if((m=d.match(/^(1[5-9]\d{2})(\d{4})$/)))out=m[1]+"-"+m[2];
+    if(!out)return {val:String(v==null?"":v).trim(),fixed:false,flag:flag||"자릿수 이상"};
+    if(flag==="글자 섞임")return {val:String(v==null?"":v).trim(),fixed:false,flag:flag};   /* 글자가 붙은 번호는 다른 사람 것일 수 있어 자동 저장하지 않는다 */
+    return {val:out,fixed:out!==String(v==null?"":v).trim(),flag:flag};
+  }
+  window.mpcPhoneNorm=mpcPhoneNorm;   /* 음성 입력(module 스크립트)에서도 같은 규칙을 쓰기 위해 노출 */
   function mpcNormBirth(s){
     if(typeof s==="number"&&s>20000&&s<80000){var dt=new Date(Math.round((s-25569)*86400000));return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0")+"-"+String(dt.getUTCDate()).padStart(2,"0");}   /* ★ 엑셀 날짜 셀(시리얼) 지원 (2026-07-17) */
     s=String(s||"").trim().replace(/[./]/g,"-");
@@ -13373,6 +13435,51 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
        만기 "35년 1월 1일"이 1935년으로 뒤집힌다. 대신 C안(변환 실패 행 경고)이 사용자에게 알려준다. */
   /* ★ [2026-07-23] 엑셀 붙여넣기(서브 입력) — 복사한 표(TSV)를 rows JSON으로 변환해 동일 파이프라인 재사용.
      셀 안 줄바꿈이 있는 표는 행이 깨질 수 있으므로 파일 업로드를 권장(모달에 안내). */
+  /* ═══ ★ [2026-09-03] 파일 분석 화면 — 엑셀·붙여넣기 등록 전 1회 ═══
+     "올리기 전에 무엇이 들어갈지 안다": 열 매핑·항목별 채움 수·등록 예정·확인 필요 행을 한 화면에 보여주고,
+     [등록 시작] 을 눌러야만 등록이 시작된다. [취소] 는 아무것도 쓰지 않는다. 문구는 안내 없이도 읽히도록 쉬운 말로. */
+  function mpcPreflightOpen(P,onGo){
+    var esc=function(t){return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");};
+    var ov=document.createElement("div");ov.id="mpcPreOv";
+    ov.style.cssText="position:fixed;inset:0;z-index:9750;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:14px";
+    var rows=P.cols.map(function(c){
+      return '<tr><td style="padding:6px 0;border-bottom:1px solid #EEF1F5;color:#15294A;word-break:break-all">'+esc(c.from)+'</td>'
+        +'<td style="padding:6px 4px;border-bottom:1px solid #EEF1F5;color:#B4BAC8;text-align:center">→</td>'
+        +'<td style="padding:6px 0;border-bottom:1px solid #EEF1F5;color:'+(c.extra?'#8A93A8':'#15294A')+'">'+esc(c.to)+(c.note?'<div style="font-size:10.5px;color:#B26A00">'+esc(c.note)+'</div>':'')+'</td>'
+        +'<td style="padding:6px 0;border-bottom:1px solid #EEF1F5;text-align:right;white-space:nowrap;color:#5C6678">'+(c.blank?'':(c.n+' <span style="color:#B4BAC8">/ '+P.nNamed+'</span>'))+'</td></tr>';}).join("");
+    var chk=P.chk.map(function(t){var ls=String(t).replace(/^·\s*/,"").split("\n");var head=ls.shift();
+      return '<div style="margin-top:8px"><div style="font-weight:800;color:#7A4E00">'+esc(head)+'</div>'+(ls.length?'<div style="color:#6B5A2E;margin-top:2px;white-space:pre-wrap;word-break:break-all">'+esc(ls.map(function(x){return x.replace(/^\s{2,}/,"");}).join("\n"))+'</div>':'')+'</div>';}).join("");
+    var stat=function(l,v,c){return '<div style="flex:1;min-width:60px;background:'+(c||'#F4F6FA')+';border-radius:10px;padding:8px 6px;text-align:center"><div style="font-size:10.5px;color:#8A93A8">'+l+'</div><div style="font-size:18px;font-weight:800;color:#15294A">'+v+'</div></div>';};
+    ov.innerHTML='<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25);overflow:hidden">'
+      +'<div style="padding:16px 16px 10px">'
+        +'<div style="font-size:14px;font-weight:800;color:#15294A">📄 올리기 전에 확인해 주세요</div>'
+        +'<div style="font-size:11.5px;color:#5C6678;margin-top:4px;word-break:break-all">'+esc(P.src||"고객 파일")+' · 이름 있는 행 <b>'+P.nNamed+'</b>건'+(P.nRows>P.nNamed?' (전체 '+P.nRows+'행)':'')+'</div>'
+        +(P.gdOn
+          ?'<div style="margin-top:8px;padding:7px 10px;border-radius:9px;background:#EAF5EF;color:#1D6A45;font-size:11.5px">☁ 구글드라이브 연결됨 — 등록 후 자동 백업됩니다</div>'
+          :'<div style="margin-top:8px;padding:7px 10px;border-radius:9px;background:#FFF4E5;color:#8A4B00;font-size:11.5px">☁ 구글드라이브가 연결되어 있지 않아요 — 이 기기에만 저장되고 다른 기기·마이페이지에는 보이지 않습니다. 등록 후 <b>드라이브 연결</b>을 꼭 해주세요.</div>')
+      +'</div>'
+      +'<div style="padding:0 16px 12px;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:12px">'
+        +'<div style="font-size:12px;font-weight:800;color:#15294A;margin:4px 0 4px">엑셀 열이 이렇게 들어갑니다</div>'
+        +'<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px"><colgroup><col style="width:34%"><col style="width:6%"><col style="width:40%"><col style="width:20%"></colgroup>'+rows+'</table>'
+        +'<div style="font-size:12px;font-weight:800;color:#15294A;margin:14px 0 6px">등록 예정</div>'
+        +'<div style="display:flex;gap:6px">'+stat("신규",P.nNew)+stat("갱신",P.nUpd)+(P.nSkip?stat("제외",P.nSkip,"#FFF4E5"):"")+(P.fold?stat("병합",P.fold.replace(/^.*→\s*/,"").replace(/명으로 병합/,"명")):"")+'</div>'
+        +(P.nUpd?'<div style="font-size:11px;color:#8A93A8;margin-top:6px">갱신 = 이미 등록된 분. 파일에 적힌 값으로 덮어쓰고, 파일에 빈 칸은 기존 값을 그대로 둡니다.</div>':'')
+        +(P.chk.length
+          ?'<div style="margin-top:14px;border:1.5px solid #F0D48A;background:#FFF9EA;border-radius:12px;padding:10px 12px;font-size:11.5px;line-height:1.55">'
+            +'<div style="font-size:12px;font-weight:800;color:#7A4E00">⚠️ 확인이 필요한 행이 있어요</div>'
+            +'<div style="font-size:11px;color:#8A6A2A;margin-top:2px">그대로 등록해도 되고, [취소] 후 파일을 고쳐 다시 올려도 됩니다.</div>'
+            +chk+'</div>'
+          :'<div style="margin-top:14px;padding:10px 12px;border-radius:12px;background:#EAF5EF;color:#1D6A45;font-size:11.5px">✅ 확인이 필요한 행이 없어요. 바로 등록할 수 있습니다.</div>')
+      +'</div>'
+      +'<div style="display:flex;gap:8px;padding:12px 16px 16px;border-top:1px solid #EEF1F5">'
+        +'<button type="button" id="mpcPreNo" style="flex:1;border:1px solid #E1E5EC;background:#fff;color:#5C6678;border-radius:11px;padding:12px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">취소 — 파일부터 고칠게요</button>'
+        +'<button type="button" id="mpcPreGo" style="flex:1.4;border:none;background:#1B3A5C;color:#fff;border-radius:11px;padding:12px 0;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">'+P.nGo+'명 등록 시작</button>'
+      +'</div></div>';
+    document.body.appendChild(ov);
+    var close=function(){try{ov.remove();}catch(_e){}};
+    $("mpcPreNo").onclick=function(){close();mpcProgHide();};
+    $("mpcPreGo").onclick=function(){close();try{onGo();}catch(e){mpcProgHide();alert("등록을 시작하지 못했어요. 다시 시도해 주세요.");}};
+  }
   function mpcPasteOpen(){
     var ov=document.createElement("div");ov.id="mpcPasteOv";
     ov.style.cssText="position:fixed;inset:0;z-index:9750;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:18px";
@@ -13395,7 +13502,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       var hd=lines[0].split("\t").map(function(h,i){return String(h).trim()||("열"+(i+1));});
       if(hd.length<2){alert("탭으로 구분된 표가 아니에요 — 엑셀에서 범위를 복사해 붙여넣어 주세요.");return;}
       var rows=lines.slice(1).map(function(l){var cs=l.split("\t");var o={};hd.forEach(function(h,i){o[h]=(cs[i]!=null)?String(cs[i]).trim():"";});return o;});
-      close();mpcXlsxImport(rows);
+      mpcGated(function(){close();mpcXlsxSrcName="붙여넣은 표";mpcXlsxImport(rows);});   /* ★ [2026-09-03] 드라이브 게이트 */
     };
     setTimeout(function(){var ta=ov.querySelector("#mpcPasteTa");if(ta)ta.focus();},80);
   }
@@ -13417,8 +13524,12 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
      기존 _pv/_pvHide 는 mpcXlsxHandle 지역 변수라 형제 함수(mpcXlsxImport·mpcXlsxImport2)에서 보이지 않았다.
      그 결과 파싱 단계에서 되돌아가는 경로들이 오버레이를 닫지 못해 화면이 잠겼다(새로고침 외 탈출 불가). */
   function mpcProgHide(){try{var e=$("mpcXlsxProg");if(e)e.classList.remove("show");var st=$("mpcProgStop");if(st)st.style.display="";}catch(_e){}}
-  var mpcXlsxBusy=false;   /* ★ [2026-09-03] 등록 루프 진행 중 — 이 동안은 중지 버튼이 오버레이를 직접 닫지 않고 mpcXlsxDone2 가 닫는다(서버 커밋 중 재업로드 방지) */
+  var mpcXlsxBusy=false,mpcXlsxSrcName="";   /* ★ [2026-09-03] 분석 화면 제목용 — 파일명 또는 "붙여넣은 표" */   /* ★ [2026-09-03] 등록 루프 진행 중 — 이 동안은 중지 버튼이 오버레이를 직접 닫지 않고 mpcXlsxDone2 가 닫는다(서버 커밋 중 재업로드 방지) */
+  var mpcXlsxGatedFile=null;
   function mpcXlsxHandle(file){if(!file)return;
+    /* ★ [2026-09-03] 드라이브 게이트 — 파일을 고르자마자, 읽기 전에. 통과하면 같은 파일로 이어서 */
+    if(mpcXlsxGatedFile!==file&&!mpcGateFresh()){mpcGated(function(){mpcXlsxGatedFile=file;mpcXlsxHandle(file);});return;}
+    mpcXlsxGatedFile=null;mpcXlsxSrcName=String(file.name||"");
     /* ★ 정본 1개 원칙 경고 게이트 (2026-07-17) — [2026-08-29] 파일 선택 뒤로 이동.
        선택한 파일명을 이미 알고 있으므로 안내가 더 정확해진다. */
     var last=null;try{last=JSON.parse(localStorage.getItem("mpc_last_upload")||"null");}catch(_e){}
@@ -13474,11 +13585,11 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     var items=rows.map(function(r,_ri){var name=String(r[mp.name]||"").trim();if(!name){if(Object.keys(r).some(function(k){return k!=="__row"&&String(r[k]==null?"":r[k]).trim();}))_noName.push(_ri+2);return null;}r.__row=_ri+2;   /* ★ [2026-09-02] 엑셀 행 번호(헤더 1행 가정) — 동명이인 안내용 */
       var rels=mp.rel?String(r[mp.rel]||"").split(/[,/·]/).map(function(s){return s.trim();}).filter(Boolean):[];
       var cts=[];(mp.ct||[]).forEach(function(cm){if(!cm)return;var pd=cm.product?String(r[cm.product]||"").trim():"";if(!pd)return;cts.push({insurer:cm.insurer?String(r[cm.insurer]||"").trim():"",product:pd,ptype:cm.ptype?String(r[cm.ptype]||"").trim():"",expiry:mpcNormBirth(cm.expiry?r[cm.expiry]:"")||String(cm.expiry?r[cm.expiry]:"").trim(),premium:cm.premium?String(r[cm.premium]||"").trim():""});});
-      var ph=mp.phone?String(r[mp.phone]||"").trim():"";if(/^1[016789]\d{7,8}$/.test(ph.replace(/\D/g,"")))ph="0"+ph.replace(/\D/g,"");   /* ★ [2026-07-23] 엑셀 숫자셀에서 사라진 앞 0 자동 복원 */
+      var _pn=mpcPhoneNorm(mp.phone?r[mp.phone]:""),ph=_pn.val;   /* ★ [2026-09-03] 연락처 정규화 — 표준 형식으로 저장, 애매한 값은 원본 유지 + 분석 화면에 표시 (기존 앞 0 복원 규칙 포함) */
       var _nd=(typeof mpcNormNeeds==='function')?mpcNormNeeds(mp.needs?r[mp.needs]:''):{list:[],miss:0};
       var nds=_nd.list;if(_nd.miss)mpcNeedSkip+=_nd.miss;   /* ★ [2026-08-29] 표준 15개로 정규화 + 미인식 건수 집계 */
       var ext={};(mp.extra||[]).forEach(function(h){var v=r[h];if(v==null)return;v=String(v).trim();if(!v)return;var kk=String(h).replace(/\*/g,"").trim().slice(0,30);if(kk){if(Object.keys(ext).length<40)ext[kk]=v.slice(0,300);else mpcExSkip++;}});   /* ★ [2026-07-28] 상한 20→40키 + 초과분 집계(조용한 유실 금지) */   /* ★ [2026-07-23] 미매핑 칼럼 무손실 보관 (키 20개·값 300자 제한) */
-      return {name:name,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",__birthRaw:mp.birth?String(r[mp.birth]==null?"":r[mp.birth]).trim():"",/* ★ [2026-09-03] 원본 보관 — 변환 실패 행을 사용자에게 그대로 보여주기 위함 */company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",job:mp.job?String(r[mp.job]||"").trim():"",phone:ph,email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:(function(){var t1=mpcAddrTag(mp.addr?r[mp.addr]:""),t2=mpcAddrTag(mp.addr2?r[mp.addr2]:"");var o9={a1:t1.a,l1:t1.l||mp.addrHint||"",a2:t2.a,l2:t2.l||"직장"};if(t1.l==="직장"&&!o9.a2){o9.a2=o9.a1;o9.l2="직장";o9.a1="";o9.l1="";}r.__a9=o9;return o9.a1;})(),addrLabel:(r.__a9&&r.__a9.a1)?r.__a9.l1:"",addr2:r.__a9?r.__a9.a2:"",addr2Label:(r.__a9&&r.__a9.a2)?r.__a9.l2:"",/* ★ [2026-07-29 v3] 셀 라벨 해석 + 직장표기 자동 라우팅 */rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",needs:nds,nextContact:mp.nextContact?(mpcNormBirth(r[mp.nextContact])||""):"",extra:ext,contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0,__row:r.__row};}).filter(Boolean);
+      return {name:name,__phoneRaw:mp.phone?String(r[mp.phone]==null?"":r[mp.phone]).trim():"",__phoneFlag:_pn.flag,__phoneFixed:_pn.fixed,birthDate:mp.birth?mpcNormBirth(r[mp.birth]):"",__birthRaw:mp.birth?String(r[mp.birth]==null?"":r[mp.birth]).trim():"",/* ★ [2026-09-03] 원본 보관 — 변환 실패 행을 사용자에게 그대로 보여주기 위함 */company:mp.company?String(r[mp.company]||"").trim():"",title:mp.title?String(r[mp.title]||"").trim():"",job:mp.job?String(r[mp.job]||"").trim():"",phone:ph,email:mp.email?String(r[mp.email]||"").trim():"",status:mp.status?String(r[mp.status]||"").trim():"",referrer:mp.referrer?String(r[mp.referrer]||"").trim():"",addr:(function(){var t1=mpcAddrTag(mp.addr?r[mp.addr]:""),t2=mpcAddrTag(mp.addr2?r[mp.addr2]:"");var o9={a1:t1.a,l1:t1.l||mp.addrHint||"",a2:t2.a,l2:t2.l||"직장"};if(t1.l==="직장"&&!o9.a2){o9.a2=o9.a1;o9.l2="직장";o9.a1="";o9.l1="";}r.__a9=o9;return o9.a1;})(),addrLabel:(r.__a9&&r.__a9.a1)?r.__a9.l1:"",addr2:r.__a9?r.__a9.a2:"",addr2Label:(r.__a9&&r.__a9.a2)?r.__a9.l2:"",/* ★ [2026-07-29 v3] 셀 라벨 해석 + 직장표기 자동 라우팅 */rels:rels,memo:mp.memo?String(r[mp.memo]||"").trim():"",needs:nds,nextContact:mp.nextContact?(mpcNormBirth(r[mp.nextContact])||""):"",extra:ext,contracts:cts,lat:mp.lat?parseFloat(r[mp.lat])||0:0,lng:mp.lng?parseFloat(r[mp.lng])||0:0,__row:r.__row};}).filter(Boolean);
     if(!items.length){mpcProgHide();alert("등록할 고객이 없어요.");return;}   /* ★ [2026-09-03] 진행 화면 닫기 누락 — 화면이 잠기던 경로 */
     /* ═══ ★ [2026-09-03 v2] 파일 점검 — "정상 행은 반드시 올라간다" 원칙 ═══
        기존: 문제 유형마다 확인창이 따로 뜨고([취소]면 중단), 동명이인은 전체 차단이었다.
@@ -13493,6 +13604,12 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     var _chk=[],_nAll=items.length;   /* 확인창·완료창 공용 요약 줄 · _nAll: 파일의 이름 있는 행 수(병합 전) */
     /* ⓪ 이름 없는 행 → 등록 불가(이름이 열쇠). 행 번호를 알려준다 */
     if(_noName.length)_chk.push("· 이름이 비어 있는 행 "+_noName.length+"건 → 등록 안 됨\n    "+_noName.slice(0,12).join("행 · ")+"행"+(_noName.length>12?(" … 외 "+(_noName.length-12)+"건"):"")+"\n    이름을 채우면 등록됩니다");
+    /* ⓪-2 연락처 — 형식 보정은 표에 건수만, 확인 필요는 행 단위로 */
+    var _pFix=items.filter(function(it){return it.__phoneFixed;}).length;
+    var _pFlag=items.filter(function(it){return it.__phoneFlag;});
+    if(_pFlag.length)_chk.push("· 연락처 확인 필요 "+_pFlag.length+"명 → 적힌 그대로 저장 (전화 걸기가 안 될 수 있어요)\n    "
+      +_pFlag.slice(0,6).map(function(it){return it.__row+"행 "+it.name+" \""+String(it.__phoneRaw).slice(0,24)+"\" — "+it.__phoneFlag;}).join("\n    ")+(_pFlag.length>6?("\n    … 외 "+(_pFlag.length-6)+"명"):"")
+      +"\n    숫자만 적거나 010-1234-5678 형식으로 적어주세요");
     /* ① 생년월일 못 읽음 → 생일 없이 등록 (제외하지 않음). 미래 생일 = 앞 0 손실(050101→50101) 시리얼 오독 → 비운다 */
     var _bBad=items.filter(function(it){if(it.birthDate&&it.birthDate>_tdy){it.birthDate="";return true;}return !!(it.__birthRaw&&!it.birthDate);});
     if(_bBad.length)_chk.push("· 생년월일 못 읽음 "+_bBad.length+"명 → 생일 없이 등록 (생일·상령일 알림 제외)\n    "
@@ -13534,12 +13651,26 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       alert("한 번에 올릴 수 있는 인원은 "+MPC_MAX_ROWS.toLocaleString()+"명까지예요.\n\n이 파일은 "+items.length.toLocaleString()+"명입니다"+(mpcFoldNote?(" — "+mpcFoldNote):"")+".\n\n파일을 나눠서 올려주세요. 나눠 올려도 이름+생년월일이 같으면 중복 없이 합쳐집니다.");
       return;
     }
-    /* ⑤ 점검 결과 요약 — 알릴 것이 있을 때만 확인창 1회. 깨끗한 파일은 창 없이 바로 등록 */
+    /* ⑤ ★ [2026-09-03 v3] 파일 분석 화면 — 항상 1회. 열 매핑·항목별 채움 수·등록 예정·확인 필요 행을 한 화면에.
+       기존 confirm() 텍스트는 표를 담을 수 없어 모달로 교체. 등록은 [등록 시작] 을 눌러야만 시작된다. */
     mpcChkNote=_chk.join("\n");
-    if(_chk.length){
-      mpcProgHide();
-      if(!confirm("파일 점검 결과 — 이름 있는 행 "+_nAll+"건 → "+items.length+"명 등록 예정\n\n"+mpcChkNote+"\n\n[확인] "+items.length+"명 등록 시작\n[취소] 올리지 않고 파일부터 고치기"))return;
-    }
+    var _named=rows.filter(function(r){return String(r[mp.name]||"").trim();});
+    var _cnt=function(h){if(!h)return 0;var n=0;_named.forEach(function(r){if(String(r[h]==null?"":r[h]).trim())n++;});return n;};
+    var _cols=[];
+    var _emptyCols=0;
+    var _push=function(h,label,note){if(!h)return;var n=_cnt(h);if(!n&&!/^이름/.test(label)){_emptyCols++;return;}_cols.push({from:String(h).replace(/\*/g,"").trim(),to:label,n:n,note:note||""});};   /* 값이 하나도 없는 열은 표에서 빼고 건수만 */
+    _push(mp.name,"이름 *");_push(mp.birth,"생년월일",_bBad.length?("못 읽음 "+_bBad.length):"");
+    _push(mp.phone,"연락처",(_pFix?("형식 보정 "+_pFix):"")+(_pFlag.length?((_pFix?" · ":"")+"확인 "+_pFlag.length):""));
+    _push(mp.email,"이메일");_push(mp.company,"회사");_push(mp.title,"직함");_push(mp.job,"직업");
+    _push(mp.addr,"주소①");_push(mp.addr2,"주소②");_push(mp.rel,"관계");_push(mp.status,"상태");_push(mp.referrer,"소개자");
+    _push(mp.needs,"관심항목");_push(mp.nextContact,"다음연락일");_push(mp.memo,"메모");
+    (mp.ct||[]).forEach(function(cm,ci){if(!cm)return;var L={product:"상품",ptype:"유형",expiry:"만기",insurer:"보험사",premium:"월보험료"};Object.keys(L).forEach(function(k){if(cm[k])_push(cm[k],"계약"+(ci+1)+" "+L[k]);});});
+    (mp.extra||[]).forEach(function(h){var n=_cnt(h);if(n)_cols.push({from:String(h).replace(/\*/g,"").trim(),to:"추가정보 · "+String(h).replace(/\*/g,"").trim().slice(0,14),n:n,note:"",extra:true});});
+    var _emptyExtra=(mp.extra||[]).filter(function(h){return !_cnt(h)&&!/^__EMPTY/i.test(String(h));}).length;
+    if(_emptyCols+_emptyExtra)_cols.push({from:"빈 열 "+(_emptyCols+_emptyExtra)+"개",to:"무시",n:0,note:"",extra:true,blank:true});
+    var _nUpd=0;items.forEach(function(it){if(mpcFindByName(it.name))_nUpd++;});
+    var _pre={src:mpcXlsxSrcName,nRows:rows.length,nNamed:_nAll,nGo:items.length,nNew:items.length-_nUpd,nUpd:_nUpd,nSkip:_dupSkip.length,fold:mpcFoldNote,cols:_cols,chk:_chk,gdOn:mpcGateFresh()};   /* ★ [2026-09-03] 실제 검문 결과 */
+    var _start=function(){
     mpcXlsxStop=false;mpcXlsxBusy=true;$("mpcXlsxProg").classList.add("show");$("mpcProgTit").textContent="고객 등록 중…";$("mpcProgFill").style.width="0%";$("mpcProgSub").textContent="0 / "+items.length;
     var i=0,geoOk=0,geoFail=0,geoApx=0,noAddr=0,nUp=0,nNew=0,nNoBirth=0,coreArr=[];   /* ★ [2026-07-24] 추정·주소미입력 분리 집계 */
     /* ★ 업서트 (2026-07-17): 이름+생년월일(보조: 이름+연락처) 매칭 → 갱신, 없으면 신규.
@@ -13608,7 +13739,15 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
            (기존에는 알림이 먼저 뜨고 저장이 뒤따라서 사용자가 성공으로 오인했다) */
         if($("mpcProgSub"))$("mpcProgSub").textContent="서버에 저장하는 중… 잠시만요";
         try{if($("mpOverlay")&&$("mpOverlay").classList.contains("listMode")&&window.mpTblRender)setTimeout(function(){mpTblRender(1);},300);}catch(_e){}   /* ★ [2026-08-29] 목록 탭이 열려 있으면 업로드 후 자동 갱신 */
-        flushCore(function(){mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail);});
+        flushCore(function(){
+          /* ★ [2026-09-03] 드라이브 저장 응답을 받은 뒤에만 완료 창. 실패면 성공할 때까지 재시도 안내 — "저장됐다"는 말은 드라이브가 답한 뒤에만 */
+          try{$("mpcProgTit").textContent="드라이브에 저장하는 중…";$("mpcProgSub").textContent="응답을 기다리고 있어요";var _st=$("mpcProgStop");if(_st)_st.style.display="none";}catch(_e){}
+          (function _gdTry(){mpcGdPushAwait().then(function(res){
+            if(res==="ok"||res==="off"){mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,res);return;}
+            if(confirm("드라이브에 저장되지 않았어요.\n고객 "+items.length+"명은 이 기기에는 등록됐지만 아직 드라이브에 없습니다.\n\n인터넷을 확인한 뒤 [확인]을 누르면 다시 저장을 시도합니다.\n[취소]하면 나중에 지도를 열 때 자동으로 다시 시도합니다."))_gdTry();
+            else mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,res);
+          });})();
+        });
         return;}
       var it=items[i];
       var geo2=function(cb){/* ★ [2026-07-29] 주소② 좌표 — 기존 좌표 재사용 → 정확 결과만 채택 */
@@ -13639,7 +13778,10 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       if(it.lat&&it.lng){save();}
       else if(it.addr&&it.addr.length>=4){var ex0=findExisting(it);if(ex0&&ex0.lat&&ex0.lng&&ex0.addr===it.addr){it.lat=ex0.lat;it.lng=ex0.lng;it.geoApprox=ex0.geoApprox?1:0;save();}else{it._geoCalled=1;mpcGeocode(it.addr).then(function(g){if(g.ok){it.lat=g.lat;it.lng=g.lng;it.geoApprox=g.approx?1:0;it.addr=mpcFixSido(it.addr,g.matched);}save();});}}   /* ★ [2026-07-24] 추정 플래그 저장 · 재사용 시 기존 플래그 승계 · 시/도 누락 자동 보정 */
       else{var ex1=findExisting(it);if(ex1&&ex1.lat&&ex1.lng){it.lat=ex1.lat;it.lng=ex1.lng;it.geoApprox=ex1.geoApprox?1:0;}save();}
-    })();});}
+    })();});
+    };   /* _start 끝 — 등록 루프 전체는 분석 화면의 [등록 시작] 에서만 실행된다 */
+    mpcProgHide();mpcPreflightOpen(_pre,_start);
+  }
   /* ═══ ★ [2026-07-24] 위치 재계산 — 주소는 맞는데 핀이 틀린 고객을 한 번에 복구 ═══
      배경: 엑셀 재업로드는 '저장된 주소 == 엑셀 주소'면 기존 좌표를 재사용한다(속도 최적화).
            그래서 과거 버그로 좌표만 어긋난 기록은 몇 번을 다시 올려도 고쳐지지 않는다.
@@ -13686,7 +13828,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if($("mpcProgSub"))$("mpcProgSub").textContent="0 / "+list.length;
     step();
   }
-  function mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail){mpcXlsxBusy=false;$("mpcXlsxProg").classList.remove("show");mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}mpcGdPush();
+  function mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,gdRes){mpcXlsxBusy=false;$("mpcXlsxProg").classList.remove("show");mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}if(gdRes!=="ok")mpcGdPush();   /* ★ [2026-09-03] 드라이브 저장은 호출부에서 응답까지 받았다 — 실패한 경우에만 백그라운드 재시도 */
     var msg="업로드 완료\n· 갱신 "+nUp+"명 · 신규 "+nNew+"명";
     if(mpcChkNote)msg+="\n\n📋 파일 점검 결과 (등록 전에 안내한 내용)\n"+mpcChkNote+"\n\n제외된 분은 파일에서 고친 뒤 그 분들만 다시 올려주세요 — 이름이 같으면 중복 없이 갱신됩니다.";   /* ★ [2026-09-03] 안 올라간 고객과 원인을 완료 창에 다시 표시 — 확인창을 무심코 닫아도 놓치지 않게. 병합(mpcFoldNote) 안내도 여기에 포함된다 */
     if(mpcNeedSkip)msg+="\n· 관심항목 중 표준 15개로 인식되지 않은 값 "+mpcNeedSkip+"건 — 그대로 저장되어 '직접 추가' 항목으로 표시됩니다";   /* ★ [2026-08-29] 조용한 유실 금지 */
@@ -13699,6 +13841,10 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(window.__mpcGdLate){window.__mpcGdLate=false;msg+="\n\n⚠️ 내 드라이브 확인이 늦어 이번 등록에는 반영되지 않았습니다 — 다른 기기에서 최근 수정한 내용이 있다면 [동기화]를 한 번 눌러주세요";}
     if(srvFail)msg+="\n\n🚨 서버 저장 실패 "+srvFail+"명 — 이 고객들은 생일·만기 알림과 마이페이지 명단에서 빠집니다.\n인터넷 연결을 확인한 뒤 같은 파일을 다시 올려주세요 (중복 없이 갱신됩니다).";
     else if(srvOk)msg+="\n\n✅ 서버 저장 "+srvOk+"명 완료 — 생일·만기 알림과 마이페이지 명단에 반영됩니다.";
+    /* ★ [2026-09-03] 드라이브 저장 결과 — 다른 기기·마이페이지에 보이려면 이 줄이 ✅ 여야 한다 */
+    if(gdRes==="ok")msg+="\n☁ 드라이브 백업 완료 — PC·휴대폰·마이페이지에서 같은 목록을 보게 됩니다.";
+    else if(gdRes==="off")msg+="\n\n⚠️ 드라이브가 연결되어 있지 않아 이 기기에만 저장됐습니다. 지도 상단에서 드라이브를 연결해 주세요.";
+    else msg+="\n\n🚨 드라이브 백업 실패 — 이 기기에만 저장됐습니다. 인터넷을 확인한 뒤 지도를 다시 열면 자동으로 백업을 다시 시도합니다.";
     alert(msg);}
   /* ═══ ★ [2026-08-29] 양식 내려받기 — 정적 파일 + 안내 팝업으로 교체 ═══
      기존: SheetJS(xlsx 0.18.5 커뮤니티 빌드)로 코드에서 조립.
@@ -13784,6 +13930,93 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   function mpcXlsxExport(){if(!customers.length){alert("내보낼 고객이 없어요.");return;}mpcLoadXLSX(function(ok){if(!ok){alert("엑셀 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.");return;}var out=customers.map(function(c){var row={"이름":c.name||"","생년월일":c.birthDate||"","연락처":c.phone||"","이메일":c.email||"","회사":c.company||"","직함":c.title||"","직업":c.job||"","주소":c.addr||"","직장주소":c.addr2||"","관계":(c.rels||[]).join(","),"상태":c.status||"","소개자":c.referrer||"","관심항목":(c.needs||[]).join(","),"다음연락일":c.nextContact||"","메모":c.memo||""};(c.contracts||[]).forEach(function(ct,i){var n=i+1;row["계약"+n+"상품"]=ct.product||"";row["계약"+n+"유형"]=ct.ptype||"";row["계약"+n+"만기"]=ct.expiry||"";row["계약"+n+"보험사"]=ct.insurer||"";row["계약"+n+"월보험료"]=ct.premium||"";});   /* ★ [2026-08-29] 3건 제한 해제 + 월보험료 포함 — 내보내기·재업로드 왕복 무손실 */if(c.extra)Object.keys(c.extra).forEach(function(k){if(!row.hasOwnProperty(k))row[k]=c.extra[k];});row["_위도"]=c.lat||"";row["_경도"]=c.lng||"";return row;});   /* ★ [2026-07-23] 관심항목·다음연락일·추가정보 포함 — 내보내기→재업로드 왕복 무손실 */var ws=XLSX.utils.json_to_sheet(out);var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"고객목록");XLSX.writeFile(wb,"내고객_백업_"+new Date().toISOString().slice(0,10)+".xlsx");});}
   // ── 내 고객: 구글드라이브 자동 동기화 (나의 장소 인증 재사용 · 별도 파일 · 연결 시에만 조용히) ──
   var GD_CUST_FILE="내고객.json",gdCustFileId=null;
+  /* ═══ ★ [2026-09-03] 드라이브 게이트 — "고객 DB에 닿는 순간 드라이브부터" ═══
+     지도·목록·고객입력(폼/음성/엑셀/붙여넣기)·AI비서 진입 전에 서버 토큰을 실제로 발급받아 판정한다.
+     'ok' 통과 / 'connect' 토큰 없음·권한 취소·사용자 해제 → 연결 화면 / 'net' 응답 없음 → 인터넷 확인 화면.
+     성공은 5분 기억. "이 기기로 계속" 선택지는 없다 — 기기 데이터는 정본이 아니다. */
+  var mpcGateLast="",mpcGateAt=0;
+  function mpcGateFresh(){return mpcGateLast==="ok"&&(Date.now()-mpcGateAt)<5*60000;}
+  function mpcDriveGate(force){
+    return (async function(){
+      try{
+        if(!window.ccStorage||!window.ccStorage.token){mpcGateLast="connect";return "connect";}
+        if(!force&&mpcGateFresh())return "ok";
+        var _off=false;try{_off=!!(window.ccSync&&window.ccSync.knownOff&&window.ccSync.knownOff());}catch(_e){}
+        if(_off){mpcGateLast="connect";return "connect";}
+        await window.ccStorage.token();
+        mpcGateLast="ok";mpcGateAt=Date.now();return "ok";
+      }catch(e){
+        var m=String((e&&(e.message||e.code))||"");
+        var r=(m==="token")?"connect":((!navigator.onLine||/network|fetch|timeout|deadline|unavailable|internal|aborted/i.test(m))?"net":"connect");
+        mpcGateLast=r;return r;
+      }
+    })();
+  }
+  /* 연결 화면 / 인터넷 확인 화면. onOk: 통과 후 이어서 할 일, retry: 다시 검문 */
+  function mpcGateOpen(kind,onOk,retry){
+    try{var old=document.getElementById("mpcGateOv");if(old)old.remove();}catch(_e){}
+    var ov=document.createElement("div");ov.id="mpcGateOv";
+    ov.style.cssText="position:fixed;inset:0;z-index:9800;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:18px";
+    var card='background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px 20px;box-shadow:0 12px 40px rgba(0,0,0,.25)';
+    if(kind==="net"){
+      ov.innerHTML='<div style="'+card+'">'
+        +'<div style="font-size:15px;font-weight:800;color:#15294A">📡 인터넷 연결을 확인해 주세요</div>'
+        +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">드라이브에서 최신 고객 목록을 확인하지 못했어요.<br>정확한 정보만 보여드리기 위해 인터넷이 연결된 뒤 열 수 있습니다.</div>'
+        +'<button type="button" id="mpcGateRetry" style="width:100%;margin-top:16px;border:1px solid #1B3A5C;background:#fff;color:#1B3A5C;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">다시 시도</button>'
+        +'<button type="button" id="mpcGateClose" style="width:100%;margin-top:8px;border:none;background:transparent;color:#8A93A8;padding:8px 0;font-size:12px;font-family:inherit;cursor:pointer">닫기</button></div>';
+    }else{
+      ov.innerHTML='<div style="'+card+'">'
+        +'<div style="font-size:15px;font-weight:800;color:#15294A">☁ 먼저 구글드라이브를 연결해 주세요</div>'
+        +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">고객 정보는 회원님 <b>본인의 구글드라이브</b>에만 저장됩니다.<br>JARVIA 서버에는 이름·생일·계약만 있고, 연락처·주소·메모는 드라이브에 있어요.</div>'
+        +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:8px">연결하면 PC·휴대폰·마이페이지 어디서나 같은 목록을 보게 됩니다.</div>'
+        +'<button type="button" id="mpcGateGo" style="width:100%;margin-top:16px;border:none;background:#1B3A5C;color:#fff;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">드라이브 연결하기</button>'
+        +'<div style="font-size:11.5px;color:#8A93A8;text-align:center;margin-top:8px">연결 후 하려던 화면으로 바로 이어집니다</div>'
+        +'<button type="button" id="mpcGateClose" style="width:100%;margin-top:4px;border:none;background:transparent;color:#8A93A8;padding:8px 0;font-size:12px;font-family:inherit;cursor:pointer">닫기</button></div>';
+    }
+    document.body.appendChild(ov);
+    var close=function(){try{ov.remove();}catch(_e){}};
+    var c=document.getElementById("mpcGateClose");if(c)c.onclick=close;
+    var r=document.getElementById("mpcGateRetry");if(r)r.onclick=function(){close();if(typeof retry==="function")retry();};
+    var g=document.getElementById("mpcGateGo");if(g)g.onclick=function(){
+      /* 구글 팝업은 클릭 직후에만 열린다 — 검문 등 비동기 작업 없이 바로 connect() */
+      g.disabled=true;g.textContent="구글 연결 창을 여는 중…";
+      try{if(window.ccSync&&window.ccSync.setOff)window.ccSync.setOff(false);}catch(_e){}
+      window.ccStorage.connect().then(function(){
+        mpcGateLast="ok";mpcGateAt=Date.now();close();
+        try{if(window.ccSync&&window.ccSync.probe)window.ccSync.probe(true);}catch(_e){}
+        try{toast("드라이브 연결됨 — 이어서 진행합니다");}catch(_e){}
+        if(typeof onOk==="function")onOk();
+      }).catch(function(e){
+        g.disabled=false;g.textContent="드라이브 연결하기";
+        var m=String((e&&e.message)||"");
+        alert(m==="inapp"?"카카오톡 등 앱 안의 브라우저에서는 구글 연결 창이 열리지 않아요.\n크롬·사파리 등 일반 브라우저로 열어주세요.":(m==="gis"?"구글 연결 모듈을 불러오지 못했어요. 인터넷을 확인하고 다시 시도해 주세요.":"드라이브 연결이 완료되지 않았어요. 다시 시도해 주세요."));
+      });
+    };
+  }
+  /* 진입점 공용: 검문 통과면 즉시 fn(), 아니면 화면 띄우고 통과 후 fn() */
+  function mpcGated(fn){
+    if(mpcGateFresh()){fn();return;}
+    mpcDriveGate().then(function(r){if(r==="ok"){fn();return;}mpcGateOpen(r,fn,function(){mpcGated(fn);});});
+  }
+  window.mpcDriveGate=mpcDriveGate;window.mpcGateOpen=mpcGateOpen;window.mpcGated=mpcGated;window.mpcGateFresh=mpcGateFresh;   /* 음성 입력·AI 비서·딥링크(module 스크립트)에서 사용 */
+  /* ★ [2026-09-03] 꼬리표 — 드라이브 '내고객.safe' 의 수정시각. 마지막 확인과 같으면 내려받지 않는다 */
+  var mpcGdPullLast="";   /* 'same'|'merged'|'empty'|'fail'|'off' — 열 때 기기 사본을 보여줘도 되는지 판단 */
+  function mpcGdMtKey(){return "mpc_gd_mt:"+String((window.ccVaultId&&window.ccVaultId())||window._ccSlug||"");}   /* 계정별 키(ccStorage 와 같은 slug) — 같은 기기에서 다른 회원이 로그인해도 섞이지 않게 */
+  function mpcGdStampGet(){try{return localStorage.getItem(mpcGdMtKey())||"";}catch(_e){return "";}}
+  function mpcGdStampSet(mt){try{if(mt)localStorage.setItem(mpcGdMtKey(),mt);else localStorage.removeItem(mpcGdMtKey());}catch(_e){}}
+  function mpcGdMeta(){
+    return (async function(){
+      var t=await window.ccStorage.token();
+      var fm=await window.ccStorage.ensureFolders();   /* saveJson/loadJson 과 같은 '고객관리' 폴더 안에서만 찾는다. 폴더를 못 정하면 throw → 'fail' */
+      var parent=fm&&fm["고객관리"];if(!parent)throw new Error("folder");
+      var q="name='내고객.safe' and trashed=false and '"+parent+"' in parents";
+      var r=await fetch("https://www.googleapis.com/drive/v3/files?q="+encodeURIComponent(q)+"&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime desc&pageSize=1",{headers:{Authorization:"Bearer "+t}});
+      if(!r.ok)throw new Error("drive-"+r.status);
+      var j=await r.json();var f=(j.files&&j.files[0])||null;
+      return f?{id:f.id,mt:f.modifiedTime||""}:{id:null,mt:""};
+    })();
+  }
+  function mpcGdStampNow(){mpcGdStampSet("");}   /* 저장 직후에는 꼬리표를 비운다 — 다음 열기 때 한 번 내려받아 확실히 맞춘다. (저장 직후 메타를 읽어 기록하면 그 사이 다른 기기가 저장한 판을 내 것으로 오인할 수 있다) */
   function mpcGdOn(){try{return !!(window.ccStorage&&window.ccStorage.connected&&window.ccStorage.connected());}catch(_e){return false;}}   /* 통합 (2026-07-15) */
   function mpcGdFind(cb){var q=encodeURIComponent("name='"+GD_CUST_FILE+"' and trashed=false");gdApi("GET","https://www.googleapis.com/drive/v3/files?q="+q+"&spaces=drive&fields=files(id,name,modifiedTime)").then(function(r){return r.json();}).then(function(d){var f=(d.files&&d.files[0])||null;gdCustFileId=f?f.id:null;cb(f);}).catch(function(){cb(null);});}
   function mpcGdUpload(jsonStr,cb){if(gdCustFileId){gdApi("PATCH","https://www.googleapis.com/upload/drive/v3/files/"+gdCustFileId+"?uploadType=media",{"Content-Type":"application/json"},jsonStr).then(function(r){return r.json();}).then(function(d){cb&&cb(d&&d.id);}).catch(function(){cb&&cb(null);});}else{var b="mcb"+Date.now();var meta={name:GD_CUST_FILE,mimeType:"application/json"};var body="--"+b+"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"+JSON.stringify(meta)+"\r\n--"+b+"\r\nContent-Type: application/json\r\n\r\n"+jsonStr+"\r\n--"+b+"--";gdApi("POST","https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{"Content-Type":"multipart/related; boundary="+b},body).then(function(r){return r.json();}).then(function(d){gdCustFileId=d&&d.id;cb&&cb(gdCustFileId);}).catch(function(){cb&&cb(null);});}}
@@ -13799,7 +14032,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(!mpcGdOn())return Promise.resolve("off");
     try{
       return window.ccStorage.saveJson("고객관리","내고객",{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers})
-        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}return "ok";})
+        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}mpcGdStampNow();return "ok";})
         .catch(function(){return "fail";});
     }catch(_e){return Promise.resolve("fail");}
   }
@@ -13812,7 +14045,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(!mpcGdOn())return;   /* 미연결: 플래그만 남김 → 다음 연결 시 자동 백업 */
     try{
       window.ccStorage.saveJson("고객관리","내고객",{app:"mycustomers",version:2,updatedAt:Date.now(),customers:customers})
-        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}})
+        .then(function(){try{localStorage.removeItem("mpc_dirty");localStorage.setItem("mpc_pushed_at",String(Date.now()));}catch(_e){}mpcGdStampNow();})
         .catch(function(){
           if(retry<2){setTimeout(function(){mpcGdPushQ(retry+1);},1800*(retry+1));}
           else{try{toast("드라이브 백업이 지연되고 있어요 — 데이터는 이 기기에 저장됐고, 다음 접속 때 자동 백업돼요","warn");}catch(_e){}}
@@ -13948,19 +14181,34 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
              서버 보관 리프레시 토큰으로 무음 확인(token()) — 성공 시 token()이 스스로 기기 플래그를 세운다(기존 L5712 무음복구).
              명시적 연결해제(isOff) 상태에서는 플래그가 세워지지 않아 기존대로 풀 생략 — 해제 의사 존중. */
           try{await window.ccStorage.token();}catch(_e0){}
-          if(!mpcGdOn()){cb&&cb(false);return;}
+          if(!mpcGdOn()){mpcGdPullLast="off";cb&&cb(false);return;}
         }
-        var d=null;try{d=await window.ccStorage.loadJson('고객관리','내고객');}catch(_e){d=null;}
+        /* ★ [2026-09-03] 꼬리표 확인 — 드라이브 수정시각이 마지막 확인과 같고, 기기에 미백업 편집이 없으면 내려받지 않는다.
+           같음 = 기기 사본이 드라이브와 동일하므로 그대로 보여줘도 된다(정본 원칙 유지). 확인 자체가 실패하면 'fail'. */
+        var _dirty0=false;try{_dirty0=localStorage.getItem("mpc_dirty")==="1";}catch(_e){}
+        var _meta=null;try{_meta=await mpcGdMeta();}catch(_e){_meta=null;mpcGdPullLast="fail";cb&&cb(false);return;}
+        if(_meta&&_meta.mt&&!_dirty0&&customers.length&&_meta.mt===mpcGdStampGet()){mpcGdPullLast="same";cb&&cb(true);return;}
+        var d=null;
+        if(_meta&&_meta.id){
+          /* ★ [2026-09-03] 드라이브에서 직접 내려받는다. ccStorage.loadJson 은 기기 캐시(localStorage 'cc_v_*')가 있으면 캐시를 즉시 돌려주고
+             드라이브는 뒤에서만 읽어 캐시만 갱신한다(이 화면은 그 갱신을 듣지 않음) → 다른 기기의 변경이 "다음번 열 때"에야 보이던 근본 원인. */
+          try{var _bytes=await window.ccStorage.download(_meta.id);d=JSON.parse(new TextDecoder().decode(await window.ccStorage.dec(_bytes)));
+              try{localStorage.setItem('cc_v_'+(window.ccVaultId?window.ccVaultId():'')+'_내고객',JSON.stringify(d));}catch(_e){}}   /* 기기 캐시(ccStorage.loadJson 이 쓰는 키)도 방금 받은 것으로 맞춘다 */
+          catch(_e){d=null;}
+          if(d===null){mpcGdPullLast="fail";cb&&cb(false);return;}   /* 파일은 있는데 못 내려받음 → 실패로 판정(기기 사본 표시 금지) */
+        }else{
+          try{d=await window.ccStorage.loadJson('고객관리','내고객');}catch(_e){d=null;}   /* .safe 파일이 아직 없는 경우(신규·레거시) — 기존 경로 */
+        }
         /* ★ [2026-08-29] 12초 타임아웃으로 이미 업로드가 시작된 뒤 도착한 응답이면 병합하지 않는다.
            그대로 병합하면 방금 저장한 고객이 드라이브의 예전 값으로 되돌아간다. */
         if(window.__mpcGdStale){window.__mpcGdStale=false;try{console.warn('드라이브 응답이 늦어 이번 병합은 건너뜁니다');}catch(_e2){}cb&&cb(false);return;}
-        if(d&&d.customers&&d.customers.length){var _np=await mpcMergeRemote(d.customers,d.updatedAt||0);var _dirty=false;try{_dirty=!!localStorage.getItem("mpc_dirty");}catch(_e){}if(_np||_dirty)mpcGdPush();cb&&cb(true);return;}
+        if(d&&d.customers&&d.customers.length){var _np=await mpcMergeRemote(d.customers,d.updatedAt||0);var _dirty=false;try{_dirty=!!localStorage.getItem("mpc_dirty");}catch(_e){}if(_np||_dirty)mpcGdPush();else mpcGdStampSet(_meta&&_meta.mt||"");mpcGdPullLast="merged";cb&&cb(true);return;}   /* 병합 후 기기 변경이 없으면 지금 꼬리표를 그대로 기록, 있으면 push 성공 시 새 꼬리표 기록 */
         if(customers.length){mpcGdPush();}   /* Drive 비어있고 로컬만 있음 → 최초 백업 */
         /* 레거시 평문 파일 1회 마이그레이션 */
         var t=await window.ccStorage.token();
         var r=await fetch("https://www.googleapis.com/drive/v3/files?q="+encodeURIComponent("name='"+GD_CUST_FILE+"' and trashed=false")+"&spaces=drive&fields=files(id)&pageSize=1",{headers:{Authorization:"Bearer "+t}});
         var j=await r.json();var f=(j.files&&j.files[0])||null;
-        if(!f){cb&&cb(false);return;}
+        if(!f){mpcGdPullLast="empty";cb&&cb(false);return;}
         var rr=await fetch("https://www.googleapis.com/drive/v3/files/"+f.id+"?alt=media",{headers:{Authorization:"Bearer "+t}});
         var ld=await rr.json();
         if(ld&&ld.customers&&ld.customers.length){
@@ -13971,8 +14219,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           }catch(_e){}
           cb&&cb(true);return;
         }
-        cb&&cb(false);
-      }catch(_e){cb&&cb(false);}
+        mpcGdPullLast="empty";cb&&cb(false);
+      }catch(_e){mpcGdPullLast="fail";cb&&cb(false);}
     })();}
 
   /* ---------- 미디어 압축 ---------- */
