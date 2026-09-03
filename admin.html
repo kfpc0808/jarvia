@@ -3208,6 +3208,22 @@ onAuthStateChanged(auth,async u=>{
   if(snap.empty){window.location.href='index.html';return;}
   admData=snap.docs[0].data();
   try{await updateDoc(snap.docs[0].ref,{authUid:u.uid,lastLoginAt:serverTimestamp()});}catch(e){}
+  /* ★ [2026-09-03] 관리자 테스트 프로필 — 새 창으로 열리는 사용자 페이지들(약관분석·업무일지·텍스나비 등)은
+     users/{uid}.role 로 자체 판정하므로, 관리자에게도 users 문서가 있어야 전 기능 점검이 가능하다.
+     · role inner_circle: index.html 등급 배열 12종 전부에 포함된 유일한 등급
+     · 정기결제 대상(role jarvia_member)이 아니고, 전화·카드가 없어 청구·알림 발생 없음
+     · isAdminTest:true 로 회원관리·대시보드 집계에서 제외 (이 파일 3곳)
+     · 이미 있으면 건드리지 않는다 (merge 아님, 존재 검사 후 생성) */
+  try{
+    const _tpRef=doc(db,'users',u.uid);
+    const _tp=await getDoc(_tpRef);
+    if(!_tp.exists()){
+      await setDoc(_tpRef,{loginId:lid,loginIdLower:lid.toLowerCase(),name:admData.name||lid,role:'inner_circle',status:'active',
+        expiresAt:'unlimited',innerCircleExpiresAt:'unlimited',balance:99999999,point:99999999,
+        isAdminTest:true,company:'JARVIA 관리자',createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      console.log('[admin] 테스트 프로필 생성:',lid);
+    }
+  }catch(e){console.warn('[admin] 테스트 프로필 생성 실패:',e);}
   $('adm-name').textContent=(admData.name||admData.loginId)+' ('+({superadmin:'총괄',admin:'관리자'}[admData.role]||admData.role)+')';
   if($('mob-adm-name'))$('mob-adm-name').textContent=$('adm-name').textContent;
   loadDash();
@@ -4178,14 +4194,14 @@ async function loadDash(){
     }
   }catch(e){console.error('이너서클 만료 복원 오류:',e);}
   const today=new Date();today.setHours(0,0,0,0);const tTs=Timestamp.fromDate(today);
-  const su=await getDocs(query(collection(db,'users'),where('createdAt','>=',tTs)));$('d-signup').textContent=su.size;
+  const su=await getDocs(query(collection(db,'users'),where('createdAt','>=',tTs)));$('d-signup').textContent=su.docs.filter(d=>d.data().isAdminTest!==true).length;   /* ★ [2026-09-03] 관리자 테스트 프로필 제외 */
   const vw=await getDocs(query(collection(db,'view_logs'),where('createdAt','>=',tTs)));$('d-views').textContent=vw.size;
   const ch=await getDocs(query(collection(db,'payments'),where('status','==','paid'),where('createdAt','>=',tTs)));
   let rev=0;ch.forEach(d=>rev+=(d.data().paidAmount||0));$('d-rev').textContent=fmt(rev);
   let totalUsers=0;
   try{
     const allU=await getDocs(collection(db,'users'));
-    totalUsers=allU.docs.filter(d=>{const r=d.data().role;return r==='free_user'||r==='user'||r==='jarvia_member'||r==='jarvia_inner'||r==='inner_circle'||r==='con_homepage'||r==='branch_manager'||r==='jarvia_report';}).length;
+    totalUsers=allU.docs.filter(d=>d.data().isAdminTest!==true).filter(d=>{const r=d.data().role;return r==='free_user'||r==='user'||r==='jarvia_member'||r==='jarvia_inner'||r==='inner_circle'||r==='con_homepage'||r==='branch_manager'||r==='jarvia_report';}).length;
   }catch(e){totalUsers=0;}
   $('d-total').textContent=totalUsers;
   // PPT 생성 통계
@@ -4208,7 +4224,7 @@ async function loadMembers(){
   try{
     const snapAll=await getDocs(collection(db,'users'));
     snapAll.docs.forEach(d=>{const u=d.data();if(u.referralCode)_refMap[u.referralCode]=u.name||'';});
-    list=snapAll.docs.map(d=>({id:d.id,...d.data()})).filter(m=>m.role==='free_user'||m.role==='user'||m.role==='jarvia_member'||m.role==='jarvia_inner'||m.role==='inner_circle'||m.role==='con_homepage'||m.role==='branch_manager'||m.role==='jarvia_report').filter(m=>m.status!=='withdrawn');   // 탈퇴회원 제외 (별도 '탈퇴회원 현황'에서 관리)
+    list=snapAll.docs.map(d=>({id:d.id,...d.data()})).filter(m=>m.role==='free_user'||m.role==='user'||m.role==='jarvia_member'||m.role==='jarvia_inner'||m.role==='inner_circle'||m.role==='con_homepage'||m.role==='branch_manager'||m.role==='jarvia_report').filter(m=>m.status!=='withdrawn').filter(m=>m.isAdminTest!==true);   // 탈퇴회원 제외 (별도 '탈퇴회원 현황'에서 관리) · ★ [2026-09-03] 관리자 테스트 프로필 제외
     list.sort((a,b)=>{const at=a.createdAt?.toDate?a.createdAt.toDate():new Date(0);const bt=b.createdAt?.toDate?b.createdAt.toDate():new Date(0);return bt-at;});
     // 단체 마스터 이름 매핑 (하위계정 표시용)
     const _grpNameMap={};list.filter(m=>m.isGroup).forEach(m=>{_grpNameMap[m.id]=m.groupName||m.name||'';});
@@ -5472,7 +5488,7 @@ async function loadFinanceDash(){
     const fcUsers=[];
     for(const role of VALID_ROLES){
       const snap=await getDocs(query(collection(db,'users'),where('role','==',role)));
-      snap.docs.forEach(d=>{const u=d.data();fcUsers.push({docId:d.id,loginId:u.loginId||'',name:u.name||'',company:u.company||'',role:u.role||'',createdAt:u.createdAt,lastLoginAt:u.lastLoginAt});});
+      snap.docs.forEach(d=>{const u=d.data();if(u.isAdminTest===true)return;/* ★ [2026-09-03] 관리자 테스트 프로필 제외 */fcUsers.push({docId:d.id,loginId:u.loginId||'',name:u.name||'',company:u.company||'',role:u.role||'',createdAt:u.createdAt,lastLoginAt:u.lastLoginAt});});
     }
     // loginId 중복 제거
     const fcMap=new Map();
@@ -5709,6 +5725,7 @@ async function loadClientRegistry(){
       const snap=await getDocs(query(collection(db,'users'),where('role','==',role)));
       snap.docs.forEach(d=>{
         const u=d.data();
+        if(u.isAdminTest===true)return;   /* ★ [2026-09-03] 관리자 테스트 프로필 제외 */
         if(u.loginId&&!fcMap.has(u.loginId))fcMap.set(u.loginId,{docId:d.id,authUid:u.authUid||d.id,name:u.name||'',company:u.company||'',role:u.role||''});
         const uid=u.authUid||d.id; if(u.loginId)uidToLogin[uid]=u.loginId;
       });
@@ -13357,6 +13374,7 @@ async function loadSmsMembers(){
   _smsMembers=[];
   snap.forEach(d=>{
     const u=d.data();
+    if(u.isAdminTest===true)return;   /* ★ [2026-09-03] 관리자 테스트 프로필 제외 */
     if(!u.phone)return;
     _smsMembers.push({uid:d.id,name:u.name||'',loginId:u.loginId||'',role:u.role||'free_user',phone:u.phone||''});
   });
