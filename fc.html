@@ -6229,7 +6229,7 @@ window.fccBridge={
       /* ★ [2026-09-03] 묶음 커밋이 실패하면 그 묶음을 한 건씩 다시 저장한다.
          Firestore 는 묶음 안 한 건이 거부되면 전체를 되돌리므로, 종전에는 1명 때문에 "200명 실패"로 집계됐다.
          이제 실패는 진짜 실패한 사람만 세고, 이름·오류 코드를 남기며(failed), 그 사람의 id 는 되돌려주지 않는다(outIds=null). */
-      let _ops=[];const failed=[];
+      let _ops=[];const failed=[],skipped=[];
       const _flush=async function(){
         if(!_bn)return;
         const n=_bn;const bb=_b;const ops=_ops;_b=writeBatch(db);_bn=0;_ops=[];
@@ -6264,7 +6264,7 @@ window.fccBridge={
         }else{
           /* ★ 중복 가드 (2026-07-18): 생일 없는 신규 등록인데 같은 이름의 문서(생일 보유 포함)가 이미 있으면 생성하지 않음
              — 명함 고객(무생일)과 기존 고객(생일)이 동일인일 가능성이 높아, 빈 중복 문서 생성을 원천 차단. 편입 단계의 생일 승격이 자연 병합 처리 */
-          if(!s.birthDate&&nameAny[s.name]){outIds.push(null);continue;}
+          if(!s.birthDate&&nameAny[s.name]){outIds.push(null);skipped.push(s.name);continue;}   /* 서버 생략 — 완료 창에 건수 표시 */
           const ref=doc(collection(db,'fc_clients'));
           const _nd=Object.assign({fcAuthUid:fcUid,fcLoginId:(typeof loginId!=='undefined'&&loginId)||'',contracts:inc.slice(0,20),createdAt:serverTimestamp()},core);
           _b.set(ref,_nd);_bn++;_ops.push({t:'set',ref:ref,data:_nd,name:s.name,idx:outIds.length});
@@ -6275,7 +6275,7 @@ window.fccBridge={
       }
       await _flush();
       if(_okN)try{localStorage.setItem('fcc_changed_at',String(Date.now()));}catch(_e){}   /* ★ [2026-08-31] 서버 반영 신호 — index.html 생일·상령일 팝업이 캐시 대신 재조회하도록 */
-      outIds.ok=_okN;outIds.fail=_failN;outIds.failed=failed;   /* ★ 배열에 결과 부가 — 기존 호출부(배열 사용)와 호환 유지. failed: [{name,code}] */
+      outIds.ok=_okN;outIds.fail=_failN;outIds.failed=failed;outIds.skip=skipped.length;outIds.skipped=skipped;   /* ★ 배열에 결과 부가 — 기존 호출부(배열 사용)와 호환 유지. failed: [{name,code}] */
       return outIds;
     }catch(e){console.warn('fccBridge.upsert',e);return null;}
   },
@@ -13686,6 +13686,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if(_emptyCols+_emptyExtra)_cols.push({from:"빈 열 "+(_emptyCols+_emptyExtra)+"개",to:"무시",n:0,note:"",extra:true,blank:true});
     var _nUpd=0;items.forEach(function(it){if(mpcFindByName(it.name))_nUpd++;});
     var _pre={src:mpcXlsxSrcName,nRows:rows.length,nNamed:_nAll,nGo:items.length,nNew:items.length-_nUpd,nUpd:_nUpd,nSkip:_dupSkip.length,fold:mpcFoldNote,cols:_cols,chk:_chk,gdOn:mpcGateFresh()};   /* ★ [2026-09-03] 실제 검문 결과 */
+    mpcUpTotals={named:_nAll,go:items.length,skip:_dupSkip.length,fold:mpcFoldNote};   /* 완료 창 대조용 */
     var _start=function(){
     mpcXlsxStop=false;mpcXlsxBusy=true;$("mpcXlsxProg").classList.add("show");$("mpcProgTit").textContent="고객 등록 중…";$("mpcProgFill").style.width="0%";$("mpcProgSub").textContent="0 / "+items.length;
     var i=0,geoOk=0,geoFail=0,geoApx=0,noAddr=0,nUp=0,nNew=0,nNoBirth=0,coreArr=[];   /* ★ [2026-07-24] 추정·주소미입력 분리 집계 */
@@ -13724,14 +13725,14 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
        변경: 지도 저장과 보조를 맞춰 200건마다 서버에 커밋 → 중단되어도 양쪽 숫자가 어긋나지 않는다.
        비용: 커밋 때마다 fccBridge.upsert가 기존 목록을 1회 조회하므로 읽기가 늘어난다.
              (2,000명 기준 약 9천 읽기) 중단 시 데이터 유실을 막는 값으로 감수한다. */
-    var CORE_FLUSH=200,corePend=[],srvOk=0,srvFail=0,srvFailed=[];   /* srvFailed: [{name,code}] — 실패한 사람만 */
+    var CORE_FLUSH=200,corePend=[],srvOk=0,srvFail=0,srvFailed=[],srvSkip=0,srvSkipped=[];   /* srvFailed: [{name,code}] — 실패한 사람만 */
     var coreOf=function(x){return {name:x.name,birthDate:x.birthDate,contracts:(x.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(y){return y.productName;})};};
     var flushCore=function(cb){
       if(!corePend.length||!window.fccBridge){cb&&cb();return;}
       var src=corePend.splice(0,corePend.length);
       var batch=src.map(function(x){return coreOf(x.core);});
       var fin=function(r){
-        if(r&&typeof r.ok==="number"){srvOk+=r.ok;srvFail+=r.fail||0;if(r.failed&&r.failed.length)srvFailed=srvFailed.concat(r.failed);}
+        if(r&&typeof r.ok==="number"){srvOk+=r.ok;srvFail+=r.fail||0;srvSkip+=r.skip||0;if(r.failed&&r.failed.length)srvFailed=srvFailed.concat(r.failed);if(r.skipped&&r.skipped.length)srvSkipped=srvSkipped.concat(r.skipped);}
         else if(r)srvOk+=batch.length;
         else{srvFail+=batch.length;batch.forEach(function(x){srvFailed.push({name:x.name,code:"upsert-null"});});}   /* 함수 자체가 실패(스냅샷 조회 등) → 묶음 전체 */
         /* ★ [2026-08-29] 서버 문서 id(fccId)를 지도 고객에 되돌려 저장한다.
@@ -13759,7 +13760,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           /* ★ [2026-09-03] 드라이브 저장 응답을 받은 뒤에만 완료 창. 실패면 성공할 때까지 재시도 안내 — "저장됐다"는 말은 드라이브가 답한 뒤에만 */
           try{$("mpcProgTit").textContent="드라이브에 저장하는 중…";$("mpcProgSub").textContent="응답을 기다리고 있어요";var _st=$("mpcProgStop");if(_st)_st.style.display="none";}catch(_e){}
           (function _gdTry(){mpcGdPushAwait().then(function(res){
-            mpcSrvFailed=srvFailed;
+            mpcSrvFailed=srvFailed;mpcSrvSkip=srvSkip;mpcSrvSkipped=srvSkipped;
             if(res==="ok"||res==="off"){mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,res);return;}
             if(confirm("드라이브에 저장되지 않았어요.\n고객 "+items.length+"명은 이 기기에는 등록됐지만 아직 드라이브에 없습니다.\n\n인터넷을 확인한 뒤 [확인]을 누르면 다시 저장을 시도합니다.\n[취소]하면 나중에 지도를 열 때 자동으로 다시 시도합니다."))_gdTry();
             else mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,res);
@@ -13845,7 +13846,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if($("mpcProgSub"))$("mpcProgSub").textContent="0 / "+list.length;
     step();
   }
-  var mpcFixRows=[],mpcSrvFailed=[];
+  var mpcFixRows=[],mpcSrvFailed=[],mpcSrvSkip=0,mpcSrvSkipped=[],mpcUpTotals=null;
   function mpcCopyText(t,cb){
     var done=function(ok){try{toast(ok?"복사했어요 — 메모장에 붙여 두면 파일 고칠 때 편해요":"복사가 안 됐어요 — 내용을 길게 눌러 직접 복사해 주세요",ok?"":"warn");}catch(_e){}if(cb)cb(ok);};
     try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){done(true);},function(){done(false);});return;}}catch(_e){}
@@ -13925,7 +13926,11 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpcUploadLog=mpcUploadLogOpen;   /* 고객입력 시트(module 스크립트)의 [업로드 이력] 버튼용 */
 
   function mpcXlsxDone2(nUp,nNew,nNoBirth,geoOk,geoFail,geoApx,noAddr,srvOk,srvFail,gdRes){mpcXlsxBusy=false;$("mpcXlsxProg").classList.remove("show");mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}if(gdRes!=="ok")mpcGdPush();   /* ★ [2026-09-03] 드라이브 저장은 호출부에서 응답까지 받았다 — 실패한 경우에만 백그라운드 재시도 */
-    var msg="업로드 완료\n· 갱신 "+nUp+"명 · 신규 "+nNew+"명";
+    var T=mpcUpTotals||{};
+    var msg="업로드 완료"
+      +"\n· 파일 "+(T.named!=null?T.named:(nUp+nNew))+"명 → 이 기기 등록 "+(nUp+nNew)+"명 (신규 "+nNew+" · 갱신 "+nUp+")"+(T.skip?(" · 제외 "+T.skip+"명"):"")
+      +"\n· 서버(내고객관리) 저장 "+srvOk+"명"+(srvFail?(" · 실패 "+srvFail+"명"):"")+(mpcSrvSkip?(" · 생략 "+mpcSrvSkip+"명"):"")
+      +"\n· 드라이브 백업 "+(gdRes==="ok"?"완료":(gdRes==="off"?"미연결":"실패"));   /* ★ [2026-09-03] 파일→기기→서버→드라이브 대조 요약 */
     if(mpcChkNote)msg+="\n\n📋 파일 점검 결과 (등록 전에 안내한 내용)\n"+mpcChkNote+"\n\n제외된 분은 파일에서 고친 뒤 그 분들만 다시 올려주세요 — 이름이 같으면 중복 없이 갱신됩니다.";   /* ★ [2026-09-03] 안 올라간 고객과 원인을 완료 창에 다시 표시 — 확인창을 무심코 닫아도 놓치지 않게. 병합(mpcFoldNote) 안내도 여기에 포함된다 */
     if(mpcNeedSkip)msg+="\n· 관심항목 중 표준 15개로 인식되지 않은 값 "+mpcNeedSkip+"건 — 그대로 저장되어 '직접 추가' 항목으로 표시됩니다";   /* ★ [2026-08-29] 조용한 유실 금지 */
     if(mpcExSkip)msg+="\n· ⚠️ 추가정보 상한(40개) 초과로 저장되지 않은 칼럼값 "+mpcExSkip+"건 — 불필요한 열을 줄여 다시 올리면 반영됩니다";   /* ★ [2026-07-28] 조용한 유실 금지 */
@@ -13941,7 +13946,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       msg+="\n\n🚨 서버 저장 실패 "+srvFail+"명 — 이 분들은 생일·만기 알림과 마이페이지 명단에서 빠집니다.\n    "+_sf+(srvFail>10?(" … 외 "+(srvFail-10)+"명"):"")+"\n    인터넷을 확인한 뒤 이 분들만 다시 올려주세요 (이름이 같으면 중복 없이 갱신됩니다). permission-denied 가 보이면 본사에 알려주세요.";
       (mpcSrvFailed||[]).forEach(function(x){mpcFixRows.push({row:"",name:x.name||"",field:"서버 저장",value:"",issue:"서버(내고객관리) 저장 실패 — "+(x.code||""),fix:"이 분만 다시 올리기. permission-denied 면 본사 문의"});});
     }
-    else if(srvOk)msg+="\n\n✅ 서버 저장 "+srvOk+"명 완료 — 생일·만기 알림과 마이페이지 명단에 반영됩니다.";
+    if(srvOk)msg+="\n\n✅ 서버 저장 "+srvOk+"명 완료 — 생일·만기 알림과 마이페이지 명단에 반영됩니다.";
+    if(mpcSrvSkip)msg+="\n· 서버 저장 생략 "+mpcSrvSkip+"명 — 생년월일이 없고 같은 이름이 이미 서버에 있어 새로 만들지 않았습니다 (같은 사람으로 보고 기존 명단 유지): "+(mpcSrvSkipped||[]).slice(0,8).join(" · ")+(mpcSrvSkip>8?(" … 외 "+(mpcSrvSkip-8)+"명"):"");
     /* ★ [2026-09-03] 드라이브 저장 결과 — 다른 기기·마이페이지에 보이려면 이 줄이 ✅ 여야 한다 */
     if(gdRes==="ok")msg+="\n☁ 드라이브 백업 완료 — PC·휴대폰·마이페이지에서 같은 목록을 보게 됩니다.";
     else if(gdRes==="off")msg+="\n\n⚠️ 드라이브가 연결되어 있지 않아 이 기기에만 저장됐습니다. 지도 상단에서 드라이브를 연결해 주세요.";
