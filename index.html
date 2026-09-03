@@ -1275,7 +1275,8 @@
   <div class="mdl-box" style="max-width:560px;padding:26px 24px">
     <button class="mdl-x" onclick="closeM('mdl-fcc-quick')">×</button>
     <h2 style="font-size:17px;font-weight:800;color:var(--primary);margin:0 0 4px">🎂 고객 생일·상령일</h2>
-    <p style="font-size:12px;color:#6B7280;margin:0 0 10px">오늘부터 60일간 예정 이벤트입니다. 행을 누르면 💬 안부 멘트를 바로 보낼 수 있습니다.</p>
+    <p style="font-size:12px;color:#6B7280;margin:0 0 10px">오늘부터 60일간 예정 이벤트입니다. <b>📞 문자</b>를 누르면 문자앱이 바로 열리고, <b>번호 등록</b>을 누르면 번호를 넣은 뒤 바로 보낼 수 있습니다.</p><!-- ★ [2026-09-03] 📞 배지 안내 -->
+    <div id="fcq-drive" style="display:none;font-size:11.5px;line-height:1.6;border-radius:8px;padding:7px 10px;margin-bottom:8px"></div><!-- ★ [2026-09-03] 연락처 동기화 상태 줄 — 정상은 회색 한 줄, 문제 시에만 버튼 -->
     <div id="fcq-mtabs" style="display:flex;gap:6px;margin-bottom:8px"></div><!-- ★ [2026-08-03] 전체(60일)·당월·익월 월 필터 탭 -->
     <div id="fcq-tabs" style="display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin-bottom:12px;padding-bottom:2px"></div><!-- ★ [2026-07-31] 전체·생일·상령일·만기 필터 탭 / [2026-08-03] 모바일 한 줄 유지 + 좌우 스크롤 -->
     <div id="fcq-months" onclick="fccMsgClick(event)"></div><!-- ★ [2026-07-31] 오늘부터 60일 롤링 — 월 블록 동적 생성 -->
@@ -8061,6 +8062,63 @@ function fccMonthEvents(Y,M){
   ev.sort((a,b)=>a.d-b.d);
   return ev;
 }
+/* ★ [2026-09-03] 📞 배지 — 이 기기에서 바로 발송 가능한 번호 보유 여부 캐시
+   번호 원천 2곳: ① jarvia-sms(SmsCore.exportNumbers · 이 기기에서 입력한 번호) ② mycustomers_db(jvMcAll · 드라이브 동기화분)
+   SmsCore.getNumber()가 ①→② 순으로 찾는 것과 동일 기준. null=미확인 → 기존 💬 멘트 표시 유지(안전 폴백) */
+let fcqPhones=null;
+let _jvMcLast='';   /* jvMcDriveSync 최근 결과: ''|'ok'|'nofile'|'fail' — 상태 줄 분기용 */
+async function fcqLoadPhones(){
+  try{
+    if(!window.SmsCore||typeof SmsCore.exportNumbers!=='function'){fcqPhones=null;return;}
+    const set=new Set();
+    try{(await SmsCore.exportNumbers()).forEach(x=>{if(x&&x.cid&&x.phone)set.add(x.cid);});}catch(_e){}
+    if(!jvMcIdx){try{await jvMcRead();}catch(_e){}}
+    (jvMcAll||[]).forEach(c=>{if(c&&c.fccId&&c.phone)set.add(c.fccId);});
+    fcqPhones=set;
+  }catch(_e){fcqPhones=null;}
+}
+function fcqBadge(cid){   /* 행 우측 배지 — 📞 문자(번호 있음) / 번호 등록(없음) / 💬 멘트(미확인·기존) */
+  if(!fcqPhones||(_jvMcLast==='fail'&&fcqPhones.size===0))return '<span class="fcq-pb" style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬 멘트</span>';   /* 미확인·동기화 실패로 판단 불가 → 기존 표시 */
+  if(cid&&fcqPhones.has(cid))return '<span class="fcq-pb" style="font-size:11px;font-weight:700;color:#1B3A5C;background:#EAF2FB;border:1px solid #C7DBF2;border-radius:10px;padding:2px 8px;flex-shrink:0;white-space:nowrap">📞 문자</span>';
+  return '<span class="fcq-pb" style="font-size:11px;font-weight:600;color:#6B7280;border:1px dashed #C5CAD6;border-radius:10px;padding:2px 8px;flex-shrink:0;white-space:nowrap">번호 등록</span>';
+}
+function fcqMarkPhone(cid){   /* 번호 등록 직후 해당 고객 행 배지를 📞로 즉시 갱신 */
+  try{
+    if(!cid)return;if(fcqPhones)fcqPhones.add(cid);
+    document.querySelectorAll('.fcc-al-row[data-cid="'+cid+'"] .fcq-pb').forEach(el=>{el.outerHTML=fcqBadge(cid);});
+    fcqDriveNote();
+  }catch(_e){}
+}
+function fcqDriveNote(){   /* 모달 상단 상태 줄 — 동기화 실패와 번호 없음을 반드시 구분해 표시 */
+  const el=$('fcq-drive');if(!el)return;
+  if(!window.SmsCore||!fcqPhones){el.style.display='none';return;}
+  const all=(fccCache||[]).filter(c=>c&&c.id);const tot=all.length;const have=all.filter(c=>fcqPhones.has(c.id)).length;const miss=tot-have;
+  const B=(fn,tx)=>'<button type="button" onclick="'+fn+'" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7DBF2;border-radius:6px;cursor:pointer">'+tx+'</button>';
+  const k=new Date(Date.now()+9*3600000);const hm=String(k.getUTCHours()).padStart(2,'0')+':'+String(k.getUTCMinutes()).padStart(2,'0');
+  let html='',bg='#F3F4F6',fg='#6B7280';
+  if(_jvMcLast==='fail'){
+    if(have===0){bg='#FCEBEB';fg='#791F1F';html='⛔ 드라이브 확인 실패 — 이 기기엔 아직 연락처가 없습니다.'+B('fcqSyncNow()','다시 시도')+B("jvGoFc('')",'고객입력 열기');}
+    else{bg='#FEF7E0';fg='#8B6914';html='☁ 동기화 실패 — 다른 기기에서 넣은 번호가 반영되지 않았을 수 있습니다 · 번호 있는 고객 '+have+'/'+tot+'명'+B('fcqSyncNow()','다시 시도');}
+  }else if(_jvMcLast==='nofile'){
+    bg='#FEF7E0';fg='#8B6914';html='☁ 드라이브 백업 전 — 고객입력에서 저장하면 어느 기기서든 자동 복원됩니다 · 번호 있는 고객 '+have+'/'+tot+'명';
+  }else if(miss>0){
+    bg='#FEF7E0';fg='#8B6914';html='⚠ 번호 없는 고객 '+miss+'명 · 다른 기기에서 입력했다면'+B('fcqSyncNow()','지금 동기화');
+  }else{
+    html='☁ 연락처 최신 · '+tot+'명 준비됨 · '+hm;
+  }
+  el.style.display='block';el.style.background=bg;el.style.color=fg;el.innerHTML=html;
+}
+window.fcqSyncNow=async function(){   /* [지금 동기화]·[다시 시도] — 강제 동기화 후 배지·상태 줄 재렌더 */
+  if(window._jvSyncing)return;window._jvSyncing=true;
+  const el=$('fcq-drive');if(el){el.style.display='block';el.style.background='#F3F4F6';el.style.color='#6B7280';el.innerHTML='☁ 내 드라이브에서 연락처를 가져오는 중… 잠시만요';}
+  try{
+    try{await jvMcDriveSync(true);}catch(_e){}
+    try{await jvMcRead();}catch(_e){}
+    await fcqLoadPhones();
+    try{fcqRender();}catch(_e){}
+    fcqDriveNote();
+  }finally{window._jvSyncing=false;}
+};
 function fccRenderMonthInto(elId,Y,M,opts){   /* ★ [2026-07-31] opts 선택 인자: {kinds:['생일'|'상령일'|'만기'], fromD:일} — 미지정 시 기존 동작 동일 */
   const el=$(elId);if(!el)return 0;
   const t=fccToday();let ev=fccMonthEvents(Y,M);
@@ -8080,7 +8138,7 @@ function fccRenderMonthInto(elId,Y,M,opts){   /* ★ [2026-07-31] opts 선택 �
       +'<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+e.bg+';color:'+e.fg+'">'+_badge+(isToday?' 오늘':'')+'</span>'
       +'<span style="font-size:13px;font-weight:700;color:#1F2937">'+fccEsc(e.n)+'</span>'
       +'<span style="font-size:12px;color:#6B7280;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fccEsc(e.sub)+'</span>'
-      +'<span style="font-size:11px;color:#9CA3AF;flex-shrink:0">💬 멘트</span>'
+      +fcqBadge(e.cid||'')   /* ★ [2026-09-03] 📞 문자 / 번호 등록 / 💬 멘트(미확인) */
       +'</div>';
   };
   let html='';
@@ -8353,6 +8411,7 @@ window.fccSmsSend=async function(ed,ta,cid){
     }
     if(!phone||phone.length<9){toast('번호 형식을 확인해 주세요.','error');return;}
     try{await SmsCore.setNumber(cid,phone);}catch(_e){}
+    try{fcqMarkPhone(cid);}catch(_e){}   /* ★ [2026-09-03] 행 배지 즉시 📞로 */
   }
   // 안전 발송 한도 확인 → 본인 문자앱 열기
   const r=await SmsCore.sendOne(phone,body);
@@ -8374,6 +8433,7 @@ async function loadFcAlertBoard(){
     if(!_ok){b.classList.add('hidden');return;}
     await fccFetch();
     if(!fccBoardY){const t=fccToday();fccBoardY=t.y;fccBoardM=t.m;}
+    await fcqLoadPhones();   /* ★ [2026-09-03] 알림보드 행에도 📞 배지 */
     fccRenderBoard();
     try{
       const _t=fccToday();
@@ -8474,9 +8534,14 @@ window.fccQuickList=async function(){
   if(box)box.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:2px 0">불러오는 중...</div>';
   try{await fccFetch();}
   catch(e){console.error('fccQuickList error:',e);if(box)box.innerHTML='<div style="font-size:12px;color:#DC2626;padding:2px 0">고객 정보를 불러오지 못했습니다.</div>';return;}
+  /* ★ [2026-09-03] 연락처 자동 준비 — 드라이브 동기화(60초 스로틀·변경 없으면 다운로드 0) → 번호 캐시 → 📞 배지 */
+  try{await jvMcDriveSync(false);}catch(_e){}
+  try{await jvMcRead();}catch(_e){}
+  await fcqLoadPhones();
   fcqKind='';   /* ★ [2026-07-31] 모달 열 때마다 '전체' 탭으로 초기화 */
   fcqMonth='';  /* ★ [2026-08-03] 월 필터도 '전체(60일)'로 초기화 */
   fcqRender();
+  fcqDriveNote();   /* ★ [2026-09-03] 상태 줄 */
 };
 /* ★ [2026-07-31] 퀵 모달 탭 필터 — 전체·생일·상령일·만기 / 오늘 이후만 표시(지난 일정 접기) */
 let fcqKind='';   /* '' | '생일' | '상령일' | '만기' */
@@ -8878,7 +8943,7 @@ async function _jvMcToken(){
 async function jvMcDriveSync(force){
   const lid=(meData&&meData.loginId)||'';if(!me||!lid)return false;   /* meData 미로드 시 다음 호출에서 재시도 */
   if(!force&&(Date.now()-_jvMcChkAt)<60000)return false;   /* 60초 내 재확인 생략 — 수동 버튼(force)은 통과 */
-  _jvMcChkAt=Date.now();
+  _jvMcChkAt=Date.now();_jvMcLast='ok';   /* ★ [2026-09-03] 퀵 모달 상태 줄용 결과 플래그 */
   const el=$('fcc-drive-note');
   const note=(t,c)=>{if(el){el.style.display='block';el.style.color=c||'#1B3A5C';el.innerHTML=t;}};
   try{
@@ -8888,7 +8953,7 @@ async function jvMcDriveSync(force){
     /* 1) 메타만 조회 — 마지막 동기화와 같으면 여기서 종료 (파일 다운로드 0) */
     const fr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='내고객.safe' and trashed=false")+'&fields=files(id,modifiedTime)&orderBy=modifiedTime desc&pageSize=1')).json();
     const ff=(fr.files||[])[0];
-    if(!ff){note('☁ 드라이브에 고객 백업이 아직 없습니다 — <b>고객입력</b>에서 저장하면 자동 생성됩니다.','#8B6914');return false;}
+    if(!ff){_jvMcLast='nofile';note('☁ 드라이브에 고객 백업이 아직 없습니다 — <b>고객입력</b>에서 저장하면 자동 생성됩니다.','#8B6914');return false;}
     let lastMt='';try{lastMt=localStorage.getItem(_jvMcMtKey())||'';}catch(_e){}
     if(!force&&jvMcState==='ok'&&ff.modifiedTime===lastMt){_jvMcNoteOk('최신 상태');return false;}
     /* 2) 복호화 열쇠 (세션 캐시) */
@@ -8916,7 +8981,7 @@ async function jvMcDriveSync(force){
     _jvMcNoteOk('동기화됨 — 고객 '+list.length+'명 상세');
     return true;
   }catch(e){
-    console.warn('[mypage] drive sync:',e&&e.message);
+    console.warn('[mypage] drive sync:',e&&e.message);_jvMcLast='fail';   /* ★ [2026-09-03] */
     if(jvMcState==='ok'){   /* 상세가 이미 있는 기기 — 확인 실패만 조용히 알리고 기존 표시는 유지 */
       note('☁ 드라이브 확인에 실패했습니다 — 지금 표시는 이 기기의 마지막 동기화 기준입니다. <button type="button" onclick="jvMcSyncNow()" style="margin-left:6px;padding:3px 10px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:7px;cursor:pointer">다시 시도</button>','#8B6914');
     }else{
