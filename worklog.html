@@ -250,6 +250,13 @@ input::placeholder,textarea::placeholder{color:#C7D0DC;opacity:1}
 .ckyb small{font-size:9px;color:var(--mut)}
 /* ★ [2026-09-03] 출근 현황 — 전용 뷰 (개인·팀·지점 / 일자별·월별) */
 .ckstGo{width:100%;margin-top:10px;padding:12px;border:1.5px solid var(--navy);border-radius:11px;background:#fff;color:var(--navy);font-size:13.5px;font-weight:800;font-family:inherit}
+/* ★ [2026-09-05] 홈 빠른 실행 바 — 팀장·지점장 전용 (공지·코멘트·출근 현황) */
+.hmAct{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}
+.hmAct button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:11px 4px;border:1px solid var(--line2);border-radius:11px;background:#fff;box-shadow:var(--shSm);font-family:inherit;color:var(--sub);min-height:56px}
+.hmAct button .e{font-size:16px;line-height:1}
+.hmAct button .l{font-size:11.5px;font-weight:800;letter-spacing:-.2px}
+.hmAct button.pri{background:var(--navy);border-color:var(--navy);color:#fff}
+.hmAct button:disabled{opacity:.55}
 .ckstT{display:flex;gap:6px;margin-bottom:8px}
 .ckstT button{flex:1;border:1px solid var(--line2);background:#fff;color:var(--sub);border-radius:10px;padding:9px 0;font-size:12.5px;font-weight:800;font-family:inherit}
 .ckstT button.on{background:var(--navy);border-color:var(--navy);color:#fff}
@@ -865,6 +872,7 @@ textarea.ag{overflow:hidden;min-height:48px}
     <div class="hello"><h2 id="hmDate"></h2></div>
     <div id="hmOrgBan"></div>   <!-- ★ [2026-09-01] 조직 해제 배너 -->
     <div id="hmMsg" style="display:none"></div>   <!-- ★ [2026-09-01] 받은 메시지 -->
+    <div class="hmAct" id="hmAct" style="display:none"></div>   <!-- ★ [2026-09-05] 팀장·지점장 빠른 실행 (공지·코멘트·출근 현황) -->
     <div class="strat" id="hmStrat" onclick="wlStOpen()"></div>
     <div class="upStrat" id="hmUpStrat" style="display:none"></div>   <!-- ★ [2026-09-02] 지점·팀 전략 (상위자 작성, 읽기) -->
     <div class="org" id="hmOrg" style="display:none"></div>   <!-- ★ [2026-09-01] 조직 카드 -->
@@ -1347,7 +1355,7 @@ async function loadOrgMe(){
     const r=await httpsCallable(fns,'wlOrgView')({mode:'me',ym:_ym});
     _orgMe=(r.data&&r.data.success)?r.data:null;
   }catch(e){console.warn('org',e);_orgMe=null;}
-  if(_view==='vHome')renderOrgCard();
+  if(_view==='vHome'){renderOrgCard();renderHomeAct();}   /* ★ [2026-09-05] isUpline 확정 시점에 빠른 실행 바 갱신 */
   /* 팀 탭 노출 — 팀장·지점장(하위 있거나 직책 설정) */
   const up=!!(_orgMe&&_orgMe.isUpline);const tb=$('tabTeam');if(tb)tb.style.display=up?'':'none';$('tabbar').classList.toggle('svn',up);
 }
@@ -2515,7 +2523,7 @@ async function loadInbox(){
     const qs=await getDocs(query(collection(db,'wl_msgs'),where('toUids','array-contains',me.uid),orderBy('createdAt','desc'),limit(50)));
     _inbox=qs.docs.map(d=>({id:d.id,...d.data()}));
   }catch(e){console.warn('inbox',e);_inbox=_inbox||[];}
-  if(_view==='vHome')renderHomeMsg();
+  if(_view==='vHome'){renderHomeMsg();renderHomeAct();}   /* ★ [2026-09-05] 빠른 실행 바 */
   if(_view==='vMsg')renderMsg();
 }
 async function loadSent(){
@@ -2544,6 +2552,26 @@ function msgRow(m,box){
     <div class="in"><div class="t${un?' un':''}">${esc(m.kind==='notice'?(m.title||'(제목 없음)'):(m.text||'').split('\n')[0])}<span class="kd ${k}">${kindKo[k]}</span></div>
     <div class="s">${who} · ${fmtDT(m.createdAt)}${readN}${alim}</div>${m.kind==='notice'&&m.text?`<div class="p">${esc(m.text)}</div>`:''}</div></div>`;
 }
+/* ★ [2026-09-05] 홈 빠른 실행 바 — 팀장·지점장만 노출
+   · 공지·코멘트는 기존 wlMsgCompose() 재사용 (내부에서 _team 미로드 시 자동 로드)
+   · 첫 클릭 시 조직 조회 지연이 있을 수 있어 busy 표시 */
+function renderHomeAct(){
+  const el=$('hmAct');if(!el)return;
+  if(!(_orgMe&&_orgMe.isUpline)){el.style.display='none';el.innerHTML='';return;}
+  el.style.display='';
+  el.innerHTML=`<button type="button" class="pri" id="hmActN" onclick="wlHmAct('notice')"><span class="e">📣</span><span class="l">공지 보내기</span></button>
+    <button type="button" id="hmActC" onclick="wlHmAct('comment')"><span class="e">💬</span><span class="l">코멘트</span></button>
+    <button type="button" onclick="wlCkStOpen()"><span class="e">📊</span><span class="l">출근 현황</span></button>`;
+}
+window.wlHmAct=async function(kind){
+  const b=$(kind==='notice'?'hmActN':'hmActC');
+  if(b&&b.disabled)return;
+  const bn=$('hmActN'),bc=$('hmActC');
+  if(bn)bn.disabled=true;if(bc)bc.disabled=true;
+  if(b)b.querySelector('.l').textContent='여는 중…';
+  try{await wlMsgCompose(kind);}catch(e){console.warn('hmAct',e);toast('열지 못했습니다');}
+  renderHomeAct();
+};
 function renderHomeMsg(){
   const el=$('hmMsg');if(!el)return;
   const L=_inbox||[];
@@ -3075,7 +3103,7 @@ function renderHome(){
   $('hmDate').textContent=(d.getUTCMonth()+1)+'월 '+d.getUTCDate()+'일 '+W+'요일';
   renderStrat('hmStrat',_ym);
   renderOrgCard();   /* ★ [2026-09-01] */
-  renderHomeMsg();   /* ★ [2026-09-01] */
+  renderHomeMsg();renderHomeAct();   /* ★ [2026-09-01] · ★ [2026-09-05] 빠른 실행 바 */
   ckiSync();   /* ★ [2026-09-02] */
   renderLedger();
   /* 영업 흐름 (이번 달) */
