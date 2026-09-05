@@ -20739,10 +20739,16 @@ function imStatusHtml(d){
 }
 function imAudioHtml(d){
   const a=d.audio||{};const n=(d.step6&&d.step6.ttsCount)||a.count||0;const total=a.total||9;
+  const upd=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;const ago=upd?Math.round((Date.now()-upd)/60000):null;
   if(a.status==='done')return `<span style="color:#1a7a4a">🔊 ${n}/${total}</span>`;
-  if(a.status==='partial')return `<span style="color:#E65100">🔊 ${n}/${total} 일부</span>`;
+  if(a.status==='partial')return `<span style="color:#E65100">🔊 ${n}/${total} 일부</span> <button class="btn btn-sm" style="background:#888" onclick="imAudio('${d._id}')">재생성</button>`;
   if(a.status==='failed')return `<span style="color:#C62828">🔊 실패</span> <button class="btn btn-sm" style="background:#888" onclick="imAudio('${d._id}')">재생성</button>`;
-  if(a.status==='running'||a.status==='queued')return `<span style="color:#1565C0">🔊 생성 중${n?` ${n}/${total}`:''}</span>`;
+  if(a.status==='running'||a.status==='queued'){
+    // 진행률: substatus "🔊 6a 낭독 원고 3/9" / "🔊 6b 음성 생성 4/9 (s3)" 에서 파싱 → 바 표시. 15분 이상 갱신 없으면 정지 의심 + 재생성 버튼
+    const m=String(d.substatus||'').match(/(6a|6b)[^\d]*(\d+)\/(\d+)/);const phase=m?(m[1]==='6a'?'원고':'음성'):'준비';const cur=m?+m[2]:0;const tot=m?+m[3]:9;const pct=Math.round(cur/tot*100);
+    const stale=ago!==null&&ago>=15;
+    return `<div style="min-width:150px"><div style="font-size:12px;color:${stale?'#C62828':'#1565C0'}">🔊 ${phase} ${cur}/${tot}${ago!==null?` <span style="color:#999">· ${ago}분 전</span>`:''}</div><div style="background:#eee;border-radius:4px;height:6px;width:130px;overflow:hidden;margin-top:3px"><div style="background:${stale?'#C62828':'#1565C0'};height:100%;width:${pct}%"></div></div>${stale?`<div style="font-size:11px;color:#C62828;margin-top:2px">갱신 없음 — <button class="btn btn-sm" style="background:#888;padding:2px 6px" onclick="imAudio('${d._id}')">재생성</button></div>`:''}</div>`;
+  }
   return n?`🔊 ${n}/${total}`:'';
 }
 function imApprovalHtml(d){
@@ -20853,7 +20859,7 @@ async function imOpen(id){
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${id}')">↻ 재시도${(st.endsWith('_running'))?' (정지 시)':''}</button>`:'',
       d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a class="btn btn-sm" href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">🔗 회원 화면으로 열기</a>`:'',
       d.step5&&d.step5.html?`<a class="btn btn-sm" style="background:#455A64" href="${IM_BASE}/imAdmin?key=${IM_API_KEY}&action=download&id=${id}">⬇ HTML 다운로드</a> <button class="btn btn-sm" style="background:#455A64" onclick="imUploadPick('${id}')">⬆ 수정본 업로드</button>`:'',
-      d.step4&&d.step4.finalBody&&!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
+      d.step4&&d.step4.finalBody&&(!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))||(d.updatedAt&&d.updatedAt.toMillis&&(Date.now()-d.updatedAt.toMillis())>15*60*1000))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
       d.audio&&(d.audio.status==='running'||d.audio.status==='queued')?`<span style="font-size:12px;color:#1565C0">🔊 음성 생성 중 — ${esc(d.substatus||'')}</span>`:''].filter(Boolean).join(' ')||'<span style="color:#888;font-size:12px">진행 중 — 조작 가능 상태 아님</span>';
     const attn=(d.step7&&d.step7.needsAttention)||[];const err=d.error?[`오류: ${d.error}`]:[];const w1=(d.step1b&&d.step1b.warnings)||[];
     const lines=[...err,...attn,...(attn.length?[]:w1)];
