@@ -20412,7 +20412,9 @@ function imStatusHtml(d){
   if(st==='ready')return '<span style="color:#1a7a4a;font-weight:700">ready</span><div style="font-size:11px;color:#1a7a4a">검수 대기</div>';
   if(st==='published')return '<span style="color:#1565C0;font-weight:700">published</span>';
   if(st.startsWith('needs_'))return `<span style="color:#E65100;font-weight:700">${esc(st)}</span><div style="font-size:11px;color:#E65100;max-width:220px;white-space:normal">${esc(d.substatus||'')}</div>`;
-  return `<span>${esc(st)}</span>${d.substatus?`<div style="font-size:11px;color:#888">${esc(d.substatus)}</div>`:''}`;
+  // 실행 중 상태가 20분 이상 갱신 없으면 정지 의심 표시 (updatedAt 기준)
+  const upd=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;const stale=st.endsWith('_running')&&upd&&(Date.now()-upd)>20*60*1000;
+  return `<span${stale?' style="color:#C62828;font-weight:700"':''}>${esc(st)}</span>${stale?`<div style="font-size:11px;color:#C62828">⚠ ${Math.round((Date.now()-upd)/60000)}분 정지 — 재시도 권장</div>`:(d.substatus?`<div style="font-size:11px;color:#888">${esc(d.substatus)}</div>`:'')}`;
 }
 function imApprovalHtml(d){
   const a=d.approval&&d.approval.status;
@@ -20432,7 +20434,7 @@ async function imLoad(){
       const ctl=[`<button class="btn btn-sm" onclick="imOpen('${d._id}')">상세</button>`,
         st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${d._id}')">승인</button>`:'',
         st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${d._id}')">즉시 게시</button>`:'',
-        (st==='error'||st.startsWith('needs_'))?`<button class="btn btn-sm" style="background:#E65100" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
+        (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
     // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
@@ -20479,9 +20481,10 @@ async function imAct(action,id){
 }
 async function imRetry(id){
   const d=_imRows.find(x=>x._id===id)||{};
-  const guess=(d.errorDetail&&d.errorDetail.job&&(String(d.errorDetail.job).match(/step[1-7]b?/)||[''])[0])||'';
+  const guess=(d.errorDetail&&d.errorDetail.job&&(String(d.errorDetail.job).match(/step[1-7]b?/)||[''])[0])||((String(d.status||'').match(/^(step[1-7]b?)_running$/)||[])[1])||'';
   const from=prompt('재시작 단계 (비우면 실패 단계부터):\nstep1 설계도 / step1b 근거 / step2 집필 / step3 검증 / step4 마무리 / step5 HTML / step6 음성 / step7 카드',guess);
   if(from===null)return;
+  if(String(d.status||'').endsWith('_running')&&!confirm('실행 중 상태입니다. 정말 멈춘 것이 확실할 때만 재시도하세요(진행 중이면 중복 실행 위험).\n계속할까요?'))return;
   try{const r=await imApi({action:'retry',id,from:from.trim()});toast('재시도 시작: '+r.restartedFrom,'success');setTimeout(imLoad,1500);}
   catch(e){toast('재시도 실패: '+e.message,'error');}
 }
@@ -20495,7 +20498,7 @@ async function imOpen(id){
       st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${id}')">✔ 승인</button>`:'',
       st==='ready'?`<button class="btn btn-sm" style="background:#C62828" onclick="imAct('reject','${id}')">✖ 반려</button>`:'',
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${id}')">🚀 즉시 게시</button>`:'',
-      (st==='error'||st.startsWith('needs_'))?`<button class="btn btn-sm" style="background:#E65100" onclick="imRetry('${id}')">↻ 재시도</button>`:'',
+      (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${id}')">↻ 재시도${(st.endsWith('_running'))?' (정지 시)':''}</button>`:'',
       d.step5&&d.step5.htmlUrl?`<a class="btn btn-sm" href="${d.step5.htmlUrl}" target="_blank">HTML 원본</a>`:''].filter(Boolean).join(' ')||'<span style="color:#888;font-size:12px">진행 중 — 조작 가능 상태 아님</span>';
     const attn=(d.step7&&d.step7.needsAttention)||[];const err=d.error?[`오류: ${d.error}`]:[];const w1=(d.step1b&&d.step1b.warnings)||[];
     const lines=[...err,...attn,...(attn.length?[]:w1)];
