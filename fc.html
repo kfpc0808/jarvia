@@ -1263,6 +1263,7 @@ const fns=getFunctions(app,'asia-northeast3');
 const qzDiag=httpsCallable(fns,'quizDiagnose');
 const setLifeRequestProgressFn=httpsCallable(fns,'setLifeRequestProgress');
 const deleteLifeChangeRequestFn=httpsCallable(fns,'deleteLifeChangeRequest');
+const sendMeetingConfirmFn=httpsCallable(fns,'sendMeetingConfirm');   /* ★ [2026-09-05] 미팅예약 확정 알림 (고객 수신 · 마이파트너 채널) */
 
 // URL 파라미터에서 loginId 추출 (3중 방어: pathname 직접 파싱 → ?id → ?fc)
 // 1) location.pathname에서 /@xxx 패턴 직접 추출 (redirect splat 캡처 실패 시 백업)
@@ -3297,6 +3298,7 @@ const phoneClean=(r.phone||'').replace(/\D/g,'');
       ${lcReqSection(r)}
       ${insReqSection(r)}
       ${qzReqSection(r)}
+      ${bkReqSection(r)}
       ${r.quizLogId?'<div id="fcrAiBox" style="margin-bottom:14px"></div>':''}
       ${r.message?`<div style="margin-bottom:14px;background:#F7F8FA;border-left:3px solid var(--gold);padding:10px 12px;border-radius:0 7px 7px 0">
         <div style="font-size:10px;font-weight:700;color:var(--gold-dark);margin-bottom:4px">💬 고객 메시지</div>
@@ -3317,6 +3319,7 @@ const phoneClean=(r.phone||'').replace(/\D/g,'');
   if(r.quizLogId){getDoc(doc(db,'quiz_logs',r.quizLogId)).then(snap=>{const box=$('fcrAiBox');if(!box)return;if(snap.exists()){const dl=snap.data();box.innerHTML=fcrAiHtml(dl.ai1,dl.ai2);}else{box.remove();}}).catch(()=>{const box=$('fcrAiBox');if(box)box.remove();});}
   lcWireAdminDetail(r,reqId);
   insWireAdminDetail(r,reqId);
+  bkWireAdminDetail(r,reqId);   /* ★ [2026-09-05] 미팅예약 확정 */
   // 상태 변경
   $('requestDetailBox').querySelectorAll('.statusBtn').forEach(b=>{
     b.addEventListener('click',async()=>{
@@ -3523,6 +3526,62 @@ function lcWireAdminDetail(r,reqId){if(r.source!=='life_change')return;lcLoadFil
 /* ═══ 🛡️ 내 보험 정리 — 상담요청 상세 섹션 (2026-08-08) ═══
    고객이 "공유하기"로 보낸 보험 포트폴리오를 컨설턴트가 여기서 확인하고,
    버튼 클릭 한 번으로 "내 고객" 로컬 레코드에 병합한다(별도 수락/동의 절차 없음 — 열어보는 행위 자체가 확인). */
+/* ═══════════════════════════════════════════════════════════════
+   ★ [2026-09-05] 미팅예약 확정 — 컨설턴트가 일시를 확정하고 고객에게 알림톡을 보낸다.
+     · 발신은 KFPC 마이파트너 채널(서버 sendMeetingConfirm) — 고객에게 자비아가 드러나지 않는다
+     · 수신번호는 서버가 문서에서 읽는다(30일 경과로 삭제됐으면 서버가 안내)
+     · 컨설턴트 포인트 20P 차감 · 알림톡 실패 시 문자 대체
+   ═══════════════════════════════════════════════════════════════ */
+function bkReqSection(r){
+  if(r.source!=='meeting')return '';
+  const times=Array.isArray(r.preferredTimes)?r.preferredTimes.filter(Boolean):[];
+  const confirmed=r.bookingStatus==='confirmed';
+  const notify=r.confirmNotify||null;
+  const chLabel={alimtalk:'알림톡',sms:'문자'};
+  return `<div style="margin-bottom:14px;background:#F7F9FC;border:.5px solid #D6E0FF;border-radius:8px;padding:11px 12px">
+    <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:6px;letter-spacing:.3px">📅 미팅 예약 ${confirmed?'<span style="margin-left:6px;padding:2px 8px;background:#E6F5F0;color:#0A7B61;border-radius:9px;font-size:9.5px">확정됨</span>':'<span style="margin-left:6px;padding:2px 8px;background:#FFF8E7;color:#8B6914;border-radius:9px;font-size:9.5px">확정 대기</span>'}</div>
+    <div style="font-size:11px;line-height:1.7;color:var(--text)">
+      <div>방식: <b>${esc(r.meetingTypeLabel||'-')}</b> · <b>${esc(r.meetingPlaceLabel||'-')}</b></div>
+      ${times.length?`<div>희망 일시:${times.map((t,i)=>`<div style="padding-left:8px">${i+1}. ${esc(t)}</div>`).join('')}</div>`:''}
+      ${confirmed?`<div style="margin-top:6px;padding:8px 10px;background:#fff;border-radius:6px;border:.5px solid var(--border)">
+        <div>확정 일시: <b>${esc(r.confirmedTime||'-')}</b></div>
+        ${r.confirmedPlace?`<div>장소·안내: ${esc(r.confirmedPlace)}</div>`:''}
+        ${notify?`<div style="font-size:10px;color:var(--text-sub);margin-top:3px">고객 알림 ${chLabel[notify.channel]||notify.channel} 발송 · ${notify.cost||0}P</div>`:''}
+      </div>`:''}
+    </div>
+    ${confirmed?'':`<div style="margin-top:9px;display:grid;gap:6px">
+      <input id="bkConfirmTime" placeholder="확정 일시 — 예: 9월 8일(월) 오후 2:00" maxlength="60" style="width:100%;padding:8px 10px;border:.5px solid var(--border);border-radius:6px;font-size:11px;font-family:inherit;outline:none">
+      <input id="bkConfirmPlace" placeholder="${r.meetingPlace==='visit'?'방문 장소 — 예: 강남 사무실 3층':(r.meetingPlace==='phone'?'예: 확정 시각에 전화드립니다':'예: 화상 링크는 문자로 보내드립니다')}" maxlength="80" style="width:100%;padding:8px 10px;border:.5px solid var(--border);border-radius:6px;font-size:11px;font-family:inherit;outline:none">
+      <button id="bkConfirmSendBtn" type="button" style="padding:9px 12px;background:var(--navy);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">고객에게 예약 확정 알림 보내기 (20P)</button>
+      <div style="font-size:9.5px;color:var(--text-sub);line-height:1.6">고객 카톡으로 확정 일시가 전송됩니다. 알림톡이 안 되면 문자로 대체됩니다.</div>
+    </div>`}
+  </div>`;
+}
+function bkWireAdminDetail(r,reqId){
+  if(r.source!=='meeting')return;
+  const btn=$('bkConfirmSendBtn');if(!btn)return;
+  /* 희망 일시 1번을 확정 칸 기본값으로 — 대부분 그대로 확정한다 */
+  const t0=Array.isArray(r.preferredTimes)?(r.preferredTimes.filter(Boolean)[0]||''):'';
+  const timeEl=$('bkConfirmTime');if(timeEl&&t0&&!timeEl.value)timeEl.value=t0;
+  btn.onclick=async()=>{
+    const confirmedTime=(($('bkConfirmTime')||{}).value||'').trim();
+    const placeDetail=(($('bkConfirmPlace')||{}).value||'').trim();
+    if(!confirmedTime){toast('확정 일시를 입력해 주세요','warning');return;}
+    if(!confirm(`고객에게 예약 확정 알림을 보냅니다.\n\n일시: ${confirmedTime}\n${placeDetail?('장소·안내: '+placeDetail+'\n'):''}\n포인트 20P가 차감됩니다. 진행할까요?`))return;
+    btn.disabled=true;btn.textContent='발송 중...';
+    try{
+      const res=await sendMeetingConfirmFn({requestId:reqId,confirmedTime,placeDetail});
+      const ch=(res&&res.data&&res.data.channel)||'';
+      toast(ch==='alimtalk'?'고객에게 알림톡으로 발송했습니다':'알림톡 대신 문자로 발송했습니다','success');
+      $('requestDetailModal').classList.remove('active');
+      await refreshRequestList('all');
+    }catch(e){
+      btn.disabled=false;btn.textContent='고객에게 예약 확정 알림 보내기 (20P)';
+      toast('발송 실패: '+(e&&e.message||'오류'),'error');
+    }
+  };
+}
+
 function insReqSection(r){
   if(r.source!=='insurance_portfolio')return '';
   const rows=(r.policies||[]);
