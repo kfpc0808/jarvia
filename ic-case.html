@@ -90,6 +90,9 @@ a{color:inherit;text-decoration:none}
 .sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
 .sw.on::after{left:21px}
 
+.fileb{display:flex;align-items:center;gap:10px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:11px 14px;font-size:13px;margin-top:8px;cursor:pointer}
+.fileb:hover{border-color:var(--gray-l)}
+.fileb .exp{font-size:11px;color:var(--warn);font-weight:700;white-space:nowrap}
 .tblw{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:600px}
 .tbl th{text-align:left;font-size:11px;font-weight:600;color:var(--gray-l);letter-spacing:.04em;padding:0 12px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -159,7 +162,11 @@ const CST={received:['신규','st-wt'],ongoing:['진행중','st-rn'],done_pendin
 const STEPS=['자료 검토 중','추가자료 요청','고객 미팅 예정','검토 완료','제안서 작성','계약 협의'];
 const ROLE={fc:'컨설턴트',expert:'나',admin:'본사'};
 
-let K='',CASE=null,TL=[],EXPERT=null;
+let K='',CASE=null,TL=[],FILES=[],EXPERT=null;
+const FILE_ACCEPT='.pdf,.jpg,.jpeg,.png,.gif,.webp,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.zip';
+const FILE_MAX=20*1024*1024;
+const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+'MB':Math.ceil(b/1024)+'KB';
+const fileLeft=ms=>ms?Math.max(0,Math.ceil((ms-Date.now())/86400000)):null;
 
 /* ═══ 진입 ═══ */
 (async function boot(){
@@ -172,7 +179,7 @@ let K='',CASE=null,TL=[],EXPERT=null;
   try{
     const r=await fetch(VERIFY_URL+'?k='+encodeURIComponent(K)).then(x=>x.json());
     if(!r.success){fail(r.error||'확인에 실패했습니다.','본사에 문의해 주세요.\n박신제 본부장 010-5244-1467');return;}
-    CASE=r.case;TL=r.timeline||[];EXPERT={id:r.expertId,name:r.expertName};
+    CASE=r.case;TL=r.timeline||[];FILES=r.files||[];EXPERT={id:r.expertId,name:r.expertName};
     $('hd-me').textContent=(r.expertName||'')+' 님';
     renderCase();
   }catch(e){
@@ -231,6 +238,19 @@ function renderCase(){
     +(c.problem?'<div class="dcard"><div class="lbl">상담 내용</div>'
       +'<div style="font-size:14px;line-height:1.95;white-space:pre-line;color:#2E3644">'+esc(c.problem)+'</div></div>':'')
 
+    +'<div class="dcard"><div class="lbl">첨부 자료</div>'
+    +(FILES.length
+      ?FILES.map(f=>'<div class="fileb" data-fid="'+esc(f.id)+'">'
+        +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</span>'
+        +'<span style="font-size:11px;color:var(--gray-l)">'+esc(f.uploadedBy==='expert'?'내가 올림':'컨설턴트')+' · '+fmtSize(f.size)+'</span>'
+        +(fileLeft(f.deleteAt)!==null?'<span class="exp">D-'+fileLeft(f.deleteAt)+'</span>':'')+'</div>').join('')
+      :'<div style="font-size:12.5px;color:var(--gray-l);padding:6px 0">첨부된 자료가 없습니다</div>')
+    +(closed?''
+      :'<div style="margin-top:10px"><input type="file" id="ex-file" accept="'+FILE_ACCEPT+'" style="display:none">'
+       +'<button class="btn sec" id="ex-up" style="width:auto;display:inline-block;padding:10px 18px">자료 올리기</button>'
+       +'<span id="ex-up-msg" style="font-size:12px;color:var(--gray-l);margin-left:10px"></span></div>')
+    +'<p style="font-size:11.5px;color:var(--gray-l);margin-top:10px;line-height:1.7">파일을 누르면 내려받습니다. 업로드 30일, 내려받은 뒤 7일이 지나면 자동 삭제됩니다. 내려받은 파일은 보관에 유의해 주세요.</p></div>'
+
     +'<div class="dcard"><div class="lbl">진행 기록</div>'
     +(TL.length?'<div class="tl">'+TL.map(ev=>
         '<div class="ev'+(ev.actorRole==='system'?' sys':'')+'">'
@@ -260,6 +280,23 @@ function renderCase(){
       +'<div class="sw" id="ex-sw"></div></div>'
     +'</aside></div>';
 
+  /* 첨부 — 다운로드·업로드 */
+  document.querySelectorAll('[data-fid]').forEach(el=>el.onclick=()=>downloadFile(el.dataset.fid));
+  const up=$('ex-up'),fi=$('ex-file');
+  if(up&&fi){
+    up.onclick=()=>fi.click();
+    fi.onchange=async()=>{
+      const f=fi.files&&fi.files[0];if(!f)return;
+      up.disabled=true;
+      const ok=await uploadFile(f,m=>{$('ex-up-msg').textContent=m;});
+      up.disabled=false;fi.value='';
+      if(ok){toast('자료를 올렸습니다');
+        const v=await fetch(VERIFY_URL+'?k='+encodeURIComponent(K)).then(x=>x.json());
+        if(v.success){CASE=v.case;TL=v.timeline||[];FILES=v.files||[];renderCase();}
+      }else $('ex-up-msg').textContent='';
+    };
+  }
+
   const g=$('ex-step');
   if(g)g.querySelectorAll('span').forEach(el=>el.onclick=()=>{
     const was=el.classList.contains('on');g.querySelectorAll('span').forEach(x=>x.classList.remove('on'));if(!was)el.classList.add('on');
@@ -267,6 +304,26 @@ function renderCase(){
   const sv=$('ex-save');if(sv)sv.onclick=saveNote;
   initToggle();
   show('case');
+}
+
+async function uploadFile(file,onMsg){
+  if(file.size>FILE_MAX){toast('20MB 이하 파일만 올릴 수 있습니다');return false;}
+  onMsg&&onMsg('준비 중');
+  const r=await call('icUploadFile',{k:K,name:file.name,size:file.size,mime:file.type||'application/octet-stream'});
+  if(!r.success){toast(r.error||'업로드 준비 실패');return false;}
+  onMsg&&onMsg('업로드 중');
+  /* 서버가 서명에 쓴 contentType 을 그대로 보낸다 — 다르면 Storage 가 403 */
+  const put=await fetch(r.uploadUrl,{method:'PUT',headers:{'Content-Type':r.contentType||file.type||'application/octet-stream'},body:file});
+  if(!put.ok){toast('업로드에 실패했습니다');return false;}
+  onMsg&&onMsg('확인 중');
+  const c=await call('icConfirmFile',{k:K,fileId:r.fileId});
+  if(!c.success){toast(c.error||'업로드 확인 실패');return false;}
+  return true;
+}
+async function downloadFile(fileId){
+  const r=await call('icDownloadFile',{k:K,fileId});
+  if(!r.success){toast(r.error||'다운로드 준비 실패');return;}
+  window.location.href=r.url;
 }
 
 async function saveNote(){
@@ -281,7 +338,7 @@ async function saveNote(){
     toast('기록을 남겼습니다');
     /* 재조회 — 타임라인·상태 갱신 */
     const v=await fetch(VERIFY_URL+'?k='+encodeURIComponent(K)).then(x=>x.json());
-    if(v.success){CASE=v.case;TL=v.timeline||[];renderCase();}
+    if(v.success){CASE=v.case;TL=v.timeline||[];FILES=v.files||[];renderCase();}
   }catch(e){toast('저장 중 오류가 발생했습니다');}
   finally{if($('ex-save')){b.disabled=false;b.textContent='기록 남기기';}}
 }
