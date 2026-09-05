@@ -3140,6 +3140,16 @@
       </div>
     </div>
 
+    <!-- 법인Master 생성 진행 팝업 -->
+    <div id="mdl-im-gen" class="modal hidden"><div class="mdl-bg"></div>
+      <div class="mdl-box" style="max-width:520px;width:92%">
+        <h3 id="im-gen-title" style="margin:0 0 12px">회차 생성 중</h3>
+        <ol id="im-gen-steps" style="margin:0 0 12px 18px;font-size:14px;line-height:2"></ol>
+        <div id="im-gen-result" style="font-size:13px;color:#666;min-height:20px"></div>
+        <div style="text-align:right;margin-top:12px"><button id="im-gen-close" class="btn btn-sm hidden" onclick="closeM('mdl-im-gen')">닫기</button></div>
+      </div>
+    </div>
+
     <!-- ── 전문가 등록·수정 모달 ── -->
     <div id="mdl-ic-expert" class="modal hidden"><div class="mdl-bg" onclick="icCloseExpert()"></div>
       <div class="mdl-box" style="max-width:780px"><button class="mdl-x" onclick="icCloseExpert()">×</button>
@@ -20386,7 +20396,7 @@ window.iccIssueLink = iccIssueLink; window.iccCopyLink = iccCopyLink;
 // ═══════════════════════════════════════════════════════════════════
 const IM_API_KEY='tcw-jarvia-2026-kfpc';
 const IM_BASE='https://asia-northeast3-jarvia-platform.cloudfunctions.net';
-let _imRows=[],_imAuto=null,_imCur=null;
+let _imRows=[],_imAuto=null,_imAutoMs=0,_imCur=null,_imSchedLoaded=false;
 const IM_SEC_TITLES={summary:'전체 요약',s1:'§1 지금 왜 이 얘기인가',s2:'§2 구조',s3:'§3 시뮬레이션',s4:'§4 설계 대안',s5:'§5 함정 5개',s6:'§6 예규·판례',s7:'§7 반론 3개',s8:'§8 첫 질문'};
 const IM_PREVIEW_CSS='body{font-family:"Noto Sans KR",sans-serif;max-width:760px;margin:20px auto;padding:0 16px;color:#1A2332;line-height:1.7;font-size:15px}.cm-title{font-size:22px;font-weight:800}.cm-target{color:#64748B}.cm-sec{margin:22px 0;padding-top:12px;border-top:1px solid #E8EBF0}.cm-h2{font-size:17px;font-weight:800}.cm-num{display:inline-block;width:22px;height:22px;border-radius:50%;background:#FBF6EC;color:#9E7F45;font-size:12px;text-align:center;line-height:22px;margin-right:8px}.cm-table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}.cm-table th,.cm-table td{border-bottom:1px solid #E8EBF0;padding:7px 8px;text-align:left}.cm-table th{background:#F0F2F5;font-size:12px;color:#64748B}.cm-table td.r{text-align:right}.cm-note,.cm-case{font-size:12px;color:#64748B}.cm-traps li b,.cm-qa dt{font-weight:700;display:block;margin-top:8px}.cm-law{border-left:3px solid #C9A96E;background:#F0F2F5;padding:8px 12px;margin:8px 0;font-size:13px}.cm-ask{display:block;font-size:19px;font-weight:700;color:#0F2440;background:#FBF6EC;padding:12px;border-radius:8px;margin:8px 0}.cm-msg{white-space:pre-wrap;background:#fff;border:1px solid #E8EBF0;padding:12px;border-radius:8px;font-family:inherit;font-size:14px}.cm-check{background:#FFE082;padding:0 4px}.cm-fn a{font-size:11px;color:#9E7F45;text-decoration:none}';
 
@@ -20425,21 +20435,37 @@ async function imLoad(){
         (st==='error'||st.startsWith('needs_'))?`<button class="btn btn-sm" style="background:#E65100" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
+    // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
     const active=_imRows.some(d=>{const st=String(d.status||'');return !['ready','published','error'].includes(st)&&!st.startsWith('needs_');});
-    if(active&&!_imAuto){_imAuto=setInterval(imLoad,15000);$('im-auto-msg').textContent='진행 중 — 15초마다 자동 갱신';}
-    if(!active&&_imAuto)imStopAuto();
+    const wantMs=active?15000:60000;
+    if(_imAutoMs!==wantMs){imStopAuto();_imAuto=setInterval(imLoad,wantMs);_imAutoMs=wantMs;}
+    $('im-auto-msg').textContent=active?'진행 중 — 15초마다 자동 갱신':'대기 — 60초마다 자동 갱신';
     if(!$('im-gen-date').value){const d=new Date();const add=(5-d.getDay()+7)%7||7;d.setDate(d.getDate()+add);$('im-gen-date').value=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
     if(!$('im-sch-ym').value){const d=new Date();$('im-sch-ym').value=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;}
+    // 편성표는 패널 진입 시 1회 자동 로드 (이후 15초 자동갱신에서는 회차 상태 반영을 위해 함께 갱신)
+    _imSchedLoaded=true;imSchedLoad(true);
   }catch(e){toast('법인Master 로드 실패: '+e.message,'error');console.error(e);}
 }
-function imStopAuto(){if(_imAuto){clearInterval(_imAuto);_imAuto=null;}const m=$('im-auto-msg');if(m)m.textContent='';}
-async function imGenerate(){
-  const date=$('im-gen-date').value;if(!date)return toast('발송일(금요일)을 선택하세요','error');
+function imStopAuto(){if(_imAuto){clearInterval(_imAuto);_imAuto=null;}_imAutoMs=0;const m=$('im-auto-msg');if(m)m.textContent='';}
+async function imGenerate(dateArg){
+  const date=dateArg||$('im-gen-date').value;if(!date)return toast('발송일(금요일)을 선택하세요','error');
   if(new Date(date+'T00:00:00').getDay()!==5)return toast('금요일만 생성할 수 있습니다','error');
   if(!confirm(`${date}(금) 발송 회차를 지금 생성할까요?\n\n페르소나 생성 후 Step1~7 자동 진행(40~70분). 승인 전에는 발송되지 않습니다.`))return;
-  $('im-gen-msg').textContent='생성 요청 중…';
-  try{const r=await imApi({action:'generate',date});$('im-gen-msg').textContent=r.created?`#${r.week} ${r.title} — 시작 (${r.reportId})`:`이미 존재 (${r.reportId})`;toast(r.created?'생성 시작':'이미 생성된 회차입니다',r.created?'success':'');setTimeout(imLoad,1500);}
-  catch(e){$('im-gen-msg').textContent='';toast('생성 실패: '+e.message,'error');}
+  $('im-gen-date').value=date;
+  const steps=[['persona','페르소나(러닝 케이스) 생성 — 30초 안팎'],['doc','회차 문서 등록 (upcoming_inner_issues)'],['start','파이프라인 시작 — Step1 설계도부터 자동 진행']];
+  const ol=$('im-gen-steps');ol.innerHTML=steps.map(([k,t])=>`<li id="im-gs-${k}" style="color:#999">⏳ ${t}</li>`).join('');
+  $('im-gen-title').textContent=`${date}(금) 회차 생성 중`;$('im-gen-result').textContent='';$('im-gen-close').classList.add('hidden');openM('mdl-im-gen');
+  const mark=(k,ok,txt)=>{const li=$('im-gs-'+k);if(!li)return;li.style.color=ok?'#1a7a4a':'#C62828';li.textContent=(ok?'✅ ':'❌ ')+(txt||li.textContent.replace(/^[⏳✅❌]\s*/,''));};
+  const t0=Date.now();const tick=setInterval(()=>{const li=$('im-gs-persona');if(li&&li.textContent.startsWith('⏳'))li.textContent=`⏳ 페르소나(러닝 케이스) 생성 중 — ${Math.round((Date.now()-t0)/1000)}초`;},1000);
+  try{
+    const r=await imApi({action:'generate',date});clearInterval(tick);
+    mark('persona',true,'페르소나 생성 완료');
+    if(r.created){mark('doc',true,`회차 문서 등록 — #${r.week} ${r.title}`);mark('start',true,`파이프라인 시작 (${r.reportId})`);$('im-gen-result').innerHTML='목록에서 진행률이 15초마다 갱신됩니다. 40~70분 후 <b>ready</b>가 되면 [상세]에서 검수하세요.';}
+    else{mark('doc',false,`이미 생성된 회차 (${r.reportId})`);mark('start',false,'기존 회차를 목록에서 확인하세요');}
+    $('im-gen-msg').textContent=r.created?`#${r.week} ${r.title} — 시작 (${r.reportId})`:`이미 존재 (${r.reportId})`;
+    await imLoad();
+  }catch(e){clearInterval(tick);mark('persona',false,'생성 실패: '+e.message);$('im-gen-msg').textContent='';}
+  $('im-gen-close').classList.remove('hidden');
 }
 async function imAct(action,id){
   const d=_imRows.find(x=>x._id===id)||{};
@@ -20497,15 +20523,18 @@ async function imOpen(id){
   }catch(e){toast('상세 로드 실패: '+e.message,'error');console.error(e);}
 }
 function imDetailTab(t){document.querySelectorAll('.im-dtab').forEach(el=>el.classList.add('hidden'));const el=$('im-d-'+t);if(el)el.classList.remove('hidden');}
-async function imSchedLoad(){
-  const ym=$('im-sch-ym').value;if(!ym)return toast('월을 선택하세요','error');
+async function imSchedLoad(silent){
+  const ym=$('im-sch-ym').value;if(!ym){if(!silent)toast('월을 선택하세요','error');return;}
   try{
     const snap=await getDoc(doc(db,'innerSchedule',ym));const tb=$('im-sch-tb');
     if(!snap.exists()){tb.innerHTML='<tr><td colspan="6" class="tc">편성표 없음 — [♻ (재)생성]</td></tr>';$('im-sch-announce').value='';return;}
     const s=snap.data();
-    tb.innerHTML=(s.issues||[]).map(it=>`<tr><td style="white-space:nowrap">${esc(it.date)}${it.holiday?' <span style="color:#C62828;font-size:11px">공휴일</span>':''}</td><td>#${it.week}</td><td>${it.tag==='◎'?'필수':it.tag==='★'?'<span style="color:#9E7F45">관심</span>':'-'}${it.floating?' <span style="font-size:11px;color:#888">5주차</span>':''}</td><td style="white-space:normal">${esc(it.title)}<div style="font-size:11px;color:#888">${esc(it.angle||'')}</div></td><td style="font-size:12px">${esc(it.deadline||'-')}</td><td>${it.doc?`${esc(it.doc.status)} / ${esc(it.doc.approval)}`:'<span style="color:#999">planned</span>'}</td></tr>`).join('');
+    // 회차 상태는 편성표 문서(25일 생성 시점)가 아니라 현재 upcoming 목록에서 병합 — 항상 최신
+    const live=Object.fromEntries(_imRows.map(r=>[r.sendDate,{reportId:r._id,status:r.status,approval:(r.approval&&r.approval.status)||'pending'}]));
+    (s.issues||[]).forEach(it=>{if(live[it.date])it.doc=live[it.date];});
+    tb.innerHTML=(s.issues||[]).map(it=>`<tr><td style="white-space:nowrap">${esc(it.date)}${it.holiday?' <span style="color:#C62828;font-size:11px">공휴일</span>':''}</td><td>#${it.week}</td><td>${it.tag==='◎'?'필수':it.tag==='★'?'<span style="color:#9E7F45">관심</span>':'-'}${it.floating?' <span style="font-size:11px;color:#888">5주차</span>':''}</td><td style="white-space:normal">${esc(it.title)}<div style="font-size:11px;color:#888">${esc(it.angle||'')}</div></td><td style="font-size:12px">${esc(it.deadline||'-')}</td><td style="white-space:nowrap">${it.doc?`${esc(it.doc.status)} / ${esc(it.doc.approval)} <button class="btn btn-sm" onclick="imOpen('${it.doc.reportId}')">상세</button>`:`<span style="color:#999">planned</span> <button class="btn btn-sm" style="background:#7a1f2b" onclick="imGenerate('${it.date}')">▶ 생성</button>`}</td></tr>`).join('');
     $('im-sch-announce').value=s.announcement||'';
-  }catch(e){toast('편성표 로드 실패: '+e.message,'error');}
+  }catch(e){if(!silent)toast('편성표 로드 실패: '+e.message,'error');}
 }
 async function imSchedRegen(){
   const ym=$('im-sch-ym').value;if(!ym)return toast('월을 선택하세요','error');
