@@ -3176,6 +3176,7 @@
           <button class="btn btn-sm" onclick="imDetailClose()">닫기</button>
         </div>
         <div id="im-d-actions" class="toolbar" style="margin:10px 0"></div>
+        <input type="file" id="im-upload-file" accept=".html,.htm" style="display:none" onchange="imUploadFile(this)">
         <div id="im-d-attn" style="font-size:13px;line-height:1.7;background:#FFF8E1;border:1px solid #F0D9A0;border-radius:8px;padding:10px 12px;margin-bottom:10px"></div>
         <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="imDetailTab('preview')">📄 미리보기</button>
@@ -20814,6 +20815,22 @@ async function imAudio(id,scripts){
   try{await imApi({action:'audio',id,scripts:scripts===true?'1':''});toast('음성 재생성 시작 (회차 상태 유지)','success');setTimeout(imLoad,1500);if(_imCur===id)imOpen(id);}
   catch(e){toast('음성 재생성 실패: '+e.message,'error');}
 }
+let _imUploadId=null;
+function imUploadPick(id){_imUploadId=id;$('im-upload-file').value='';$('im-upload-file').click();}
+async function imUploadFile(input){
+  const f=input.files&&input.files[0];if(!f||!_imUploadId)return;
+  const d=_imRows.find(x=>x._id===_imUploadId)||{};
+  if(!confirm(`수정본을 반영할까요?\n\n${d.sendDate} #${d.week} ${d.title}\n파일: ${f.name} (${Math.round(f.size/1024)}KB)\n\n· 본문(HTML 조각)·독립 HTML 이 교체됩니다\n· 음성은 수정본 문장으로 원고부터 다시 만듭니다(약 15분, 백그라운드)\n· 섹션 구조(cm-s1~cm-s8)는 유지돼 있어야 합니다\n· 검증 단계는 다시 돌지 않습니다(수정 내용은 관리자 책임)`))return;
+  const html=await f.text();
+  toast('업로드 중…');
+  try{
+    const r=await fetch(IM_BASE+'/imAdmin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:IM_API_KEY,action:'uploadHtml',id:_imUploadId,html,by:'admin'})});
+    const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
+    if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
+    toast(`수정본 반영 완료 — 음성 재생성 시작${(j.warnings||[]).length?` (경고 ${j.warnings.length})`:''}`,'success');
+    await imLoad();imOpen(_imUploadId);
+  }catch(e){toast('업로드 실패: '+e.message,'error');}
+}
 async function imRetry(id){
   const d=_imRows.find(x=>x._id===id)||{};
   const guess=(d.errorDetail&&d.errorDetail.job&&(String(d.errorDetail.job).match(/step[1-7]b?/)||[''])[0])||((String(d.status||'').match(/^(step[1-7]b?)_running$/)||[])[1])||'';
@@ -20835,6 +20852,7 @@ async function imOpen(id){
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${id}')">🚀 즉시 게시</button>`:'',
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${id}')">↻ 재시도${(st.endsWith('_running'))?' (정지 시)':''}</button>`:'',
       d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a class="btn btn-sm" href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">🔗 회원 화면으로 열기</a>`:'',
+      d.step5&&d.step5.html?`<a class="btn btn-sm" style="background:#455A64" href="${IM_BASE}/imAdmin?key=${IM_API_KEY}&action=download&id=${id}">⬇ HTML 다운로드</a> <button class="btn btn-sm" style="background:#455A64" onclick="imUploadPick('${id}')">⬆ 수정본 업로드</button>`:'',
       d.step4&&d.step4.finalBody&&!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
       d.audio&&(d.audio.status==='running'||d.audio.status==='queued')?`<span style="font-size:12px;color:#1565C0">🔊 음성 생성 중 — ${esc(d.substatus||'')}</span>`:''].filter(Boolean).join(' ')||'<span style="color:#888;font-size:12px">진행 중 — 조작 가능 상태 아님</span>';
     const attn=(d.step7&&d.step7.needsAttention)||[];const err=d.error?[`오류: ${d.error}`]:[];const w1=(d.step1b&&d.step1b.warnings)||[];
@@ -20893,7 +20911,7 @@ async function imSchedRegen(){
   try{await imApi({action:'schedule',ym});toast('편성표 생성 완료','success');imSchedLoad();}catch(e){toast('편성표 생성 실패: '+e.message,'error');}
 }
 function imCopyAnnounce(){const el=$('im-sch-announce');if(!el.value)return toast('먼저 [조회]하세요','error');el.select();try{document.execCommand('copy');toast('복사했습니다','success');}catch(_){toast('복사 실패 — 직접 선택해 복사하세요','error');}}
-window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
+window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
 
 
 
