@@ -3065,7 +3065,7 @@
         <th style="width:46px">순서</th><th style="width:56px">사진</th><th style="width:130px">성명</th>
         <th style="width:92px">분야</th><th>상담 가능 주제</th><th style="width:78px">지역</th>
         <th style="width:118px">연락처</th><th style="width:88px">배분율</th>
-        <th style="width:88px">상태</th><th style="width:56px">노출</th><th style="width:120px">관리</th>
+        <th style="width:88px">상태</th><th style="width:56px">작성</th><th style="width:56px">노출</th><th style="width:150px">관리</th>
       </tr></thead><tbody id="tb-ic-experts"></tbody></table></div>
     </div>
 
@@ -19852,7 +19852,7 @@ async function icSeedFields() {
 
 async function icLoadExperts() {
   const tb = $('tb-ic-experts');
-  if (tb) tb.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-lt)">로딩 중...</td></tr>';
+  if (tb) tb.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--text-lt)">로딩 중...</td></tr>';
   try {
     if (!_icFields.length) await icLoadFields();
     const snap = await getDocs(collection(db, 'innerExperts'));
@@ -19868,7 +19868,7 @@ async function icLoadExperts() {
     icFillFieldSelects();
     icRenderExperts();
   } catch (e) {
-    if (tb) tb.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--danger)">불러오기 실패: ' + icEsc(e.message) + '</td></tr>';
+    if (tb) tb.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--danger)">불러오기 실패: ' + icEsc(e.message) + '</td></tr>';
   }
 }
 
@@ -19888,7 +19888,7 @@ function icRenderExperts() {
   });
 
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-lt);padding:24px">'
+    tb.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--text-lt);padding:24px">'
       + (_icExperts.length ? '조건에 맞는 전문가가 없습니다.' : '등록된 전문가가 없습니다. 「＋ 전문가 등록」으로 시작하세요.') + '</td></tr>';
     $('ice-summary').textContent = '';
     return;
@@ -19911,8 +19911,10 @@ function icRenderExperts() {
       + '<td style="font-size:12px">' + icEsc(p.phone || '-') + '</td>'
       + '<td style="font-size:12px">' + rate + '</td>'
       + '<td>' + icStBadge(e.status) + '</td>'
+      + '<td title="' + (e.profileCompletedAt ? '전문가 작성 완료' : '미작성') + '">' + (e.profileCompletedAt ? '<span style="color:#138A5E;font-weight:700">완료</span>' : '<span style="color:#C87A0A">대기</span>') + '</td>'
       + '<td>' + (e.active === false ? '❌' : '✅') + '</td>'
       + '<td><button class="btn btn-sm btn-sec" onclick="icOpenExpert(\'' + e.id + '\')">편집</button> '
+      + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\')" title="전문가가 직접 프로필을 작성하는 링크">링크</button> '
       + '<button class="btn btn-sm btn-danger" onclick="icDelExpert(\'' + e.id + '\')">삭제</button></td>'
       + '</tr>';
   }).join('');
@@ -20125,6 +20127,26 @@ window.icNewExpert = icNewExpert; window.icOpenExpert = icOpenExpert; window.icS
 window.icDelExpert = icDelExpert; window.icFieldChange = icFieldChange; window.icToggleTopic = icToggleTopic;
 window.icRateSum = icRateSum; window.icUploadPhoto = icUploadPhoto;
 window.icCloseExpert = icCloseExpert;
+
+/* ★ [2026-09-06] 전문가 프로필 자가 작성 링크 — 본사는 이름·연락처·분야·배분율만 넣고 링크를 보낸다 */
+async function icProfileLink(id) {
+  const e = _icExperts.find(x => x.id === id); if (!e) return;
+  const hasLink = !!(e._priv && e._priv.profileSalt);
+  let reissue = false;
+  if (hasLink) {
+    const a = prompt('「' + e.name + '」 프로필 링크\n\n1 = 기존 링크 다시 보기\n2 = 새 링크 발급 (이전 링크는 무효화됩니다)\n\n번호를 입력하세요', '1');
+    if (a === null) return;
+    reissue = (a.trim() === '2');
+  }
+  try {
+    const r = await icCall('icIssueProfileToken', { expertId: id, reissue });
+    if (!r.success) return toast(r.error || '발급에 실패했습니다.', 'error');
+    const ok = await navigator.clipboard.writeText(r.url).then(() => true).catch(() => false);
+    prompt((ok ? '클립보드에 복사했습니다. ' : '') + '전문가에게 카카오톡·문자로 전달하세요.\n(만료 없음 · 재발급 시 이전 링크 무효)', r.url);
+    if (r.reissued) icLoadExperts();
+  } catch (err) { toast('발급 중 오류: ' + err.message, 'error'); }
+}
+window.icProfileLink = icProfileLink;
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -20738,6 +20760,36 @@ function imStatusHtml(d){
   return `<span${stale?' style="color:#C62828;font-weight:700"':''}>${esc(st)}</span>${d.substatus?`<div style="font-size:11px;color:#888">${esc(d.substatus)}</div>`:''}${last}${stale?`<div style="font-size:11px;color:#C62828">⚠ ${Math.round((Date.now()-upd)/60000)}분 갱신 없음 — 재시도 권장</div>`:''}`;
 }
 function imAudioHtml(d){
+  const a=d.audio||{};
+  if(a.engine!=='section-queue-v2')return imLegacyAudioHtml(d);
+  const ids=['summary','s1','s2','s3','s4','s5','s6','s7','s8'];
+  const secs=a.sections||{};
+  const done=ids.filter(id=>secs[id]?.status==='done').length;
+  const failed=ids.filter(id=>secs[id]?.status==='failed').length;
+  const running=ids.filter(id=>secs[id]?.status==='running');
+  const queued=9-done-failed-running.length;
+  const active=running.map(id=>`${IM_SEC_TITLES[id]||id}: ${secs[id].phase||'처리 중'}`).join(' / ');
+  const upd=a.updatedAt?.toMillis?.()||0;
+  const ago=upd?Math.floor((Date.now()-upd)/60000):null;
+  const pct=Math.round(done/9*100);
+  const retry=failed&&!running.length&&!queued?` <button class="btn btn-sm" style="background:#888" onclick="imAudio('${d._id}')">실패분 재시도</button>`:'';
+  return `<div style="min-width:170px;white-space:normal"><b style="color:${failed?'#C62828':'#1565C0'}">음성 ${done}/9개 완료</b>
+    <div style="font-size:11px;color:#666">생성 중 ${running.length} · 대기 ${queued} · 실패 ${failed}</div>
+    <div style="background:#eee;height:6px;border-radius:4px;margin:4px 0"><div style="background:#1565C0;height:6px;width:${pct}%"></div></div>
+    ${active?`<div style="font-size:11px;color:#666">${esc(active)}</div>`:''}
+    ${a.error?`<div style="font-size:11px;color:#C62828">${esc(a.error)}</div>`:''}
+    ${ago!==null&&ago>=15&&(queued||running.length)?`<div style="font-size:11px;color:#C62828">${ago}분 갱신 없음 · 작업 복구 확인 중</div>`:''}
+    ${a.renderPending?'<div style="font-size:11px;color:#888">HTML 음성 링크 반영 대기</div>':''}${retry}</div>`;
+}
+function imAudioDetails(d){
+  const a=d.audio||{}, secs=a.sections||{};
+  const seconds=v=>v==null?'—':`${Math.round(v/1000)}초`;
+  return ['summary','s1','s2','s3','s4','s5','s6','s7','s8'].map(id=>{
+    const s=secs[id]||{}, t=s.timings||{};
+    return `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid #eee"><b>${esc(IM_SEC_TITLES[id]||id)}</b> · ${esc(s.phase||'대기')}${s.reused?' · 기존 파일 재사용':''}<br>원고 ${seconds(t.scriptMs)} · 합성 ${seconds(t.synthMs)} · 저장 ${seconds(t.uploadMs)}${t.failedAttemptMs?` · 실패 시도 전체 ${seconds(t.failedAttemptMs)}`:''}${s.error?`<br><span style="color:#C62828">${esc(s.error)}</span>`:''}</div>`;
+  }).join('');
+}
+function imLegacyAudioHtml(d){
   const a=d.audio||{};const n=(d.step6&&d.step6.ttsCount)||a.count||0;const total=a.total||9;
   const upd=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;const ago=upd?Math.round((Date.now()-upd)/60000):null;
   if(a.status==='done')return `<span style="color:#1a7a4a">🔊 ${n}/${total}</span>`;
@@ -20770,7 +20822,7 @@ async function imLoad(){
         st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${d._id}')">승인</button>`:'',
         st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${d._id}')">즉시 게시</button>`:'',
         (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
-      return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
+      return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">본문 ${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
     // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
     const active=_imRows.some(d=>{const st=String(d.status||'');return (!['ready','published','error'].includes(st)&&!st.startsWith('needs_'))||(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'));});
@@ -20816,9 +20868,9 @@ async function imAct(action,id){
 }
 async function imAudio(id,scripts){
   const d=_imRows.find(x=>x._id===id)||{};
-  const msg=scripts===true?'낭독 원고부터 다시 만들고(원고 9개 ≈3분) 음성을 재생성합니다.':'저장된 낭독 원고를 재사용해 음성(TTS)만 다시 만듭니다.';
+  const msg=scripts===true?'낭독 원고를 다시 작성합니다. 동일 원고의 기존 음성은 재사용합니다.':'완료된 음성은 재사용하고, 없거나 실패한 섹션만 생성합니다.';
   if(!confirm(`${d.sendDate} #${d.week} ${d.title}\n\n${msg}\n회차 상태(승인·발송)에는 영향 없습니다. 계속할까요?`))return;
-  try{await imApi({action:'audio',id,scripts:scripts===true?'1':''});toast('음성 재생성 시작 (회차 상태 유지)','success');setTimeout(imLoad,1500);if(_imCur===id)imOpen(id);}
+  try{const r=await imApi({action:'audio',id,scripts:scripts===true?'1':''});toast(r.note||'섹션별 음성 작업 접수','success');setTimeout(imLoad,1500);if(_imCur===id)imOpen(id);}
   catch(e){toast('음성 재생성 실패: '+e.message,'error');}
 }
 let _imUploadId=null;
@@ -20826,7 +20878,7 @@ function imUploadPick(id){_imUploadId=id;$('im-upload-file').value='';$('im-uplo
 async function imUploadFile(input){
   const f=input.files&&input.files[0];if(!f||!_imUploadId)return;
   const d=_imRows.find(x=>x._id===_imUploadId)||{};
-  if(!confirm(`수정본을 반영할까요?\n\n${d.sendDate} #${d.week} ${d.title}\n파일: ${f.name} (${Math.round(f.size/1024)}KB)\n\n· 본문(HTML 조각)·독립 HTML 이 교체됩니다\n· 음성은 수정본 문장으로 원고부터 다시 만듭니다(약 15분, 백그라운드)\n· 섹션 구조(cm-s1~cm-s8)는 유지돼 있어야 합니다\n· 검증 단계는 다시 돌지 않습니다(수정 내용은 관리자 책임)`))return;
+  if(!confirm(`수정본을 반영할까요?\n\n${d.sendDate} #${d.week} ${d.title}\n파일: ${f.name} (${Math.round(f.size/1024)}KB)\n\n· 본문(HTML 조각)·독립 HTML 이 교체됩니다\n· 음성은 수정본 문장으로 변경된 섹션의 원고와 음성을 다시 만듭니다\n· 섹션 구조(cm-s1~cm-s8)는 유지돼 있어야 합니다\n· 검증 단계는 다시 돌지 않습니다(수정 내용은 관리자 책임)`))return;
   const html=await f.text();
   toast('업로드 중…');
   try{
@@ -20859,7 +20911,7 @@ async function imOpen(id){
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${id}')">↻ 재시도${(st.endsWith('_running'))?' (정지 시)':''}</button>`:'',
       d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a class="btn btn-sm" href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">🔗 회원 화면으로 열기</a>`:'',
       d.step5&&d.step5.html?`<a class="btn btn-sm" style="background:#455A64" href="${IM_BASE}/imAdmin?key=${IM_API_KEY}&action=download&id=${id}">⬇ HTML 다운로드</a> <button class="btn btn-sm" style="background:#455A64" onclick="imUploadPick('${id}')">⬆ 수정본 업로드</button>`:'',
-      d.step4&&d.step4.finalBody&&(!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))||(d.updatedAt&&d.updatedAt.toMillis&&(Date.now()-d.updatedAt.toMillis())>15*60*1000))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
+      d.step4&&d.step4.finalBody&&(!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))||(d.audio?.engine!=='section-queue-v2'&&d.updatedAt&&d.updatedAt.toMillis&&(Date.now()-d.updatedAt.toMillis())>15*60*1000))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
       d.audio&&(d.audio.status==='running'||d.audio.status==='queued')?`<span style="font-size:12px;color:#1565C0">🔊 음성 생성 중 — ${esc(d.substatus||'')}</span>`:''].filter(Boolean).join(' ')||'<span style="color:#888;font-size:12px">진행 중 — 조작 가능 상태 아님</span>';
     const attn=(d.step7&&d.step7.needsAttention)||[];const err=d.error?[`오류: ${d.error}`]:[];const w1=(d.step1b&&d.step1b.warnings)||[];
     const lines=[...err,...attn,...(attn.length?[]:w1)];
@@ -20871,8 +20923,9 @@ async function imOpen(id){
     else{ifr.removeAttribute('src');ifr.srcdoc=frag?`<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>${IM_PREVIEW_CSS}</style></head><body>${frag}</body></html>`:'<p style="padding:20px;color:#888;font-family:sans-serif">Step5 HTML 미생성</p>';}
     const tts=(d.step6&&d.step6.ttsUrls)||{};
     const aud=d.audio||{};const ttsFailed=(d.step6&&d.step6.ttsFailed)||[];
-    $('im-d-audio').innerHTML=`<div style="font-size:12px;color:#666;margin-bottom:8px">상태: <b>${esc(aud.status||'미생성')}</b>${aud.count!=null?` · ${aud.count}/${aud.total||9}`:''}${aud.error?` · <span style="color:#C62828">${esc(aud.error)}</span>`:''}${ttsFailed.length?`<div style="color:#C62828">실패 섹션: ${esc(ttsFailed.join(' / '))}</div>`:''}<div style="color:#888">회원 페이지는 mp3 없는 섹션을 즉석 합성합니다 — 승인·발송과 무관</div></div>`+
-      (['summary','s1','s2','s3','s4','s5','s6','s7','s8'].map(k=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #eee"><b style="min-width:180px;font-size:13px">${IM_SEC_TITLES[k]||k}</b>${tts[k]?`<audio controls preload="none" src="${tts[k]}" style="height:32px;flex:1"></audio>`:`<span style="font-size:12px;color:#999">${aud.status==='running'||aud.status==='queued'?'생성 중…':'없음 (즉석 합성 폴백)'}</span>`}</div>`).join(''));
+    $('im-d-audio').innerHTML=`<div style="font-size:12px;color:#666;margin-bottom:8px">상태: <b>${esc(aud.status||'미생성')}</b>${aud.count!=null?` · ${aud.count}/${aud.total||9}`:''}${aud.error?` · <span style="color:#C62828">${esc(aud.error)}</span>`:''}${ttsFailed.length?`<div style="color:#C62828">실패 섹션: ${esc(ttsFailed.join(' / '))}</div>`:''}<div style="color:#888">독립 HTML은 생성 완료된 섹션부터 들을 수 있습니다. 승인·발송 상태는 별도입니다.</div></div>`+
+      (['summary','s1','s2','s3','s4','s5','s6','s7','s8'].map(k=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #eee"><b style="min-width:180px;font-size:13px">${IM_SEC_TITLES[k]||k}</b>${tts[k]?`<audio controls preload="none" src="${tts[k]}" style="height:32px;flex:1"></audio>`:`<span style="font-size:12px;color:#999">${aud.status==='running'||aud.status==='queued'?'생성 중…':'미생성 — 실패 원인 확인 후 재시도'}</span>`}</div>`).join(''));
+    if(aud.engine==='section-queue-v2')$('im-d-audio').innerHTML+=imAudioDetails(d);
     $('im-d-body-pre').textContent=(d.step4&&d.step4.finalBody)||(d.step2&&d.step2.body)||'(본문 미생성)';
     const c=(d.step2&&d.step2.calc)||{};const g=(d.step3&&d.step3.qualityGate)||{};const r4=(d.step4&&d.step4.recheck)||{};const q4=(d.step4&&d.step4.finalQa)||{};const q2=(d.step2&&d.step2.skeletonQa)||{};
     $('im-d-verify').innerHTML=`

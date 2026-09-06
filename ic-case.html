@@ -93,6 +93,23 @@ a{color:inherit;text-decoration:none}
 .fileb{display:flex;align-items:center;gap:10px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:11px 14px;font-size:13px;margin-top:8px;cursor:pointer}
 .fileb:hover{border-color:var(--gray-l)}
 .fileb .exp{font-size:11px;color:var(--warn);font-weight:700;white-space:nowrap}
+.intro{background:var(--gold-bg);border:1px solid var(--gold-line);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+.intro .t{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.intro .s{font-size:13px;color:#6A5A2E;margin-top:6px;line-height:1.75}
+.done{background:var(--ok-bg);border:1px solid #CFE8DA;border-radius:8px;padding:12px 16px;font-size:13px;color:var(--ok);margin-bottom:14px}
+.fld label{display:block;font-size:12.5px;font-weight:600;color:var(--gray);margin-bottom:6px}
+.fld label i{color:var(--danger);font-style:normal}
+.fld label em{font-style:normal;font-weight:400;color:var(--gray-l);font-size:11px}
+.fld input{width:100%;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:16px;background:#fff;outline:none}
+.fld input:focus{border-color:var(--gold)}
+.fld input[readonly]{background:var(--paper);color:var(--gray)}
+.fld .hint{font-size:11.5px;color:var(--gray-l);margin-top:6px;line-height:1.6}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.photo{display:flex;gap:16px;align-items:center;margin-bottom:18px}
+.av{width:88px;height:88px;border-radius:50%;background:#EDF0F4;border:1px solid var(--line);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#8C99AB;background-size:cover;background-position:center}
+.gex{background:var(--gold-bg);border:1px solid var(--gold-line);border-radius:8px;padding:14px 16px;font-size:12.5px;color:#6A5A2E;line-height:1.85;margin-bottom:10px}
+.gex b{color:#4E4220}
+.tb .nav+.nav{margin-left:-4px}
 .tblw{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:600px}
 .tbl th{text-align:left;font-size:11px;font-weight:600;color:var(--gray-l);letter-spacing:.04em;padding:0 12px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -112,6 +129,7 @@ a{color:inherit;text-decoration:none}
 .toast.on{opacity:1}
 .fixcta{display:none;position:fixed;left:0;right:0;bottom:0;z-index:70;background:#fff;border-top:1px solid var(--line);padding:12px 16px calc(12px + var(--safe-b))}
 
+@media(max-width:600px){.row2{grid-template-columns:1fr}}
 @media(max-width:1023px){
   .tb{height:50px;padding:0 14px}
   .tb .who{display:none}
@@ -130,12 +148,14 @@ a{color:inherit;text-decoration:none}
   <span class="bk" id="hd-bk">‹</span>
   <div class="lg"><span class="dot"></span><span id="hd-ti">이너서클 상담</span><span class="sub">INNER CIRCLE</span></div>
   <span class="who" id="hd-me"></span>
+  <button class="nav" id="hd-prof" style="display:none">내 프로필</button>
   <button class="nav" id="hd-nav">내 의뢰 현황</button>
 </div></div>
 
 <div class="pg">
   <div id="v-case" class="view on"><div id="case-body"><div class="load">확인 중</div></div></div>
   <div id="v-list" class="view"><div id="list-body"><div class="load">불러오는 중</div></div></div>
+  <div id="v-prof" class="view"><div id="prof-body" style="max-width:760px"><div class="load">불러오는 중</div></div></div>
 </div>
 
 <div class="fixcta" id="fixcta"></div>
@@ -163,6 +183,7 @@ const STEPS=['자료 검토 중','추가자료 요청','고객 미팅 예정','�
 const ROLE={fc:'컨설턴트',expert:'나',admin:'본사'};
 
 let K='',CASE=null,TL=[],FILES=[],EXPERT=null;
+let PK='',PE=null,PTOPICS=[],PSEL=[],PPHOTO='';   /* 프로필 화면 */
 const FILE_ACCEPT='.pdf,.jpg,.jpeg,.png,.gif,.webp,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.zip';
 const FILE_MAX=20*1024*1024;
 const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+'MB':Math.ceil(b/1024)+'KB';
@@ -171,6 +192,12 @@ const fileLeft=ms=>ms?Math.max(0,Math.ceil((ms-Date.now())/86400000)):null;
 /* ═══ 진입 ═══ */
 (async function boot(){
   const p=new URLSearchParams(location.search);
+  /* ?p= 프로필 링크 — 케이스 없이 프로필만 작성·수정 (본사가 보낸 링크) */
+  PK=p.get('p')||'';
+  if(PK){
+    $('hd-nav').style.display='none';$('hd-prof').style.display='none';
+    await loadProfile();return;
+  }
   K=p.get('k')||'';
   /* 구형 링크(?c=&t=) 하위호환 */
   if(!K&&p.get('c')&&p.get('t'))K=p.get('c')+'.'+p.get('t');
@@ -180,6 +207,7 @@ const fileLeft=ms=>ms?Math.max(0,Math.ceil((ms-Date.now())/86400000)):null;
     const r=await fetch(VERIFY_URL+'?k='+encodeURIComponent(K)).then(x=>x.json());
     if(!r.success){fail(r.error||'확인에 실패했습니다.','본사에 문의해 주세요.\n박신제 본부장 010-5244-1467');return;}
     CASE=r.case;TL=r.timeline||[];FILES=r.files||[];EXPERT={id:r.expertId,name:r.expertName};
+    if(r.profileKey){PK=r.profileKey;$('hd-prof').style.display='';}
     $('hd-me').textContent=(r.expertName||'')+' 님';
     renderCase();
   }catch(e){
@@ -196,9 +224,13 @@ function fail(t,s){
 function show(v){
   $('v-case').classList.toggle('on',v==='case');
   $('v-list').classList.toggle('on',v==='list');
-  $('hd-bk').style.display=v==='list'?'inline-block':'none';
-  $('hd-ti').textContent=v==='list'?'내 의뢰 현황':'이너서클 상담';
-  $('hd-nav').style.display=v==='list'?'none':'';
+  $('v-prof').classList.toggle('on',v==='prof');
+  const sub=v!=='case';
+  $('hd-bk').style.display=(sub&&K)?'inline-block':'none';
+  $('hd-ti').textContent=v==='list'?'내 의뢰 현황':(v==='prof'?'내 프로필':'이너서클 상담');
+  $('hd-nav').style.display=(v==='case'&&K)?'':'none';
+  $('hd-prof').style.display=(v==='case'&&PK)?'':'none';
+  if(v==='prof'){setCta(PE?'<button class="btn" id="pf-save-fix">저장</button>':null);const b=$('pf-save-fix');if(b)b.onclick=saveProfile;window.scrollTo(0,0);return;}
   setCta(v==='case'&&CASE&&CASE.fcPhone
     ?'<a class="btn" href="tel:'+esc(CASE.fcPhone)+'">'+esc(CASE.fcName||'컨설턴트')+'에게 전화</a>':null);
   window.scrollTo(0,0);
@@ -206,6 +238,7 @@ function show(v){
 function setCta(html){const w=$('fixcta');if(!html){w.innerHTML='';w.classList.remove('on');return;}w.innerHTML=html;w.classList.add('on');}
 
 $('hd-nav').onclick=()=>{show('list');loadList();};
+$('hd-prof').onclick=()=>{show('prof');loadProfile();};
 $('hd-bk').onclick=()=>show('case');
 
 /* ═══ 케이스 화면 ═══ */
@@ -367,6 +400,117 @@ function applyToggle(status){
   const on=status!=='off';
   sw.classList.toggle('on',on);
   if(t)t.textContent=status==='busy'?'본사가 「상담 지연」으로 표시 중입니다':(on?'당분간 새 상담을 받지 않으려면 끄세요':'현재 새 상담을 받지 않습니다');
+}
+
+/* ═══ 내 프로필 — 본사 링크(?p=) 또는 케이스 화면 「내 프로필」로 진입 ═══ */
+async function loadProfile(){
+  const w=$('prof-body');
+  w.innerHTML='<div class="load">불러오는 중</div>';
+  let r;
+  try{r=await call('icProfileGet',{p:PK});}catch(e){r={success:false,error:'연결에 실패했습니다.'};}
+  if(!r.success){
+    if(!K){fail(r.error||'확인에 실패했습니다.','본사에 문의해 주세요.\n박신제 본부장 010-5244-1467');return;}
+    w.innerHTML='<div class="empty"><b>'+esc(r.error||'불러오지 못했습니다')+'</b></div>';show('prof');return;
+  }
+  PE=r.expert;PTOPICS=r.topics||[];PSEL=(PE.subTopics||[]).slice();PPHOTO=PE.photoUrl||'';
+  $('hd-me').textContent=PE.name+' 님';
+  renderProfile();
+  show('prof');
+}
+
+function renderProfile(){
+  const E=PE, first=!E.profileCompletedAt;
+  $('prof-body').innerHTML=
+    (first
+      ?'<div class="intro"><div class="t">'+esc(E.name)+' 님, 반갑습니다</div>'
+       +'<div class="s">한국FP센터 이너서클 회원(재무컨설턴트)들이 보게 될 프로필입니다. '
+       +'아래 내용을 채워 저장하시면 본사 확인 후 회원 화면에 공개됩니다. 언제든 이 링크로 다시 들어와 수정하실 수 있습니다.</div></div>'
+      :'<div class="done">프로필이 등록되어 있습니다. 수정 후 저장하시면 바로 반영됩니다.</div>')
+
+    +'<div class="dcard"><div class="lbl">기본 정보</div>'
+    +'<div class="photo">'
+      +'<div class="av" id="pf-av"'+(PPHOTO?' style="background-image:url('+esc(PPHOTO)+')"':'')+'>'+(PPHOTO?'':esc(E.name.charAt(0)))+'</div>'
+      +'<div><input type="file" id="pf-photo" accept="image/jpeg,image/png,image/webp" style="display:none">'
+      +'<button class="btn sec" id="pf-photo-btn">사진 선택</button>'
+      +'<div class="hint" id="pf-photo-msg" style="font-size:11.5px;color:var(--gray-l);margin-top:6px">JPG·PNG · 10MB 이하 · 정면 사진 권장</div></div></div>'
+    +'<div class="row2">'
+      +'<div class="fld"><label>성명</label><input value="'+esc(E.name)+'" readonly><div class="hint">본사 등록 기준. 변경은 본사에 요청</div></div>'
+      +'<div class="fld"><label>분야</label><input value="'+esc(E.fieldName||E.field)+'" readonly></div>'
+    +'</div><div class="row2">'
+      +'<div class="fld"><label>직함 <i>*</i></label><input id="pf-title" value="'+esc(E.title)+'" placeholder="세무사 · 노무사 · 변호사"></div>'
+      +'<div class="fld"><label>소속 <em>선택</em></label><input id="pf-org" value="'+esc(E.org)+'" placeholder="세무법인 ○○ 대표"></div>'
+    +'</div><div class="row2">'
+      +'<div class="fld"><label>연락처 <em>회원 비공개</em></label><input id="pf-phone" value="'+esc(E.phone)+'" placeholder="010-0000-0000" inputmode="tel"></div>'
+      +'<div class="fld"><label>알림톡 받을 번호 <em>선택</em></label><input id="pf-alim" value="'+esc(E.alimtalkPhone)+'" placeholder="비우면 연락처와 동일" inputmode="tel"></div>'
+    +'</div><div class="row2">'
+      +'<div class="fld" style="margin:0"><label>활동 지역</label><input id="pf-region" value="'+esc(E.region)+'" placeholder="서울 · 수도권"></div>'
+      +'<div class="fld" style="margin:0"><label>상담 방법</label><input id="pf-method" value="'+esc(E.method)+'" placeholder="대면 · 화상 · 유선"></div>'
+    +'</div></div>'
+
+    +'<div class="dcard"><div class="lbl">상담 가능 주제 <em style="font-weight:400;letter-spacing:0;font-size:11px">복수 선택</em></div>'
+    +(PTOPICS.length
+      ?'<div class="tps" id="pf-tps">'+PTOPICS.map(t=>'<span class="'+(PSEL.includes(t)?'on':'')+'" data-t="'+esc(t)+'">'+esc(t)+'</span>').join('')+'</div>'
+       +'<div class="hint" style="font-size:11.5px;color:var(--gray-l);margin-top:10px">회원이 전문가를 찾을 때 여기 선택한 주제로 검색됩니다. 자신 있는 주제를 고르세요.</div>'
+      :'<div style="font-size:13px;color:var(--gray-l)">이 분야에 등록된 주제가 없습니다. 본사가 주제를 등록하면 선택할 수 있습니다.</div>')
+    +'</div>'
+
+    +'<div class="dcard"><div class="lbl">경력 · 자격</div>'
+    +'<div class="fld"><label>주요 경력</label><textarea id="pf-career" placeholder="국세청 조사국 12년&#10;세무법인 ○○ 대표 8년">'+esc(E.career)+'</textarea><div class="hint">한 줄에 하나씩</div></div>'
+    +'<div class="fld"><label>자격</label><input id="pf-certs" value="'+esc((E.certs||[]).join(', '))+'" placeholder="세무사, 경영지도사"><div class="hint">쉼표로 구분</div></div>'
+    +'<div class="fld" style="margin:0"><label>대표 사례 <em>회원에게 공개</em></label><textarea id="pf-cases" placeholder="제조업 법인 가지급금 8억 정리 — 이익소각·배당 병행 설계&#10;매출 120억 도소매 가업승계 사전 진단">'+esc((E.cases||[]).join('\n'))+'</textarea><div class="hint">한 줄에 하나씩. 고객명은 쓰지 마세요.</div></div>'
+    +'</div>'
+
+    +'<div class="dcard"><div class="lbl">회원께 드리는 인사말</div>'
+    +'<div class="gex"><b>이렇게 쓰시면 좋습니다</b> — 어떤 일을 해오셨는지, 어떤 고객을 만나왔는지, 컨설턴트와 어떻게 협업하고 싶으신지. '
+    +'경력 나열보다 <b>편지 쓰듯</b> 3~5문장이면 충분합니다. 회원이 전문가를 고를 때 가장 먼저 읽는 글입니다.</div>'
+    +'<div class="fld" style="margin:0"><textarea id="pf-greeting" style="min-height:180px" placeholder="국세청 조사국에서 12년을 보내고 개업한 지 8년째입니다. 그동안 만난 대부분의 법인은 문제가 터진 뒤에 저를 찾아왔습니다.&#10;&#10;가지급금이든 승계든, 늦으면 선택지가 사라집니다. 컨설턴트님이 현장에서 먼저 발견해 주시는 것이 그래서 중요합니다.&#10;&#10;답을 정해놓고 시작하지 않습니다. 회사 사정을 같이 들여다보고 대표님이 감당할 수 있는 순서를 함께 찾겠습니다.">'+esc(E.greeting)+'</textarea></div>'
+    +'</div>'
+
+    +'<p style="font-size:12px;color:var(--gray-l);margin-top:18px;line-height:1.7;text-align:center">저장하시면 본사가 내용을 확인한 뒤 회원 화면에 공개합니다.<br>수수료 배분율 등 계약 조건은 본사와 별도로 협의합니다.</p>'
+    +'<div style="height:20px"></div>';
+
+  $('pf-photo-btn').onclick=()=>$('pf-photo').click();
+  $('pf-photo').onchange=uploadProfilePhoto;
+  const g=$('pf-tps');
+  if(g)g.querySelectorAll('span').forEach(el=>el.onclick=()=>{
+    const t=el.dataset.t;const i=PSEL.indexOf(t);
+    if(i>=0){PSEL.splice(i,1);el.classList.remove('on');}else{PSEL.push(t);el.classList.add('on');}
+  });
+}
+
+async function uploadProfilePhoto(){
+  const fi=$('pf-photo'),f=fi.files&&fi.files[0];if(!f)return;
+  const msg=$('pf-photo-msg');
+  if(f.size>10*1024*1024){toast('10MB 이하 이미지만 올릴 수 있습니다');fi.value='';return;}
+  msg.textContent='업로드 중';
+  try{
+    const r=await call('icProfilePhoto',{p:PK,mime:f.type||'image/jpeg',size:f.size});
+    if(!r.success){toast(r.error||'업로드 준비 실패');msg.textContent='';return;}
+    const put=await fetch(r.uploadUrl,{method:'PUT',headers:{'Content-Type':r.contentType},body:f});
+    if(!put.ok){toast('업로드에 실패했습니다');msg.textContent='';return;}
+    PPHOTO=r.photoUrl;
+    const av=$('pf-av');av.style.backgroundImage='url('+PPHOTO+')';av.textContent='';
+    msg.textContent='사진이 올라갔습니다. 저장을 눌러야 반영됩니다.';msg.style.color='var(--ok)';
+  }catch(e){toast('업로드 중 오류가 발생했습니다');msg.textContent='';}
+  finally{fi.value='';}
+}
+
+async function saveProfile(){
+  const V=id=>{const el=$(id);return el?(el.value||'').trim():'';};
+  if(!V('pf-title'))return toast('직함을 입력해 주세요');
+  const b=$('pf-save-fix');if(b){b.disabled=true;b.textContent='저장 중';}
+  try{
+    const r=await call('icProfileSave',{
+      p:PK, title:V('pf-title'), org:V('pf-org'), phone:V('pf-phone'), alimtalkPhone:V('pf-alim'),
+      region:V('pf-region'), method:V('pf-method'), subTopics:PSEL,
+      career:V('pf-career'), certs:V('pf-certs'), cases:V('pf-cases'), greeting:V('pf-greeting'),
+      photoUrl:PPHOTO
+    });
+    if(!r.success){toast(r.error||'저장에 실패했습니다');return;}
+    alert('저장되었습니다.\n\n본사가 내용을 확인한 뒤 회원 화면에 공개합니다.\n수정이 필요하면 이 링크로 다시 들어오시면 됩니다.');
+    await loadProfile();
+  }catch(e){toast('저장 중 오류가 발생했습니다');}
+  finally{const b2=$('pf-save-fix');if(b2){b2.disabled=false;b2.textContent='저장';}}
 }
 
 /* ═══ 내 의뢰 현황 ═══ */
