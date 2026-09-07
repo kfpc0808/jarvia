@@ -338,7 +338,7 @@
       <p style="color:#666;margin:-8px 0 16px;font-size:13px">개인정보(이름·이메일·연락처)는 삭제되어 표시되지 않습니다. 아이디로 식별하며, 연락처 기반 특정인 조회는 회원관리의 「탈퇴회원 조회」를 이용하세요.</p>
       <div class="toolbar mt"><input id="wd-search" placeholder="아이디 검색..." oninput="renderWithdrawn()"> <select id="wd-sort" onchange="renderWithdrawn()"><option value="date-desc">탈퇴일 최신순</option><option value="date-asc">탈퇴일 오래된순</option><option value="id-asc">아이디 가나다순</option></select> <button class="btn btn-sec" onclick="loadWithdrawn()" style="margin-left:8px">🔄 새로고침</button></div>
       <div id="wd-summary" style="margin:8px 0 12px;font-size:13px;color:var(--primary);font-weight:600"></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No.</th><th>아이디</th><th>회원유형</th><th>탈퇴일</th><th>탈퇴경로</th><th style="text-align:right">이용일수</th><th style="text-align:right">참고정산금</th><th style="text-align:right">회수포인트</th><th>보관만료</th><th style="text-align:center">재가입</th></tr></thead><tbody id="tb-withdrawn"></tbody></table></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px">No.</th><th>아이디</th><th>회원유형</th><th>탈퇴일</th><th>탈퇴경로</th><th style="text-align:right">이용일수</th><th style="text-align:right">참고정산금</th><th style="text-align:right">회수포인트</th><th>보관만료</th><th style="text-align:center">재가입</th><th style="text-align:center">완전삭제</th></tr></thead><tbody id="tb-withdrawn"></tbody></table></div>
     </div>
     <div id="p-admins" class="panel hidden"><h2>관리자 관리</h2><button class="btn" id="btn-add-adm" onclick="document.getElementById('add-adm-form').classList.toggle('hidden')">관리자 추가</button><div id="add-adm-form" class="hidden form-box"><div class="fr"><div class="fg"><label>아이디</label><input id="na-id"></div><div class="fg"><label>이름</label><input id="na-name"></div><div class="fg"><label>비밀번호</label><input id="na-pw" type="password"></div></div><button class="btn" onclick="createAdmin()">생성</button> <button class="btn btn-sec" onclick="document.getElementById('add-adm-form').classList.add('hidden')">취소</button></div><div class="tbl-wrap"><table class="tbl mt"><thead><tr><th>아이디</th><th>이름</th><th>권한</th><th>마지막 로그인</th><th>상태</th><th>관리</th></tr></thead><tbody id="tb-admins"></tbody></table></div></div>
     <!-- ★ [2026-09-03] 관리자 계정 수정 모달 (총괄: 전체 / 관리자: 본인만) -->
@@ -5098,14 +5098,14 @@ async function doWithdrawnLookup(){
 // ── 탈퇴회원 현황 (A방식: 아이디 기반, 개인정보 없음) ──
 let _wdData=[];
 async function loadWithdrawn(){
-  const tb=$('tb-withdrawn'); if(tb)tb.innerHTML='<tr><td colspan="10" class="tc">불러오는 중...</td></tr>';
+  const tb=$('tb-withdrawn'); if(tb)tb.innerHTML='<tr><td colspan="11" class="tc">불러오는 중...</td></tr>';
   try{
     const snap=await getDocs(query(collection(db,'withdrawn_users'),orderBy('withdrawnAt','desc')));
     _wdData=snap.docs.map(d=>({id:d.id,...d.data()}));
     renderWithdrawn();
   }catch(e){
     console.error('탈퇴회원 현황 로드 실패:',e);
-    if(tb)tb.innerHTML='<tr><td colspan="10" class="tc" style="color:var(--danger)">로드 실패: '+esc(e.message||'')+'</td></tr>';
+    if(tb)tb.innerHTML='<tr><td colspan="11" class="tc" style="color:var(--danger)">로드 실패: '+esc(e.message||'')+'</td></tr>';
   }
 }
 function renderWithdrawn(){
@@ -5134,6 +5134,9 @@ function renderWithdrawn(){
     }
     return '<td style="text-align:center"><button class="btn" style="padding:4px 10px;font-size:12px" onclick="approveReSignup(\''+esc(w.id)+'\')">재가입 승인</button></td>';
   };
+  /* ★ [2026-09-07] 완전삭제 — 재가입 승인으로 풀리지 않는 경우(아이디 잠금·해킹 계정 정리 등)에 쓴다.
+     탈퇴이력의 loginId 로 users 문서를 역추적한다(탈퇴 시 users 문서는 남고 개인정보만 지워진다). */
+  const _purgeCell=w=>'<td style="text-align:center"><button class="btn btn-danger" style="padding:4px 10px;font-size:12px" onclick="purgeMemberByLoginId(\''+esc(w.loginId||'')+'\')" title="계정·채널·고객정보·정기결제까지 삭제(매출 이력은 보존)">완전삭제</button></td>';
   tb.innerHTML=rows.length?rows.map((w,i)=>
     '<tr><td style="text-align:center">'+(i+1)+'</td>'
     +'<td style="font-weight:600;color:var(--primary)">'+esc(w.loginId||'-')+'</td>'
@@ -5144,9 +5147,74 @@ function renderWithdrawn(){
     +'<td style="text-align:right;white-space:nowrap"><input id="wd-set-'+esc(w.id)+'" type="number" min="0" value="'+(w.settlementAmountRef||0)+'" style="width:90px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:right;font-size:12px">원 <button class="btn btn-sec" style="padding:2px 8px;font-size:11px" onclick="saveSettlement(\''+esc(w.id)+'\')">저장</button></td>'
     +'<td style="text-align:right">'+(w.clawbackAmount?fmt(w.clawbackAmount)+'P':'-')+'</td>'
     +'<td>'+fdate(w.expiresAt)+'</td>'
-    +_reCell(w)+'</tr>'
-  ).join(''):'<tr><td colspan="10" class="tc">탈퇴회원이 없습니다.</td></tr>';
+    +_reCell(w)+_purgeCell(w)+'</tr>'
+  ).join(''):'<tr><td colspan="11" class="tc">탈퇴회원이 없습니다.</td></tr>';
 }
+
+/* ═══ ★ [2026-09-07] 회원 완전 삭제 (등급 무관) ═══
+   재가입 승인으로 풀리지 않는 경우에 쓴다 — 옛 아이디를 다시 써야 하거나, 해킹 계정을 정리할 때.
+   · 지움: users·Auth·아이디/연락처 잠금·탈퇴이력·채널·고객정보·정기결제(빌키·자동충전)
+   · 남김: payments·transactions (매출 대사)
+   · 서버가 status==='withdrawn' 과 단체 마스터 소속 여부를 다시 검사한다. */
+async function purgeMemberByLoginId(loginId){
+  if(!loginId)return toast('아이디를 알 수 없습니다.','error');
+  let uid='',m={};
+  try{
+    let s=await getDocs(query(collection(db,'users'),where('loginIdLower','==',String(loginId).toLowerCase()),limit(1)));
+    if(s.empty)s=await getDocs(query(collection(db,'users'),where('loginId','==',loginId),limit(1)));
+    if(s.empty)return toast('회원 문서를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.','error');
+    uid=s.docs[0].id;m=s.docs[0].data()||{};
+  }catch(e){return toast('회원 조회 실패: '+(e.message||e),'error');}
+  if(m.status!=='withdrawn')return toast('탈퇴 처리된 회원만 완전 삭제할 수 있습니다. (현재: '+(m.status||'미상')+')','error');
+
+  /* 삭제 규모를 미리 보여준다 — 컨설턴트 계정이면 고객 데이터가 함께 사라진다 */
+  let nClients=0;
+  try{const c=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',uid)));nClients=c.size;}catch(_){}
+  const grp=m.isGroup?'\n· ⚠ 단체 마스터 계정입니다 (소속 회원이 남아 있으면 서버가 거부합니다)':'';
+
+  if(!confirm('【완전 삭제】 '+loginId+' ('+(m.role||'')+')'
+    +'\n\n삭제되는 것'
+    +'\n· 회원 계정 · 로그인 자격'
+    +'\n· 아이디 · 연락처 잠금 (재가입 가능해짐)'
+    +'\n· 탈퇴 이력'
+    +'\n· 컨설턴트 채널 · 고객 정보 '+nClients+'건'
+    +'\n· 정기결제 빌키 · 자동충전 설정'
+    +'\n\n남는 것'
+    +'\n· 결제·정산 이력 (매출 대사용)'+grp
+    +'\n\n되돌릴 수 없습니다. 계속할까요?'))return;
+
+  const typed=prompt('삭제를 확정하려면 아이디를 그대로 입력하세요.\n\n'+loginId);
+  if(typed===null)return;
+  if(String(typed).trim()!==loginId)return toast('아이디가 일치하지 않아 취소했습니다.','warning');
+
+  const reason=prompt('삭제 사유를 입력하세요. (감사 기록으로 남습니다)\n예: 계정 해킹으로 신규 아이디 재가입');
+  if(reason===null)return;
+  if(String(reason).trim().length<2)return toast('삭제 사유를 입력해야 합니다.','error');
+
+  try{
+    toast('삭제 처리 중...');
+    const fn=httpsCallable(functions,'adminPurgeMember');
+    const res=await fn({targetUid:uid,reason:String(reason).trim()});
+    const d=res.data||{};
+    if(d.success){
+      const w=(d.warnings||[]).filter(Boolean);
+      const r=d.reusable||{};
+      const ok=k=>r[k]?'가능':'확인 필요';
+      toast('완전 삭제 완료 — '+loginId,'success');
+      alert('【완전 삭제 완료】 '+loginId
+        +'\n\n재가입 가능 여부'
+        +'\n· 같은 아이디 : '+ok('loginId')
+        +'\n· 같은 이메일 : '+ok('email')
+        +'\n· 같은 연락처 : '+ok('phone')
+        +'\n\n보존된 것: 결제·정산 이력'
+        +(w.length?'\n\n⚠ 확인이 필요한 항목\n· '+w.join('\n· '):''));
+      loadWithdrawn();try{loadMembers();}catch(_){}
+    }else{
+      toast('삭제 실패: '+(d.error||'알 수 없는 오류'),'error');
+    }
+  }catch(e){console.error('완전 삭제 실패:',e);toast('삭제 실패: '+(e.message||e),'error');}
+}
+window.purgeMemberByLoginId=purgeMemberByLoginId;
 
 // ── 재가입 승인 / 승인 취소 (관리자, 7일 유효) ──
 async function approveReSignup(docId){
@@ -20833,7 +20901,9 @@ async function imLoad(){
         // ★ [2026-09-06] 계산 입력 문제로 집필 전 정지된 회차는 [재시도]로는 못 푼다(같은 calcParams 로 다시 막힘).
         //   페르소나부터 새로 뽑는 강제 재생성이 정규 복구 경로다.
         st==='needs_calc_input'?`<button class="btn btn-sm" style="background:#E65100" onclick="imRegen('${d._id}')">강제 재생성</button>`:'',
-        (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
+        (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:'',
+        // ★ [2026-09-06] 삭제 — 문서·Storage(HTML·음성)·음성잡을 함께 지운다. 게시본은 노출하지 않는다.
+        st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="imDelete('${d._id}')">삭제</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">본문 ${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
     // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
@@ -20900,6 +20970,22 @@ async function imUploadFile(input){
     toast(`수정본 반영 완료 — 음성 재생성 시작${(j.warnings||[]).length?` (경고 ${j.warnings.length})`:''}`,'success');
     await imLoad();imOpen(_imUploadId);
   }catch(e){toast('업로드 실패: '+e.message,'error');}
+}
+async function imDelete(id){
+  // ★ [2026-09-06] 회차 완전 삭제 — Firestore 문서 · Storage(조각/독립 HTML · 섹션 mp3) · 음성 잡 문서.
+  //   되돌릴 수 없으므로 2단계로 확인받는다.
+  const d=_imRows.find(x=>x._id===id)||{};
+  const st=String(d.status||'');
+  if(st==='published')return toast('이미 게시된 회차는 이 화면에서 삭제할 수 없습니다','error');
+  const audio=(d.audio&&d.audio.status)||'-';
+  if(!confirm(`${d.sendDate}(금) #${d.week}\n${d.title||''}\n\n이 회차를 완전히 삭제합니다.\n· 회차 문서 (상태 ${st} / 음성 ${audio})\n· HTML 조각 · 독립 HTML\n· 섹션 음성 mp3 전체\n· 음성 생성 잡 기록\n\n되돌릴 수 없습니다. 계속할까요?`))return;
+  if(!confirm(`한 번 더 확인합니다.\n\n"${d.title||''}"\n${d.sendDate} 발송분을 정말 삭제할까요?\n\n※ 편성표에서 [▶ 생성]으로 다시 만들 수 있습니다(40~70분 소요).`))return;
+  toast('삭제 중…');
+  try{
+    const r=await imApi({action:'delete',id,by:'admin'});
+    toast(`삭제 완료 — Storage ${r.storageDeleted||0}/${r.storageTotal||0} · 음성잡 ${r.jobsDeleted||0}`,'success');
+    await imLoad();try{imSchedLoad(true);}catch(_){}
+  }catch(e){toast('삭제 실패: '+e.message,'error');}
 }
 async function imRegen(id){
   // ★ [2026-09-06] 계산 입력 미확보·페르소나 불일치로 집필 전 정지된 회차 복구.
@@ -20998,7 +21084,7 @@ async function imSchedRegen(){
   try{await imApi({action:'schedule',ym});toast('편성표 생성 완료','success');imSchedLoad();}catch(e){toast('편성표 생성 실패: '+e.message,'error');}
 }
 function imCopyAnnounce(){const el=$('im-sch-announce');if(!el.value)return toast('먼저 [조회]하세요','error');el.select();try{document.execCommand('copy');toast('복사했습니다','success');}catch(_){toast('복사 실패 — 직접 선택해 복사하세요','error');}}
-window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imRegen=imRegen;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
+window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imRegen=imRegen;window.imDelete=imDelete;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
 
 
 
