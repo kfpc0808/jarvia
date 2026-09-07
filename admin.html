@@ -20753,7 +20753,16 @@ function imStatusHtml(d){
   if(st==='error')return `<span style="color:#C62828;font-weight:700">error</span><div style="font-size:11px;color:#C62828;max-width:220px;white-space:normal">${esc(d.error||'')}</div>`;
   if(st==='ready')return '<span style="color:#1a7a4a;font-weight:700">ready</span><div style="font-size:11px;color:#1a7a4a">검수 대기</div>';
   if(st==='published')return '<span style="color:#1565C0;font-weight:700">published</span>';
-  if(st.startsWith('needs_'))return `<span style="color:#E65100;font-weight:700">${esc(st)}</span><div style="font-size:11px;color:#E65100;max-width:220px;white-space:normal">${esc(d.substatus||'')}</div>`;
+  if(st.startsWith('needs_')){
+    // ★ [2026-09-06] needs_calc_input 은 집필 전 정지 — substatus 는 첫 사유만 잘려 있으므로 전문을 펼쳐 보여준다
+    const cg=(d.qualityGate&&d.qualityGate.calcInput)||{};
+    const crits=Array.isArray(cg.criticals)?cg.criticals:[];
+    const warns=Array.isArray(cg.warnings)?cg.warnings:[];
+    const detail=crits.length
+      ? `<ul style="margin:3px 0 0 14px;padding:0;font-size:11px;color:#E65100;max-width:280px;white-space:normal">${crits.map(c=>`<li>${esc(c)}</li>`).join('')}</ul>${warns.length?`<div style="font-size:11px;color:#888;max-width:280px;white-space:normal">참고: ${esc(warns.join(' / '))}</div>`:''}`
+      : `<div style="font-size:11px;color:#E65100;max-width:220px;white-space:normal">${esc(d.substatus||'')}</div>`;
+    return `<span style="color:#E65100;font-weight:700">${esc(st)}</span>${detail}`;
+  }
   // 실행 중 상태가 20분 이상 갱신 없으면 정지 의심 표시 (updatedAt 기준). ready 이후는 음성 백그라운드라 경고 대상 아님
   const upd=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;const stale=st.endsWith('_running')&&upd&&(Date.now()-upd)>20*60*1000;
   const last=d.lastLog&&d.lastLog.m?`<div style="font-size:11px;color:#1565C0;max-width:280px;white-space:normal">${esc(d.lastLog.t||'')} ${esc(d.lastLog.m)}${upd?` <span style="color:#999">(${Math.round((Date.now()-upd)/1000)}초 전)</span>`:''}</div>`:'';
@@ -20821,6 +20830,9 @@ async function imLoad(){
       const ctl=[`<button class="btn btn-sm" onclick="imOpen('${d._id}')">상세</button>`,
         st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${d._id}')">승인</button>`:'',
         st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${d._id}')">즉시 게시</button>`:'',
+        // ★ [2026-09-06] 계산 입력 문제로 집필 전 정지된 회차는 [재시도]로는 못 푼다(같은 calcParams 로 다시 막힘).
+        //   페르소나부터 새로 뽑는 강제 재생성이 정규 복구 경로다.
+        st==='needs_calc_input'?`<button class="btn btn-sm" style="background:#E65100" onclick="imRegen('${d._id}')">강제 재생성</button>`:'',
         (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">본문 ${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
@@ -20889,8 +20901,24 @@ async function imUploadFile(input){
     await imLoad();imOpen(_imUploadId);
   }catch(e){toast('업로드 실패: '+e.message,'error');}
 }
+async function imRegen(id){
+  // ★ [2026-09-06] 계산 입력 미확보·페르소나 불일치로 집필 전 정지된 회차 복구.
+  //   generate&force=1 은 페르소나를 새로 뽑아 새 문서(새 id)를 만든다. 성공 뒤에만 정지본을 지운다.
+  const d=_imRows.find(x=>x._id===id)||{};
+  const crits=((d.qualityGate&&d.qualityGate.calcInput&&d.qualityGate.calcInput.criticals)||[]).join('\n· ');
+  if(!confirm(`${d.sendDate} #${d.week} ${d.title}\n\n[정지 사유]\n· ${crits||d.substatus||'-'}\n\n페르소나와 계산 입력을 새로 만들어 처음부터 다시 생성합니다.\n· 새 대표 사례(이름·조건)가 만들어집니다\n· 기존 정지 회차는 생성 성공 후 삭제됩니다\n· Step1~7 에 40~70분 걸립니다\n\n계속할까요?`))return;
+  toast('재생성 중 — 페르소나 생성에 1~3분 걸립니다…');
+  try{
+    const r=await imApi({action:'generate',date:d.sendDate,force:'1'});
+    if(r.blocked){toast('재생성했지만 또 정지: '+String(r.reason||'').slice(0,60),'error');await imLoad();return;}
+    try{await imApi({action:'delete',id,by:'admin'});}catch(e){toast('새 회차 생성됨 — 기존 정지본 삭제 실패(수동 삭제 필요): '+e.message,'error');}
+    toast('재생성 시작 — Step1 진행 중','success');
+    setTimeout(imLoad,2000);
+  }catch(e){toast('재생성 실패: '+e.message,'error');}
+}
 async function imRetry(id){
   const d=_imRows.find(x=>x._id===id)||{};
+  if(String(d.status||'')==='needs_calc_input'&&!confirm('이 회차는 계산 입력 문제로 집필 전에 멈춘 상태입니다.\n[재시도]는 같은 계산 입력으로 다시 돌기 때문에 대개 같은 지점에서 또 막힙니다.\n\n[강제 재생성]을 쓰는 것이 정상 복구 경로입니다.\n그래도 재시도할까요?'))return;
   const guess=(d.errorDetail&&d.errorDetail.job&&(String(d.errorDetail.job).match(/step[1-7]b?/)||[''])[0])||((String(d.status||'').match(/^(step[1-7]b?)_running$/)||[])[1])||'';
   const from=prompt('재시작 단계 (비우면 실패 단계부터):\nstep1 설계도 / step1b 근거 / step2 집필 / step3 검증 / step4 마무리 / step5 HTML / step6 음성 / step7 카드',guess);
   if(from===null)return;
@@ -20970,7 +20998,7 @@ async function imSchedRegen(){
   try{await imApi({action:'schedule',ym});toast('편성표 생성 완료','success');imSchedLoad();}catch(e){toast('편성표 생성 실패: '+e.message,'error');}
 }
 function imCopyAnnounce(){const el=$('im-sch-announce');if(!el.value)return toast('먼저 [조회]하세요','error');el.select();try{document.execCommand('copy');toast('복사했습니다','success');}catch(_){toast('복사 실패 — 직접 선택해 복사하세요','error');}}
-window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
+window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imRegen=imRegen;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
 
 
 
