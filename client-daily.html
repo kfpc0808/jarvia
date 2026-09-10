@@ -267,6 +267,7 @@ body{
 .secTile.active{background:var(--accent);border:1.5px solid var(--gold)}
 .secTile.active .stMark{opacity:.22}
 .secTile.active .stName{color:#F5EFE0}
+.rpt-needTag{display:inline-block;flex-shrink:0;font-size:9px;font-weight:800;color:#fff;background:linear-gradient(135deg,#C9A05C,#96701F);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:2px;white-space:nowrap}   /* ★ [2026-09-10] 관심 항목 라벨 */
 .secTile.active .stTitle{color:#C9CDD4}
 .secPane .sec-divider{cursor:default}
 .sec-preview{
@@ -1834,6 +1835,7 @@ async function init(){
     /* ★ [2026-08-22] 링크 게이트 — 서명 해석·날짜 고정·유예·잠금. 통과 못 하면 여기서 종료.
        캐시 표시보다 먼저 실행한다(잠글 링크에 오늘자 캐시가 먼저 번쩍이는 것 방지) */
     if(!await cdGatePass())return;
+    try{rptLoadNeeds();}catch(_e){}   /* ★ [2026-09-10] 관심항목(needs) 비동기 조회 — c·k 있는 링크만, 실패해도 무시 */
 
     // ★ [속도개선 C] 당일 캐시 — 오늘 본 적 있으면 즉시(0초) 표시, 배경에서 최신 확인
     try{
@@ -2471,6 +2473,7 @@ function renderSections(){
   container.innerHTML=html;
   try{if(_ck){container.appendChild(_ck);_ck.style.display='block';}}catch(e){}
   try{buildSectionTiles();}catch(e){console.warn('타일 빌드 실패 — 아코디언 현행 유지',e);}
+  try{rptApplyNeeds();}catch(e){console.warn('[rpt] 관심 섹션 정렬 실패 — 기존 순서 유지',e);}   /* ★ [2026-09-10] 관심 항목 섹션 상단 배치 — 타일 빌드 직후 */
   try{cdTtsInit();}catch(e){console.warn('[CD-TTS] 주입 실패',e);}   /* ★ [2026-09-02] 섹션 낭독 바 주입 — 반드시 타일 빌드 이후 */
   // ★ 한 줄 해석: 5줄 이하이면 토글 버튼 숨김 (2026-07-16)
   try{
@@ -2560,6 +2563,63 @@ window.selectSecTile=function(i,silent){
     }
   }catch(e){}
 };
+
+/* ═══ ★ [2026-09-10] 고객 관심 항목(needs) 섹션 강조 ═══
+   · 링크에 c(고객)·k(서명)가 있을 때만 서버(reportClientNeeds)에 관심항목을 물어본다 — 서명이 맞아야 응답, needs 배열만 받음
+   · 타일·pane이 만들어진 뒤 후처리: 제목이 관심항목과 맞는 섹션을 앞으로 옮기고 「관심 항목」 라벨. 매칭 없으면 아무것도 안 함
+   · 동의어 표 RPT_NEED_KEYS 는 reportAlimtalk.js 와 동일하게 유지 */
+const RPT_NEED_KEYS=[
+  ['상속','증여','유산','가업승계'],['연금','노후','은퇴','퇴직','IRP'],['절세','세금','세제','공제','세무','양도세','종부세','소득세','법인세'],
+  ['보장','보험','건강','의료','질병','암','실손','간병'],['자녀','교육','학자금','육아','출산'],['부동산','주택','아파트','전세','월세','청약','재건축'],
+  ['금리','대출','채권','예금','적금'],['투자','주식','펀드','ETF','코스피','증시','자산'],['환율','달러','원화','엔화'],['법인','사업','창업','경영','CEO'],['경기','물가','인플레','GDP']
+];
+function rptNeedTerms(needs){
+  const out=new Set();
+  (Array.isArray(needs)?needs:String(needs||'').split(/[,·/|\n]/)).map(s=>String(s||'').trim()).filter(Boolean).forEach(n=>{
+    out.add(n);
+    if(n.length>=2)RPT_NEED_KEYS.forEach(g=>{if(g.some(k=>n.includes(k)||k.includes(n)))g.forEach(k=>out.add(k));});
+  });
+  return [...out].filter(k=>k.length>=2);
+}
+function rptNeedHit(text,terms){const t=String(text||'');return !!t&&(terms||[]).some(k=>t.includes(k));}
+window._rptNeedTerms=[];
+function rptLoadNeeds(){
+  if(!fcId||!_cSig||!keyParam)return;
+  httpsCallable(fns,'reportClientNeeds')({fc:fcId,c:_cSig,k:keyParam}).then(r=>{
+    const n=(r&&r.data&&r.data.success&&Array.isArray(r.data.needs))?r.data.needs:[];
+    window._rptNeedTerms=rptNeedTerms(n);
+    if(window._rptNeedTerms.length&&window._secPanes){try{rptApplyNeeds();}catch(_e){}}   /* 렌더가 먼저 끝난 경우 지금 적용 */
+  }).catch(()=>{});
+}
+function rptApplyNeeds(){
+  const terms=window._rptNeedTerms||[];
+  const panes=window._secPanes,tiles=window._secTileEls;
+  if(!terms.length||!panes||!tiles||panes.length<2||tiles.length!==panes.length)return;
+  const grid=tiles[0].parentNode;
+  if(!grid||grid.dataset.rptNeeds)return;   /* 이미 적용된 DOM이면 중복 실행 안 함 */
+  const hit=panes.map((p,i)=>{
+    const t=tiles[i];
+    const txt=[((t.querySelector('.stTitle')||{}).textContent||''),...[...p.querySelectorAll('.news-title')].map(e=>e.textContent||'')].join(' ');
+    return rptNeedHit(txt,terms);
+  });
+  if(!hit.some(Boolean))return;
+  const order=panes.map((_,i)=>i).sort((a,b)=>(hit[b]?1:0)-(hit[a]?1:0));   /* 안정 정렬 — 매칭 섹션 앞, 나머지 기존 순서 */
+  const newPanes=order.map(i=>panes[i]),newTiles=order.map(i=>tiles[i]);
+  const paneParent=panes[0].parentNode,ref=panes[panes.length-1].nextSibling;
+  newPanes.forEach(p=>paneParent.insertBefore(p,ref));
+  newTiles.forEach((t,i)=>{
+    grid.appendChild(t);
+    t.setAttribute('onclick','selectSecTile('+i+')');
+    if(hit[order[i]]&&!t.querySelector('.rpt-needTag')){
+      const head=t.querySelector('.stHead'),tag=document.createElement('span');
+      tag.className='rpt-needTag';tag.textContent='관심 항목';
+      if(head)head.appendChild(tag);
+    }
+  });
+  window._secPanes=newPanes;window._secTileEls=newTiles;
+  grid.dataset.rptNeeds='1';
+  selectSecTile(0,true);
+}
 
 var _ctxC={'일상대화':['#FAEEDA','#854F0B'],'비즈니스':['#E1F5EE','#0F6E56'],'SNS':['#EEEDFE','#534AB7'],'동료에게':['#FAEEDA','#854F0B'],'고객에게':['#E1F5EE','#0F6E56'],'실생활':['#EEEDFE','#534AB7']};
 var _enPanelIdx=0;
