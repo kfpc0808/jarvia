@@ -404,7 +404,7 @@ async function loadArchiveViewer(){
     if(MCV.k){
       /* 서명 키 → 발행일. 위조·변조 키는 서버가 거부한다 */
       try{
-        const r=await httpsCallable(fns,'mcShareKey')({mode:'resolve',fc:MCV.fc,key:MCV.k});
+        const r=await httpsCallable(fns,'mcShareKey')({mode:'resolve',fc:MCV.fc,key:MCV.k,cid:MCV.c});   /* ★ [2026-09-10] 고객별 링크는 cid 까지 서명에 봉인돼 있다 */
         if(r&&r.data&&r.data.success)fd=String(r.data.fileDate||'');
         else _why=(r&&r.data&&r.data.error)||'키 검증 실패';
       }catch(e){ _why='서버 연결 실패: '+((e&&e.message)||''); console.warn('키 해석 실패:',e&&e.message); }
@@ -706,7 +706,9 @@ const MCV = (function(){
     if(q.get('v')!=='1')return null;
     const fc=(q.get('fc')||'').trim();
     if(!/^[A-Za-z0-9_.@가-힣-]{1,50}$/.test(fc))return null;
-    return { fc, d:(q.get('d')||'').replace(/\D/g,''), k:(q.get('k')||'').trim() };
+    /* ★ [2026-09-10] c(고객 ID) — 알림톡 고객별 링크. 서명 검증·열람 기록에 함께 쓴다 */
+    const c=(q.get('c')||'').trim();
+    return { fc, d:(q.get('d')||'').replace(/\D/g,''), k:(q.get('k')||'').trim(), c:/^[A-Za-z0-9_-]{1,40}$/.test(c)?c:'' };
   }catch(_e){return null;}
 })();
 
@@ -746,6 +748,51 @@ function mcvTopHTML(){
   const f=r?fmtDate(r):null;
   const hd=f?('<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:2px 2px 14px;margin-bottom:18px;border-bottom:2px solid #C9A05C"><div style="font-size:19px;font-weight:800;color:#1E2226;letter-spacing:-.3px">🧭 모닝 브리핑</div><div style="font-size:14.5px;font-weight:800;color:#1E2226;white-space:nowrap">'+esc(f.main)+'</div></div>'):'';
   return top+hd;
+}
+
+/* ★ [2026-09-10] 열람 기록 — 알림톡 고객별 링크(c·k)일 때만. 서버가 서명을 검증한 뒤
+   report_views 에 첫/마지막 열람 시각·횟수만 남긴다(번호·기기 정보 없음).
+   컨설턴트에게 열람 알림을 보내지는 않는다 — 이력 화면에서 확인만 한다. */
+function mcRptMarkView(){
+  if(!MCV||!MCV.c||!MCV.k)return;
+  try{ httpsCallable(fns,'reportViewMark')({fc:MCV.fc,c:MCV.c,k:MCV.k,kind:'mc'}).catch(()=>{}); }catch(_e){}
+}
+
+/* ★ [2026-09-10] 카카오톡 리포트 수신 신청 배너 (고객 열람 모드 전용)
+   · 신청 처리는 client-daily.html 의 신청 시트 한 곳에서만 한다 — 동의 문구·저장 로직을 두 파일에
+     복제하면 문구가 어긋날 때 동의 기록이 서로 달라진다. 버튼은 ?sub=1 로 그 시트를 바로 연다.
+   · 노출 규칙(닫으면 7일 뒤·최대 3회)과 저장소 키(jv_rpt_{fc})는 client-daily 와 동일 —
+     한쪽에서 신청하거나 닫으면 다른 쪽에도 그대로 반영된다. */
+const MCRPT_MAX_CLOSE=3, MCRPT_REOPEN_DAYS=7;
+function mcRptLs(){try{return JSON.parse(localStorage.getItem('jv_rpt_'+MCV.fc)||'{}');}catch(_e){return {};}}
+function mcRptSave(o){try{localStorage.setItem('jv_rpt_'+MCV.fc,JSON.stringify(o));}catch(_e){}}
+window.mcRptClose=function(){
+  const st=mcRptLs();st.closes=(st.closes||0)+1;st.closedAt=Date.now();mcRptSave(st);
+  const w=document.getElementById('mcRptBanner');if(w)w.remove();
+};
+function mcRptBanner(){
+  if(!MCV)return;
+  /* client-daily 의 컨센서스 오버레이(iframe) 안에서는 표시하지 않는다 —
+     그 화면에는 이미 같은 배너가 있고, 여기서 누르면 오버레이 안에서 데일리 화면이 또 열린다 */
+  try{ if(window.top!==window.self)return; }catch(_e){ return; }
+  const st=mcRptLs();
+  if(st.subscribed&&st.reportOptIn!==false)return;          /* 이미 수신 중 */
+  if((st.closes||0)>=MCRPT_MAX_CLOSE)return;
+  if(st.closedAt&&(Date.now()-st.closedAt)<MCRPT_REOPEN_DAYS*86400000)return;
+  const main=document.getElementById('main');if(!main||document.getElementById('mcRptBanner'))return;
+  const nm=(fcProfile&&fcProfile.name)?fcProfile.name:'담당';
+  const url='https://jarvia.co.kr/client-daily?fc='+encodeURIComponent(MCV.fc)+(MCV.c?'&c='+encodeURIComponent(MCV.c):'')+'&sub=1';
+  const el=document.createElement('div');
+  el.id='mcRptBanner';
+  el.style.cssText='position:relative;background:#fff;border:1.5px solid #F0D779;border-radius:14px;padding:15px 14px 13px;margin:18px 0 4px;box-shadow:0 3px 12px rgba(201,160,92,.12)';
+  el.innerHTML='<button type="button" onclick="mcRptClose()" aria-label="닫기" style="position:absolute;right:8px;top:6px;background:none;border:none;font-size:19px;line-height:1;color:#AEB6BE;cursor:pointer">×</button>'
+    +'<div style="display:flex;align-items:center;gap:9px;margin-bottom:9px"><span style="width:30px;height:30px;border-radius:9px;background:#FEE500;display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+    +'<svg viewBox="0 0 24 24" width="17" height="17" fill="#191919"><path d="M12 3C6.5 3 2 6.6 2 11c0 2.8 1.9 5.3 4.7 6.7L5.6 21l4.3-2.6c.7.1 1.4.2 2.1.2 5.5 0 10-3.6 10-8S17.5 3 12 3z"/></svg></span>'
+    +'<div style="min-width:0"><div style="font-size:14.5px;font-weight:800;color:#1E2226;letter-spacing:-.2px">이 리포트, 카카오톡으로 받기</div>'
+    +'<div style="font-size:12px;color:#5A636B;margin-top:2px;word-break:keep-all">'+esc(nm)+' 컨설턴트가 골라 보내드리는 모닝 컨센서스·데일리 리포트를 카카오톡으로 편하게 받아보세요</div></div></div>'
+    +'<a href="'+url+'" style="display:block;text-align:center;background:#FEE500;color:#191919;font-size:14px;font-weight:800;border-radius:10px;padding:11px 0;text-decoration:none">카카오톡으로 받기</a>'
+    +'<div style="font-size:11px;color:#8B939B;text-align:center;margin-top:7px">담당 컨설턴트가 보낼 때만 · 광고 없음 · 언제든 수신 중단</div>';
+  main.appendChild(el);
 }
 
 /* 고객 열람 기록 — 컨설턴트의 열람 현황에 '모닝 컨센서스'로 집계된다 */
@@ -843,6 +890,8 @@ if(MCV){
     await loadFcProfileByLoginId(MCV.fc);
     await loadArchiveViewer();   /* ★ [2026-08-21] 60건 일괄 → 해당 1건만 */
     try{ mcvTrack(); }catch(_e){}
+    try{ mcRptMarkView(); }catch(_e){}   /* ★ [2026-09-10] 열람 기록 — c·k 있는 알림톡 링크만 */
+    try{ mcRptBanner(); }catch(_e){}     /* ★ [2026-09-10] 카카오톡 수신 신청 배너 */
   })();
 }else
 onAuthStateChanged(auth,async u=>{
