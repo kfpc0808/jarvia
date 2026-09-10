@@ -6310,7 +6310,12 @@ window.fccBridge={
         if(!exId&&!s.forceCreate){const nk=String(s.name||'').replace(/\s+/g,'');if(nk&&byName[nk]&&byName[nk].n===1){exId=byName[nk].id;exCt=byName[nk].contracts;_byNameOnly=true;}}
         const inc=(s.contracts||[]);
         const core={name:s.name,birthDate:s.birthDate||'',birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',sangryeongMmdd:s.birthDate?fccBridgeSang(s.birthDate):'',updatedAt:serverTimestamp()};
-        if(s.mgTitle!=null)core.mgTitle=String(s.mgTitle);
+      if(s.mgTitle!=null)core.mgTitle=String(s.mgTitle);
+      /* ★ [2026-09-10] 서버 속성 4종(관계·상태·관심항목·다음연락일) — 연락처·주소·메모는 여전히 드라이브에만.
+         호출부가 넘긴 값 우선, 없으면 이 기기의 고객 목록(__mpcAttrsOf)에서 찾아 채운다. 둘 다 없으면 서버 값 유지 */
+      {const _at=(s.rels!=null||s.status!=null||s.needs!=null||s.nextContact!=null)?s:((window.__mpcAttrsOf&&window.__mpcAttrsOf(s.fccId||'',s.name))||null);
+      if(_at){if(Array.isArray(_at.rels))core.rels=_at.rels.slice(0,3).map(String);if(_at.status!=null)core.status=String(_at.status).slice(0,20);
+        if(Array.isArray(_at.needs))core.needs=_at.needs.slice(0,8).map(String);if(_at.nextContact!=null)core.nextContact=/^\d{4}-\d{2}-\d{2}$/.test(String(_at.nextContact))?String(_at.nextContact):'';}}
         /* ★ [2026-09-02] 이름만으로 맞춘 경우, 들어온 생일이 비어 있으면 서버의 생일·생일MMDD·상령일을 덮어쓰지 않는다
            (음성 입력처럼 생일 없는 갱신이 알림 기준을 지워버리는 것을 막는다) */
         if(_byNameOnly&&!s.birthDate){delete core.birthDate;delete core.birthMmdd;delete core.sangryeongMmdd;}
@@ -12423,7 +12428,10 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   };
   /* ★ 음성입력 신규 고객 생성 (2026-07-19): 확인 화면에서 사용자가 이름을 확정한 뒤에만 호출된다.
      저장 순서 = 기기 즉시 → 드라이브 즉시 → 서버(fc_clients) 즉시. 좌표를 못 찾아도 저장은 진행한다. */
-  window.__vmCreateCustomer=function(f,cb){try{
+    /* ★ [2026-09-10] fccBridge.upsert 가 서버 속성 4종을 채울 때 쓰는 로컬 고객 조회 (fccId → 이름 순) */
+    window.__mpcAttrsOf=function(fccId,name){try{var c=null;if(fccId){for(var i=0;i<customers.length;i++){if(customers[i].fccId===fccId){c=customers[i];break;}}}
+      if(!c&&name)c=mpcFindByName(name);if(!c)return null;return {rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};}catch(_e){return null;}};
+    window.__vmCreateCustomer=function(f,cb){try{
     f=f||{};
     var nm=String(f.name||"").trim().slice(0,30);
     if(!nm){if(cb)cb(false,"이름이 없어요");return;}
@@ -12448,7 +12456,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var syncFcc=function(after){
       if(!window.fccBridge||!window.fccBridge.upsert){after();return;}
       try{
-        window.fccBridge.upsert([{fccId:"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:"",mgTitle:"",forceCreate:false,   /* ★ [2026-09-02] 이름이 열쇠 — 서버에 같은 이름이 있으면 갱신. forceCreate:true 는 서버 문서를 무조건 하나 더 만들어 서버·드라이브 개수를 어긋나게 했다 */
+        window.fccBridge.upsert([{fccId:"",name:o.name,birthDate:o.birthDate||"",prevBirthDate:"",mgTitle:"",forceCreate:false,rels:o.rels||[],status:o.status||"",needs:o.needs||[],nextContact:o.nextContact||"",   /* ★ [2026-09-10] 서버 속성 4종 */   /* ★ [2026-09-02] 이름이 열쇠 — 서버에 같은 이름이 있으면 갱신. forceCreate:true 는 서버 문서를 무조건 하나 더 만들어 서버·드라이브 개수를 어긋나게 했다 */
           contracts:(o.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:false,insType:"",insurer:"",premium:""};}).filter(function(x){return x.productName;})}])
           .then(function(ids){if(ids&&ids[0])o.fccId=ids[0];after();},
                 function(){toast("서버 반영이 지연됐어요 — 고객 지도를 다시 열면 자동으로 맞춰져요","warn");after();});
@@ -13909,7 +13917,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
        비용: 커밋 때마다 fccBridge.upsert가 기존 목록을 1회 조회하므로 읽기가 늘어난다.
              (2,000명 기준 약 9천 읽기) 중단 시 데이터 유실을 막는 값으로 감수한다. */
     var CORE_FLUSH=200,corePend=[],srvOk=0,srvFail=0,srvFailed=[],srvSkip=0,srvSkipped=[];   /* srvFailed: [{name,code}] — 실패한 사람만 */
-    var coreOf=function(x){return {name:x.name,birthDate:x.birthDate,contracts:(x.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(y){return y.productName;})};};
+    var coreOf=function(x){return {name:x.name,birthDate:x.birthDate,rels:x.rels||[],status:x.status||"",needs:x.needs||[],nextContact:x.nextContact||"",/* ★ [2026-09-10] 서버 속성 4종 */contracts:(x.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(y){return y.productName;})};};
     var flushCore=function(cb){
       if(!corePend.length||!window.fccBridge){cb&&cb();return;}
       var src=corePend.splice(0,corePend.length);
