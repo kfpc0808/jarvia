@@ -23,6 +23,8 @@ a{color:var(--primary)}
 .picker select,.picker input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:14px;background:#fff}
 .picker .chip{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--gold);color:var(--primary-dk)}
 .picker .chip.tax{background:var(--green);color:#fff}
+.picker .chip.weekly{background:#8C6A16;color:#fff}   /* ★ [2026-09-10] 위클리 컨센서스 */
+.play.playing{background:#0E1730!important;color:#fff!important}.play.playing i{border-left-color:#fff!important}
 .empty{text-align:center;padding:60px 20px;color:var(--gray-l)}
 /* 회차 헤드 */
 .head{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px 22px;margin-bottom:16px}
@@ -100,6 +102,23 @@ table.log th{cursor:pointer;user-select:none;white-space:nowrap;color:var(--ink)
   <p class="note" style="margin-top:10px">예규 인용문과 면책 문구는 고정입니다. 저장하면 미리보기·링크에 반영되고, 이 회차의 링크를 받은 대표는 고친 버전을 봅니다.</p>
 </div></div>
 
+<!-- ★ [2026-09-10] 위클리 CEO 전달본 편집 -->
+<div id="mEditW" class="modal"><div class="modal-in">
+  <h3>대표 전달본 편집 — 위클리</h3>
+  <label>개인 메시지 <small>대표 이름을 부르면 개인 편지가 됩니다</small><textarea id="w_msg" rows="3" maxlength="600"></textarea></label>
+  <div class="lock">🌡 온도계 · 한 문장 · 요일 막대 · 이번 주 날짜 · 원칙 <small>고정 · 수정 불가</small></div>
+  <div style="margin-top:12px;font-size:13.5px;font-weight:700">돈의 흐름 세 가지 — 할 것 / 하지 말 것 <small style="font-weight:400;color:var(--gray-l)">고객 업종·상황에 맞게 고치세요</small></div>
+  <label><span id="w_f0lab">금리</span> · 할 것<textarea id="w_f0do" rows="2" maxlength="400"></textarea></label>
+  <label>하지 말 것<textarea id="w_f0dont" rows="2" maxlength="300"></textarea></label>
+  <label><span id="w_f1lab">환율</span> · 할 것<textarea id="w_f1do" rows="2" maxlength="400"></textarea></label>
+  <label>하지 말 것<textarea id="w_f1dont" rows="2" maxlength="300"></textarea></label>
+  <label><span id="w_f2lab">돈의 유출입</span> · 할 것<textarea id="w_f2do" rows="2" maxlength="400"></textarea></label>
+  <label>하지 말 것<textarea id="w_f2dont" rows="2" maxlength="300"></textarea></label>
+  <label>마무리 <small>증시 해설을 약속하는 문장은 피하세요</small><textarea id="w_close" rows="3" maxlength="400"></textarea></label>
+  <div class="btns"><button class="pri" type="button" onclick="ceoSaveWeekly()">저장</button><button type="button" onclick="ceoReset()">원본으로 되돌리기</button><button type="button" onclick="mClose('mEditW')">닫기</button></div>
+  <p class="note" style="margin-top:10px">업종·협력사·보유 종목을 가정하는 문장, 매수·매도 표현, 브랜드명은 쓸 수 없습니다. 저장하면 미리보기·링크에 반영됩니다.</p>
+</div></div>
+
 <!-- 링크 발급 -->
 <div id="mSend" class="modal"><div class="modal-in">
   <h3>누구에게 보내시나요?</h3>
@@ -149,7 +168,7 @@ async function loadIssues(){
   const s=await getDocs(query(collection(db,'innerIssues'),orderBy('sendDate','desc'),limit(30)));
   ISSUES=s.docs.map(d=>({id:d.id,...d.data()}));
   const want=new URLSearchParams(location.search).get('d')||new URLSearchParams(location.search).get('id');
-  $('pick').innerHTML=ISSUES.map(i=>`<option value="${esc(i.id)}">${esc(i.sendDate)} · ${i.kind==='tax_deep'?'Tax Master':'법인Master'} · ${esc((i.title||i.entry?.title||'').slice(0,40))}</option>`).join('')||'<option>게시된 회차 없음</option>';
+  $('pick').innerHTML=ISSUES.map(i=>`<option value="${esc(i.id)}">${esc(i.sendDate)} · ${i.kind==='tax_deep'?'Tax Master':i.kind==='weekly'?'위클리 컨센서스':'법인Master'} · ${esc((i.title||i.entry?.title||'').slice(0,40))}</option>`).join('')||'<option>게시된 회차 없음</option>';
   const first=ISSUES.find(i=>i.id===want||i.sendDate===want)||ISSUES[0];
   if(first){$('pick').value=first.id;show(first.id);}else $('view').innerHTML='<div class="empty">게시된 회차가 없습니다</div>';
 }
@@ -158,9 +177,14 @@ $('pick').onchange=e=>show(e.target.value);
 async function show(id){
   CUR=ISSUES.find(i=>i.id===id);if(!CUR)return;
   history.replaceState(null,'',`?id=${encodeURIComponent(id)}`);
-  const isTax=CUR.kind==='tax_deep';
-  $('kind').hidden=false;$('kind').textContent=isTax?'Tax Master · 수요일':'법인Master · 금요일';$('kind').className='chip'+(isTax?' tax':'');
+  const isTax=CUR.kind==='tax_deep';const isWeekly=CUR.kind==='weekly';
+  $('kind').hidden=false;$('kind').textContent=isTax?'Tax Master · 수요일':isWeekly?'위클리 컨센서스 · 월요일':'법인Master · 금요일';$('kind').className='chip'+(isTax?' tax':isWeekly?' weekly':'');
   let h=`<div class="head"><h1>${esc(CUR.title||CUR.entry?.title||'')}</h1><div class="meta">${esc(CUR.sendDate)} 발송 · 이너서클 회원 전용</div>`;
+  if(isWeekly){
+    /* ★ [2026-09-10] 위클리 컨센서스 — step4 HTML(자체 스타일 포함)을 그대로 삽입, 듣기 버튼은 ttsUrls 로 연결 */
+    h+=`</div>`+(CUR.html||'<div class="empty">본문 없음</div>');
+    $('view').innerHTML=h;wireTts();await renderCeo();return;
+  }
   if(isTax){
     if(CUR.twUrl)h+=`<div class="pre">📎 먼저 읽을 것 · <a href="${esc(CUR.twUrl)}" target="_blank">택스위클리 같은 주제 편</a> — 제도·용어·FAQ는 그쪽에 있고 여기서 반복하지 않습니다.</div>`;
     h+=`</div>`+(CUR.html||'<div class="empty">본문 없음</div>');
@@ -171,12 +195,58 @@ async function show(id){
   await renderCeo();   /* ★ [2026-09-09] 법인Master 도 CEO 전달본 — ceoJson 없는 회차는 renderCeo 가 스스로 건너뜀 */
 }
 
+/* ★ [2026-09-10] 섹션 듣기 — 위클리 HTML 의 <button data-tts="summary|s1..s5"> 를 innerIssues.ttsUrls 로 연결. 한 번에 하나만 재생 */
+let _audio=null,_audioBtn=null;
+function wireTts(){
+  const urls=CUR.ttsUrls||{};
+  document.querySelectorAll('#view button[data-tts]').forEach(btn=>{
+    const key=btn.dataset.tts;const url=urls[key];
+    if(!url){btn.disabled=true;btn.title='음성 없음';btn.style.opacity='.45';return;}
+    btn.onclick=()=>{
+      if(_audio&&_audioBtn===btn){if(_audio.paused)_audio.play();else _audio.pause();return;}
+      if(_audio){_audio.pause();_audio=null;if(_audioBtn)_audioBtn.classList.remove('playing');}
+      _audio=new Audio(url);_audioBtn=btn;btn.classList.add('playing');
+      _audio.onended=()=>{btn.classList.remove('playing');_audio=null;_audioBtn=null;};
+      _audio.onpause=()=>btn.classList.remove('playing');_audio.onplay=()=>btn.classList.add('playing');
+      _audio.play().catch(()=>toast('재생할 수 없습니다'));
+    };
+  });
+}
+/* ★ [2026-09-10] 위클리 CEO 전달본 패널 — 편집 필드: 개인 메시지 · 돈의 흐름 3줄 할 것/하지 말 것 · 마무리 */
+function renderCeoWeekly(){
+  const av=prof.photoUrl?`<img src="${esc(prof.photoUrl)}" alt="">`:esc((prof.name||meData.name||'?')[0]);
+  const sub=[prof.title,prof.company].filter(Boolean).join(' · ');
+  const box=document.createElement('section');box.className='ceo';box.id='ceo';
+  const flows=(BASE.flows||[]).map(f=>`<li>${esc(f.head)}${f.value?` <span style="color:var(--gray-l)">${esc(f.value)}</span>`:''}</li>`).join('');
+  box.innerHTML=`<h2><span class="num">📨</span>대표 전달본 — 대표에게 보낼 주간 메모</h2>
+  <p style="font-size:14.5px">이 호의 내용을 <b>경영자의 대출·예금·환율·여유자금 결정</b> 관점으로만 추린 별도 페이지입니다. 증권사명·종목·매매 판단은 들어가지 않습니다. 회원님 명의로 발송되고, 대표가 열면 회원님 프로필과 [상담 요청] 버튼이 붙습니다.</p>
+  <div class="ceo-prev"><div class="c"><div class="av">${av}</div><div><b>${esc(prof.name||meData.name||'')}</b><span>${esc(sub)}</span><em id="ceoCardLine">“${esc(BASE.title||'')}”</em></div></div>
+  <b>온도계 ${esc(BASE.thermo?.label||'')} · ${esc(BASE.verdict||'')}</b><ol>${flows}</ol><div style="font-size:13px;color:var(--gray-l);margin-top:6px">이번 호의 원칙 #${esc(String(BASE.principle?.id||''))} ${esc(BASE.principle?.title||'')}</div></div>
+  <div class="btns"><button class="pri" type="button" onclick="ceoPreview()">미리보기</button><button type="button" onclick="ceoEditOpen()">편집</button><button type="button" onclick="ceoSendOpen()">링크 복사</button><button type="button" onclick="logOpen()">발송 현황 <span class="cnt" id="logCnt">${LOG.length}</span></button></div>
+  <p class="note" style="margin-top:10px">${MEMO?'✏️ 편집본이 저장돼 있습니다 — 링크를 받은 대표는 편집본을 봅니다.':'[편집]에서 개인 메시지 · 돈의 흐름 3줄의 「할 것 / 하지 말 것」 · 마무리 문장을 고칠 수 있습니다. 온도계·한 문장·요일·일정·원칙은 고정입니다.'}</p>`;
+  const slot=document.querySelector('#view [data-ceo-panel="weekly"]');
+  if(slot)slot.replaceWith(box);else $('view').appendChild(box);
+}
+function ceoFillWeekly(){
+  $('w_msg').value=MEMO?.message||BASE.memo||'';$('w_close').value=MEMO?.closing||BASE.closing||'';
+  (BASE.flows||[]).slice(0,3).forEach((f,i)=>{const lab=document.getElementById(`w_f${i}lab`);if(lab)lab.textContent=f.head||`흐름 ${i+1}`;$(`w_f${i}do`).value=MEMO?.[`f${i}do`]||f.do||'';$(`w_f${i}dont`).value=MEMO?.[`f${i}dont`]||f.dont||'';});
+}
+async function ceoSaveWeekly(){
+  const data={uid:me.uid,issueId:CUR.id,message:$('w_msg').value.trim().slice(0,600),closing:$('w_close').value.trim().slice(0,400),updatedAt:serverTimestamp()};
+  for(let i=0;i<3;i++){data[`f${i}do`]=$(`w_f${i}do`).value.trim().slice(0,400);data[`f${i}dont`]=$(`w_f${i}dont`).value.trim().slice(0,300);}
+  if(/jarvia|자비아/i.test(data.message+data.closing))return toast('브랜드명은 대표에게 보내는 메모에 쓸 수 없습니다');
+  if(/매수|매도|사세요|파세요|비중\s*(확대|축소)/.test(Object.values(data).filter(v=>typeof v==='string').join(' ')))return toast('매수·매도 등 매매 권유 표현은 대표 전달본에 쓸 수 없습니다');
+  try{await setDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`),data);MEMO=data;mClose('mEditW');toast('저장했습니다 — 미리보기·링크에 반영됩니다');}
+  catch(e){toast('저장 실패: '+(e.message||e));}
+}
+
 /* ═══ CEO 전달본 ═══ */
 async function renderCeo(){
   BASE=null;try{BASE=CUR.ceoJson?JSON.parse(CUR.ceoJson):null;}catch(_){}
   if(!BASE)return;
   MEMO=null;try{const m=await getDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`));if(m.exists())MEMO=m.data();}catch(_){}
   await logLoad();
+  if(BASE.kind==='weekly')return renderCeoWeekly();   // ★ [2026-09-10]
   const card=(MEMO?.cardLine)||BASE.cardLine||'';
   const av=prof.photoUrl?`<img src="${esc(prof.photoUrl)}" alt="">`:esc((prof.name||meData.name||'?')[0]);
   const sub=[prof.title,prof.company].filter(Boolean).join(' · ');
@@ -190,14 +260,15 @@ async function renderCeo(){
   $('view').appendChild(box);
 }
 function ceoFill(){$('e_card').value=MEMO?.cardLine||BASE.cardLine||'';$('e_cta').value=MEMO?.ctaLine||BASE.ctaLine||'';$('e_msg').value=MEMO?.message||'';$('e_b1').value=MEMO?.b1||BASE.b1?.p||'';$('e_b2').value=MEMO?.b2||BASE.b2?.p||'';$('e_b3').value=MEMO?.b3||BASE.b3?.p||'';$('o_basis').checked=MEMO?.basisOn!==false;$('o_table').checked=MEMO?.tableOn!==false;$('o_chk').checked=MEMO?.checksOn!==false;}
-window.ceoEditOpen=()=>{ceoFill();mOpen('mEdit');};
+window.ceoEditOpen=()=>{if(BASE&&BASE.kind==='weekly'){ceoFillWeekly();mOpen('mEditW');return;}ceoFill();mOpen('mEdit');};
+window.ceoSaveWeekly=ceoSaveWeekly;
 window.ceoSave=async()=>{
   const data={uid:me.uid,issueId:CUR.id,cardLine:$('e_card').value.trim().slice(0,80),ctaLine:$('e_cta').value.trim().slice(0,80),message:$('e_msg').value.trim().slice(0,600),b1:$('e_b1').value.trim().slice(0,3000),b2:$('e_b2').value.trim().slice(0,3000),b3:$('e_b3').value.trim().slice(0,3000),basisOn:$('o_basis').checked,tableOn:$('o_table').checked,checksOn:$('o_chk').checked,updatedAt:serverTimestamp()};
   if(/jarvia|자비아/i.test(data.message+data.cardLine+data.ctaLine))return toast('브랜드명은 대표에게 보내는 메모에 쓸 수 없습니다');
   try{await setDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`),data);MEMO=data;$('ceoCardLine').textContent='“'+(data.cardLine||BASE.cardLine)+'”';mClose('mEdit');toast('저장했습니다 — 미리보기·링크에 반영됩니다');}
   catch(e){toast('저장 실패: '+(e.message||e));}
 };
-window.ceoReset=async()=>{try{await deleteDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`));}catch(_){}MEMO=null;ceoFill();$('ceoCardLine').textContent='“'+(BASE.cardLine||'')+'”';toast('원본으로 되돌렸습니다');};
+window.ceoReset=async()=>{try{await deleteDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`));}catch(_){}MEMO=null;if(BASE&&BASE.kind==='weekly'){ceoFillWeekly();toast('원본으로 되돌렸습니다');return;}ceoFill();$('ceoCardLine').textContent='“'+(BASE.cardLine||'')+'”';toast('원본으로 되돌렸습니다');};
 window.ceoPreview=async()=>{try{const r=await httpsCallable(fns,'itCeoIssueLink')({issueId:CUR.id,preview:true});window.open(r.data.url,'_blank');}catch(e){toast('미리보기 실패: '+(e.message||e));}};
 window.ceoSendOpen=()=>{$('s_name').value='';$('s_co').value='';mOpen('mSend');setTimeout(()=>$('s_name').focus(),60);};
 window.ceoSend=async(record)=>{
