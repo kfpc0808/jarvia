@@ -99,6 +99,9 @@ details.mc-banner[open] .bn-cara{transform:rotate(90deg)}
 .mc-banner .bn-hint{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--text-sub)}
 details.mc-banner[open] .bn-hint{display:none}
 .mc-firms{margin-top:8px;font-size:12px;color:var(--text-sub)}
+/* ★ [2026-09-11] 소표본 안내 — 표본이 적은 날에만 표시 */
+.mc-fewnote{background:var(--gold-bg,#FBF7EE);border:1px solid rgba(201,160,92,.35);border-left:3px solid var(--gold,#C9A05C);border-radius:10px;padding:13px 15px;margin-bottom:14px;font-size:14px;line-height:1.8;color:#6B5A38;word-break:keep-all}
+.mc-fewnote b{color:#8A6410;font-weight:800}
 .mc-strip{background:linear-gradient(135deg,#141719,#1E2226);color:#fff;border-radius:var(--radius-sm);padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px 26px;align-items:center;margin-bottom:16px}
 .mc-strip .lb{font-size:11px;letter-spacing:.12em;color:rgba(255,255,255,.55);font-weight:700}
 .mc-strip .vl{font-size:16.5px;font-weight:700;color:var(--gold-lt)}
@@ -476,7 +479,7 @@ async function loadArchiveViewer(){
 async function loadArchive(){
   try{
     const snap=await getDocs(query(collection(db,'morning_consensus'),orderBy('fileDate','desc'),limit(60)));
-    archive=snap.docs.map(d=>({id:d.id,...d.data()})).filter(r=>r.status==='done'||r.status==='digest'||r.status==='fallback');   /* ★ [2026-09-11] digest(요약본) 포함 */
+    archive=snap.docs.map(d=>({id:d.id,...d.data()})).filter(r=>r.status==='done'||r.status==='fallback');
     if(!archive.length){
       document.getElementById('dateMain').innerHTML='발행 이력 없음';
       document.getElementById('main').innerHTML='<div class="empty"><div class="empty-icon">🧭</div><p>아직 발행된 모닝 컨센서스가 없습니다.<br>매 영업일 오전 9시 전후에 발행됩니다.</p></div>';
@@ -538,18 +541,17 @@ function show(){
   document.getElementById('dateSub').textContent=curIdx===0?'최신 발행분':`${curIdx} 영업일 전`;
   document.getElementById('btnPrev').disabled=curIdx>=archive.length-1;
   document.getElementById('btnNext').disabled=curIdx<=0;
-  _setShareDisabled(!((r.status==='done'||r.status==='digest')&&r.ko));
+  _setShareDisabled(!(r.status==='done'&&r.ko));
   renderDateList();
   /* ★ [2026-08-14] 유료화 게이트 — 멤버십·발행보류는 무료, 일반회원은 결제(당일 유효) 확인 후 렌더 */
-  const _free=mcIsMember()||r.status==='fallback'||r.status==='digest'||!r.ko;   /* ★ [2026-09-11] 요약본은 무료 */
+  const _free=mcIsMember()||r.status==='fallback'||!r.ko;
   if(_free||mcPaid[r.id]){
     document.getElementById('main').innerHTML=MCV
       ? (mcvTopHTML()+`<div class="report-card" id="capArea">${renderConsensus(r)}</div>`+(cardFooterHTML()||''))
       : `<div class="report-card" id="capArea">${renderConsensus(r)}</div>`;
-    const _dl=!((r.status==='done'||r.status==='digest')&&r.ko);
+    const _dl=!(r.status==='done'&&r.ko);
     _setShareDisabled(_dl);
-    /* ★ [2026-09-11] 요약본(digest)은 컨센서스 블록이 없어 섹션 낭독 대상이 아니다 */
-    if(r.status!=='digest'){ try{ mcTtsInit(r.id,r.ttsUrls); }catch(_e){ console.warn('[MC-TTS] 주입 실패',_e); } }   /* ★ [2026-09-02] 섹션 낭독 바 주입 */
+    try{ mcTtsInit(r.id,r.ttsUrls); }catch(_e){ console.warn('[MC-TTS] 주입 실패',_e); }   /* ★ [2026-09-02] 섹션 낭독 바 주입 */
   }else{
     const _f=fmtDate(r),_ck=r.id;
     _setShareDisabled(true);   /* 미결제 상태 — 아래 _setShareDisabled 정책 스위치 참조 */
@@ -580,54 +582,14 @@ function renderDateList(){
   const el=document.getElementById('dateList');
   el.innerHTML=archive.map((r,i)=>{
     const f=fmtDate(r);
-    const meta=r.status==='fallback'?'발행 보류':(r.status==='digest'?`요약 ${r.totalFirms||''}개사`:`${r.totalFirms||(r.ko&&r.ko.meta&&r.ko.meta.totalFirms)||''}개사`);
+    const meta=r.status==='fallback'?'발행 보류':`${r.totalFirms||(r.ko&&r.ko.meta&&r.ko.meta.totalFirms)||''}개사`;
     return `<div class="date-item${i===curIdx?' cur':''}${r.status==='fallback'?' fb':''}" onclick="selectDate(${i})"><span>${f.main}</span><span class="di-meta">${esc(String(meta))}</span></div>`;
   }).join('');
 }
 function selectDate(i){curIdx=i;show();closeDateList();}
 
 /* ── 컨센서스 풀 렌더 (dailyReport renderConsensusSection과 동일 구조 · 컨설턴트 페이지 → 상담 Tip 포함) ── */
-/* ★ [2026-09-11] 증권사 리서치 요약본(digest) 렌더 — 2~5개사 수집일.
-   "N개사 중 M개사" 같은 집계 표현을 일절 쓰지 않고, 각 증권사 시각을 출처와 함께 나열한다.
-   컨센서스 블록(01~04)·시장온도·방향분포는 다수 의견을 전제로 하므로 이 모드에서는 렌더하지 않는다. */
-function renderDigest(mc){
-  const d=mc.ko||{}; const fs=d.digestFirms||[];
-  /* renderConsensus 내부의 dirBadge 는 지역 변수라 이 함수에서 참조할 수 없다 — 동일 마크업을 자체 보유 */
-  const _dgBadge=dv=>({up:'<span class="fbd fbd-up">상승</span>',neutral:'<span class="fbd fbd-neutral">중립</span>',down:'<span class="fbd fbd-down">하락</span>'}[dv]||'');
-  let b='<div class="dg-note"><div class="dt">📋 오늘의 증권사 리서치 요약</div>'
-    +'<div class="db">오늘은 수집된 증권사 리서치가 '+fs.length+'곳으로, 공통된 시각(컨센서스)을 집계하기에는 표본이 충분하지 않습니다.<br>'
-    +'집계 대신 <b>각 증권사의 시각을 있는 그대로</b> 정리해 드립니다. 특정 증권사의 견해이며 증권가 전체 의견이 아닙니다.</div></div>';
-  if(d.prevDayRecap&&d.prevDayRecap.full){
-    b+='<div class="dg-card"><div class="dh"><span class="dn">📈 전일 마감</span>'
-      +'<span class="dtt">'+esc(d.prevDayRecap.source||'')+' 기준</span></div>'
-      +'<div class="dv">'+esc(d.prevDayRecap.full)+'</div></div>';
-  }
-  for(const f of fs){
-    b+='<div class="dg-card"><div class="dh"><span class="dn">'+esc(f.firm)+'</span>'
-      +(f.reportTitle?'<span class="dtt">'+esc(f.reportTitle)+'</span>':'')
-      +_dgBadge(f.direction)+'</div>';
-    if(f.outlook)  b+='<div class="dl">시황</div><div class="dv">'+esc(f.outlook)+'</div>';
-    if(f.keyFactors&&f.keyFactors.length)
-      b+='<div class="dl">핵심 변수</div><div class="dchips">'+f.keyFactors.map(x=>'<span class="dchip">'+esc(x)+'</span>').join('')+'</div>';
-    if(f.midTerm)  b+='<div class="dl">중기 시각</div><div class="dv">'+esc(f.midTerm)+'</div>';
-    if(f.position) b+='<div class="dl">전략</div><div class="dv">'+esc(f.position)+'</div>';
-    if(f.sectors&&f.sectors.length)
-      b+='<div class="dl">관심 업종</div><div class="dchips">'+f.sectors.map(x=>'<span class="dchip">'+esc(x)+'</span>').join('')+'</div>';
-    if(f.cautions&&f.cautions.length)
-      b+='<div class="dl">경계 요인</div><div class="dchips">'+f.cautions.map(x=>'<span class="dchip">'+esc(x)+'</span>').join('')+'</div>';
-    if(f.stocks&&f.stocks.length)
-      b+='<div class="dl">언급 종목</div><div class="dv">'+f.stocks.map(x=>esc(x.name)+(x.reason?' — '+esc(x.reason):'')).join('<br>')+'</div>';
-    b+='</div>';
-  }
-  b+='<div style="margin-top:14px;font-size:12.5px;color:#9AA2AA;text-align:center">다음 영업일에는 정상 컨센서스로 찾아뵙겠습니다.</div>';
-  return b;
-}
-
 function renderConsensus(mc){
-  /* ★ [2026-09-11] 2단계 발행 — digest(2~5사)는 집계 없이 증권사별 시각만 나열 */
-  if(mc.status==='digest'&&mc.ko&&Array.isArray(mc.ko.digestFirms)&&mc.ko.digestFirms.length){
-    return renderDigest(mc);
-  }
   if(mc.status==='fallback'||!mc.ko){
     /* ★ [2026-09-11] 보류 안내 개편 — 컨센서스의 목적부터 설명해 "왜 안 나왔는지"를
        컨설턴트가 고객에게 그대로 전달할 수 있게 한다(2026-09-11 보류 시 문의 다발). */
@@ -725,7 +687,16 @@ function renderConsensus(mc){
       +`<div class="mc-recap-bd" style="font-size:14.5px;color:var(--text,#33393F);line-height:1.85;word-break:keep-all">${esc(d.prevDayRecap.full)}</div>`   /* 12.5 -> 14.5 (2026-08-22) */
       +`</div>`;
   }
-  b+=`<div class="mc-strip"><div><div class="lb">오늘의 시장 온도</div><div class="vl">${esc(meta.overallTemp||'')}</div></div><div><div class="lb">오늘의 방향 분포</div><div class="vl">${esc(meta.overallDirection||'')}</div></div><div><div class="lb">일치도</div><div class="vl" style="font-family:var(--font-mono)">${meta.overallAgree||0}<span style="font-size:11px;color:rgba(255,255,255,.6)"> / ${N}개사</span></div></div><div class="vr"><div class="ok"><span>✓</span> 3중 교차검증 통과</div><div class="tm">집계 완료 ${esc(mc.collectedAt||'')} · ${N}개사</div></div></div>`;
+  /* ★ [2026-09-11] 소표본(6개사 미만)일 때는 집계 지표를 감춘다.
+     '일치도 2/3개사' 같은 표시는 표본이 적을수록 실제보다 커 보이게 만든다.
+     대신 몇 곳을 정리했는지 있는 그대로 안내한다 — 그게 사실이고 숨길 이유가 없다. */
+  const _few = N>0 && N<6;   /* 6 = consensusReport.js 의 LABEL_MIN_FIRMS — 한쪽만 바꾸면 안내와 원고 규칙이 어긋난다 */
+  if(_few){
+    b+=`<div class="mc-fewnote">오늘은 증권사 <b>${N}곳</b>의 조간 리서치가 확인되어 그 범위에서 정리했습니다.<br>각 증권사의 시각을 그대로 전해드리며, 증권가 전체의 다수 의견으로 읽지 말아 주세요.</div>`;
+  }
+  b+=`<div class="mc-strip"><div><div class="lb">오늘의 시장 온도</div><div class="vl">${esc(meta.overallTemp||'')}</div></div><div><div class="lb">오늘의 방향 분포</div><div class="vl">${esc(meta.overallDirection||'')}</div></div>`
+    +(_few?'':`<div><div class="lb">일치도</div><div class="vl" style="font-family:var(--font-mono)">${meta.overallAgree||0}<span style="font-size:11px;color:rgba(255,255,255,.6)"> / ${N}개사</span></div></div>`)
+    +`<div class="vr"><div class="ok"><span>✓</span> 3중 교차검증 통과</div><div class="tm">집계 완료 ${esc(mc.collectedAt||'')} · ${N}개사</div></div></div>`;
 
   const ol=d.outlook||{};
   let i1=ol.blockFallback?fb(ol.blockFallback):(ol.items||[]).map(clineBox).join('');
@@ -865,6 +836,9 @@ window.mcRptClose=function(){
 };
 function mcRptBanner(){
   if(!MCV)return;
+  /* ★ [2026-09-11] 오픈 전 테스트 단계 — 아직 발송할 수 없으므로 신규 신청 배너를 띄우지 않는다.
+     오픈 시 아래 인라인 스크립트의 RPT_TEST_IDS 를 [] 로 바꾸면 전체 노출 */
+  try{ const T=(typeof RPT_TEST_IDS!=='undefined')?RPT_TEST_IDS:[]; if(T.length&&T.indexOf(MCV.fc||'')<0)return; }catch(_e){}
   /* client-daily 의 컨센서스 오버레이(iframe) 안에서는 표시하지 않는다 —
      그 화면에는 이미 같은 배너가 있고, 여기서 누르면 오버레이 안에서 데일리 화면이 또 열린다 */
   try{ if(window.top!==window.self)return; }catch(_e){ return; }
