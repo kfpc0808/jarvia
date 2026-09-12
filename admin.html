@@ -349,7 +349,7 @@
       <h3 class="dash-sec">👥 회원 현황</h3>
       <div class="dash-row">
         <div class="dash-c"><span>전체 회원</span><strong id="d-total">0</strong><em class="sub" id="d-total-sub">관리자·직원 제외 기준</em></div>
-        <div class="dash-c"><span>유료 멤버십 회원</span><strong id="d-paid">0</strong><em class="sub">멤버십·이너서클·리포트 합계</em></div>
+        <div class="dash-c"><span>자비아멤버십 회원</span><strong id="d-paid">0</strong><em class="sub" id="d-paid-sub">월 5만원 · 연납 포함</em></div>
         <div class="dash-c"><span>당월 신규가입</span><strong id="d-new-month">0</strong><em>명</em></div>
         <div class="dash-c" style="border-left-color:#DA3633"><span>당월 탈퇴</span><strong id="d-withdraw-month">0</strong><em>명</em></div>
       </div>
@@ -4943,11 +4943,13 @@ let _jvExCache=null;
 async function jvExcludedUids(users){
   if(_jvExCache)return _jvExCache;
   const ex=new Set();
-  try{const aSnap=await getDocs(collection(db,'admins'));aSnap.docs.forEach(d=>{const a=d.data();if(a.authUid)ex.add(a.authUid);});}catch(e){console.warn('admins 조회 실패:',e);}
+  let _admOk=true;
+  try{const aSnap=await getDocs(collection(db,'admins'));aSnap.docs.forEach(d=>{const a=d.data();if(a.authUid)ex.add(a.authUid);});}catch(e){_admOk=false;console.warn('admins 조회 실패:',e);}
   let arr=users;
   if(!arr){try{arr=(await getDocs(collection(db,'users'))).docs;}catch(e){arr=[];}}
   arr.forEach(x=>{const u=x.data?x.data():x;const id=x.id;if(!id)return;if(u.isAdminTest===true)ex.add(id);const lid=String(u.loginId||'').toLowerCase();if(lid&&JV_STAFF_LOGINS.has(lid))ex.add(id);});
-  _jvExCache=ex;return ex;
+  if(_admOk)_jvExCache=ex;   /* 불완전한 집합은 캐시하지 않는다 */
+  return ex;
 }
 
 // ═══ DASHBOARD ═══
@@ -5003,8 +5005,12 @@ async function loadDash(){
     const _cd=u=>{const t=u.createdAt;try{return t&&t.toDate?t.toDate():(t?new Date(t):null);}catch(e){return null;}};
     set('d-total',fmt(mem.length));
     set('d-total-sub',staffCnt?'관리자·직원 '+staffCnt+'명 제외':'관리자·직원 제외 기준');
-    /* 유료 멤버십 = 멤버십 + 이너서클 + 리포트회원 (중복 없이 역할 단위로 1회만) */
-    set('d-paid',fmt(cnt(u=>u.role==='jarvia_member'||u.role==='jarvia_inner'||u.role==='inner_circle'||u.role==='jarvia_report')));
+    /* 자비아멤버십 회원 = role 'jarvia_member' (월 5만원 정기결제 대상).
+       연납회원(annualPrepaid:true)은 월 청구에서만 제외되고 role은 동일하므로 함께 집계된다. */
+    const _jm=mem.filter(u=>u.role==='jarvia_member');
+    const _annual=_jm.filter(u=>u.annualPrepaid===true).length;
+    set('d-paid',fmt(_jm.length));
+    set('d-paid-sub','월 5만원 · 연납 '+fmt(_annual)+'명 포함');
     set('d-signup',fmt(cnt(u=>{const d=_cd(u);return d&&d>=today;})));
     set('d-new-month',fmt(cnt(u=>{const d=_cd(u);return d&&d>=monthStart;})));
     /* 유형별 인원 — 회원관리 유형별 요약과 동일한 라벨·순서 */
@@ -5027,7 +5033,7 @@ async function loadDash(){
 
   /* ⑤ 오늘 접속 현황 — 접속통계와 동일 함수(jvAccessAgg) 사용 */
   try{
-    const ag=await jvAccessAgg(todayStr,todayStr,uArr.length?uArr:null);
+    const ag=await jvAccessAgg(todayStr,todayStr,uArr.length?uArr:null,{skipClient:true});
     set('d-acc-users',fmt(ag.accUsers));
     set('d-acc-users-sub',ag.cliOnly?'고객방문만 '+fmt(ag.cliOnly)+'명 별도':'접속통계와 동일 기준');
     set('d-acc-events',fmt(ag.totEvent));
@@ -19774,7 +19780,7 @@ function initAsDates(){if($('acs-from').value&&$('acs-to').value)return;const to
 function setAsRange(r){const to=new Date();let from=new Date();if(r==='today'){}else if(r==='week'){from.setDate(to.getDate()-6);}else if(r==='month'){from=new Date(to.getFullYear(),to.getMonth(),1);}else if(r==='all'){from=new Date(2024,0,1);}$('acs-from').value=_asYmd(from);$('acs-to').value=_asYmd(to);loadAccessStats();}
 /* ★ [2026-09-12] 접속 집계 공통 함수 — 접속통계·대시보드가 동일 로직·동일 제외기준을 사용한다.
    fromStr·toStr = 'YYYY-MM-DD', users = (선택) 이미 읽어둔 users 배열 [{id,...}] — 중복 조회 방지 */
-async function jvAccessAgg(fromStr,toStr,users){
+async function jvAccessAgg(fromStr,toStr,users,opts){
   const fromTs=Timestamp.fromDate(new Date(fromStr+'T00:00:00'));
   const toTs=Timestamp.fromDate(new Date(toStr+'T23:59:59'));
   // 회원 맵
@@ -19800,8 +19806,11 @@ async function jvAccessAgg(fromStr,toStr,users){
     const vSnap=await getDocs(query(collection(db,'view_logs'),where('createdAt','>=',fromTs),where('createdAt','<=',toTs)));
     vSnap.docs.forEach(d=>{const l=d.data();if(!l.userId||!l.contentId)return;const cid=String(l.contentId);let t;if(cid.startsWith('cr_'))t='case_report';else if(ctype[cid]!==undefined&&ctype[cid]!=='')t=ctype[cid];else if(mgSet.has(cid))t='master_guide';else t='';if(!AS_CONTENT_KEYS.has(t))return;add(l.userId,t,_asDay(l.createdAt));});
     // fc_view_stats → 고객 방문 (문서ID = {loginId}_{ymd})
+    /* ★ [2026-09-12] skipClient — 고객방문 집계는 컬렉션 전량 스캔이라 비용이 크다.
+       접속회원수·총이벤트·콘텐츠열람은 고객방문과 무관(addClient는 total을 올리지 않음)하므로
+       대시보드에서는 건너뛴다. 접속통계 화면은 그대로 전량 집계한다. */
     const fromYmd=fromStr.replace(/-/g,''),toYmd=toStr.replace(/-/g,'');
-    try{
+    if(!(opts&&opts.skipClient))try{
       const fvSnap=await getDocs(collection(db,'fc_view_stats'));
       fvSnap.docs.forEach(d=>{
         const id=d.id;const ymd=id.slice(-8);if(!/^\d{8}$/.test(ymd))return;
