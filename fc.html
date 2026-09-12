@@ -8122,12 +8122,19 @@ function vmEdRender(){
 window.vmEdRender=vmEdRender;
 window.vmEdOpen=function(cid){
   if(!window.__mpcOpenEditByCid){toast('고객 편집 화면을 열 수 없습니다 — 화면을 새로고침해 주세요','warn');return;}
-  window.__mpcOpenEditByCid(cid,'','');
+  /* ★ [2026-09-12] 고객입력(#vmSheet z-index:9650)이 고객 목록(#mpOverlay z-index:1250) 위에 있어
+     닫지 않으면 편집 화면이 뒤에서 열려 아무 일도 안 한 것처럼 보인다. vmClose 는 숨김이라 상태는 남는다 */
+  try{vmClose();}catch(_e){}
+  setTimeout(function(){window.__mpcOpenEditByCid(cid,'','');},120);
 };
 function vmIfHandoffToEdit(d){
 /* 고객 데이터·편집 폼은 다른 스크립트 블록의 IIFE 안에 있으므로 window 창구로 넘긴다.
    (직접 customers·openCustForm 을 부르면 ReferenceError 로 조용히 실패한다) */
-if(window.__mpcOpenEditByCid){window.__mpcOpenEditByCid(d.cid,d.phone||'',d.last4||'');return;}
+if(window.__mpcOpenEditByCid){
+  try{vmClose();}catch(_e){}   /* ★ [2026-09-12] 고객입력이 편집 화면을 덮으므로 먼저 닫는다 */
+  setTimeout(function(){window.__mpcOpenEditByCid(d.cid,d.phone||'',d.last4||'');},120);
+  return;
+}
 toast('고객 편집 화면을 열 수 없습니다 — 고객 목록에서 「'+(d.name||'')+'」님을 찾아 연락처를 고쳐 주세요','warn');
 }
 function vmIfSave(){
@@ -9957,13 +9964,21 @@ const BK_PLACES = [
   { k: 'phone', t: '전화' },
   { k: 'video', t: '화상' },
 ];
-let bkState = { type: 'finance', place: 'visit', times: ['', '', ''], name: '', phone: '', note: '', consent: false };
+let bkState = { type: 'finance', place: 'visit', times: ['', '', ''], parts: [{ d: '', t: '' }, { d: '', t: '' }, { d: '', t: '' }], name: '', phone: '', note: '', consent: false };   /* ★ [2026-09-12] parts — 날짜만 고른 중간 상태를 리렌더에도 보존 */
 
 /* ★ [2026-08-16] 리렌더 전 화면 입력값을 state로 수확 — 칩 클릭 시 일시·이름·연락처·메모·동의가 지워지던 결함 수정 */
 const bkEsc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 function bkHarvest() {
   try {
-    [0, 1, 2].forEach(i => { const el = document.getElementById('bkTime' + i); if (el) bkState.times[i] = el.value || ''; });
+    [0, 1, 2].forEach(i => {   /* ★ [2026-09-12] 날짜·시간 분리 입력에서 수확 */
+      const d = document.getElementById('bkDate' + i);
+      const t = document.getElementById('bkTimeSel' + i);
+      if (d || t) {
+        const dv = d ? (d.value || '') : '', tv = t ? (t.value || '') : '';
+        bkState.parts[i] = { d: dv, t: tv };
+        bkState.times[i] = (dv && tv) ? (dv + 'T' + tv) : '';
+      }
+    });
     const n = document.getElementById('bkName');    if (n) bkState.name = n.value || '';
     const p = document.getElementById('bkPhone');   if (p) bkState.phone = p.value || '';
     const t = document.getElementById('bkNote');    if (t) bkState.note = t.value || '';
@@ -9978,6 +9993,36 @@ function bkDateRange() {
   const max = new Date(k.getTime() + 30 * 86400000).toISOString().slice(0, 10);
   return { min, max };
 }
+
+/* ★ [2026-09-12] 희망 일시 입력을 날짜(date) + 시간(select 30분 단위)로 분리.
+   종전 datetime-local 은 브라우저 기본 팝업이라 확인 버튼이 없어, 시·분을 고른 뒤
+   바깥을 클릭해야 닫히는 불편이 있었다. 저장값은 종전과 동일한
+   'YYYY-MM-DDTHH:mm' 형식을 유지한다 — 컨설턴트 확정화면(_fcrFmtBookTime)과
+   미팅 알림톡(consultNotify)이 이 형식을 new Date()로 파싱한다. */
+const BK_TIME_FROM = 9 * 60, BK_TIME_TO = 21 * 60, BK_TIME_STEP = 30;
+function bkTimeOptions() {
+  const out = [];
+  for (let m = BK_TIME_FROM; m <= BK_TIME_TO; m += BK_TIME_STEP) {
+    const h = Math.floor(m / 60), mm = m % 60;
+    const v = String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+    out.push({ v, t: (h < 12 ? '오전 ' : '오후 ') + (h % 12 || 12) + ':' + String(mm).padStart(2, '0') });
+  }
+  return out;
+}
+/** 'YYYY-MM-DDTHH:mm' → {d,t} · 값이 없거나 형식이 다르면 빈 값 */
+function bkSplit(v) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(v || ''));
+  return m ? { d: m[1], t: m[2] } : { d: '', t: '' };
+}
+/** 날짜·시간 중 하나라도 비면 미선택으로 둔다 (부분 입력 저장 방지) */
+window.bkSyncTime = function (i) {
+  const d = document.getElementById('bkDate' + i);
+  const t = document.getElementById('bkTimeSel' + i);
+  const dv = d ? (d.value || '') : '', tv = t ? (t.value || '') : '';
+  bkState.parts[i] = { d: dv, t: tv };
+  bkState.times[i] = (dv && tv) ? (dv + 'T' + tv) : '';
+  if (dv && !tv && t) { try { t.focus(); } catch (_e) {} }   /* 날짜만 고른 상태 — 시간 선택으로 유도 */
+};
 
 function bkChip(list, cur, fn) {
   return list.map(x =>
@@ -9996,14 +10041,23 @@ function bkRender() {
   const box = document.getElementById('bkBody');
   if (!box) return;
   const r = bkDateRange();
-  const rows = [0, 1, 2].map(i =>
-    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+  const _tOpts = bkTimeOptions();
+  const _inpCss = 'padding:9px 10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--text)';
+  const rows = [0, 1, 2].map(i => {
+    const _pt = (bkState.parts && bkState.parts[i]) || { d: '', t: '' };
+    const _sv = bkSplit(bkState.times[i]);
+    const sp = { d: _pt.d || _sv.d, t: _pt.t || _sv.t };
+    const opts = '<option value="">시간 선택</option>'
+      + _tOpts.map(o => `<option value="${o.v}"${sp.t === o.v ? ' selected' : ''}>${o.t}</option>`).join('');
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
        <span style="font-size:11px;color:var(--text-mute);min-width:34px;flex:none">${i + 1}순위</span>
-       <input type="datetime-local" id="bkTime${i}" value="${bkState.times[i] || ''}" min="${r.min}T00:00" max="${r.max}T23:59"
-         onchange="bkState.times[${i}]=this.value" oninput="bkState.times[${i}]=this.value"
-         style="flex:1;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--text)">
-     </div>`
-  ).join('');
+       <input type="date" id="bkDate${i}" value="${sp.d}" min="${r.min}" max="${r.max}"
+         onchange="bkSyncTime(${i})"
+         style="flex:1.15;min-width:0;${_inpCss}">
+       <select id="bkTimeSel${i}" onchange="bkSyncTime(${i})"
+         style="flex:1;min-width:0;${_inpCss}">${opts}</select>
+     </div>`;
+  }).join('');
 
   box.innerHTML =
     `<div style="font-size:12px;color:var(--text-sub);font-weight:700;margin-bottom:7px">어떤 상담을 원하시나요</div>
@@ -10162,7 +10216,7 @@ window.openBookingForm = function () {
   document.body.appendChild(ov);
   document.body.style.overflow = 'hidden';
   try{['vmFab','aiFab'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});}catch(_e){}   /* ★ [2026-08-16] 예약 폼 위에 소유자용 플로팅 버튼(고객입력·AI비서)이 겹쳐 입력란을 가리는 문제 수정 */
-  bkState = { type: 'finance', place: 'visit', times: ['', '', ''], name: '', phone: '', note: '', consent: false };
+  bkState = { type: 'finance', place: 'visit', times: ['', '', ''], parts: [{ d: '', t: '' }, { d: '', t: '' }, { d: '', t: '' }], name: '', phone: '', note: '', consent: false };
   bkRender();
 };
 
