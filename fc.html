@@ -12610,16 +12610,24 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
       var c=null;
       try{c=(customers||[]).filter(function(x){return x&&x.id===cid;})[0]||null;}catch(_e){}
       if(!c){toast("고객을 찾지 못했습니다 — 고객 목록에서 직접 찾아 주세요","warn");return;}
-      /* ★ [2026-09-12] __mpCustOpen 은 데이터 적재·렌더만 하고 #mpOverlay 를 띄우지 않는다.
-         화면을 실제로 여는 것은 myPlacesOpen (mpOverlay.classList.add("show"))이며,
-         컨설턴트 본인 화면이면 그 안에서 __mpCustOpen 까지 호출한다.
-         종전에는 폼만 열려 화면이 안 보였고 상단 「고객」을 눌러야 드러났다.
-         12641행 __mpcEditById · 16218행과 같은 정석 순서를 따른다. */
-      try{if(window.myPlacesOpen)window.myPlacesOpen();}catch(_e){}
-      /* 고객 탭 전환은 myPlacesOpen 이 컨설턴트 본인 화면일 때 직접 처리한다(14984행대).
-         forceCustTab 은 다른 스크립트 블록(16218행)에만 있어 여기서는 부를 수 없다. */
-      /* ★ [2026-09-12] 고정 대기(0.6초)는 기기·고객 수·네트워크에 따라 부족해 로딩 화면에 폼이 가려졌다.
-         로딩이 걷히고 폼이 실제로 열렸는지(mpcEditId) 확인하며 재시도한다 (0.3초 간격, 최대 15초) */
+      /* ★ [2026-09-12] 화면을 실제로 여는 것은 myPlacesOpen (mpOverlay.classList.add("show"))이다.
+         __mpCustOpen 은 적재·렌더만 하고 화면을 띄우지 않아, 종전에는 폼만 열리고 상단 「고객」을
+         눌러야 드러났다. 컨설턴트 본인 화면이면 myPlacesOpen 안에서 고객 탭 전환과 __mpCustOpen 까지
+         처리한다(14984행대). forceCustTab 은 다른 스크립트 블록(16218행)에만 있어 여기서는 못 부른다.
+         · 검색이 방금 custLoad 를 돌렸는데 화면 열기가 또 custLoad 를 시작하면 IndexedDB 가 겹쳐
+           BLOCKED·TIMEOUT 으로 「고객을 불러오지 못했습니다」가 뜬다(드라이브가 느릴 때 재현).
+           진행 중인 적재·동기화가 끝난 뒤에 연다 — 13830행과 같은 취지의 가드.
+         · __ccOwnerView 가 아직 false면 '내 장소' 탭으로 열려 편집 폼이 안 보이므로 함께 기다린다(16221행). */
+      var wt=0;
+      var showScreen=function(){
+        var b1=false;
+        try{var be=mpcBusyEl();b1=!!(be&&be.classList&&be.classList.contains("show"));}catch(_e){}
+        var sy=false;try{sy=!!mpcSyncBusy;}catch(_e){}
+        if((b1||sy||window.__ccOwnerView!==true)&&++wt<50){setTimeout(showScreen,200);return;}
+        try{if(window.myPlacesOpen)window.myPlacesOpen();}catch(_e){}
+        setTimeout(open,300);
+      };
+      /* 로딩이 걷히고 폼이 실제로 열렸는지(mpcEditId) 확인하며 재시도한다 (0.3초 간격, 최대 15초) */
       var tries=0;
       var open=function(){
         var busy=false;
@@ -12635,7 +12643,7 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
         else if(last4)toast("「"+(c.name||"")+"」 연락처를 신청 번호(뒷자리 "+last4+")로 고쳐 저장해 주세요");
         else toast("「"+(c.name||"")+"」 정보를 열었습니다 — 고친 뒤 저장해 주세요");
       };
-      setTimeout(open,300);
+      showScreen();
     });
   }catch(_e){}
 };
