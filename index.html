@@ -15452,7 +15452,9 @@ function rptRender(){
   _rpt._lastView=_rpt.view;
   document.querySelectorAll('#mdl-rpt .rpt-tab').forEach(t=>t.classList.toggle('on',t.dataset.v===_rpt.view));
   const body=$('rpt-body'),foot=$('rpt-foot');
-  if(_rpt.loading){body.innerHTML='<div style="text-align:center;padding:40px 20px;color:var(--text-lt)">고객 목록과 수신 신청 정보를 불러오는 중…<div style="margin-top:10px;font-size:12.5px;font-weight:700;color:#1B2430;line-height:1.6">🔒 고객 연락처는 <b>회원님 구글 드라이브</b>에서 직접 불러옵니다<div style="margin-top:3px;font-weight:400;color:#6B7280;font-size:11.5px">회사 서버에 저장하지 않기 때문이며, 고객 수가 많으면 몇 초 더 걸릴 수 있습니다.</div></div></div>';foot.innerHTML='';return;}   /* ★ [2026-09-12] 지연 사유를 또렷하게 안내 */
+  /* ★ [2026-09-12] 이용가이드는 고객 데이터를 쓰지 않는 정적 안내문이므로 로딩 가드에서 제외한다.
+     종전에는 로딩 중 [📖 이용가이드]를 눌러도 이 return 에 막혀 화면이 바뀌지 않았다. */
+  if(_rpt.loading&&_rpt.view!=='guide'){body.innerHTML='<div style="text-align:center;padding:40px 20px;color:var(--text-lt)">고객 목록과 수신 신청 정보를 불러오는 중…<div style="margin-top:10px;font-size:12.5px;font-weight:700;color:#1B2430;line-height:1.6">🔒 고객 연락처는 <b>회원님 구글 드라이브</b>에서 직접 불러옵니다<div style="margin-top:3px;font-weight:400;color:#6B7280;font-size:11.5px">회사 서버에 저장하지 않기 때문이며, 고객 수가 많으면 몇 초 더 걸릴 수 있습니다.</div></div></div>';foot.innerHTML='';return;}   /* ★ [2026-09-12] 지연 사유를 또렷하게 안내 */
   const v=_rpt.view;
   if(v==='send')rptRenderSend(body,foot);
   else if(v==='schedule')rptRenderSchedule(body,foot);
@@ -18373,16 +18375,19 @@ try{ Object.assign(window,{auth,db,gid,doc,getDoc,getDocs,setDoc,collection,quer
 (function(){
   const grid=document.querySelector('#jm-programs .jm-progs');if(!grid)return;
   const LS_KEY='jarvia_progOrder';
+  const PIN_KEY='jarvia_rptPinDone';   /* ★ [2026-09-12] 회원이 직접 순서를 바꾼 뒤에는 알림톡 고정을 해제한다 */
   const cardOf=el=>el&&el.closest?el.closest('.jm-prog'):null;
   const curKeys=()=>[...grid.querySelectorAll('.jm-prog')].map(c=>c.dataset.pkey).filter(Boolean);
   function applyOrder(order){
     if(!Array.isArray(order)||!order.length)return;
-    /* ★ [2026-09-12] 알림톡은 기본 첫 번째 — 이미 순서를 저장해 둔 회원도 맨 앞에 보이도록 한 번만 끌어올린다.
-       저장값 자체는 바꾸지 않으므로, 회원이 직접 드래그해 옮기면 그 순서가 저장되고 이후로는 그대로 따른다 */
+    /* ★ [2026-09-12] 알림톡은 기본 첫 번째 — 이미 순서를 저장해 둔 회원도 맨 앞에 보이게 끌어올린다.
+       applyOrder 는 로컬 캐시·서버값으로 두 번 불리므로 매번 적용해야 한다(세션 플래그로 막으면 두 번째에
+       원래 자리로 되돌아간다). 회원이 직접 드래그하면 PIN_KEY 가 기록되어 이후로는 저장 순서를 따른다 */
     try{
-      if(!window._jmRptPinned&&order.indexOf('rptalim')>0){
+      var _pinDone=false;
+      try{_pinDone=localStorage.getItem(PIN_KEY)==='1';}catch(_e2){}
+      if(!_pinDone&&order.indexOf('rptalim')>0){
         order=['rptalim'].concat(order.filter(function(k){return k!=='rptalim';}));
-        window._jmRptPinned=true;
       }
     }catch(_e){}
     const map={};grid.querySelectorAll('.jm-prog').forEach(c=>{if(c.dataset.pkey)map[c.dataset.pkey]=c;});
@@ -18394,6 +18399,7 @@ try{ Object.assign(window,{auth,db,gid,doc,getDoc,getDocs,setDoc,collection,quer
   try{const c=JSON.parse(localStorage.getItem(LS_KEY)||'null');if(c&&Array.isArray(c.order))applyOrder(c.order);}catch(_){}
   async function saveOrder(){
     const order=curKeys();
+    try{localStorage.setItem(PIN_KEY,'1');}catch(_){}   /* ★ [2026-09-12] 직접 배치한 순서를 그대로 존중한다 */
     try{localStorage.setItem(LS_KEY,JSON.stringify({order,uid:window.me?window.me.uid:null}));}catch(_){}
     if(window.me){try{await setDoc(doc(db,'users',window.me.uid),{progOrder:order},{merge:true});}catch(e){console.warn('progOrder 저장 실패',e);}}
   }
