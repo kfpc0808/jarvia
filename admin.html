@@ -332,7 +332,7 @@
     </div>
     </nav></aside>
   <main class="adm-main">
-    <!-- ★ [2026-09-12] 대시보드 전면 개편 — 담당자 통합 현황판 / 모든 지표는 관리자·직원 제외 (접속통계와 동일 기준) / PPT 카드 삭제 -->
+    <!-- ★ [2026-09-12] 대시보드 전면 개편 — 담당자 통합 현황판 / 접속·회원 지표는 관리자·직원 제외(접속통계·회원관리 요약과 동일 기준), 결제 지표는 실제 청구 기준 / PPT 카드 삭제 -->
     <div id="p-dash" class="panel"><h2>대시보드</h2>
       <div class="toolbar" style="margin-bottom:16px">
         <button class="btn btn-sec btn-sm" onclick="loadDash()">🔄 새로고침</button>
@@ -5017,8 +5017,12 @@ async function loadDash(){
 
   /* 당월 탈퇴 */
   try{
-    const wSnap=await getDocs(query(collection(db,'withdrawn_users'),where('withdrawnAt','>=',Timestamp.fromDate(monthStart))));
-    set('d-withdraw-month',fmt(wSnap.size));
+    /* withdrawnAt 이 Timestamp·문자열 어느 쪽이어도 동일하게 판정 (탈퇴회원 현황 화면과 동일 기준) */
+    const wSnap=await getDocs(collection(db,'withdrawn_users'));
+    let wCnt=0;
+    wSnap.docs.forEach(d=>{const t=d.data().withdrawnAt;let dt=null;try{dt=t&&t.toDate?t.toDate():(t?new Date(t):null);}catch(_e){}
+      if(dt&&!isNaN(dt.getTime())&&dt>=monthStart)wCnt++;});
+    set('d-withdraw-month',fmt(wCnt));
   }catch(e){console.warn('탈퇴 집계 실패:',e);set('d-withdraw-month','-');}
 
   /* ⑤ 오늘 접속 현황 — 접속통계와 동일 함수(jvAccessAgg) 사용 */
@@ -5066,7 +5070,7 @@ async function loadDash(){
   try{
     const drSnap=await getDocs(query(collection(db,'daily_reports'),orderBy('createdAt','desc'),limit(5)));
     const drList=drSnap.docs.map(d=>d.data());
-    const hit=drList.find(r=>(r.date||r.fileDate)===todayStr);
+    const hit=drList.find(r=>String(r.date||r.fileDate||'').slice(0,10)===todayStr||(r.createdAt&&r.createdAt.toDate&&ymd(r.createdAt.toDate())===todayStr));
     const el=$('d-dr-today');
     if(el){el.textContent=hit?'발행완료':'미발행';el.style.color=hit?'var(--success)':'var(--danger)';}
     set('d-dr-sub','최근 '+((drList[0]&&(drList[0].date||drList[0].fileDate))||'-'));
