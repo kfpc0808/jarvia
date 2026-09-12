@@ -12614,6 +12614,21 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
        리포트 알림톡의 조건 그룹이 이 4종으로 대상을 계산하므로, 값이 바뀌면 바로 올려 준다.
        attrsOnly:true 라 이름·생일·상령일·계약은 서버에서 변하지 않는다. */
     var _mpcAttrQ={},_mpcAttrT=null;   /* ★ [2026-09-12] 칩을 연달아 누를 때 upsert(=고객 전체 조회)가 매번 도는 것을 막는다 */
+    /* ★ [2026-09-12] 대기 중인 전송을 즉시 내보낸다 — 디바운스 1.5초 안에 화면을 닫아도 서버 반영이 유실되지 않게 */
+    function _mpcAttrFlush(){
+      if(_mpcAttrT){clearTimeout(_mpcAttrT);_mpcAttrT=null;}
+      var batch=Object.keys(_mpcAttrQ).map(function(k){return _mpcAttrQ[k];});
+      _mpcAttrQ={};
+      if(!batch.length)return;
+      if(!window.fccBridge||!window.fccBridge.upsert)return;
+      try{window.fccBridge.upsert(batch)
+        .then(function(){try{localStorage.setItem("fcc_changed_at",String(Date.now()));}catch(_e){}},function(){});
+      }catch(_e){}
+    }
+    try{
+      document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")_mpcAttrFlush();});
+      window.addEventListener("pagehide",_mpcAttrFlush);
+    }catch(_e){}
     window.__mpcPushAttrs=function(c){
       try{
         if(!c||!c.fccId||!c.name)return;
@@ -12621,15 +12636,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
         _mpcAttrQ[c.fccId]={fccId:c.fccId,name:c.name,attrsOnly:true,
           rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};
         if(_mpcAttrT)clearTimeout(_mpcAttrT);
-        _mpcAttrT=setTimeout(function(){
-          _mpcAttrT=null;
-          var batch=Object.keys(_mpcAttrQ).map(function(k){return _mpcAttrQ[k];});
-          _mpcAttrQ={};
-          if(!batch.length)return;
-          try{window.fccBridge.upsert(batch)
-            .then(function(){try{localStorage.setItem("fcc_changed_at",String(Date.now()));}catch(_e){}},function(){});
-          }catch(_e){}
-        },1500);
+        _mpcAttrT=setTimeout(_mpcAttrFlush,1500);
       }catch(_e){}
     };
     /* ★ [2026-09-10] fccBridge.upsert 가 서버 속성 4종을 채울 때 쓰는 로컬 고객 조회 (fccId → 이름 순) */
@@ -13685,7 +13692,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           return {fccId:c.fccId,name:c.name,attrsOnly:true,
                   rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};
         });
-        if(!list.length){try{localStorage.setItem(MPC_ATTR_BF_KEY,"1");}catch(_e){}return;}
+        /* ★ [2026-09-12] 고객이 0명이면 드라이브 읽기 실패일 수 있으므로 플래그를 남기지 않는다 (다음 접속에 재시도) */
+        if(!list.length){if((customers||[]).length){try{localStorage.setItem(MPC_ATTR_BF_KEY,"1");}catch(_e){}}return;}
         window.fccBridge.upsert(list).then(function(){
           try{localStorage.setItem(MPC_ATTR_BF_KEY,"1");}catch(_e){}
           try{localStorage.setItem("fcc_changed_at",String(Date.now()));}catch(_e){}
