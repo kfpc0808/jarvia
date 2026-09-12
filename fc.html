@@ -6319,6 +6319,10 @@ window.fccBridge={
         /* ★ [2026-09-02] 이름만으로 맞춘 경우, 들어온 생일이 비어 있으면 서버의 생일·생일MMDD·상령일을 덮어쓰지 않는다
            (음성 입력처럼 생일 없는 갱신이 알림 기준을 지워버리는 것을 막는다) */
         if(_byNameOnly&&!s.birthDate){delete core.birthDate;delete core.birthMmdd;delete core.sangryeongMmdd;}
+        /* ★ [2026-09-12] 속성 전용 갱신(attrsOnly) — 상태·관계·관심항목·다음연락일만 덮어쓰고
+           이름·생일·상령일·호칭·계약은 건드리지 않는다. 기존 문서를 못 찾으면 새로 만들지 않고 건너뛴다. */
+        if(s.attrsOnly){delete core.name;delete core.birthDate;delete core.birthMmdd;delete core.sangryeongMmdd;delete core.mgTitle;
+          if(!exId){outIds.push(null);continue;}}
         if(exId){
           if(s.replaceContracts){core.contracts=inc.slice(0,20);}
           else if(inc.length){const merged=(exCt||[]).slice();inc.forEach(ct=>{const i2=merged.findIndex(x=>x.productName===ct.productName);if(i2>=0){merged[i2]=Object.assign({},merged[i2],{maturityDate:ct.maturityDate||merged[i2].maturityDate,insType:ct.insType||merged[i2].insType,yearly:(ct.yearly!=null)?ct.yearly:merged[i2].yearly,insurer:(ct.insurer!=null&&ct.insurer!=='')?ct.insurer:(merged[i2].insurer||''),premium:(ct.premium!=null&&ct.premium!=='')?ct.premium:(merged[i2].premium||'')});}else merged.push(ct);});core.contracts=merged.slice(0,20);}
@@ -11642,7 +11646,7 @@ init();
       </div>
       <button class="mp-save" id="mpcSave">저장</button>
       <button type="button" id="mpcFormDel" style="display:none;width:100%;border:1px solid #E8B4B4;background:#FDF3F3;color:#A94442;border-radius:12px;padding:11px;font-size:12.5px;font-weight:700;margin-top:8px">🗑 이 고객 삭제</button>
-      <div class="mp-note">고객 정보는 <b>내 구글 드라이브에 무제한 저장</b>돼요 · 회사 서버에 저장되지 않아요<br>주소·메모·관심항목·직업까지 함께 저장되며, <b>AI 비서가 한 번에 읽는 범위는 최대 6만 글자(A4 약 35장)</b>입니다</div>
+      <div class="mp-note">고객 정보는 <b>내 구글 드라이브에 무제한 저장</b>돼요 · 주소·메모·직업·상담기록까지 함께 저장되고 <b>회사 서버에는 남지 않습니다</b><br>다만 <b>이름·생년월일·계약(만기)·상태·관계·관심항목·다음 연락일</b>은 생일·만기 알림과 리포트 조건 발송을 위해 회사 서버에도 함께 보관됩니다 · <b>AI 비서가 한 번에 읽는 범위는 최대 6만 글자(A4 약 35장)</b>입니다</div>
       <div id="mpcRosterMeter" style="margin-top:8px"></div>
     </div>
   </div>
@@ -12541,6 +12545,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     });}   /* ★ [2026-07-29 v5] 삭제 지시 수행 */   /* ★ [2026-07-29 v2] 음성 주소② — 변경 시 옛 🏢좌표 제거 · ★ [2026-07-25] job 추가 */
     var _prevB=(c.birthDate||"");
     var _ctBefore=JSON.stringify(c.contracts||[]);
+    var _atBefore=JSON.stringify([c.status||"",c.rels||[],c.needs||[],c.nextContact||""]);   /* ★ [2026-09-12] 4종 변경 감지 */
     if(f.birthDate&&/^\d{4}-\d{2}-\d{2}$/.test(f.birthDate)){c.birthDate=f.birthDate;c.birthUnknown=false;}
     if(f.nextContact&&/^\d{4}-\d{2}-\d{2}$/.test(f.nextContact))c.nextContact=f.nextContact;
     if(f.needs&&f.needs.length){c.needs=c.needs||[];f.needs.forEach(function(n){n=String(n||"").trim();if(n&&c.needs.indexOf(n)<0)c.needs.push(n);});}
@@ -12558,8 +12563,11 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     /* ★ 서버 즉시 반영 (2026-07-19): fc_clients는 상령일·만기 D-day·캘린더의 정본.
        코어(생일·계약)가 바뀐 경우에만 호출하고, replaceContracts 미지정 = 병합 모드라 서버 계약이 지워지지 않는다. */
     var _coreChanged=(c.birthDate!==_prevB)||(JSON.stringify(c.contracts||[])!==_ctBefore);
+    var _attrChanged=(JSON.stringify([c.status||"",c.rels||[],c.needs||[],c.nextContact||""])!==_atBefore);   /* ★ [2026-09-12] */
     var syncFcc=function(after){
-      if(!_coreChanged||!window.fccBridge||!window.fccBridge.upsert){after();return;}
+      if(!_coreChanged||!window.fccBridge||!window.fccBridge.upsert){
+        if(_attrChanged){try{window.__mpcPushAttrs(c);}catch(_e){}}   /* ★ [2026-09-12] 코어는 그대로여도 4종이 바뀌면 올린다 */
+        after();return;}
       try{
         window.fccBridge.upsert([{fccId:c.fccId||"",name:c.name,birthDate:c.birthDate||"",prevBirthDate:(_prevB&&_prevB!==c.birthDate)?_prevB:"",mgTitle:c.mgTitle||"",
           contracts:(c.contracts||[]).map(function(ct){return {productName:ct.product||"",maturityDate:ct.expiry||"",yearly:(ct.yearly!=null)?!!ct.yearly:(ct.ptype==="자동차"||ct.ptype==="실손"),insType:MPC_PT2CODE[ct.ptype]||ct.ptype||"",insurer:ct.insurer||"",premium:ct.premium||""};}).filter(function(x){return x.productName;})}])
@@ -12602,6 +12610,28 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   };
   /* ★ 음성입력 신규 고객 생성 (2026-07-19): 확인 화면에서 사용자가 이름을 확정한 뒤에만 호출된다.
      저장 순서 = 기기 즉시 → 드라이브 즉시 → 서버(fc_clients) 즉시. 좌표를 못 찾아도 저장은 진행한다. */
+    /* ★ [2026-09-12] 상태·관계·관심항목·다음연락일만 서버에 반영한다.
+       리포트 알림톡의 조건 그룹이 이 4종으로 대상을 계산하므로, 값이 바뀌면 바로 올려 준다.
+       attrsOnly:true 라 이름·생일·상령일·계약은 서버에서 변하지 않는다. */
+    var _mpcAttrQ={},_mpcAttrT=null;   /* ★ [2026-09-12] 칩을 연달아 누를 때 upsert(=고객 전체 조회)가 매번 도는 것을 막는다 */
+    window.__mpcPushAttrs=function(c){
+      try{
+        if(!c||!c.fccId||!c.name)return;
+        if(!window.fccBridge||!window.fccBridge.upsert)return;
+        _mpcAttrQ[c.fccId]={fccId:c.fccId,name:c.name,attrsOnly:true,
+          rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};
+        if(_mpcAttrT)clearTimeout(_mpcAttrT);
+        _mpcAttrT=setTimeout(function(){
+          _mpcAttrT=null;
+          var batch=Object.keys(_mpcAttrQ).map(function(k){return _mpcAttrQ[k];});
+          _mpcAttrQ={};
+          if(!batch.length)return;
+          try{window.fccBridge.upsert(batch)
+            .then(function(){try{localStorage.setItem("fcc_changed_at",String(Date.now()));}catch(_e){}},function(){});
+          }catch(_e){}
+        },1500);
+      }catch(_e){}
+    };
     /* ★ [2026-09-10] fccBridge.upsert 가 서버 속성 4종을 채울 때 쓰는 로컬 고객 조회 (fccId → 이름 순) */
     window.__mpcAttrsOf=function(fccId,name){try{var c=null;if(fccId){for(var i=0;i<customers.length;i++){if(customers[i].fccId===fccId){c=customers[i];break;}}}
       if(!c&&name)c=mpcFindByName(name);if(!c)return null;return {rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};}catch(_e){return null;}};
@@ -13193,6 +13223,7 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
       nb.innerHTML=mpcDtNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
       mpcNeedsWire(nb,sel,function(ns){
         c.needs=ns.slice();c.createdAt=Date.now();custPut(c);mpcGdPushSoon();
+        try{window.__mpcPushAttrs(c);}catch(_e){}   /* ★ [2026-09-12] 조건 그룹용 서버 반영 */
         try{mpcRenderList();}catch(_e){}
         mpcDetailRender(c);
       },function(){mpcDtNeedsOpen=true;mpcDetailRender(c);}
@@ -13621,7 +13652,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustOpen=function(){
     /* ★ [2026-09-03] ① 드라이브 게이트 — 통과 못 하면 고객 화면을 열지 않는다 */
     if(!mpcGateFresh()){mpcDriveGate().then(function(r){if(r==="ok"){window.__mpCustOpen();return;}mpcGateOpen(r,function(){window.__mpCustOpen();},function(){window.__mpCustOpen();});});return;}
-    mpcLoadCustomRels();mpcBusyOn("회원님 구글 드라이브에서 고객 정보를 불러오는 중…","개인정보는 회원님 개인 드라이브에만 암호화 저장됩니다 — 직접 내려받는 중이라 잠시 걸려요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
+    mpcLoadCustomRels();mpcBusyOn("회원님 구글 드라이브에서 고객 정보를 불러오는 중…","연락처·주소·메모는 회원님 개인 드라이브에만 암호화 저장됩니다 — 직접 내려받는 중이라 잠시 걸려요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
     /* ★ [2026-09-03] ② 표시 전에 드라이브 꼬리표 확인 — 같으면 즉시, 다르면 내려받은 뒤. 기기 사본을 확인 없이 보여주지 않는다.
        (종전: 기기 목록을 먼저 보여주고 확인 창 뒤에서 드라이브를 맞췄다 → 옛 목록이 잠깐 보였다) */
     .then(function(){if(mpcSyncBusy)return null;mpcGdPullLast="";return new Promise(function(res){mpcGdPull(function(){res();});});})
@@ -13636,6 +13667,31 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     mpcDedup().catch(function(){return 0;}).then(function(n){if(n){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(true);mpcUpdateCount();}toast("중복 고객 "+n+"건을 자동 정리했어요 (기록은 합쳐서 보존)");}
     /* ★ 100% 동기화 조인 v5 (2026-07-18): fc_clients=코어 정본(이름·생일·호칭·계약[상품·만기·유형·매년·보험사·월보험료]).
        ①fccId 마이그레이션 → ①b 최초링크 계약 합집합 통일(충돌 시 지도 우선) → ②조인 → ③역방향 삭제 → ⑤미링크 전원 등록 → ④신규 편입 */
+    /* ★ [2026-09-12] 서버 속성 4종 백필 — 2026-09-10 이전에 등록된 고객은 서버(fc_clients)에
+       상태·관계·관심항목·다음 연락일이 없다. 리포트 알림톡의 조건 그룹이 이 4종으로 대상을
+       계산하므로, 회원당 한 번만 조용히 올려 준다.
+       · 대상: 서버 문서와 이미 연결된(fccId 보유) 고객 중 4종에 값이 있는 사람
+       · attrsOnly 라 이름·생일·상령일·계약은 서버에서 그대로 유지된다
+       · 한 번의 호출로 넘겨 서버 조회를 1회로 줄인다 (내부에서 200건씩 커밋)
+       · 성공했을 때만 플래그를 남겨, 실패하면 다음 접속에 다시 시도한다 */
+    var MPC_ATTR_BF_KEY="mpc_attr_backfill_v1";
+    function mpcAttrBackfill(){
+      try{
+        if(localStorage.getItem(MPC_ATTR_BF_KEY))return;
+        if(!window.fccBridge||!window.fccBridge.upsert)return;
+        var list=(customers||[]).filter(function(c){
+          return c&&c.fccId&&c.name&&(c.status||(c.rels&&c.rels.length)||(c.needs&&c.needs.length)||c.nextContact);
+        }).map(function(c){
+          return {fccId:c.fccId,name:c.name,attrsOnly:true,
+                  rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||""};
+        });
+        if(!list.length){try{localStorage.setItem(MPC_ATTR_BF_KEY,"1");}catch(_e){}return;}
+        window.fccBridge.upsert(list).then(function(){
+          try{localStorage.setItem(MPC_ATTR_BF_KEY,"1");}catch(_e){}
+          try{localStorage.setItem("fcc_changed_at",String(Date.now()));}catch(_e){}
+        },function(){});
+      }catch(_e){}
+    }
     if(window.fccBridge&&window.fccBridge.pullDocs){mpcSyncOn("서버 고객 정보를 대조하는 중…");window.fccBridge.pullDocs().then(function(pd){if(!pd){mpcSyncUnlock();mpcSyncOff();return;}
       var dirty=false,removed=0,firstLink={};
       /* ⓪ 중복 자동 정리 (2026-07-18): ⑤단계 결함으로 생성된 빈 고아 문서(무생일·무계약·무호칭 + 동명의 생일 문서 존재) 삭제.
@@ -13728,7 +13784,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         if(mpcDataGen!==_gen||mpTblBusy){mpcSyncUnlock();if(dirty)mpcGdPush();mpcRefreshAll();try{mpcDiffCompute(pd.list);}catch(_e){}mpcSyncOff();return;}
         mpcFccAdoptAsync(pd.list,function(_added){
           var _re=function(){mpcRefreshAll();};
-          var _fin=function(){_re();try{mpcDiffCompute(pd.list);}catch(_e){}mpcSyncOff();};   /* ★ [2026-09-02] 동기화 완료 시점에 드라이브↔서버 명단 대조 */
+          var _fin=function(){_re();try{mpcDiffCompute(pd.list);}catch(_e){}mpcSyncOff();
+            try{mpcAttrBackfill();}catch(_e){}};   /* ★ [2026-09-12] 동기화가 모두 끝난 뒤 1회 백필 (중복 생성 방지) */   /* ★ [2026-09-02] 동기화 완료 시점에 드라이브↔서버 명단 대조 */
           if(_added){mpcDedup().then(function(){mpcSyncUnlock();_fin();},function(){mpcSyncUnlock();_fin();});}else{mpcSyncUnlock();_fin();if(dirty)mpcGdPush();}   /* dedup은 자체적으로 mpcGdPush 수행 — 중복 업로드 방지 */
           if(_added)toast("내고객관리에서 "+_added+"명을 불러왔어요");
         });
@@ -13746,6 +13803,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     nb.innerHTML=mpcdNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
     mpcNeedsWire(nb,sel,function(ns){
       c.needs=ns.slice();c.createdAt=Date.now();custPut(c);mpcGdPushSoon();
+        try{window.__mpcPushAttrs(c);}catch(_e){}   /* ★ [2026-09-12] 조건 그룹용 서버 반영 */
       try{mpcRenderList();}catch(_e){}
       openCustDetail(c,true);
     },function(){mpcdNeedsOpen=true;openCustDetail(c,true);}
@@ -14388,7 +14446,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         +'<div style="background:#F7F8FA;border-radius:12px;padding:12px 14px">'
           +'<div style="font-size:13px;font-weight:800;color:#1B2430;margin-bottom:8px">🔒 어디에 저장되나요</div>'
           +'<div style="display:flex;gap:8px;margin-bottom:6px"><span style="width:13px;height:13px;border-radius:4px;background:#15294A;flex-shrink:0;margin-top:3px"></span><span style="font-size:11.5px;color:#5C6678;line-height:1.6"><b style="color:#1B2430">남색 열</b> — 이름·생일·계약. 알림과 캘린더 때문에 서버에도 저장됩니다</span></div>'
-          +'<div style="display:flex;gap:8px"><span style="width:13px;height:13px;border-radius:4px;background:#C9A96E;flex-shrink:0;margin-top:3px"></span><span style="font-size:11.5px;color:#5C6678;line-height:1.6"><b style="color:#1B2430">금색·회색 열</b> — 연락처·주소·메모 등. 내 기기와 내 구글드라이브에만 저장됩니다</span></div>'
+          +'<div style="display:flex;gap:8px"><span style="width:13px;height:13px;border-radius:4px;background:#C9A96E;flex-shrink:0;margin-top:3px"></span><span style="font-size:11.5px;color:#5C6678;line-height:1.6"><b style="color:#1B2430">금색·회색 열</b> — 연락처·주소·메모 등. 내 기기와 내 구글드라이브에만 저장됩니다 (관심항목·상태·다음 연락일은 알림·조건 발송에 쓰이므로 회사 서버에도 저장돼요)</span></div>'
         +'</div>'
       +'</div>'
       +'<div style="display:flex;gap:8px;padding:13px 17px;border-top:1px solid #EEF0F4;flex-shrink:0">'
