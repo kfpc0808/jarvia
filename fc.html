@@ -7849,7 +7849,7 @@ function vmExCard(k,icon,ic,tc,label,text){
     +'<div style="display:flex;align-items:center;gap:6px"><i class="ti '+icon+'" style="font-size:13px;color:'+ic+'"></i><span style="font-size:10.5px;color:'+tc+';font-weight:700">'+label+'</span></div>'
     +'<div style="font-size:12px;color:#3A4457;line-height:1.6;margin-top:5px">'+_aiEsc(text)+'</div></div>';}
 /* ═══ ★ [2026-09-10] 고객입력 3모드 + 개별등록 폼 ═══ */
-const VM_MODES=['bulk','form','voice'];
+const VM_MODES=['bulk','form','voice','edit'];   /* ★ [2026-09-12] edit: 등록된 고객을 찾아 수정 */
 function vmModeInit(){
 /* 리포트 알림톡 인계(?rpt=1) → 개별등록으로, 그 외엔 마지막 선택(기본 자연어) */
 try{if((new URLSearchParams(location.search).get('rpt')||'')==='1')return 'form';}catch(_e){}
@@ -7859,7 +7859,7 @@ return 'voice';
 function vmSetMode(m){
 if(VM_MODES.indexOf(m)<0)m='voice';
 try{localStorage.setItem('jv_vm_mode',m);}catch(_e){}
-const show={bulk:'vmModeBulk',form:'vmModeForm',voice:'vmModeVoice'};
+const show={bulk:'vmModeBulk',form:'vmModeForm',voice:'vmModeVoice',edit:'vmModeEdit'};
 VM_MODES.forEach(k=>{const el=vmEl(show[k]);if(el)el.style.display=(k===m)?'':'none';});
 document.querySelectorAll('#vmModeBar [data-vmmode]').forEach(b=>{const on=b.getAttribute('data-vmmode')===m;b.style.background=on?'#15294A':'#fff';b.style.color=on?'#fff':'#3A4457';b.style.borderColor=on?'#15294A':'#E1E5EC';});
 const nb=vmEl('vmNew'),ab=vmEl('vmAi'),fb=vmEl('vmIfSave');
@@ -7868,6 +7868,7 @@ if(ab)ab.style.display=(m==='voice')?'':'none';
 if(fb)fb.style.display=(m==='form')?'':'none';
 const foot=fb&&fb.parentElement;if(foot)foot.style.display=(m==='bulk')?'none':'flex';
 if(m==='form'){try{vmIfPrefillFromHandoff();}catch(_e){}const n=vmEl('vmIfName');if(n&&!n.value)setTimeout(()=>{try{n.focus();}catch(_e){}},50);}
+if(m==='edit'){setTimeout(()=>{try{const k=vmEl('vmEdKw');if(k)k.focus();}catch(_e){}},60);try{vmEdRender();}catch(_e){}}   /* ★ [2026-09-12] 고객수정 탭 */
 }
 const VM_IF_RELS=['고객','가망고객','친구','지인'];
 const VM_IF_STATUS=['가망','신규','계약자','VIP','휴면'];
@@ -8093,26 +8094,41 @@ toast('리포트 알림톡 신청 고객 정보가 채워졌어요 — 확인 �
 /* ★ [2026-09-12] 리포트 알림톡의 「연락처 갱신」·「직접 수정」으로 넘어온 경우 —
    새 고객 등록이 아니라 기존 고객의 편집 화면을 연다.
    ?rpt=1 진입 직후에는 고객 목록(customers)이 아직 비어 있어 최대 10초까지 기다린다. */
-function vmIfHandoffToEdit(d){
-/* 고객 목록(customers)은 「고객 목록」 화면을 열 때만 적재된다. ?rpt=1 로는 개별등록으로 오므로
-   여기서 직접 적재한 뒤(__mpcEnsureCustomers) 해당 고객을 찾아 편집 화면을 연다. */
-const pick=function(){
-  let c=null;
-  try{c=(customers||[]).filter(function(x){return x&&x.id===d.cid;})[0]||null;}catch(_e){}
-  if(!c&&d.name){try{c=(customers||[]).filter(function(x){return x&&x.name===d.name;})[0]||null;}catch(_e){}}
-  if(!c){toast('고객을 찾지 못했습니다 — 고객 목록에서 「'+(d.name||'')+'」님을 찾아 연락처를 고쳐 주세요','warn');return;}
-  try{if(window.__mpCustOpen)__mpCustOpen();}catch(_e){}
-  setTimeout(function(){
-    try{openCustForm(c);}catch(_e){}
-    try{const p=$("mpcPhone");if(p){if(d.phone)p.value=d.phone;p.focus();}}catch(_e){}
-    if(d.phone)toast('「'+(c.name||'')+'」 연락처를 신청 번호로 채웠습니다 — 확인 후 저장해 주세요');
-    else toast('「'+(c.name||'')+'」 연락처를 신청 번호(뒷자리 '+(d.last4||'')+')로 고쳐 저장해 주세요');
-  },600);
+/* ★ [2026-09-12] 고객수정 탭 — 검색 결과를 그리고, 누르면 기존 편집 화면으로 보낸다.
+   고객 데이터·편집 폼은 다른 스크립트 블록의 IIFE 안에 있어 window 창구로만 접근한다. */
+let _vmEdSeq=0;
+function vmEdEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function vmEdMask(p){p=String(p||'').replace(/\D/g,'');if(p.length<8)return p||'연락처 없음';return p.slice(0,3)+'-****-'+p.slice(-4);}
+function vmEdRender(){
+  const box=vmEl('vmEdList');if(!box)return;
+  const kw=((vmEl('vmEdKw')||{}).value||'').trim();
+  if(!kw){box.innerHTML='<div style="text-align:center;color:#8A93A8;font-size:12px;padding:18px 6px;line-height:1.7">고칠 고객의 <b>이름</b>을 입력해 주세요.<br>이름 일부만 적어도 찾아드립니다.</div>';return;}
+  const seq=++_vmEdSeq;
+  box.innerHTML='<div style="text-align:center;color:#8A93A8;font-size:12px;padding:16px 6px">찾는 중…</div>';
+  if(!window.__mpcSearchCustomers){box.innerHTML='<div style="text-align:center;color:#B42318;font-size:12px;padding:16px 6px">고객 목록을 불러올 수 없습니다 — 화면을 새로고침해 주세요.</div>';return;}
+  window.__mpcSearchCustomers(kw,function(list){
+    if(seq!==_vmEdSeq)return;   /* 타이핑이 이어졌으면 이전 결과는 버린다 */
+    if(list===null){box.innerHTML='<div style="background:#FEF3F2;border:1px solid #F5C2C0;border-radius:11px;padding:10px 12px;font-size:11.5px;font-weight:700;color:#1B2430;line-height:1.65">⚠ 이 기기에 고객 정보가 아직 없습니다 — <b>고객 목록</b>을 한 번 열어 구글 드라이브에서 불러온 뒤 다시 검색해 주세요.</div>';return;}
+    if(!list.length){box.innerHTML='<div style="text-align:center;color:#8A93A8;font-size:12px;padding:18px 6px">「'+vmEdEsc(kw)+'」로 찾은 고객이 없습니다.</div>';return;}
+    box.innerHTML=list.map(function(c){
+      const sub=[vmEdMask(c.phone),c.company||'',c.job||''].filter(Boolean).join(' · ');
+      return '<div onclick="vmEdOpen(\''+vmEdEsc(c.id)+'\')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E1E5EC;border-radius:11px;padding:10px 12px;margin-bottom:5px;cursor:pointer">'
+        +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:#1B2430">'+vmEdEsc(c.name)+'</div>'
+        +'<div style="font-size:11px;color:#8A93A8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+vmEdEsc(sub)+'</div></div>'
+        +'<span style="font-size:11.5px;font-weight:800;color:#15294A;white-space:nowrap">수정 →</span></div>';
+    }).join('')+(list.length>=50?'<div style="font-size:11px;color:#8A93A8;text-align:center;padding:6px">50명까지만 표시했습니다 — 검색어를 더 적어 주세요.</div>':'');
+  });
+}
+window.vmEdRender=vmEdRender;
+window.vmEdOpen=function(cid){
+  if(!window.__mpcOpenEditByCid){toast('고객 편집 화면을 열 수 없습니다 — 화면을 새로고침해 주세요','warn');return;}
+  window.__mpcOpenEditByCid(cid,'','');
 };
-try{
-  if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(function(){pick();});
-  else pick();
-}catch(_e){pick();}
+function vmIfHandoffToEdit(d){
+/* 고객 데이터·편집 폼은 다른 스크립트 블록의 IIFE 안에 있으므로 window 창구로 넘긴다.
+   (직접 customers·openCustForm 을 부르면 ReferenceError 로 조용히 실패한다) */
+if(window.__mpcOpenEditByCid){window.__mpcOpenEditByCid(d.cid,d.phone||'',d.last4||'');return;}
+toast('고객 편집 화면을 열 수 없습니다 — 고객 목록에서 「'+(d.name||'')+'」님을 찾아 연락처를 고쳐 주세요','warn');
 }
 function vmIfSave(){
 const nm=(vmEl('vmIfName')&&vmEl('vmIfName').value||'').trim();
@@ -8154,9 +8170,10 @@ function vmRenderInput(){
     +'</div>'
     /* ★ [2026-09-10] 입력 방식 3모드 — 단체등록(엑셀) · 개별등록(항목 폼) · 자연어입력(말하기/타이핑). 마지막 선택을 기억 */
     +'<div id="vmModeBar" style="display:flex;gap:6px;margin-bottom:10px">'
-    +'<button type="button" data-vmmode="bulk" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:10px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">📊 단체등록</button>'
-    +'<button type="button" data-vmmode="form" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:10px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">👤 개별등록</button>'
-    +'<button type="button" data-vmmode="voice" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:10px 4px;font-size:12.5px;font-weight:800;font-family:inherit;cursor:pointer">🎙 자연어입력</button>'
+    +'<button type="button" data-vmmode="bulk" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">📊 단체등록</button>'
+    +'<button type="button" data-vmmode="form" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">👤 개별등록</button>'
+    +'<button type="button" data-vmmode="voice" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">🎙 자연어</button>'
+    +'<button type="button" data-vmmode="edit" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">✏️ 고객수정</button>'   /* ★ [2026-09-12] 등록된 고객 찾아 수정 */
     +'</div>'
     /* ── 단체등록 ── */
     +'<div id="vmModeBulk">'
@@ -8175,7 +8192,15 @@ function vmRenderInput(){
       /* ── 개별등록 (항목 폼) ── ★ [2026-09-10] 이름만 필수, 나머지 선택. 저장은 자연어 경로와 같은 __vmCreateCustomer */
       +'<div id="vmModeForm" style="display:none">'+vmIfHtml()+'</div>'
       /* ── 자연어입력 ── */
-      +'<div id="vmModeVoice">'
+      /* ── ★ [2026-09-12] 고객수정 — 등록된 고객을 찾아 기존 편집 화면으로 보낸다 (저장 경로는 하나로 유지) ── */
+    +'<div id="vmModeEdit" style="display:none">'
+    +'<div style="background:#fff;border:1.5px solid #E1E5EC;border-radius:13px;padding:12px 13px">'
+    +'<div style="font-size:12.5px;font-weight:800;color:#1B2430">✏️ 등록된 고객 정보 수정</div>'
+    +'<div style="font-size:11px;color:#5B6478;line-height:1.65;margin-top:4px">이름·연락처·회사·직업으로 찾아 고칠 고객을 고르세요. 누르면 <b>고객 목록의 편집 화면</b>이 열립니다.<div style="margin-top:3px;font-weight:700;color:#1B2430">🔒 연락처·주소·메모는 회원님 구글 드라이브에서 직접 불러옵니다</div></div>'
+    +'<input type="text" id="vmEdKw" placeholder="이름·연락처 검색 (예: 홍길동)" autocomplete="off" enterkeyhint="search" oninput="vmEdRender()" style="width:100%;margin-top:9px;border:1.5px solid #E1E5EC;border-radius:11px;padding:12px 13px;font-size:16px;font-family:inherit;outline:0">'
+    +'<div id="vmEdList" style="margin-top:8px;max-height:340px;overflow-y:auto"></div>'
+    +'</div></div>'
+    +'<div id="vmModeVoice">'
       +'<div style="background:#fff;border:1px solid #E4E0D5;border-radius:13px;padding:13px 14px">'
       /* ★ [2026-09-10] Win+H 안내 제거 → 자연어 자동 분류 안내 (폰은 키패드 마이크 안내) */
       +'<div style="font-size:13px;color:#1B2430;font-weight:800;line-height:1.5">고객 정보를 말하듯 자연스럽게 적어주세요</div>'
@@ -12506,6 +12531,53 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     }catch(_e){cb&&cb(false,'fail');}
   };
   window.__mpcEnsureCustomers=function(cb){try{if(customers&&customers.length){cb(customers);return;}custLoad().then(function(){cb(customers);});}catch(_e){cb([]);}};   /* ★ AI 비서 읽기 전용 접근자 (2026-07-17) */
+/* ★ [2026-09-12] 고객입력 「고객수정」 탭 · 리포트 알림톡 「직접 수정」에서 쓰는 창구.
+   customers·openCustForm·__mpCustOpen 은 이 IIFE 안에만 있어 다른 스크립트 블록에서 직접 쓸 수 없다. */
+window.__mpcSearchCustomers=function(kw,cb){
+  try{
+    window.__mpcEnsureCustomers(function(){
+      var k=String(kw||"").trim().toLowerCase();
+      /* ★ [2026-09-12] 이 기기에 고객 정보가 아예 없는 경우와 검색 결과가 없는 경우를 구분해 알린다
+         (둘 다 "없습니다"로 보이면 2,470명을 가진 회원이 멈춘다) */
+      if(!(customers||[]).length){cb(null);return;}
+      if(!k){cb([]);return;}
+      var out=(customers||[]).filter(function(c){
+        if(!c||!c.name)return false;
+        return (c.name+" "+(c.phone||"")+" "+(c.company||"")+" "+(c.job||"")).toLowerCase().indexOf(k)>=0;
+      }).sort(function(a,b){return String(a.name).localeCompare(String(b.name),"ko");}).slice(0,50)
+       .map(function(c){return {id:c.id,name:c.name,phone:c.phone||"",company:c.company||"",job:c.job||""};});
+      cb(out);
+    });
+  }catch(_e){cb([]);}
+};
+window.__mpcOpenEditByCid=function(cid,phone,last4){
+  try{
+    window.__mpcEnsureCustomers(function(){
+      var c=null;
+      try{c=(customers||[]).filter(function(x){return x&&x.id===cid;})[0]||null;}catch(_e){}
+      if(!c){toast("고객을 찾지 못했습니다 — 고객 목록에서 직접 찾아 주세요","warn");return;}
+      try{if(window.__mpCustOpen)__mpCustOpen();}catch(_e){}
+      /* ★ [2026-09-12] 고정 대기(0.6초)는 기기·고객 수·네트워크에 따라 부족해 로딩 화면에 폼이 가려졌다.
+         로딩이 걷히고 폼이 실제로 열렸는지(mpcEditId) 확인하며 재시도한다 (0.3초 간격, 최대 15초) */
+      var tries=0;
+      var open=function(){
+        var busy=false;
+        try{var be=mpcBusyEl();busy=!!(be&&be.classList&&be.classList.contains("show"));}catch(_e){}
+        if(busy&&++tries<50){setTimeout(open,300);return;}
+        try{openCustForm(c);}catch(_e){}
+        if(mpcEditId!==c.id){
+          if(++tries<50){setTimeout(open,300);return;}
+          toast("편집 화면을 열지 못했습니다 — 고객 목록에서 「"+(c.name||"")+"」님을 직접 열어 주세요","warn");return;
+        }
+        try{var p=$("mpcPhone");if(p){if(phone)p.value=phone;p.focus();}}catch(_e){}
+        if(phone)toast("「"+(c.name||"")+"」 연락처를 신청 번호로 채웠습니다 — 확인 후 저장해 주세요");
+        else if(last4)toast("「"+(c.name||"")+"」 연락처를 신청 번호(뒷자리 "+last4+")로 고쳐 저장해 주세요");
+        else toast("「"+(c.name||"")+"」 정보를 열었습니다 — 고친 뒤 저장해 주세요");
+      };
+      setTimeout(open,300);
+    });
+  }catch(_e){}
+};
   /* ★ [2026-08-09] 보험 공유 병합용 쓰기 브리지 — customers·custPut·mpcGdPush·openCustForm·forceCustTab이 클로저 내부라
      모듈 스크립트의 insMergeByParam/insMergeToCustomer가 접근 불가하던 문제 해결. 배열은 동일 참조라 push가 원본에 반영됨 */
   window.__mpcCustomersRef=function(){return customers;};
@@ -14887,6 +14959,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     if($("mpcAddrChk"))$("mpcAddrChk").onclick=mpcCheckAddr;if($("mpcAddr2Chk"))$("mpcAddr2Chk").onclick=mpcCheckAddr2;/* ★ [2026-07-29] */
     if($("mpcSave"))$("mpcSave").onclick=mpcSaveCust;
     if($("mpcPhone"))$("mpcPhone").oninput=function(){this.value=mpcFmtPhone(this.value);};
+    /* ★ [2026-09-12] 출생년 칸은 inputmode 만 있어 데스크톱·일부 키보드에서 문자가 들어갔다 — 숫자만 남긴다 */
+    if($("mpcFamBirth"))$("mpcFamBirth").oninput=function(){this.value=this.value.replace(/[^0-9]/g,"").slice(0,4);};
     if($("mpcSearchIn"))$("mpcSearchIn").oninput=function(){mpcSearch=this.value;mpcPage=1;mpcRenderList();};
     /* ★ [2026-07-24] '지도 화면 안만' 토글 — 기본 해제(전체 표시). 켠 상태는 기억한다. */
     if($("mpcViewOnly")){
