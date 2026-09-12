@@ -15285,7 +15285,7 @@ window.rptOpen=async function(){
   rptEnsureModal();
   openM('mdl-rpt');
   _rpt={view:'send',kind:'daily',clients:[],matched:{},unmatched:[],groups:[],sel:new Set(),tab:'on',fileDate:rptToday(),preview:null,schedules:[],sends:[],views:{},filterGroup:'',kw:'',loading:true,   /* ★ [2026-09-10] kind: 보낼 콘텐츠(daily 데일리 리포트 / mc 모닝 컨센서스), views: 고객 열람 기록 */
-        gname:'',gkw:'',gfilter:'',gsel:new Set(),gmenu:'',gbulk:'',   /* ★ [2026-09-12] 그룹 탭 전용 — 이름 입력·검색·필터·다중선택·행메뉴·일괄작업 (발송 탭 kw/filterGroup 과 분리) */
+        gname:'',gkw:'',gfilter:'',gsel:new Set(),gmenu:'',gbulk:'',gkeep:new Set(),   /* ★ [2026-09-12] 그룹 탭 전용 — 이름 입력·검색·필터·다중선택·행메뉴·일괄작업 (발송 탭 kw/filterGroup 과 분리) */
         sch:{repeat:'daily',time:'08:30',startDate:rptToday(),weekdays:[1,2,3,4,5],intervalDays:3,endMode:'none',endDate:'',maxRuns:10,groupIds:[],rotateOrder:[],fallback:true,maxPerRun:100,name:''}};
   /* ★ [2026-09-12] 인라인 on* 핸들러는 전역 스코프에서 실행되므로 module 변수 _rpt 에 접근할 수 없다.
      (예약 이름·시간·시작일·간격·종료일·횟수·회당 최대 인원, 조건 그룹 「다음 연락일」·「취소」가 저장되지 않던 원인) */
@@ -15399,6 +15399,10 @@ function rptFiltered(list){
 function rptRender(){
   if(!_rpt||!$('rpt-body'))return;
   rptGroupsInvalidate();   /* ★ [2026-09-12] 이번 렌더에서 쓸 그룹 인원 캐시 초기화 */
+  /* ★ [2026-09-12] 다시 그리기 전에 스크롤 위치를 기억한다 — 체크할 때마다 목록이 맨 위로 튀던 문제 */
+  const _scB=($('rpt-body')||{}).scrollTop||0;
+  const _scLEl=$('rpt-glist')||$('rpt-slist');
+  const _scL=_scLEl?_scLEl.scrollTop:0;
   document.querySelectorAll('#mdl-rpt .rpt-tab').forEach(t=>t.classList.toggle('on',t.dataset.v===_rpt.view));
   const body=$('rpt-body'),foot=$('rpt-foot');
   if(_rpt.loading){body.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-lt)">고객 목록과 수신 신청 정보를 불러오는 중…</div>';foot.innerHTML='';return;}
@@ -15410,6 +15414,12 @@ function rptRender(){
   else rptRenderGuide(body,foot);
   /* ★ [2026-09-10] 보낼 콘텐츠 선택 — 발송·예약·이력 화면 맨 위에 (그룹·가이드는 종류와 무관) */
   if(v==='send'||v==='schedule'||v==='history')body.insertAdjacentHTML('afterbegin',rptKindBar());
+  /* ★ [2026-09-12] 기억해 둔 스크롤 위치로 되돌린다 (모달 본문 + 고객 목록 안쪽) */
+  try{
+    if(_scB)body.scrollTop=_scB;
+    const _l=$('rpt-glist')||$('rpt-slist');
+    if(_l&&_scL)_l.scrollTop=_scL;
+  }catch(_e){}
 }
 function rptStatBar(){
   const on=rptOnList().length,off=rptOffList().length,nw=Object.values(_rpt.matched).filter(m=>m.newFlag).length;
@@ -15438,7 +15448,7 @@ function rptRenderSend(body,foot){
     +'<div style="display:flex;gap:6px;margin-bottom:6px"><input class="rpt-inp" style="flex:1" placeholder="이름·번호 검색" value="'+rptE(_rpt.kw)+'" oninput="rptKw(this.value)">'+(_rpt.tab==='on'?'<span class="btn btn-sm btn-sec" onclick="rptSelAll('+(allOn?'false':'true')+')">'+(allOn?'이 목록 전체 해제':'이 목록 전체 선택')+'</span>':'')+'</div>'
     +(hiddenSel?'<div style="background:#FFF4E0;border:1px solid #F5D76E;border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.5;margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="flex:1">⚠ 지금 목록에 보이지 않는 고객 <b>'+hiddenSel+'명</b>이 선택돼 있습니다. 이대로 누르면 이분들에게도 함께 발송됩니다.</span><span class="btn btn-sm btn-sec" onclick="rptSelKeepVisible()">보이는 고객만 남기기</span></div>':'')
     +(_rpt.tab==='off'?'<div style="background:#FFF8E1;border:1px solid #F5D76E;border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.5;margin-bottom:6px">아직 카카오톡 수신을 신청하지 않은 고객입니다. 알림톡은 보낼 수 없고 <b>신청 링크</b>를 내 폰 문자로 보내 신청을 안내할 수 있습니다. 연락처가 없는 고객은 목록에 표시되지만 링크를 보낼 수 없습니다.</div>':'')
-    +'<div style="max-height:320px;overflow-y:auto">'+(list.length?list.map(c=>{
+    +'<div id="rpt-slist" style="max-height:320px;overflow-y:auto">'+(list.length?list.map(c=>{
         const m=_rpt.matched[c.cid];const gs=rptGroupsOf(c.cid).map(id=>{const g=_rpt.groups.find(x=>x.id===id);return g?'<span class="rpt-pill">'+rptE(g.name)+'</span>':'';}).join('');
         if(_rpt.tab==='on'){
           if(m&&m.phoneMismatch)return '<div class="rpt-row" style="opacity:.8"><div class="rpt-chk" style="border-style:dashed;cursor:not-allowed" title="연락처를 맞춘 뒤 발송할 수 있습니다"></div><div style="flex:1"><span class="rpt-nm">'+rptE(c.name)+'</span>'+gs+'<span class="rpt-pill y">연락처 확인</span><div class="rpt-ph">저장된 번호가 신청 번호(뒷자리 <b>'+rptE((m.mask||'').slice(-4))+'</b>)와 '+(c.phone?'다릅니다':'없습니다')+' — 갱신 후 발송 가능</div></div>'+(m.canHandoff?'<span class="btn btn-sm btn-sec" onclick="rptHandoff(\''+rptE(m.subId)+'\',\'update\',\''+rptE(c.cid)+'\')">🔄 연락처 갱신</span>':'<span class="rpt-pill k">직접 수정</span>')+'</div>';
@@ -15534,7 +15544,7 @@ function rptGFiltered(){
   let l=_rpt.clients.slice();
   const f=_rpt.gfilter||'';
   if(f==='on')l=l.filter(c=>_rpt.matched[c.cid]&&_rpt.matched[c.cid].reportOptIn);
-  else if(f==='none')l=l.filter(c=>!rptGroupsOf(c.cid).length);
+  else if(f==='none')l=l.filter(c=>!rptGroupsOf(c.cid).length||(_rpt.gkeep&&_rpt.gkeep.has(c.cid)));   /* ★ [2026-09-12] 방금 담은 고객은 결과를 볼 수 있게 이 화면에 남겨 둔다 */
   else if(f)l=l.filter(c=>rptGroupCids(_rpt.groups.find(g=>g.id===f)).includes(c.cid));
   if(_rpt.gkw){const k=_rpt.gkw.toLowerCase();l=l.filter(c=>(c.name+' '+c.phone).toLowerCase().includes(k));}
   return l.sort((a,b)=>a.name.localeCompare(b.name,'ko'));
@@ -15594,8 +15604,8 @@ function rptRenderGroups(body,foot){
       ? '<div style="flex-basis:100%;padding:6px 0 2px">'+(manual.length?manual.map(g=>'<span class="rpt-chip'+(rptGroupCids(g).includes(c.cid)?' on':'')+'" onclick="rptGroupToggle(\''+rptE(c.cid)+'\',\''+rptE(g.id)+'\')">'+rptE(g.name)+'</span>').join(''):'<span class="rpt-hint">담을 그룹이 없습니다. 위에서 먼저 만들어 주세요.</span>')+'<span class="rpt-chip" onclick="rptGMenu(\'\')">닫기</span></div>'
       : '';
     return '<div class="rpt-row" style="flex-wrap:wrap"><div class="rpt-chk'+(_rpt.gsel.has(c.cid)?' on':'')+'" onclick="rptGSel(\''+rptE(c.cid)+'\')"></div>'
-      +'<div style="flex:1;min-width:140px"><span class="rpt-nm">'+rptE(c.name)+'</span>'+(on?'<span class="rpt-pill g">발송 대상</span>':'')+gs
-      +'<div class="rpt-ph">'+(c.phone?rptMask(c.phone):'연락처 없음')+'</div></div>'
+      +'<div style="flex:1;min-width:140px"><span class="rpt-nm">'+rptE(c.name)+'</span>'+(on?'<span class="rpt-pill g">발송 대상</span>':'')
+      +'<div class="rpt-ph">'+(c.phone?rptMask(c.phone):'연락처 없음')+(gs?' '+gs:'')+'</div></div>'
       +'<span class="btn btn-sm btn-sec" onclick="rptGMenu(\''+rptE(c.cid)+'\')">'+(_rpt.gmenu===c.cid?'접기':'＋ 그룹')+'</span>'+menu+'</div>';
   }).join('');
 
@@ -15604,7 +15614,7 @@ function rptRenderGroups(body,foot){
     +'<div style="display:flex;gap:6px;margin-bottom:6px"><input class="rpt-inp" id="rpt-gsearch" style="flex:1" placeholder="이름·번호 검색" value="'+rptE(_rpt.gkw)+'" oninput="rptGKw(this.value)">'
     +(list.length?'<span class="btn btn-sm btn-sec" onclick="rptGSelAll('+(allSel?'false':'true')+')">'+(allSel?'선택 해제':'이 목록 전체 선택')+'</span>':'')+'</div>'
     +bulkbar
-    +'<div style="max-height:340px;overflow-y:auto">'+(rows||'<div style="text-align:center;color:var(--text-lt);padding:16px;font-size:12.5px">해당 고객이 없습니다.</div>')+'</div>'
+    +'<div id="rpt-glist" style="max-height:340px;overflow-y:auto">'+(rows||'<div style="text-align:center;color:var(--text-lt);padding:16px;font-size:12.5px">해당 고객이 없습니다.</div>')+'</div>'
     +(list.length>CAP?'<div class="rpt-hint">'+list.length+'명 중 '+CAP+'명만 표시했습니다. 검색이나 위 필터로 좁혀 주세요. (「이 목록 전체 선택」은 '+list.length+'명 전체에 적용됩니다)</div>':'')
     +'<div class="rpt-hint">체크하거나 그룹을 누르면 바로 저장됩니다. 수신을 신청하지 않은 고객도 그룹에 담을 수 있지만, 발송은 신청한 고객에게만 됩니다.</div></div>';
 
@@ -15612,7 +15622,7 @@ function rptRenderGroups(body,foot){
   foot.innerHTML='<span class="btn btn-sec" style="flex:1" onclick="rptView(\'send\')">발송으로</span><span class="btn btn-sec" style="flex:1" onclick="rptView(\'schedule\')">예약으로</span>';
 }
 /* ── 그룹 탭 조작 ── */
-window.rptGFilter=function(id){_rpt.gfilter=(_rpt.gfilter===id?'':id);rptRender();};
+window.rptGFilter=function(id){_rpt.gfilter=(_rpt.gfilter===id?'':id);if(_rpt.gkeep)_rpt.gkeep.clear();rptRender();};   /* ★ [2026-09-12] 필터를 바꾸면 임시 유지 목록을 비운다 */
 window.rptGKw=function(v){_rpt.gkw=v;const el=$('rpt-gsearch');const p=el?el.selectionStart:v.length;rptRender();const n=$('rpt-gsearch');if(n){n.focus();try{n.setSelectionRange(p,p);}catch(_e){}}};
 window.rptGSel=function(cid){if(_rpt.gsel.has(cid))_rpt.gsel.delete(cid);else _rpt.gsel.add(cid);if(!_rpt.gsel.size)_rpt.gbulk='';rptRender();};
 window.rptGSelAll=function(on){rptGFiltered().forEach(c=>{if(on)_rpt.gsel.add(c.cid);else _rpt.gsel.delete(c.cid);});rptRender();};
@@ -15626,6 +15636,7 @@ window.rptGBulkApply=async function(gid){
   if(_rpt.gbulk==='add'){ids.forEach(cid=>{if(!g.cids.includes(cid)){g.cids.push(cid);n++;}});}
   else{ids.forEach(cid=>{const i=g.cids.indexOf(cid);if(i>=0){g.cids.splice(i,1);n++;}});}
   if(!n){toast(_rpt.gbulk==='add'?'선택한 고객이 이미 모두 담겨 있습니다':'선택한 고객 중 이 그룹에 담긴 고객이 없습니다','warning');return;}
+  if(_rpt.gkeep)ids.forEach(function(x){_rpt.gkeep.add(x);});   /* ★ [2026-09-12] 「그룹 없음」 화면에서 바로 사라지지 않게 */
   const mode=_rpt.gbulk;
   if(await rptGroupsCommit(snap))toast('「'+g.name+'」에 '+n+'명 '+(mode==='add'?'담았습니다':'뺐습니다'),'success');
 };
@@ -15688,15 +15699,20 @@ window.rptGroupToggle=async function(cid,gid){
   const g=_rpt.groups.find(x=>x.id===gid);if(!g)return;
   if(g.type==='rule'){toast('조건 그룹은 조건으로만 정해집니다 — 「조건 편집」을 이용하세요','warning');return;}
   const snap=rptGroupsSnap();g.cids=g.cids||[];
-  const i=g.cids.indexOf(cid);if(i>=0)g.cids.splice(i,1);else g.cids.push(cid);
-  await rptGroupsCommit(snap);
+  const i=g.cids.indexOf(cid);const _added=(i<0);
+  if(i>=0)g.cids.splice(i,1);else g.cids.push(cid);
+  if(_rpt.gkeep)_rpt.gkeep.add(cid);   /* ★ [2026-09-12] 「그룹 없음」 화면에서 바로 사라지지 않게 */
+  if(await rptGroupsCommit(snap)){
+    const _c=_rpt.clients.find(x=>x.cid===cid);
+    toast((_c?_c.name:'고객')+'님을 「'+g.name+'」에 '+(_added?'담았습니다':'서 뺐습니다'),'success');   /* ★ [2026-09-12] 단건에도 확인 신호 */
+  }
 };
 
 /* ── 예약 ── */
 function rptRenderSchedule(body,foot){
   const s=_rpt.sch;
   const gopts=_rpt.groups.map(g=>'<span class="rpt-chip'+(s.groupIds.includes(g.id)?' on':'')+'" onclick="rptSchGroup(\''+rptE(g.id)+'\')">'+(g.type==='rule'?'⚙ ':'')+rptE(g.name)+' <small style="opacity:.7">'+rptGroupCids(g).filter(cid=>_rpt.matched[cid]&&_rpt.matched[cid].reportOptIn).length+'</small></span>').join('')||'<span class="rpt-hint">그룹이 없습니다. 그룹 탭에서 먼저 만드세요. (그룹 없이는 「수신 중 전체」로 예약됩니다)</span>';
-  const rot=s.repeat==='rotate'?'<div style="margin-top:8px"><div class="rpt-hint" style="margin:0 0 4px">순환 순서 (선택한 그룹을 누른 순서대로 · 실행마다 다음 그룹)</div>'+(s.rotateOrder.length?s.rotateOrder.map((id,i)=>{const g=_rpt.groups.find(x=>x.id===id);return '<span class="rpt-chip on">'+(i+1)+'. '+rptE(g?g.name:id)+'</span>';}).join(''):'<span class="rpt-hint">위에서 그룹을 순서대로 선택하세요</span>')+'</div>':'';
+  const rot=s.repeat==='rotate'?'<div style="margin-top:8px"><div class="rpt-hint" style="margin:0 0 4px">순환 순서 (선택한 그룹을 누른 순서대로 · 실행마다 다음 그룹 · <b>여러 그룹에 함께 속한 고객은 그 그룹 차례마다 받습니다</b>)</div>'+(s.rotateOrder.length?s.rotateOrder.map((id,i)=>{const g=_rpt.groups.find(x=>x.id===id);return '<span class="rpt-chip on">'+(i+1)+'. '+rptE(g?g.name:id)+'</span>';}).join(''):'<span class="rpt-hint">위에서 그룹을 순서대로 선택하세요</span>')+'</div>':'';
   const nextInfo=rptSchTargets().length;
   body.innerHTML=
     '<div class="rpt-card"><h4>새 예약 만들기 <small>'+RPT_KINDS[_rpt.kind].label+'</small></h4>'
