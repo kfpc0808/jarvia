@@ -2796,6 +2796,10 @@
           </div>
           <p style="font-size:12.5px;color:#5A6484;margin:0 0 10px;line-height:1.6">고객이 상담·진단·예약을 신청하면 알림톡(승인 전에는 문자)으로 알려드립니다.</p>
           <div id="aoStatus" style="border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.7"></div>
+
+          <!-- ═══ ★ [2026-09-12] 알림톡 항목별 설정 — 메인(위 스위치)이 켜져 있어야 작동한다 ═══ -->
+          <div id="apList" style="margin-top:12px"></div>
+
           <details style="background:#F8FAFC;border-radius:8px;padding:10px 12px;margin-top:9px">
             <summary style="cursor:pointer;list-style:none;font-size:12.5px;font-weight:700;color:#5A6484">ℹ️ 요금과 동작 안내 ▾</summary>
             <div style="font-size:12px;color:#5A6484;line-height:1.9;margin-top:8px;padding-top:8px;border-top:1px solid #E5E7EB">
@@ -6033,7 +6037,9 @@ async function loadPointSettings(){
               monthlyCap:d.monthlyCap||0,monthAmount:Number(d.monthAmount)||0,
               thresholds:ths,amounts:amts,capMult:opts.capMult||{},hasCard:!!d.hasCard,loaded:true};
     if(!_acState.monthlyCap)_acState.monthlyCap=acCapOpts(_acState.chargeAmount)[0];
-    _aoState={enabled:d.alimtalkOptIn===true,loaded:true};aoPaint();   /* ★ [2026-08-18] 옵트인 상태 */
+    _aoState={enabled:d.alimtalkOptIn===true,loaded:true};
+    _apPrefs=(d.alimtalkPrefs&&typeof d.alimtalkPrefs==='object')?d.alimtalkPrefs:{};_apLoaded=true;   /* ★ [2026-09-12] 항목별 설정 */
+    aoPaint();   /* ★ [2026-08-18] 옵트인 상태 */
     $('acThreshold').innerHTML=ths.map(v=>`<option value="${v}"${v===_acState.threshold?' selected':''}>${_acFmt(v)}원</option>`).join('');
 
     $('acCard').textContent=d.hasCard?((d.cardName||'')+' '+(d.cardMasked||'')).trim():'미등록';
@@ -6211,6 +6217,99 @@ async function mbToggleClick(){
 /* ═══ [2026-08-18] 알림톡·문자 사용(옵트인) 토글 ═══
    · 기본 미사용. 켤 때 과금(건당 20원) 동의를 confirm으로 받는다.
    · 끄면 서버가 자동충전도 함께 끈다 → 화면 상태를 재조회 없이 맞춘다. */
+/* ═══ ★ [2026-09-12] 알림톡 항목별 설정 (ap-)
+   users.alimtalkPrefs 에 {키:true/false} 로 저장한다. 키가 없으면 켜진 것으로 본다(기존 회원 동작 유지).
+   자동 발송 2종만 예외 — 명시적으로 true 여야 나간다. 메인(alimtalkOptIn)이 꺼져 있으면 전부 잠긴다. ═══ */
+const AP_GROUPS=[
+  {t:'고객이 나를 찾을 때', sub:'내가 받습니다', items:[
+    ['consult','재무상담 신청','고객이 상담을 신청하면'],
+    ['quiz','자가진단 완료','진단 후 상담을 요청하면'],
+    ['life','생활변화 신고','결혼·출산·이직 등'],
+    ['portfolio','보험 정보 공유','고객이 보험을 공유하면'],
+    ['meeting','미팅 예약 접수','고객이 날짜를 잡으면'],
+    ['chat','보안 채팅 요청','고객이 채팅을 열면'],
+    ['maturity_req','만기 등록 요청','고객이 만기 상품을 등록하면'],
+  ]},
+  {t:'내가 고객에게 보낼 때', sub:'고객이 받습니다', items:[
+    ['daily','데일리 리포트','수신 신청한 고객에게'],
+    ['consensus','모닝 컨센서스','수신 신청한 고객에게'],
+    ['meeting_ok','미팅예약 확정 안내','예약을 확정하면 자동'],
+    ['req_ok','상담요청 접수 확인','신청 접수를 고객에게'],
+    ['doc','자료 도착 안내','제안서·분석자료 전달 시'],
+  ]},
+  {t:'자동 발송', sub:'켜두면 내가 누르지 않아도 나갑니다', auto:true, items:[
+    ['auto_maturity','만기 알림','등록된 만기 30일 전 · 고객에게'],
+    ['auto_age','상령일 알림','보험 나이 변경 30일 전 · 고객에게'],
+  ]},
+];
+const AP_AUTO=['auto_maturity','auto_age'];
+let _apPrefs={}, _apLoaded=false, _apBusy=false;
+const apOn=(k)=> AP_AUTO.indexOf(k)>=0 ? _apPrefs[k]===true : _apPrefs[k]!==false;
+
+function apSw(k,on,locked){
+  return '<button type="button" onclick="apToggle(\''+k+'\')" aria-label="'+k+' 켜기/끄기" style="flex-shrink:0;width:44px;height:25px;border-radius:13px;border:0;background:'
+    +(on?'#15294A':'#D1D5DB')+';position:relative;cursor:'+(locked?'default':'pointer')+';padding:0;opacity:'+(locked?'.5':'1')+'">'
+    +'<span style="position:absolute;top:3px;left:'+(on?'22px':'3px')+';width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:left .18s"></span></button>';
+}
+function apPaint(){
+  const box=$('apList'); if(!box)return;
+  if(!_apLoaded){box.innerHTML='';return;}
+  const main=!!(_aoState&&_aoState.enabled);
+  let html='<div style="display:flex;gap:7px;margin:0 0 4px">'
+    +'<button type="button" onclick="apBulk(true)" style="flex:1;height:40px;border-radius:9px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer;border:1px solid '+(main?'#1B3A5C':'#CBD5E1')+';background:'+(main?'#1B3A5C':'#CBD5E1')+';color:#fff">전체 켜기</button>'
+    +'<button type="button" onclick="apBulk(false)" style="flex:1;height:40px;border-radius:9px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer;border:1px solid #E2E8F0;background:#fff;color:'+(main?'#1B3A5C':'#94A3B8')+'">전체 끄기</button></div>';
+  AP_GROUPS.forEach(g=>{
+    html+='<div style="font-size:12px;font-weight:800;color:#1B3A5C;margin:16px 0 7px">'+g.t+' <span style="font-weight:500;color:#64748B;font-size:11px">'+g.sub+'</span></div>';
+    g.items.forEach(it=>{
+      const on=apOn(it[0]) && main;
+      html+='<div style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid '+(g.auto?'#E0C36B':'#E2E8F0')+';border-radius:10px;margin-bottom:6px;background:'+(g.auto?'#FFFDF7':'#fff')+';opacity:'+(main?'1':'.45')+'">'
+        +'<div style="flex:1;min-width:0"><b style="display:block;font-size:13.5px;font-weight:700;color:#1A2332">'+it[1]+'</b>'
+        +'<span style="display:block;font-size:11.5px;color:#64748B;margin-top:2px;line-height:1.5">'+it[2]+'</span></div>'
+        +'<span style="flex-shrink:0;font-size:12px;font-weight:800;color:#8A6410;min-width:40px;text-align:right">20원</span>'
+        +apSw(it[0],on,!main)+'</div>';
+    });
+    if(g.auto)html+='<div style="background:#FFFBF2;border:1px solid #E8D6B2;border-radius:10px;padding:11px 12px;font-size:12px;color:#6B5A38;line-height:1.7;margin-top:8px">'
+      +'<b style="color:#8A6410">자동 발송은 기본이 꺼짐입니다.</b> 켜두면 회원님이 누르지 않아도 고객에게 나가고 포인트가 차감됩니다. 「전체 켜기」를 눌러도 이 두 가지는 따로 확인을 받습니다.</div>';
+  });
+  html+='<div style="background:#E9F7EF;border-radius:10px;padding:11px 12px;font-size:12px;color:#2A6B52;line-height:1.7;margin-top:14px">'
+    +'<b style="display:block;color:#177A56;font-weight:800;margin-bottom:2px">이건 전부 무료입니다</b>'
+    +'가입·멤버십·결제카드·정기결제 안내, 줌 설명회 안내, 평일 아침 「오늘의 고객 브리핑」은 회사가 부담합니다.</div>'
+    +'<div onclick="atMemberGuide()" style="font-size:12px;color:#1B3A5C;font-weight:700;text-align:center;margin-top:12px;text-decoration:underline;cursor:pointer">각 알림톡이 어떤 모습으로 도착하는지 보기 →</div>';
+  box.innerHTML=html;
+}
+async function apSave(){
+  if(!auth.currentUser)return;
+  await updateDoc(doc(db,'users',auth.currentUser.uid),{alimtalkPrefs:_apPrefs});
+}
+window.apToggle=async function(k){
+  if(_apBusy)return;
+  if(!(_aoState&&_aoState.enabled)){toast('먼저 위의 「알림톡·문자 알림 사용」을 켜주세요','warning');return;}
+  const next=!apOn(k);
+  if(next&&AP_AUTO.indexOf(k)>=0){
+    const nm=(k==='auto_maturity')?'만기 알림':'상령일 알림';
+    if(!confirm(nm+'을 켜면 회원님이 누르지 않아도 고객에게 자동 발송되고, 건당 20원이 차감됩니다.\n켤까요?'))return;
+  }
+  _apBusy=true; const prev=_apPrefs[k];
+  _apPrefs[k]=next; apPaint();
+  try{ await apSave(); }
+  catch(e){ _apPrefs[k]=prev; apPaint(); toast('저장 실패: '+e.message,'error'); }
+  _apBusy=false;
+};
+window.apBulk=async function(on){
+  if(_apBusy)return;
+  if(!(_aoState&&_aoState.enabled)){toast('먼저 위의 「알림톡·문자 알림 사용」을 켜주세요','warning');return;}
+  if(!confirm(on?'자동 발송을 제외한 모든 알림톡을 켤까요?':'모든 알림톡을 끌까요?'))return;
+  _apBusy=true; const prev=Object.assign({},_apPrefs);
+  AP_GROUPS.forEach(g=>g.items.forEach(it=>{
+    if(AP_AUTO.indexOf(it[0])>=0){ if(!on)_apPrefs[it[0]]=false; }   /* 자동 발송은 전체 켜기로 켜지 않는다 */
+    else _apPrefs[it[0]]=!!on;
+  }));
+  apPaint();
+  try{ await apSave(); toast(on?'자동 발송을 제외하고 모두 켰습니다':'모두 껐습니다','success'); }
+  catch(e){ _apPrefs=prev; apPaint(); toast('저장 실패: '+e.message,'error'); }
+  _apBusy=false;
+};
+
 function aoPaint(){
   const on=_aoState.enabled, tg=$('aoToggle'), kn=$('aoKnob'), st=$('aoStatus');
   if(tg){tg.style.background=on?'#15294A':'#D1D5DB';}
@@ -6219,6 +6318,7 @@ function aoPaint(){
     if(on){st.style.background='#E9F7EF';st.style.color='#177A56';st.innerHTML='✓ 사용 중 — 고객 요청이 오면 알림톡·문자로 알려드립니다. (건당 20원 차감)';}
     else{st.style.background='#F8FAFC';st.style.color='#5A6484';st.innerHTML='현재 <b>사용 안 함</b> — 고객 요청은 마이페이지 <b>고객 요청</b> 탭에서만 확인할 수 있으며, 알림 관련 포인트 차감이 없습니다.';}
   }
+  try{apPaint();}catch(_e){}   /* ★ [2026-09-12] 항목별 설정도 함께 갱신 */
 }
 async function aoToggleClick(){
   if(!_aoState.loaded)return;
