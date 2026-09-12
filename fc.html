@@ -8081,11 +8081,38 @@ if(!raw)return;
 try{sessionStorage.removeItem('jv_rpt_handoff');}catch(_e){}
 let d=null;try{d=JSON.parse(raw);}catch(_e){return;}
 if(!d||(Date.now()-(d.ts||0))>10*60000)return;   /* 10분 지난 값은 무시 */
+/* ★ [2026-09-12] cid 가 있으면 기존 고객의 연락처를 고치러 온 것 — 개별등록(새 고객)으로 채우면 같은 사람이 둘이 된다.
+   고객 목록이 적재된 뒤 해당 고객의 편집 화면을 열어 연락처만 고치게 한다. */
+if(d.cid){vmIfHandoffToEdit(d);return;}
 const n=vmEl('vmIfName');if(n&&!n.value)n.value=String(d.name||'').slice(0,30);
 if(d.phone)vmIfPhoneSet(d.phone);
 try{const r=document.querySelector('#vmIfRels [data-vmif-chip="고객"]');if(r)vmIfChip(r,true);}catch(_e){}
 try{if(n)n.dispatchEvent(new Event('input'));}catch(_e){}
 toast('리포트 알림톡 신청 고객 정보가 채워졌어요 — 확인 후 「새 고객으로 등록」을 누르세요');
+}
+/* ★ [2026-09-12] 리포트 알림톡의 「연락처 갱신」·「직접 수정」으로 넘어온 경우 —
+   새 고객 등록이 아니라 기존 고객의 편집 화면을 연다.
+   ?rpt=1 진입 직후에는 고객 목록(customers)이 아직 비어 있어 최대 10초까지 기다린다. */
+function vmIfHandoffToEdit(d){
+/* 고객 목록(customers)은 「고객 목록」 화면을 열 때만 적재된다. ?rpt=1 로는 개별등록으로 오므로
+   여기서 직접 적재한 뒤(__mpcEnsureCustomers) 해당 고객을 찾아 편집 화면을 연다. */
+const pick=function(){
+  let c=null;
+  try{c=(customers||[]).filter(function(x){return x&&x.id===d.cid;})[0]||null;}catch(_e){}
+  if(!c&&d.name){try{c=(customers||[]).filter(function(x){return x&&x.name===d.name;})[0]||null;}catch(_e){}}
+  if(!c){toast('고객을 찾지 못했습니다 — 고객 목록에서 「'+(d.name||'')+'」님을 찾아 연락처를 고쳐 주세요','warn');return;}
+  try{if(window.__mpCustOpen)__mpCustOpen();}catch(_e){}
+  setTimeout(function(){
+    try{openCustForm(c);}catch(_e){}
+    try{const p=$("mpcPhone");if(p){if(d.phone)p.value=d.phone;p.focus();}}catch(_e){}
+    if(d.phone)toast('「'+(c.name||'')+'」 연락처를 신청 번호로 채웠습니다 — 확인 후 저장해 주세요');
+    else toast('「'+(c.name||'')+'」 연락처를 신청 번호(뒷자리 '+(d.last4||'')+')로 고쳐 저장해 주세요');
+  },600);
+};
+try{
+  if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(function(){pick();});
+  else pick();
+}catch(_e){pick();}
 }
 function vmIfSave(){
 const nm=(vmEl('vmIfName')&&vmEl('vmIfName').value||'').trim();
