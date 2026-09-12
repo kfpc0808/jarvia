@@ -1459,6 +1459,18 @@
   </div>
 </div>
 
+<!-- ═══ ★ [2026-09-12] 만기 등록 — 반영할 고객 선택 ═══ -->
+<div id="mdl-mat-pick" class="modal hidden">
+  <div class="mdl-bg"></div>
+  <div class="mdl-box" style="max-width:460px;padding:22px 20px;max-height:82vh;display:flex;flex-direction:column">
+    <button class="mdl-x" onclick="closeM('mdl-mat-pick')">×</button>
+    <h2 style="font-size:16px;font-weight:800;color:var(--primary);margin:0 0 4px">반영할 고객 선택</h2>
+    <p id="mat-pick-sub" style="font-size:12.5px;color:var(--text-lt);margin:0 0 12px;line-height:1.6"></p>
+    <input id="mat-pick-kw" placeholder="이름 검색" oninput="matPickRender()" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-size:14px;font-family:inherit;margin-bottom:10px">
+    <div id="mat-pick-list" style="overflow:auto;flex:1;min-height:120px"></div>
+  </div>
+</div>
+
 <!-- ═══ ★ [2026-09-11] 📮 회원용 — 고객과 주고받는 알림톡 안내 (진열대 안내 카드·리포트 알림톡 모달에서 열림) ═══ -->
 <div id="mdl-amg" class="modal hidden">
   <div class="mdl-bg"></div>
@@ -3662,6 +3674,9 @@
       </div>
 
       <!-- 신청 카드 리스트 -->
+      <!-- ★ [2026-09-12] 종류 필터 — 상태 필터와 함께 적용된다 -->
+      <div id="fcr-type-filters" style="display:flex;gap:5px;margin:-4px 0 12px;flex-wrap:wrap"></div>
+
       <div id="fcr-list" style="display:flex;flex-direction:column;gap:6px;min-height:120px">
         <div style="padding:30px;text-align:center;color:#8B93AE;font-size:12px">신청 내역을 불러오는 중...</div>
       </div>
@@ -17232,6 +17247,7 @@ async function loadFcRequests(){
   const urlEl = $('fcr-channel-url');
   if(urlEl && meData.loginId) urlEl.textContent = 'https://jarvia.co.kr/@' + meData.loginId;
   _fcrSubscribe();
+  try{ _fcrMatLoad(); }catch(_e){}   /* ★ [2026-09-12] 만기 등록 요청 */
 }
 
 // onSnapshot 실시간 구독
@@ -17327,12 +17343,163 @@ function _fcrRenderCounts(){
 }
 
 // 카드 리스트 렌더
+/* ═══ ★ [2026-09-12] 고객 요청 — 종류 필터 · 만기 등록 요청 ═══
+   만기 등록은 별도 컬렉션(maturity_requests)이라 콜러블로 따로 읽어와 목록 위에 붙인다. */
+let _fcrTypeFilter='all', _fcrMat=[], _fcrMatLoaded=false, _fcrMatBusy=false;
+const FCR_TYPES=[
+  {k:'consult',  t:'재무상담'},
+  {k:'quiz',     t:'자가진단'},
+  {k:'my_dates', t:'생활변화'},
+  {k:'insurance_portfolio', t:'보험공유'},
+  {k:'meeting',  t:'미팅예약'},
+];
+function _fcrTypeOf(r){
+  const src=String((r&&r.source)||'');
+  if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates') return src;
+  if(r&&(r.quizType||r.quizAnswers||r.quizResult)) return 'quiz';
+  return 'consult';
+}
+function _fcrRenderTypeChips(){
+  const box=$('fcr-type-filters'); if(!box)return;
+  const base=_fcrAllRequests||[];
+  const cnt={}; base.forEach(r=>{const k=_fcrTypeOf(r);cnt[k]=(cnt[k]||0)+1;});
+  const matN=(_fcrMat||[]).filter(x=>x.status==='pending').length;
+  const chip=(k,label,n,gold)=>{
+    const on=_fcrTypeFilter===k;
+    const col=gold?'#8A6410':'#5A6484', bd=gold?'#E0C36B':'#DFE2EA';
+    return '<button class="fcr-type" data-type="'+k+'" onclick="fcrTypeFilter(this)" style="padding:6px 12px;border-radius:8px;font-size:11px;font-weight:'+(on?'700':'600')+';cursor:pointer;'
+      +(on?'background:#1B3A6B;color:#fff;border:1px solid #1B3A6B':'background:'+(gold?'#FBF7EE':'#fff')+';color:'+col+';border:'+(gold?'1px':'0.5px')+' solid '+bd)+'">'+label+(n?' '+n:'')+'</button>';
+  };
+  let html=chip('all','전체',base.length+matN,false);
+  FCR_TYPES.forEach(t=>{ if(cnt[t.k]) html+=chip(t.k,t.t,cnt[t.k],false); });
+  if((_fcrKnocks||[]).length) html+=chip('knock','보안채팅',(_fcrKnocks||[]).length,false);
+  html+=chip('maturity','📅 만기 등록',matN,true);
+  box.innerHTML=html;
+}
+window.fcrTypeFilter=function(btn){ _fcrTypeFilter=btn.dataset.type||'all'; _fcrRenderList(_fcrCurFilter); };
+
+/* 만기 등록 요청 행 — 대기 건은 항상, 처리 건은 '만기 등록' 필터에서만 */
+function _fcrMatHtml(statusFilter){
+  if(_fcrTypeFilter!=='all'&&_fcrTypeFilter!=='maturity')return '';
+  if(statusFilter&&statusFilter!=='all'&&statusFilter!=='new'&&_fcrTypeFilter!=='maturity')return '';
+  const rows=(_fcrMat||[]).filter(x=>_fcrTypeFilter==='maturity'?true:x.status==='pending');
+  if(!rows.length)return '';
+  return rows.map(r=>{
+    const done=r.status!=='pending';
+    const items=(r.items||[]).map(it=>{
+      const dd=_matDday(it.date);
+      const tag=dd<=30?'<span style="font-size:10px;font-weight:800;color:#DC2626;background:#FEECEC;border-radius:7px;padding:2px 6px;margin-left:6px">D-'+dd+'</span>'
+                      :'<span style="font-size:10px;font-weight:700;color:#8A6410;background:#FFF3D6;border-radius:7px;padding:2px 6px;margin-left:6px">D-'+dd+'</span>';
+      return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 0;border-bottom:1px solid #F1F5F9">'
+        +'<b style="font-weight:700;min-width:0;flex:1">'+_fcrEsc(it.org)+(it.prod?' '+_fcrEsc(it.prod):'')+'</b>'
+        +'<span style="color:#5A6484;white-space:nowrap">'+_fcrEsc(it.date)+'</span>'+tag+'</div>';
+    }).join('');
+    const match=r.cid||r.matchedCid
+      ? '<span style="font-size:10.5px;font-weight:700;color:#177A56;background:#E9F7EF;border-radius:8px;padding:3px 9px">✓ 내 고객과 연결됨</span>'
+      : '<span style="font-size:10.5px;font-weight:700;color:#B45309;background:#FFF8E7;border-radius:8px;padding:3px 9px">⚠ 고객 선택 필요</span>';
+    const acts=done
+      ? '<div style="font-size:11.5px;color:#177A56;font-weight:700;margin-top:9px">'+(r.status==='approved'?'✓ 승인 완료 — 고객 계약에 반영됨':'거절 처리됨')+'</div>'
+      : '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">'
+        +'<button onclick="matApprove(\''+r.id+'\')" style="flex:1.4;min-width:150px;padding:9px;border:0;border-radius:8px;background:#1B3A6B;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+((r.items||[]).length)+'건 승인 → 고객정보 반영</button>'
+        +'<button onclick="matPick(\''+r.id+'\')" style="flex:1;min-width:110px;padding:9px;border:0.5px solid #DFE2EA;border-radius:8px;background:#fff;color:#1B3A6B;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">고객 선택</button>'
+        +(r.hasPhone?'<button onclick="matPhone(\''+r.id+'\')" style="padding:9px 12px;border:0.5px solid #DFE2EA;border-radius:8px;background:#fff;color:#5A6484;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">번호 받기</button>':'')
+        +'<button onclick="matReject(\''+r.id+'\')" style="padding:9px 12px;border:0.5px solid #F3D3D3;border-radius:8px;background:#fff;color:#DC2626;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">거절</button></div>';
+    return '<div style="background:#fff;border:1px solid '+(done?'#E2E8F0':'#E0C36B')+';border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+        +'<span style="font-size:13px;font-weight:800;color:#141B2D">📅 '+_fcrEsc(r.name)+'</span>'
+        +'<span style="font-size:10px;padding:2px 8px;background:#C9A05C;color:#fff;border-radius:8px;font-weight:800">만기 등록 '+((r.items||[]).length)+'건</span>'
+        +(done?'':'<span style="font-size:10px;padding:2px 8px;background:#DC2626;color:#fff;border-radius:8px;font-weight:800">NEW</span>')
+        +'<span style="margin-left:auto;font-size:11px;color:#8B93AE">'+_matWhen(r.createdAt)+' · '+(r.source==='consensus'?'모닝 컨센서스':'데일리 리포트')+'</span></div>'
+      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+        +'<span style="font-size:11.5px;color:#5A6484">'+_fcrEsc(r.phoneMask||'')+'</span>'+match+'</div>'
+      +items+acts+'</div>';
+  }).join('');
+}
+function _matDday(ymd){try{const t=new Date(new Date(Date.now()+9*3600000).toISOString().slice(0,10)+'T00:00:00Z').getTime();return Math.round((new Date(ymd+'T00:00:00Z').getTime()-t)/86400000);}catch(_e){return 0;}}
+function _matWhen(ms){ if(!ms)return ''; const d=new Date(ms); return (d.getMonth()+1)+'월 '+d.getDate()+'일'; }
+
+async function _fcrMatLoad(){
+  if(!me)return;
+  try{
+    const r=await httpsCallable(functions,'maturityList')({});
+    _fcrMat=(r&&r.data&&r.data.rows)||[];
+    _fcrMatLoaded=true;
+    _fcrRenderList(_fcrCurFilter);
+  }catch(e){ console.warn('[만기등록] 목록 조회 실패', e&&e.message); }
+}
+
+/* 승인 — 연결된 고객이 없으면 고객 선택 모달을 먼저 띄운다 */
+window.matApprove=async function(reqId,cid){
+  if(_fcrMatBusy)return;
+  const r=(_fcrMat||[]).find(x=>x.id===reqId); if(!r)return;
+  const useCid=cid||r.cid||r.matchedCid;
+  if(!useCid){ matPick(reqId); return; }
+  if(!confirm(r.name+' 고객의 계약에 '+((r.items||[]).length)+'건을 추가할까요?'))return;
+  _fcrMatBusy=true;
+  try{
+    const res=await httpsCallable(functions,'maturityApprove')({reqId:reqId,action:'approve',cid:useCid});
+    toast(((res&&res.data&&res.data.count)||0)+'건을 고객 계약에 반영했습니다','success');
+    try{ fccCache=null; }catch(_e){}          /* 고객 캐시 무효화 — 다음 조회 때 새로 읽는다 */
+    await _fcrMatLoad();
+  }catch(e){ toast((e&&e.message)||'승인에 실패했습니다','error'); }
+  _fcrMatBusy=false;
+};
+window.matReject=async function(reqId){
+  if(_fcrMatBusy)return;
+  if(!confirm('이 요청을 거절할까요? 고객 정보에는 반영되지 않습니다.'))return;
+  _fcrMatBusy=true;
+  try{ await httpsCallable(functions,'maturityApprove')({reqId:reqId,action:'reject'}); toast('거절 처리했습니다','success'); await _fcrMatLoad(); }
+  catch(e){ toast((e&&e.message)||'처리에 실패했습니다','error'); }
+  _fcrMatBusy=false;
+};
+window.matPhone=async function(reqId){
+  const r=(_fcrMat||[]).find(x=>x.id===reqId); if(!r)return;
+  if(!confirm('연락처 원문은 한 번만 표시되고 서버에서 삭제됩니다. 지금 받을까요?'))return;
+  try{
+    const res=await httpsCallable(functions,'maturityApprove')({reqId:reqId,action:'phone'});
+    const d=(res&&res.data)||{};
+    alert('고객 연락처\n\n이름: '+(d.name||'')+'\n번호: '+(d.phone||'')+'\n\n고객입력에서 새 고객으로 등록한 뒤 「고객 선택」으로 연결해 주세요.');
+    await _fcrMatLoad();
+  }catch(e){ toast((e&&e.message)||'번호를 받지 못했습니다','error'); }
+};
+
+/* 고객 선택 모달 */
+let _matPickReq='', _matPickClients=[];
+window.matPick=async function(reqId){
+  const r=(_fcrMat||[]).find(x=>x.id===reqId); if(!r)return;
+  _matPickReq=reqId;
+  const sub=$('mat-pick-sub'); if(sub)sub.textContent=r.name+' 고객이 등록한 '+((r.items||[]).length)+'건을 반영할 고객을 고르세요.';
+  const kw=$('mat-pick-kw'); if(kw)kw.value=r.name||'';
+  const box=$('mat-pick-list'); if(box)box.innerHTML='<div style="padding:20px;text-align:center;color:#8B93AE;font-size:12px">고객 목록 불러오는 중…</div>';
+  openM('mdl-mat-pick');
+  try{ _matPickClients=await fccFetch(); }catch(_e){ _matPickClients=[]; }
+  matPickRender();
+};
+window.matPickRender=function(){
+  const box=$('mat-pick-list'); if(!box)return;
+  const kw=(($('mat-pick-kw')||{}).value||'').trim();
+  let list=_matPickClients||[];
+  if(kw) list=list.filter(c=>String(c.name||'').includes(kw));
+  list=list.slice(0,60);
+  box.innerHTML=list.length? list.map(c=>
+      '<div onclick="matPickGo(\''+c.id+'\')" style="display:flex;align-items:center;gap:9px;padding:11px 12px;border:1px solid var(--border);border-radius:9px;margin-bottom:6px;cursor:pointer">'
+      +'<b style="flex:1;font-size:13.5px;font-weight:700">'+_fcrEsc(c.name||'(이름 없음)')+'</b>'
+      +'<span style="font-size:11.5px;color:var(--text-lt)">'+_fcrEsc(String(c.phone||'').replace(/(\d{3})\d{3,4}(\d{4})/,'$1-****-$2'))+'</span></div>'
+    ).join('')
+    : '<div style="padding:20px;text-align:center;color:#8B93AE;font-size:12px">검색 결과가 없습니다. 고객입력에서 먼저 등록해 주세요.</div>';
+};
+window.matPickGo=function(cid){ closeM('mdl-mat-pick'); matApprove(_matPickReq, cid); };
+
 function _fcrRenderList(filter){
   _fcrCurFilter = filter || 'all';
   const list = $('fcr-list');
   if(!list) return;
   let arr = _fcrAllRequests;
   if(filter && filter !== 'all') arr = arr.filter(r => r.status === filter);
+  /* ★ [2026-09-12] 종류 필터 — 상태 필터와 함께 적용 */
+  if(_fcrTypeFilter && _fcrTypeFilter !== 'all') arr = (_fcrTypeFilter === 'maturity') ? [] : arr.filter(r => _fcrTypeOf(r) === _fcrTypeFilter);
+  const matHtml = _fcrMatHtml(filter);
+  try{ _fcrRenderTypeChips(); }catch(_e){}
   /* ★ [2026-08-18] 보안채팅 노크 행 — 전체 필터에서만 목록 최상단에 표시 */
   const knockHtml = (filter === 'all' || !filter) ? _fcrKnocks.map(k =>
     '<div onclick="_fcrGoSecureChat()" style="background:#FBF8EF;border-left:3px solid #8B6914;border-radius:0 8px 8px 0;padding:11px 13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
@@ -17343,14 +17510,14 @@ function _fcrRenderList(filter){
     + '<div style="font-size:11px;color:#5A6484;margin-top:3px">고객이 보안채팅 대화를 요청했습니다. 대화 내용은 채널의 보안채팅에서만 확인할 수 있습니다.</div>'
     + '</div>'
   ).join('') : '';
-  if(!arr.length && !knockHtml){
+  if(!arr.length && !knockHtml && !matHtml){
     list.innerHTML = '<div style="padding:30px;text-align:center;color:#8B93AE;font-size:12px">' + (filter === 'all' ? '아직 신청이 없습니다' : '해당 상태의 신청이 없습니다') + '</div>';
     return;
   }
-  if(!arr.length){ list.innerHTML = knockHtml; return; }
+  if(!arr.length){ list.innerHTML = matHtml + knockHtml; return; }
   const colorMap = { new:'#DC2626', contacting:'#F59E0B', done:'#10B981', interest:'#6366F1' };
   const textColor = { new:'#DC2626', contacting:'#B45309', done:'#059669', interest:'#4338CA' };
-  list.innerHTML = knockHtml + arr.map(r => {   /* ★ [2026-08-18] 노크 행을 목록 최상단에 결합 */
+  list.innerHTML = matHtml + knockHtml + arr.map(r => {   /* ★ [2026-08-18] 노크 행을 목록 최상단에 결합 · [2026-09-12] 만기 등록 행이 그 위 */
     const c = colorMap[r.status] || '#888780';
     const tc = textColor[r.status] || '#5A6484';
     const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
