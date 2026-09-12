@@ -1016,9 +1016,6 @@ body{
   <!-- ═══ 내 날짜 (MY DATES) — 상령일·만기 · 2026-08-01 추가 ═══ -->
   <div class="wrap" id="myDatesWrap" style="display:none"></div>
 
-  <!-- ═══ ★ [2026-09-12] 만기 알림 등록 — 고객이 직접 입력, 담당 컨설턴트 승인 후 반영 ═══ -->
-  <div class="wrap" id="matWrap"></div>
-
   <!-- Dynamic Sections Container -->
   <div id="sectionsContainer"></div>
 
@@ -1100,6 +1097,9 @@ body{
     <a class="kmiM-go" href="https://fpcenter.withkmi.or.kr" target="_blank" rel="noopener">예약 사이트로 이동 →</a>
   </div>
 </div>
+
+  <!-- ═══ ★ [2026-09-12] 만기 알림 등록 — 본문을 다 읽은 뒤 노출(모닝 컨센서스와 같은 위치). 컨설턴트 승인 후 고객 정보에 반영 ═══ -->
+  <div class="wrap" id="matWrap"></div>
 
   <!-- ▼ 📂 함께 보면 좋은 자료 (dr_resources) -->
   <div class="wrap">
@@ -1537,7 +1537,6 @@ async function loadMyDates(){
     if(!mdData.items.length) return;
 
     mdRender();
-    try{matRender();}catch(_e){}   /* ★ [2026-09-12] 만기 알림 등록 카드 */
   }catch(e){
     /* 실패하면 조용히 미노출 — 리포트 본문에는 영향 없음 */
     console.warn('myDates skip:', e && e.message);
@@ -1555,6 +1554,25 @@ function matDday(ymd){const t=new Date(matToday()+'T00:00:00Z').getTime(),d=new 
 function matRender(){
   const w=document.getElementById('matWrap'); if(!w) return;
   if(!fcId||window._cdLockedView){w.innerHTML='';return;}
+
+  /* ★ [2026-09-12] 컨설턴트 본인 화면 — 카드는 보여주되 입력·등록은 제공하지 않는다.
+     본인이 실수로 등록하면 고객 만기 데이터와 승인 대기 목록이 오염되므로 미리보기로 고정한다. */
+  if(_jvOwner){
+    w.innerHTML='<div class="matCard"><div class="matHd" onclick="matToggle()">'
+      +'<div class="matIco">📅</div><div class="matTx"><b>만기 알림 받기</b>'
+      +'<span>예금·보험 만기일을 등록하면 30일 전에 알려드립니다</span></div>'
+      +'<div class="matBtn">'+(matOpen?'닫기':'미리보기')+'</div></div>'
+      +'<div class="matBody" style="'+(matOpen?'':'display:none')+'">'
+      +'<div class="matWhy"><b>고객 화면에는 이렇게 보입니다</b>'
+        +'<li>예금·적금은 만기 다음 날부터 이자가 <em>연 0.1~0.2%</em>로 떨어집니다</li>'
+        +'<li>보험은 만기 다음 날부터 <em>보장이 끊깁니다</em></li>'
+        +'<li>자동차보험은 하루만 늦어도 <em>무보험</em>입니다</li></div>'
+      +'<div class="matPriv"><b>컨설턴트 미리보기입니다.</b> 이 화면에서는 등록할 수 없습니다.<br>'
+        +'고객에게 공유한 링크에서 고객이 직접 등록하면, 컨설턴트 확인 후 알림이 시작됩니다.</div>'
+      +'<p class="matFoot">받는 항목 — 금융기관 · 상품명 · 만기일 · 성함 · 연락처<br>계좌번호·증권번호·금액은 받지 않습니다</p>'
+      +'</div></div>';
+    return;
+  }
 
   /* 등록 완료 후 — 방금 올린 내역을 보여준다 */
   if(matDone&&matDone.length){
@@ -1642,6 +1660,8 @@ function matRestore(keep){
 }
 window.matSubmit=async function(){
   if(matBusy)return;
+  /* ★ [2026-09-12] 2차 방어 — 컨설턴트 본인 화면에서는 등록 자체를 막는다 */
+  if(_jvOwner){toast('컨설턴트 화면에서는 등록할 수 없습니다. 고객에게 공유한 링크에서 등록됩니다','warning');return;}
   const keep=matCollect();
   const items=keep.filter(x=>String(x.org||'').trim()&&x.date).map(x=>({org:x.org.trim(),prod:String(x.prod||'').trim(),date:x.date}));
   if(!items.length){toast('금융기관과 만기일을 입력해 주세요','warning');return;}
@@ -1928,6 +1948,8 @@ function cdReqFallback(phone,body){
    · ?d= 링크는 cdGatePass에서 컨설턴트만 통과, 고객이 열면 잠금 화면(nokey/expired)
    · 지난 호에서 [공유]해도 cdShareQS()가 오늘 키(_cdTodayKey)를 붙이므로 지난 호가 고객에게 나가지 않는다 */
 const CD_ARCHIVE_N=20;
+const CD_ARCHIVE_PER=5;   /* ★ [2026-09-12] 한 페이지에 보여줄 호수 */
+let _cdArcRows=[], _cdArcPage=1;
 async function cdOwnerArchive(){
   if(!_jvOwner||document.getElementById('cdArcBox'))return;
   const mc=document.getElementById('mainContent');if(!mc)return;
@@ -1944,27 +1966,50 @@ async function cdOwnerArchive(){
   box.innerHTML='<div class="wrap" style="padding-bottom:18px"><div style="background:#fff;border:1px solid var(--border);border-radius:13px;padding:14px">'
     +'<div style="font-size:13px;font-weight:800;color:var(--ink)">📚 지난 브리핑 <span style="font-size:10.5px;font-weight:700;color:#B45309;background:#FEF3C7;border-radius:6px;padding:1px 6px;margin-left:4px">컨설턴트 전용</span></div>'
     +'<div style="font-size:11px;color:var(--ink-sub);margin:3px 0 8px">고객 화면에는 표시되지 않습니다 · 최근 '+CD_ARCHIVE_N+'호</div>'
-    +'<div id="cdArcList" style="font-size:12px;color:var(--ink-sub)">불러오는 중...</div></div></div>';
+    +'<div id="cdArcList" style="font-size:12px;color:var(--ink-sub)">불러오는 중...</div>'
+    +'<div id="cdArcPager" style="display:flex;justify-content:center;align-items:center;gap:5px;flex-wrap:wrap;margin-top:10px"></div></div></div>';
   mc.appendChild(box);
   try{
     const snap=await getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(CD_ARCHIVE_N+5)));
     const rows=snap.docs.filter(x=>x.data().status==='published'&&/^\d{8}$/.test(x.id)&&x.id!==fileDate).slice(0,CD_ARCHIVE_N);
     const list=document.getElementById('cdArcList');if(!list)return;
     if(!rows.length){list.textContent='지난 브리핑이 없습니다.';return;}
-    list.innerHTML=rows.map(x=>{
+    /* ★ [2026-09-12] 조회는 종전과 동일(20호 1회). 화면만 5개씩 끊어 보여준다 — 추가 조회 없음 */
+    _cdArcRows=rows.map(x=>{
       const d=x.data();
-      const lb=String(d.date||'').replace(/^\d{4}년\s*/,'')||md(x.id);
-      const hd=(d.news&&d.news[0]&&d.news[0].title)||'';
-      return '<a href="'+base+'&d='+x.id+'" style="display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:.5px solid var(--border);text-decoration:none">'
-        +'<span style="flex:0 0 auto;font-size:12px;font-weight:800;color:var(--accent);white-space:nowrap">'+esc(lb)+'</span>'
-        +'<span style="flex:1;min-width:0;font-size:12px;color:var(--ink-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(hd)+'</span>'
-        +'<span style="flex:0 0 auto;font-size:11px;color:var(--ink-sub)">열기 ›</span></a>';
-    }).join('');
+      return {id:x.id, lb:String(d.date||'').replace(/^\d{4}년\s*/,'')||md(x.id), hd:(d.news&&d.news[0]&&d.news[0].title)||''};
+    });
+    cdArcPage(1);
   }catch(e){
     console.warn('[archive]',e&&e.message);
     const list=document.getElementById('cdArcList');if(list)list.textContent='지난 브리핑을 불러오지 못했습니다.';
   }
 }
+/* ★ [2026-09-12] 지난 브리핑 페이지 전환 — 보관된 _cdArcRows 만 다시 그린다 */
+function cdArcPage(p){
+  const list=document.getElementById('cdArcList'); if(!list) return;
+  const base='client-daily.html?fc='+encodeURIComponent(fcId);
+  const total=_cdArcRows.length;
+  const pages=Math.max(1,Math.ceil(total/CD_ARCHIVE_PER));
+  _cdArcPage=Math.min(Math.max(1,p||1),pages);
+  const st=(_cdArcPage-1)*CD_ARCHIVE_PER;
+  list.innerHTML=_cdArcRows.slice(st,st+CD_ARCHIVE_PER).map(r=>
+    '<a href="'+base+'&d='+r.id+'" style="display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:.5px solid var(--border);text-decoration:none">'
+    +'<span style="flex:0 0 auto;font-size:12px;font-weight:800;color:var(--accent);white-space:nowrap">'+esc(r.lb)+'</span>'
+    +'<span style="flex:1;min-width:0;font-size:12px;color:var(--ink-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.hd)+'</span>'
+    +'<span style="flex:0 0 auto;font-size:11px;color:var(--ink-sub)">열기 ›</span></a>').join('');
+  const pg=document.getElementById('cdArcPager'); if(!pg) return;
+  if(pages<=1){pg.innerHTML='';return;}
+  const bs='border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--ink-mid);font-size:12px;font-weight:700;padding:5px 10px;cursor:pointer;font-family:inherit';
+  const as='border:1px solid var(--accent);border-radius:7px;background:var(--accent);color:#fff;font-size:12px;font-weight:800;padding:5px 10px;cursor:default;font-family:inherit';
+  let h='';
+  h+='<button type="button" style="'+bs+(_cdArcPage<=1?';opacity:.35;cursor:default':'')+'" '+(_cdArcPage<=1?'disabled':'onclick="cdArcPage('+(_cdArcPage-1)+')"')+'>◀</button>';
+  for(let i=1;i<=pages;i++)h+='<button type="button" style="'+(i===_cdArcPage?as:bs)+'" '+(i===_cdArcPage?'disabled':'onclick="cdArcPage('+i+')"')+'>'+i+'</button>';
+  h+='<button type="button" style="'+bs+(_cdArcPage>=pages?';opacity:.35;cursor:default':'')+'" '+(_cdArcPage>=pages?'disabled':'onclick="cdArcPage('+(_cdArcPage+1)+')"')+'>▶</button>';
+  h+='<span style="font-size:11px;color:var(--ink-sub);margin-left:4px">'+total+'호 중 '+(st+1)+'~'+Math.min(st+CD_ARCHIVE_PER,total)+'</span>';
+  pg.innerHTML=h;
+}
+window.cdArcPage=cdArcPage;
 /* ── 지난 브리핑 표시(유예 7일 내 재방문) — 배너 + 하단 요청 카드 ── */
 function cdFrozenUI(){
   if(!window._cdFrozen||document.getElementById('cdFrozenBn'))return;
@@ -3771,6 +3816,11 @@ function showToast(msg){const t=document.getElementById('toast');t.textContent=m
 // ═══ Start ═══
 init();
 loadMyDates();   /* ★ 내 날짜 — 리포트 로딩과 독립 실행 (2026-08-01) */
+/* ★ [2026-09-12] 만기 알림 카드 — 고객 날짜 데이터·로그인 여부와 무관하게 독립 실행.
+   종전에는 loadMyDates() 안에서 호출돼, 로그인한 컨설턴트 본인 화면(_jvOwnerP)이나
+   고객 날짜 데이터가 없는 경우 함수가 조기 종료되어 카드가 아예 생성되지 않았다.
+   owner 판정이 끝난 뒤 그려야 미리보기 모드를 정확히 적용할 수 있어 then()에 둔다. */
+_jvOwnerP.then(()=>{try{matRender();}catch(_e){}});
 
 // ═══ Share Bar 스크롤 숨김/표시 ═══
 (function(){
