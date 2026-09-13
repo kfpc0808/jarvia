@@ -171,6 +171,17 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
 .hd .av.editable::after{content:'';position:absolute;inset:0;border:2px dashed rgba(255,255,255,.5);border-radius:50%}
 .phint{font-size:11px;color:rgba(255,255,255,.62);margin-top:3px}
 
+/* 개인정보처리방침 — terms/ 컬렉션의 최신 활성본을 그대로 보여준다.
+   별도 페이지(/privacy)는 존재하지 않아 404 가 떴다. 관리자 화면에서 고치면 여기도 같이 바뀐다. */
+.tm-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:120;display:none;align-items:flex-end}
+.tm-bg.on{display:flex}
+.tm{background:#fff;width:100%;max-width:560px;margin:0 auto;border-radius:16px 16px 0 0;
+ max-height:86vh;display:flex;flex-direction:column}
+.tm h3{font-size:16px;font-weight:900;padding:18px 18px 12px;border-bottom:1px solid var(--border-lt)}
+.tm .bd{flex:1;overflow-y:auto;padding:16px 18px;font-size:12.5px;line-height:1.85;color:var(--ink-mid);white-space:pre-wrap;word-break:keep-all}
+.tm .ft2{padding:12px 18px calc(16px + var(--safe-b));border-top:1px solid var(--border-lt)}
+.tm .ft2 button{width:100%;height:46px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:800}
+
 .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--accent);color:#fff;
  font-size:13.5px;font-weight:600;padding:11px 20px;border-radius:24px;z-index:99;display:none;max-width:88%}
 </style>
@@ -181,10 +192,14 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
   <div class="state"><div class="spin"></div>불러오는 중…</div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="tm-bg" id="tmBg" onclick="if(event.target===this)tmClose()">
+  <div class="tm"><h3>개인정보처리방침</h3><div class="bd" id="tmBody">불러오는 중…</div>
+  <div class="ft2"><button type="button" onclick="tmClose()">닫기</button></div></div>
+</div>
 
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,doc,getDoc,setDoc,serverTimestamp,collection,query,where,orderBy,limit,getDocs}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,serverTimestamp,collection,query,where,orderBy,limit,getDocs,documentId}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getAuth,signInAnonymously,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getStorage,ref as storageRef,uploadBytes,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
@@ -240,6 +255,51 @@ function consentText(n){
     + '\n(신청 경로: 수신 동의 요청 링크)';
 }
 
+/* terms 는 type·isActive·version 으로 최신본을 고른다. 복합 색인이 없을 수 있어
+   admin.html 과 같이 전체를 읽고 코드에서 거르는 폴백을 함께 둔다. */
+/* ★ [2026-09-14] 최신 1건 — 정렬 필드로 먼저 찾고, 비거나 실패하면 문서 ID 역순으로 재시도한다.
+   Firestore 는 정렬 필드가 없는 문서를 결과에서 통째로 제외한다. 옛 문서에 createdAt 이 없으면
+   최신 것이 있어도 빈 결과가 돌아와 샘플이 "준비 중" 으로만 보인다.
+   두 컬렉션 모두 문서 ID 가 날짜(YYYYMMDD / YYYY-MM-DD)라 ID 역순이 곧 최신순이다.
+   휴일에도 마지막 발행분이 잡히므로 "오늘 자가 없어 빈 화면" 이 되지 않는다. */
+async function latestDoc(col, sortField){
+  try{
+    const s=await getDocs(query(collection(db,col),orderBy(sortField,'desc'),limit(1)));
+    if(!s.empty)return s.docs[0];
+    console.warn('[sub] '+col+' — '+sortField+' 정렬 결과 없음, 문서 ID 역순으로 재시도');
+  }catch(e){ console.warn('[sub] '+col+' '+sortField+' 조회 실패:', e&&e.message); }
+  try{
+    const s=await getDocs(query(collection(db,col),orderBy(documentId(),'desc'),limit(1)));
+    if(!s.empty)return s.docs[0];
+    console.warn('[sub] '+col+' — 문서가 없습니다');
+  }catch(e){ console.warn('[sub] '+col+' ID 역순 조회도 실패:', e&&e.message); }
+  return null;
+}
+
+let _tmLoaded=false;
+async function tmOpen(){
+  const bg=document.getElementById('tmBg'); if(bg)bg.classList.add('on');
+  if(_tmLoaded)return; _tmLoaded=true;
+  const body=document.getElementById('tmBody');
+  try{
+    let txt='';
+    try{
+      const q1=await getDocs(query(collection(db,'terms'),where('type','==','privacy_policy'),where('isActive','==',true),orderBy('version','desc'),limit(1)));
+      if(!q1.empty)txt=q1.docs[0].data().content||'';
+    }catch(e){
+      const all=await getDocs(collection(db,'terms'));
+      const list=all.docs.map(d=>d.data()).filter(t=>t.type==='privacy_policy'&&t.isActive).sort((a,b)=>(b.version||0)-(a.version||0));
+      txt=list.length?(list[0].content||''):'';
+    }
+    body.textContent = txt || '개인정보처리방침을 불러오지 못했습니다. 담당 컨설턴트에게 문의해 주세요.';
+  }catch(e){
+    _tmLoaded=false;
+    body.textContent='개인정보처리방침을 불러오지 못했습니다. 담당 컨설턴트에게 문의해 주세요.';
+  }
+}
+function tmClose(){ const bg=document.getElementById('tmBg'); if(bg)bg.classList.remove('on'); }
+window.tmOpen=tmOpen; window.tmClose=tmClose;
+
 function errView(t,s){
   $('root').innerHTML='<div class="state"><b>'+esc(t)+'</b>'+esc(s)+'</div>';
 }
@@ -265,16 +325,16 @@ async function init(){
   try{
     /* consultants 문서 ID 가 로그인 ID 인 경우가 대부분이지만, 등록되지 않은 회원도 있다.
        client-daily.html 과 같이 users 에서 loginId 로 한 번 더 찾는다. */
-    const [fcSnap,uSnap,dSnap,mSnap]=await Promise.allSettled([
+    const [fcSnap,uSnap]=await Promise.allSettled([
       getDoc(doc(db,'consultants',FCID)),
       getDocs(query(collection(db,'users'),where('loginId','==',FCID),limit(1))),
-      getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(1))),
-      getDocs(query(collection(db,'morning_consensus'),orderBy('fileDate','desc'),limit(1))),   /* ★ consensus.html 과 같은 정렬 필드 — createdAt 은 없다 */
     ]);
     if(fcSnap.status==='fulfilled'&&fcSnap.value.exists())fc=fcSnap.value.data();
     if(uSnap.status==='fulfilled'&&!uSnap.value.empty)userDoc=uSnap.value.docs[0].data();
-    if(dSnap.status==='fulfilled'&&!dSnap.value.empty)daily=dSnap.value.docs[0];
-    if(mSnap.status==='fulfilled'&&!mSnap.value.empty)mc=mSnap.value.docs[0];
+    [daily,mc]=await Promise.all([
+      latestDoc('client_daily_reports','createdAt'),
+      latestDoc('morning_consensus','fileDate'),
+    ]);
   }catch(e){ console.warn('init',e); }
 
   /* consultants 문서가 없으면 users 의 이름·소속으로 최소 프로필을 만든다.

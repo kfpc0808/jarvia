@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>샘플 조회 점검</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;background:#111;color:#ddd;padding:18px;font-size:13px;line-height:1.8}
+h2{color:#E9C97A;font-size:15px;margin:18px 0 6px}
+.ok{color:#6ee7a8}.no{color:#f88}.dim{color:#888}
+pre{background:#1a1f26;padding:12px;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+</style></head><body>
+<h1 style="font-size:16px;color:#E9C97A">샘플 조회 점검</h1>
+<p class="dim">sub.html 이 오늘 자 리포트를 못 찾는 원인을 확인합니다. 이 파일은 확인 후 지우셔도 됩니다.</p>
+<div id="out">실행 중…</div>
+
+<script type="module">
+import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getFirestore,collection,query,orderBy,limit,getDocs,documentId}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getAuth,signInAnonymously}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+
+const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
+const app=initializeApp(FC), db=getFirestore(app), auth=getAuth(app);
+const out=document.getElementById('out');
+const log=(h)=>{out.insertAdjacentHTML('beforeend',h);};
+
+async function probe(col, sortField){
+  log('<h2>'+col+'</h2>');
+  // 1) 정렬 필드로
+  try{
+    const s=await getDocs(query(collection(db,col),orderBy(sortField,'desc'),limit(3)));
+    if(s.empty) log('<div class="no">✗ orderBy('+sortField+') → 결과 0건 (그 필드가 없는 문서만 있거나 컬렉션이 빔)</div>');
+    else{
+      log('<div class="ok">✓ orderBy('+sortField+') → '+s.size+'건</div>');
+      s.docs.forEach(d=>log('<div class="dim">   '+d.id+'</div>'));
+    }
+  }catch(e){ log('<div class="no">✗ orderBy('+sortField+') 실패: '+(e&&e.message)+'</div>'); }
+
+  // 2) 문서 ID 역순으로
+  try{
+    const s=await getDocs(query(collection(db,col),orderBy(documentId(),'desc'),limit(3)));
+    if(s.empty) log('<div class="no">✗ 문서 ID 역순 → 결과 0건 (컬렉션이 비어 있음)</div>');
+    else{
+      log('<div class="ok">✓ 문서 ID 역순 → '+s.size+'건</div>');
+      s.docs.forEach(d=>{
+        const x=d.data();
+        log('<div class="dim">   '+d.id+'  ·  필드: '+Object.keys(x).slice(0,12).join(', ')+'</div>');
+      });
+      const f=s.docs[0].data();
+      log('<pre>'+JSON.stringify({id:s.docs[0].id, createdAt:!!f.createdAt, fileDate:f.fileDate||null, status:f.status||null},null,1)+'</pre>');
+    }
+  }catch(e){ log('<div class="no">✗ 문서 ID 역순 실패: '+(e&&e.message)+'</div>'); }
+}
+
+(async()=>{
+  try{ await signInAnonymously(auth); log('<div class="ok">✓ 익명 로그인 성공</div>'); }
+  catch(e){ log('<div class="no">✗ 익명 로그인 실패: '+(e&&e.message)+'</div>'); }
+  await probe('client_daily_reports','createdAt');
+  await probe('morning_consensus','fileDate');
+  log('<h2>terms (개인정보처리방침)</h2>');
+  try{
+    const s=await getDocs(collection(db,'terms'));
+    const list=s.docs.map(d=>d.data()).filter(t=>t.type==='privacy_policy');
+    log('<div class="'+(list.length?'ok':'no')+'">'+(list.length?'✓':'✗')+' privacy_policy 문서 '+list.length+'건 · 활성 '+list.filter(t=>t.isActive).length+'건</div>');
+  }catch(e){ log('<div class="no">✗ terms 조회 실패: '+(e&&e.message)+'</div>'); }
+  log('<h2 class="dim">완료</h2>');
+})();
+</script></body></html>
