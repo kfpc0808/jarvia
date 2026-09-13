@@ -184,7 +184,7 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
 
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,doc,getDoc,setDoc,serverTimestamp,collection,query,orderBy,limit,getDocs}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,serverTimestamp,collection,query,where,orderBy,limit,getDocs}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getAuth,signInAnonymously,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getStorage,ref as storageRef,uploadBytes,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
@@ -261,18 +261,28 @@ async function init(){
     setTimeout(()=>{ if(!done){done=true;res();} },4000);   /* 인증이 늦어도 화면은 뜬다 */
   });
 
-  let fc=null, daily=null, mc=null;
+  let fc=null, daily=null, mc=null, userDoc=null;
   try{
-    const [fcSnap,dSnap,mSnap]=await Promise.allSettled([
+    /* consultants 문서 ID 가 로그인 ID 인 경우가 대부분이지만, 등록되지 않은 회원도 있다.
+       client-daily.html 과 같이 users 에서 loginId 로 한 번 더 찾는다. */
+    const [fcSnap,uSnap,dSnap,mSnap]=await Promise.allSettled([
       getDoc(doc(db,'consultants',FCID)),
+      getDocs(query(collection(db,'users'),where('loginId','==',FCID),limit(1))),
       getDocs(query(collection(db,'client_daily_reports'),orderBy('createdAt','desc'),limit(1))),
       getDocs(query(collection(db,'morning_consensus'),orderBy('fileDate','desc'),limit(1))),   /* ★ consensus.html 과 같은 정렬 필드 — createdAt 은 없다 */
     ]);
     if(fcSnap.status==='fulfilled'&&fcSnap.value.exists())fc=fcSnap.value.data();
+    if(uSnap.status==='fulfilled'&&!uSnap.value.empty)userDoc=uSnap.value.docs[0].data();
     if(dSnap.status==='fulfilled'&&!dSnap.value.empty)daily=dSnap.value.docs[0];
     if(mSnap.status==='fulfilled'&&!mSnap.value.empty)mc=mSnap.value.docs[0];
   }catch(e){ console.warn('init',e); }
 
+  /* consultants 문서가 없으면 users 의 이름·소속으로 최소 프로필을 만든다.
+     사진이 없는 상태이므로 이니셜로 표시되지만, 페이지 자체는 정상 동작한다. */
+  if(!fc && userDoc){
+    fc={ name:userDoc.name||FCID, title:userDoc.title||'', company:userDoc.company||'', phone:userDoc.phone||'' };
+    console.warn('[sub] consultants 문서 없음 — users 프로필로 대체:', FCID);
+  }
   if(!fc){ errView('담당 컨설턴트를 찾을 수 없습니다','링크를 다시 확인해 주세요.'); return; }
   FC_DATA=fc;
 
