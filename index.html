@@ -6355,11 +6355,16 @@ const AP_GROUPS=[
     ['doc','자료 도착 안내','제안서·분석자료 전달 시'],
   ]},
   {t:'자동 발송', sub:'켜두면 내가 누르지 않아도 나갑니다', auto:true, items:[
-    ['auto_maturity','만기 알림','등록된 만기 30일 전 · 고객에게'],
-    ['auto_age','상령일 알림','보험 나이 변경 30일 전 · 고객에게'],
+    ['auto_maturity','만기 알림','고객이 등록한 만기일 전 · 고객에게'],
+    ['auto_age','상령일 알림','보험 나이 변경일 전 · 고객에게'],
   ]},
 ];
 const AP_AUTO=['auto_maturity','auto_age'];
+/* ★ [2026-09-14] 자동 발송 리드타임 — 며칠 전에 보낼지. users.alimtalkPrefs.auto_maturity_days / auto_age_days */
+const AP_LEAD_KEY={auto_maturity:'auto_maturity_days', auto_age:'auto_age_days'};
+const AP_LEAD_OPTS=[5,10,20,25,30];
+const AP_LEAD_DEF=30;
+const apLeadOf=(k)=>{const v=parseInt(_apPrefs[AP_LEAD_KEY[k]],10);return AP_LEAD_OPTS.indexOf(v)>=0?v:AP_LEAD_DEF;};
 let _apPrefs={}, _apLoaded=false, _apBusy=false;
 const apOn=(k)=> AP_AUTO.indexOf(k)>=0 ? _apPrefs[k]===true : _apPrefs[k]!==false;
 
@@ -6384,6 +6389,15 @@ function apPaint(){
         +'<span style="display:block;font-size:11.5px;color:#64748B;margin-top:2px;line-height:1.5">'+it[2]+'</span></div>'
         +'<span style="flex-shrink:0;font-size:12px;font-weight:800;color:#8A6410;min-width:40px;text-align:right">20원</span>'
         +apSw(it[0],on,!main)+'</div>';
+      /* ★ [2026-09-14] 자동 발송 — 며칠 전에 보낼지 고른다. 항목이 꺼져 있으면 비활성 */
+      if(g.auto){
+        const lead=apLeadOf(it[0]);
+        const opts=AP_LEAD_OPTS.map(n=>'<option value="'+n+'"'+(n===lead?' selected':'')+'>'+n+'일 전</option>').join('');
+        html+='<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid #E0C36B;border-top:0;border-radius:0 0 10px 10px;margin:-10px 0 6px;background:#FFFDF7;opacity:'+(on?'1':'.45')+'">'
+          +'<span style="flex:1;min-width:0;font-size:11.5px;color:#6B5A38;line-height:1.5">언제 보낼까요</span>'
+          +'<select onchange="apLead(\''+it[0]+'\',this.value)"'+(on?'':' disabled')
+          +' style="flex-shrink:0;height:34px;padding:0 8px;border:1px solid #E0C36B;border-radius:8px;background:#fff;color:#8A6410;font-size:12.5px;font-weight:700;font-family:inherit;cursor:'+(on?'pointer':'default')+'">'+opts+'</select></div>';
+      }
     });
     if(g.auto)html+='<div style="background:#FFFBF2;border:1px solid #E8D6B2;border-radius:10px;padding:11px 12px;font-size:12px;color:#6B5A38;line-height:1.7;margin-top:8px">'
       +'<b style="color:#8A6410">자동 발송은 기본이 꺼짐입니다.</b> 켜두면 회원님이 누르지 않아도 고객에게 나가고 포인트가 차감됩니다. 「전체 켜기」를 눌러도 이 두 가지는 따로 확인을 받습니다.</div>';
@@ -6410,6 +6424,16 @@ window.apToggle=async function(k){
   _apPrefs[k]=next; apPaint();
   try{ await apSave(); }
   catch(e){ _apPrefs[k]=prev; apPaint(); toast('저장 실패: '+e.message,'error'); }
+  _apBusy=false;
+};
+window.apLead=async function(k,v){
+  if(_apBusy)return;
+  const n=parseInt(v,10);
+  if(AP_LEAD_OPTS.indexOf(n)<0)return;
+  _apBusy=true; const key=AP_LEAD_KEY[k], prev=_apPrefs[key];
+  _apPrefs[key]=n; apPaint();
+  try{ await apSave(); toast((k==='auto_maturity'?'만기 알림':'상령일 알림')+'을 '+n+'일 전에 보냅니다','success'); }
+  catch(e){ _apPrefs[key]=prev; apPaint(); toast('저장 실패: '+e.message,'error'); }
   _apBusy=false;
 };
 window.apBulk=async function(on){

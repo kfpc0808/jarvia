@@ -1343,13 +1343,86 @@ async function openOwnerPanel(){
   if(!$('opCtRows').children.length)opResetCtRows();   // 첫 진입 시 상품 입력행 1개
   renderOpMonth();
   loadOpViewStats();
+  try{ loadOpSendTargets(); }catch(_e){}   /* ★ [2026-09-14] 알림톡 발송 대상 */
 }
 function opNavM(dir){
   opM+=dir;
   if(opM>12){opM=1;opY++;}
   if(opM<1){opM=12;opY--;}
   renderOpMonth();
+  try{ loadOpSendTargets(); }catch(_e){}   /* ★ [2026-09-14] 발송 대상도 해당 월로 */
 }
+
+/* ═══ ★ [2026-09-14] 알림톡 발송 가능 대상 — careTargets / careSendNow.
+   위 「월별 알림」은 fc_clients(내가 등록한 고객)라 연락처가 없어 발송할 수 없다.
+   여기 목록은 고객이 직접 신청해 연락처와 동의가 확보된 건만 보여준다. ═══ */
+let opSendRows=[], opSendBusy=false;
+
+function opSendKindLabel(k){ return k==='maturity' ? '만기' : '상령일'; }
+
+async function loadOpSendTargets(){
+  const sec=document.getElementById('opSendSec'), box=document.getElementById('opSendList');
+  if(!sec||!box||!currentUser)return;
+  sec.style.display='block';
+  box.innerHTML='<div style="font-size:12px;color:#9CA3AF;padding:8px 0">불러오는 중...</div>';
+  try{
+    const r=await httpsCallable(fns,'careTargets')({ ym: opY+String(opM).padStart(2,'0') });
+    opSendRows=((r&&r.data&&r.data.rows)||[]);
+  }catch(e){
+    opSendRows=[];
+    box.innerHTML='<div style="font-size:12px;color:#DC2626;padding:8px 0">발송 대상을 불러오지 못했습니다.</div>';
+    return;
+  }
+  renderOpSendList();
+}
+
+function renderOpSendList(){
+  const box=document.getElementById('opSendList'); if(!box)return;
+  if(!opSendRows.length){
+    box.innerHTML='<div style="font-size:12px;color:#C7CDD6;padding:4px 0 6px">이번 달 발송 가능한 고객이 없습니다</div>';
+    return;
+  }
+  box.innerHTML=opSendRows.map((x,i)=>{
+    const md=Number(x.date.slice(4,6))+'.'+Number(x.date.slice(6,8));
+    const sent=x.sentOn?'<span style="font-size:10.5px;color:#2563EB;background:#EFF6FF;border-radius:6px;padding:2px 6px;white-space:nowrap">발송함</span>':'';
+    return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:8px 10px">'
+      +'<div style="flex-shrink:0;width:38px;text-align:center"><div style="font-size:13px;font-weight:800;color:#1F2937">'+md+'</div>'
+      +'<div style="font-size:10px;color:#9CA3AF">'+opSendKindLabel(x.kind)+'</div></div>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700;color:#1F2937;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(x.name)+'</div>'
+      +'<div style="font-size:11px;color:#9CA3AF;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+opEsc(x.label||'')+(x.mask?' · '+opEsc(x.mask):'')+'</div></div>'
+      +sent
+      +'<button type="button" onclick="opSendOne('+i+')" style="flex-shrink:0;font-size:11.5px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:7px;padding:6px 11px;cursor:pointer">보내기</button>'
+      +'</div>';
+  }).join('');
+}
+
+window.opSendOne=async function(i){
+  if(opSendBusy)return;
+  const x=opSendRows[i]; if(!x)return;
+  const md=Number(x.date.slice(4,6))+'월 '+Number(x.date.slice(6,8))+'일';
+  if(!confirm(x.name+' 고객에게 '+opSendKindLabel(x.kind)+' 안내를 보냅니다.\n\n기준일 '+md+'\n내용은 승인된 문구 그대로 나가며 수정할 수 없습니다.\n건당 20원이 차감됩니다.\n\n보낼까요?'))return;
+
+  opSendBusy=true;
+  try{
+    let r=await httpsCallable(fns,'careSendNow')({ key:x.key });
+    if(r&&r.data&&r.data.duplicate){
+      const on=String(r.data.sentOn||'');
+      const onTx=on.length===8?(Number(on.slice(4,6))+'월 '+Number(on.slice(6,8))+'일'):'이전';
+      if(!confirm(onTx+'에 이미 보냈습니다.\n같은 내용이 한 번 더 나가고 20원이 차감됩니다.\n\n그래도 보낼까요?')){opSendBusy=false;return;}
+      r=await httpsCallable(fns,'careSendNow')({ key:x.key, confirm:true });
+    }
+    if(r&&r.data&&r.data.success){
+      toast(x.name+' 고객에게 보냈습니다');
+      opSendRows[i].sentOn=x.date;
+      renderOpSendList();
+    }else{
+      toast('발송하지 못했습니다');
+    }
+  }catch(e){
+    toast((e&&e.message)||'발송에 실패했습니다');
+  }
+  opSendBusy=false;
+};
 function opCollectEvents(Y,M){
   const mm=String(M).padStart(2,'0');
   const ev=[];
@@ -11102,6 +11175,13 @@ init();
     </div>
     <div id="opMonthSummary" style="font-size:11px;color:#9CA3AF;margin-bottom:6px"></div>
     <div id="opAlertList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:200px;overflow-y:auto"></div>
+
+    <!-- ★ [2026-09-14] 알림톡 발송 가능 대상 — 고객이 직접 신청한 건만. 위 목록(fc_clients)과는 별개 데이터다 -->
+    <div id="opSendSec" style="display:none;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:2px;border-top:1px solid #E5E7EB;padding-top:12px">💬 알림톡 보낼 수 있는 고객</div>
+      <div style="font-size:11px;color:#9CA3AF;margin-bottom:8px;line-height:1.55">고객이 직접 수신을 신청한 건만 보입니다. 내용은 승인된 문구 그대로 나가며 수정할 수 없습니다.</div>
+      <div id="opSendList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto"></div>
+    </div>
 
     <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px;border-top:1px solid #E5E7EB;padding-top:12px">✏️ 간편 고객 등록</div>
     <input id="opFind" placeholder="🔍 기존 고객 이름 검색 → 탭하면 보험 추가" style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:12px;border:1px dashed #CBD5E1;border-radius:8px;background:#F8FAFC;margin-bottom:8px">
