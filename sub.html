@@ -84,6 +84,9 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
 .smp .tx em{display:block;font-style:normal;font-size:11.5px;color:var(--ink-sub);margin-top:4px}
 .smp .go{font-size:20px;color:#C3C8D0;flex-shrink:0}
 .smp.off{opacity:.5;pointer-events:none}
+.smp.nolink{cursor:default;background:var(--bg)}
+.smp .mark{flex-shrink:0;font-size:11px;font-weight:800;color:var(--gold-dk);
+ background:var(--gold-lt);border-radius:100px;padding:5px 10px;white-space:nowrap}
 
 /* 4. 받게 되는 것 */
 .list{margin-top:12px;list-style:none}
@@ -352,7 +355,7 @@ async function init(){
     setTimeout(()=>{ if(!done){done=true;res();} },4000);   /* 인증이 늦어도 화면은 뜬다 */
   });
 
-  let fc=null, daily=null, mc=null, userDoc=null;
+  let fc=null, daily=null, userDoc=null;
   try{
     /* consultants 문서 ID 가 로그인 ID 인 경우가 대부분이지만, 등록되지 않은 회원도 있다.
        client-daily.html 과 같이 users 에서 loginId 로 한 번 더 찾는다. */
@@ -362,10 +365,8 @@ async function init(){
     ]);
     if(fcSnap.status==='fulfilled'&&fcSnap.value.exists())fc=fcSnap.value.data();
     if(uSnap.status==='fulfilled'&&!uSnap.value.empty)userDoc=uSnap.value.docs[0].data();
-    [daily,mc]=await Promise.all([
-      latestDoc('client_daily_reports','createdAt'),
-      latestDoc('morning_consensus','fileDate'),
-    ]);
+    /* 모닝 컨센서스는 회원 전용이라 링크를 걸지 않는다 — 조회도 하지 않는다 */
+    daily=await latestDoc('client_daily_reports','createdAt');
   }catch(e){ console.warn('init',e); }
 
   /* consultants 문서가 없으면 users 의 이름·소속으로 최소 프로필을 만든다.
@@ -384,10 +385,10 @@ async function init(){
   const u=auth.currentUser;
   IS_OWNER = !!(u && !u.isAnonymous);
 
-  render(fc,daily,mc);
+  render(fc,daily);
 }
 
-function render(fc,daily,mc){
+function render(fc,daily){
   const name=fc.name||'담당 컨설턴트';
   const title=fc.title?' '+esc(fc.title):'';
   const co=[fc.company,fc.phone].filter(Boolean).join(' · ');
@@ -400,14 +401,11 @@ function render(fc,daily,mc){
   /* 샘플 — 발행된 최신 호를 그대로 연다. 인증키 없이 열리는 공개 열람이다.
      증권사 공개 리서치 요약이라 기밀이 아니고, 실물을 봐야 신청한다. */
   const dDate=daily?daily.id:null;
-  const mDate=mc?mc.id:null;
   /* ★ [2026-09-14] d= 를 붙이지 않는다.
-     client-daily.html 은 d= 가 있으면 서명 키를 요구해 「이 링크로는 열 수 없어요」로 막히고,
+     d= 가 있으면 서명 키를 요구해 「이 링크로는 열 수 없어요」로 막힌다.
      ?fc= 만 있으면 서버에서 오늘 키를 받아 자동으로 열린다(cdGatePass).
-     consensus.html 도 지난 호는 열람권을 요구하므로 최신호로만 보낸다.
      날짜 표기는 조회해 둔 문서 ID 로 하되, 링크 자체는 「최신호」로 건다. */
   const dHref=dDate?('./client-daily.html?fc='+encodeURIComponent(FCID)):'#';
-  const mHref=mDate?('./consensus.html?fc='+encodeURIComponent(FCID)):'#';
   /* 문서 ID 는 YYYYMMDD 와 YYYY-MM-DD 두 형태가 모두 쓰인다 */
   const fmt=(s)=>{
     const m=String(s||'').match(/^(\d{4})-?(\d{2})-?(\d{2})$/);
@@ -435,19 +433,22 @@ function render(fc,daily,mc){
   <section class="sec">
     <div class="tag">오늘 보내드린 것</div>
     <h2>먼저 읽어보세요</h2>
-    <p class="cap">신청 전에도 최근 리포트를 그대로 보실 수 있습니다.</p>
+    <p class="cap">신청 전에도 데일리 리포트를 그대로 보실 수 있습니다.</p>
     <a class="smp${dDate?'':' off'}" href="${dHref}" ${dDate?'target="_blank" rel="noopener"':'onclick="return false"'}>
       <div class="thumb d1"><span>오늘의<br>데일리 리포트</span></div>
       <div class="tx"><b>고객 데일리 리포트</b><span>${dDate?esc(fmt(dDate)):'준비 중'}</span>
         <em>평일 아침 5분 · 오늘의 시장과 생활경제</em></div>
       <div class="go">›</div>
     </a>
-    <a class="smp${mDate?'':' off'}" href="${mHref}" ${mDate?'target="_blank" rel="noopener"':'onclick="return false"'}>
+    <!-- ★ [2026-09-14] 모닝 컨센서스는 회원 전용이라 비로그인 고객에게 열 수 없다.
+         열람권(1,000원) 정책이 있어 공개로 풀면 기존 결제 고객과 형평이 맞지 않는다.
+         링크 없이 "함께 보내드린다" 는 사실만 알린다. -->
+    <div class="smp nolink">
       <div class="thumb d2"><span>모닝<br>컨센서스</span></div>
-      <div class="tx"><b>모닝 컨센서스</b><span>${mDate?esc(fmt(mDate)):'준비 중'} · 증권사 리서치 종합</span>
+      <div class="tx"><b>모닝 컨센서스</b><span>증권사 아침 리서치 종합</span>
         <em>전일 마감 리뷰 · 지수 흐름 · 오늘의 방향</em></div>
-      <div class="go">›</div>
-    </a>
+      <div class="mark">신청 후 함께</div>
+    </div>
   </section>
 
   <section class="sec">
