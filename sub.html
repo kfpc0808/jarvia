@@ -182,6 +182,27 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
 .tm .ft2{padding:12px 18px calc(16px + var(--safe-b));border-top:1px solid var(--border-lt)}
 .tm .ft2 button{width:100%;height:46px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:800}
 
+/* ═══ 사진 편집기 — 정사각 가이드 안에서 확대·이동해 잘라낸다.
+   원본을 그대로 가운데 잘라내면 얼굴이 치우치거나 잘린다. 컨설턴트가 직접 맞추게 한다.
+   index.html 의 photoEditModal 과 같은 방식(최소 배율 = 가이드를 채우는 크기, 최대 3배). ═══ */
+.pe{position:fixed;inset:0;background:#0A0F1E;z-index:200;display:none;flex-direction:column}
+.pe.on{display:flex}
+.pe-hd{display:flex;align-items:center;justify-content:space-between;padding:calc(14px + var(--safe-t)) 16px 14px;color:#fff}
+.pe-hd b{font-size:15px;font-weight:800}
+.pe-hd button{background:none;border:0;color:#C9D3E4;font-size:14px;font-weight:700;padding:6px 8px}
+.pe-stage{flex:1;position:relative;overflow:hidden;touch-action:none}
+.pe-stage img{position:absolute;transform-origin:0 0;-webkit-user-drag:none;user-select:none;pointer-events:none}
+.pe-mask{position:absolute;inset:0;pointer-events:none}
+.pe-guide{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+ border-radius:50%;box-shadow:0 0 0 9999px rgba(10,15,30,.72);border:2px solid rgba(255,255,255,.85)}
+.pe-ft{padding:14px 18px calc(18px + var(--safe-b));background:#0F1523}
+.pe-ft .row{display:flex;align-items:center;gap:12px;color:#9AA6BC;font-size:12px}
+.pe-ft input[type=range]{flex:1;accent-color:var(--gold)}
+.pe-ft .hint{color:#6E7683;font-size:11.5px;text-align:center;margin-bottom:10px;line-height:1.6}
+.pe-ft .go{width:100%;height:50px;margin-top:12px;border:0;border-radius:12px;
+ background:var(--gold);color:#111826;font-size:15px;font-weight:800}
+.pe-ft .go:disabled{opacity:.5}
+
 .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--accent);color:#fff;
  font-size:13.5px;font-weight:600;padding:11px 20px;border-radius:24px;z-index:99;display:none;max-width:88%}
 </style>
@@ -192,6 +213,16 @@ h2{font-size:19px;font-weight:900;letter-spacing:-.02em;margin-top:6px}
   <div class="state"><div class="spin"></div>불러오는 중…</div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="pe" id="peBox">
+  <div class="pe-hd"><button type="button" onclick="peClose()">취소</button><b>사진 맞추기</b><span style="width:44px"></span></div>
+  <div class="pe-stage" id="peStage"><img id="peImg" alt=""><div class="pe-mask"><div class="pe-guide" id="peGuide"></div></div></div>
+  <div class="pe-ft">
+    <div class="hint">사진을 끌어 위치를 맞추고, 아래 막대로 크기를 조절하세요</div>
+    <div class="row"><span>작게</span><input type="range" id="peZoom" min="100" max="300" value="100"><span>크게</span></div>
+    <button type="button" class="go" id="peSave">이 사진으로 저장</button>
+  </div>
+</div>
+
 <div class="tm-bg" id="tmBg" onclick="if(event.target===this)tmClose()">
   <div class="tm"><h3>개인정보처리방침</h3><div class="bd" id="tmBody">불러오는 중…</div>
   <div class="ft2"><button type="button" onclick="tmClose()">닫기</button></div></div>
@@ -370,8 +401,13 @@ function render(fc,daily,mc){
      증권사 공개 리서치 요약이라 기밀이 아니고, 실물을 봐야 신청한다. */
   const dDate=daily?daily.id:null;
   const mDate=mc?mc.id:null;
-  const dHref=dDate?('./client-daily.html?fc='+encodeURIComponent(FCID)+'&d='+encodeURIComponent(dDate)+'&sample=1'):'#';
-  const mHref=mDate?('./consensus.html?fc='+encodeURIComponent(FCID)+'&d='+encodeURIComponent(mDate)+'&sample=1'):'#';
+  /* ★ [2026-09-14] d= 를 붙이지 않는다.
+     client-daily.html 은 d= 가 있으면 서명 키를 요구해 「이 링크로는 열 수 없어요」로 막히고,
+     ?fc= 만 있으면 서버에서 오늘 키를 받아 자동으로 열린다(cdGatePass).
+     consensus.html 도 지난 호는 열람권을 요구하므로 최신호로만 보낸다.
+     날짜 표기는 조회해 둔 문서 ID 로 하되, 링크 자체는 「최신호」로 건다. */
+  const dHref=dDate?('./client-daily.html?fc='+encodeURIComponent(FCID)):'#';
+  const mHref=mDate?('./consensus.html?fc='+encodeURIComponent(FCID)):'#';
   /* 문서 ID 는 YYYYMMDD 와 YYYY-MM-DD 두 형태가 모두 쓰인다 */
   const fmt=(s)=>{
     const m=String(s||'').match(/^(\d{4})-?(\d{2})-?(\d{2})$/);
@@ -467,30 +503,108 @@ function render(fc,daily,mc){
 }
 
 /* ═══ 컨설턴트 전용 — 사진 교체 · 링크 복사 ═══ */
-/* 정사각 512 로 줄여 올린다. 원본을 그대로 올리면 폰 사진 한 장이 5MB 를 넘어
-   고객 화면 로딩이 느려진다. client-daily.html 의 방식과 같다. */
-function square512(file){
-  return new Promise((res,rej)=>{
+/* ═══ 사진 편집기 — 확대·이동해서 정사각 512 로 잘라낸다.
+   가운데를 기계적으로 잘라내면 얼굴이 치우치거나 잘린다. 첫인상이 걸린 사진이라
+   컨설턴트가 직접 맞추게 한다. 드래그(마우스·터치)와 두 손가락 확대를 모두 받는다. ═══ */
+let PE=null;
+function peOpen(file){
+  return new Promise((resolve)=>{
     const img=new Image(), url=URL.createObjectURL(file);
     img.onload=()=>{
-      const S=512, c=document.createElement('canvas'); c.width=S; c.height=S;
-      const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,S,S);
-      const side=Math.min(img.width,img.height);
-      g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,S,S);
-      URL.revokeObjectURL(url);
-      c.toBlob(b=>b?res(b):rej(new Error('이미지 변환 실패')),'image/jpeg',.88);
+      const box=$('peBox'), stage=$('peStage'), el=$('peImg'), guide=$('peGuide');
+      box.classList.add('on');
+      /* 가이드 = 무대 짧은 변의 72%. 화면을 다 쓰되 여백을 남겨 바깥이 보이게 한다 */
+      const sw=stage.clientWidth, sh=stage.clientHeight;
+      const G=Math.round(Math.min(sw,sh)*0.72);
+      guide.style.width=G+'px'; guide.style.height=G+'px';
+      const iw=img.naturalWidth, ih=img.naturalHeight;
+      const minS=G/Math.min(iw,ih);        /* 가이드를 꽉 채우는 최소 배율 — 빈 곳이 생기지 않는다 */
+      PE={ url, el, iw, ih, G, minS, s:minS, x:0, y:0,
+           gx:(sw-G)/2, gy:(sh-G)/2, resolve, drag:false, lx:0, ly:0, pinch:0, ps:1 };
+      el.src=url; el.style.width=iw+'px'; el.style.height=ih+'px';
+      PE.x=PE.gx+(G-iw*minS)/2; PE.y=PE.gy+(G-ih*minS)/2;   /* 가운데에서 시작 */
+      $('peZoom').value=100;
+      peDraw();
     };
-    img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('이미지를 읽지 못했습니다'));};
+    img.onerror=()=>{ URL.revokeObjectURL(url); toast('이미지를 읽지 못했습니다'); resolve(null); };
     img.src=url;
   });
 }
+function peClamp(){
+  /* 가이드 밖으로 빠지지 않게 — 사진 모서리가 가이드 안쪽으로 들어오지 못한다 */
+  const w=PE.iw*PE.s, h=PE.ih*PE.s;
+  PE.x=Math.min(PE.gx, Math.max(PE.gx+PE.G-w, PE.x));
+  PE.y=Math.min(PE.gy, Math.max(PE.gy+PE.G-h, PE.y));
+}
+function peDraw(){
+  if(!PE)return; peClamp();
+  PE.el.style.transform='translate('+PE.x+'px,'+PE.y+'px) scale('+PE.s+')';
+}
+function peZoomTo(mult){
+  const c=PE.gx+PE.G/2, m=PE.gy+PE.G/2;           /* 가이드 중심을 기준으로 확대 */
+  const ns=PE.minS*mult, k=ns/PE.s;
+  PE.x=c-(c-PE.x)*k; PE.y=m-(m-PE.y)*k; PE.s=ns; peDraw();
+}
+function peClose(){
+  const b=$('peBox'); if(b)b.classList.remove('on');
+  if(PE){ try{URL.revokeObjectURL(PE.url);}catch(_e){} if(PE.resolve)PE.resolve(null); PE=null; }
+}
+function peCrop(){
+  return new Promise((res,rej)=>{
+    const S=512, c=document.createElement('canvas'); c.width=S; c.height=S;
+    const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,S,S);
+    const k=S/PE.G;                                  /* 가이드 → 512 확대비 */
+    const sx=(PE.gx-PE.x)/PE.s, sy=(PE.gy-PE.y)/PE.s, sw=PE.G/PE.s;
+    const im=new Image();
+    im.onload=()=>{ g.drawImage(im,sx,sy,sw,sw,0,0,S,S);
+      c.toBlob(b=>b?res(b):rej(new Error('이미지 변환 실패')),'image/jpeg',.88); };
+    im.onerror=()=>rej(new Error('이미지를 읽지 못했습니다'));
+    im.src=PE.url;
+  });
+}
+function peWire(){
+  const st=$('peStage');
+  const pt=(e)=>e.touches?e.touches[0]:e;
+  const dist=(t)=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
+  const down=(e)=>{ if(!PE)return;
+    if(e.touches&&e.touches.length===2){ PE.pinch=dist(e.touches); PE.ps=PE.s; return; }
+    PE.drag=true; const p=pt(e); PE.lx=p.clientX; PE.ly=p.clientY; };
+  const move=(e)=>{ if(!PE)return;
+    if(e.touches&&e.touches.length===2&&PE.pinch){
+      e.preventDefault();
+      const k=dist(e.touches)/PE.pinch;
+      const mult=Math.min(3,Math.max(1,(PE.ps*k)/PE.minS));
+      $('peZoom').value=Math.round(mult*100); peZoomTo(mult); return;
+    }
+    if(!PE.drag)return; e.preventDefault();
+    const p=pt(e);
+    PE.x+=p.clientX-PE.lx; PE.y+=p.clientY-PE.ly;
+    PE.lx=p.clientX; PE.ly=p.clientY; peDraw(); };
+  const up=()=>{ if(PE){PE.drag=false;PE.pinch=0;} };
+  st.addEventListener('mousedown',down); st.addEventListener('touchstart',down,{passive:true});
+  window.addEventListener('mousemove',move); st.addEventListener('touchmove',move,{passive:false});
+  window.addEventListener('mouseup',up);  st.addEventListener('touchend',up);
+  $('peZoom').oninput=(e)=>peZoomTo(Number(e.target.value)/100);
+  $('peSave').onclick=async()=>{
+    if(!PE)return;
+    const btn=$('peSave'); btn.disabled=true; btn.textContent='저장 중…';
+    try{
+      const blob=await peCrop();
+      const r=PE.resolve; PE.resolve=null;
+      peClose(); if(r)r(blob);
+    }catch(e){ toast((e&&e.message)||'저장 실패'); }
+    finally{ btn.disabled=false; btn.textContent='이 사진으로 저장'; }
+  };
+}
+window.peClose=peClose;
 async function uploadSubPhoto(file){
   const u=auth.currentUser;
   if(!u||u.isAnonymous){toast('로그인 후 이용할 수 있습니다');return;}
   if(file.size>10*1024*1024){toast('사진 크기는 10MB 이하로 해주세요');return;}
   try{
+    const blob=await peOpen(file);
+    if(!blob)return;                     /* 취소 */
     toast('사진 올리는 중…');
-    const blob=await square512(file);
     const sr=storageRef(storage,'consultants/'+u.uid+'/sub.jpg');
     await uploadBytes(sr,blob,{contentType:'image/jpeg'});
     const url=await getDownloadURL(sr);
@@ -549,6 +663,7 @@ function fallback(url,done){
 
 function wire(){
   const sb=$('shareBtn'); if(sb)sb.onclick=shareLink;
+  if(IS_OWNER&&!window._peWired){ peWire(); window._peWired=true; }
   if(IS_OWNER){
     const box=$('avBox'); if(box)box.onclick=pickPhoto;
     const cb=$('copyBtn'); if(cb)cb.onclick=copyLink;
