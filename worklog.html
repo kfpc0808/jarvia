@@ -873,6 +873,7 @@ textarea.ag{overflow:hidden;min-height:48px}
   #vClient{max-width:840px;margin:0 auto}
   .toolbar{grid-template-columns:1fr 140px}
 }
+.wlSent{display:inline-block;font-size:11px;font-weight:700;color:#0F6E56;background:#E1F5EE;border-radius:6px;padding:2px 7px;margin-left:2px}
 </style>
 </head>
 <body>
@@ -3858,6 +3859,94 @@ window.wlConsultPick=function(v){                       /* 탭=토글, 닫지 �
 };
 window.wlPremLive=el=>{const n=num(el.value);el.value=n==null?'':comma(n);};   /* 입력 즉시 3자리 콤마 */
 
+/* ═══ ★ [2026-09-14] 상령일·만기 알림톡 수동 발송
+   번호는 기기 IndexedDB(내 고객)에서 읽어 요청에만 실어 보내고 서버에 저장하지 않는다.
+   발송 근거는 업무일지 — 최근 24개월 기록이 있어야 서버가 발송을 허용한다. ═══ */
+let _wlCare=[], _wlCareBusy=false, _wlSent={};   /* _wlSent: "clientId|kind|YYYYMMDD" → 발송일 */
+
+/* 이 고객의 발송 이력을 서버에서 받아 정보 박스를 다시 그린다 */
+async function wlLoadSent(cid){
+  if(!cid)return;
+  try{
+    const r=await httpsCallable(fns,'careSentMap')({clientIds:[cid]});
+    Object.assign(_wlSent,(r&&r.data&&r.data.sent)||{});
+    if(_view==='vForm'&&_sel.clientId===cid)wlClientChanged();
+  }catch(e){}
+}
+const _wlSentReq={};
+function wlSentOn(cid,kind,y8){ return _wlSent[cid+'|'+kind+'|'+y8]||''; }
+function wlSentTx(on){ return /^\d{8}$/.test(String(on||''))?(Number(on.slice(4,6))+'월 '+Number(on.slice(6,8))+'일'):''; }
+
+function wlSangMmdd(birth){          /* 상령일 = 주민등록상 생일 + 6개월 (월말 초과 시 익월 1일) */
+  if(!birth||birth.length!==10)return '';
+  let m=parseInt(birth.slice(5,7),10), d=parseInt(birth.slice(8,10),10);
+  m+=6; if(m>12)m-=12;
+  const dim=[31,28,31,30,31,30,31,31,30,31,30,31];
+  if(d>dim[m-1]){d=1;m=(m===12)?1:m+1;}
+  return String(m).padStart(2,'0')+String(d).padStart(2,'0');
+}
+function wlTodayY8(){const k=new Date(Date.now()+9*3600000);return k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');}
+function wlNextDue(mmdd){            /* 올해 상령일이 지났으면 내년 */
+  if(!/^\d{4}$/.test(String(mmdd||'')))return '';
+  const t=wlTodayY8(), y=Number(t.slice(0,4));
+  const a=String(y)+mmdd;
+  return a>=t?a:String(y+1)+mmdd;
+}
+function wlDday(y8){
+  if(!/^\d{8}$/.test(String(y8||'')))return null;
+  const t=wlTodayY8();
+  const ms=Date.UTC(+y8.slice(0,4),+y8.slice(4,6)-1,+y8.slice(6,8))-Date.UTC(+t.slice(0,4),+t.slice(4,6)-1,+t.slice(6,8));
+  return Math.round(ms/86400000);
+}
+function wlCareBtn(i){ return '<button type="button" class="sbtn" onclick="wlCareSend('+i+')">💬 알림톡 보내기</button>'; }
+
+/* 기기 '내 고객'에서 번호 찾기 — wlInfoOpen 과 같은 매칭 규칙 */
+async function wlCarePhone(c){
+  try{
+    const all=await wlMpcAll();
+    const _norm=v=>String(v||'').replace(/\s+/g,'').trim();
+    const nm=_norm(c.name);
+    let hits=(all||[]).filter(x=>_norm(x.name)===nm);
+    if(!hits.length&&nm.length>=2)hits=(all||[]).filter(x=>_norm(x.name).startsWith(nm)||nm.startsWith(_norm(x.name)));
+    if(hits.length>1&&c.birthDate){const b=hits.filter(x=>String(x.birthDate||'').slice(0,10)===c.birthDate);if(b.length)hits=b;}
+    return String((hits[0]||{}).phone||'').replace(/\D/g,'');
+  }catch(e){ return ''; }
+}
+
+window.wlCareSend=async function(i){
+  if(_wlCareBusy)return;
+  const x=_wlCare[i]; if(!x){toast('대상을 찾을 수 없습니다');return;}
+  const c=(_clients||[]).find(y=>y.id===x.clientId);
+  if(!c){toast('고객 정보를 찾을 수 없습니다');return;}
+
+  const phone=await wlCarePhone(c);
+  if(!/^01\d{8,9}$/.test(phone)){
+    alert('이 기기에 '+(c.name||'고객')+'님의 연락처가 없습니다.\n고객을 등록한 기기에서 보내주세요.');
+    return;
+  }
+  const md=Number(x.date.slice(4,6))+'월 '+Number(x.date.slice(6,8))+'일';
+  const kindTx=x.kind==='maturity'?'만기':'상령일';
+  if(!confirm((c.name||'고객')+'님에게 '+kindTx+' 안내를 보냅니다.\n\n기준일 '+md+'\n내용은 승인된 문구 그대로 나가며 수정할 수 없습니다.\n건당 20원이 차감됩니다.\n\n보낼까요?'))return;
+
+  _wlCareBusy=true;
+  try{
+    const r=await httpsCallable(fns,'careSendDirect')({
+      clientId:x.clientId, name:c.name||'', phone:phone, kind:x.kind, date:x.date,
+      insurer:x.insurer||'', productName:x.productName||''
+    });
+    if(r&&r.data&&r.data.success){
+      toast((c.name||'고객')+'님에게 보냈습니다 ('+(r.data.usedToday||0)+'/'+(r.data.limit||20)+')');
+      _wlSent[x.clientId+'|'+x.kind+'|'+x.date]=wlTodayY8();   /* 버튼을 발송 표시로 교체 */
+      wlClientChanged();
+    }else{
+      toast('발송하지 못했습니다');
+    }
+  }catch(e){
+    alert((e&&e.message)||'발송에 실패했습니다');
+  }
+  _wlCareBusy=false;
+};
+
 /* 고객 선택 → 기존 정보 자동 표시 + 누락 보완 */
 window.wlClientChanged=function(){
   const v=_sel.clientId;
@@ -3874,9 +3963,24 @@ window.wlClientChanged=function(){
   const c=(_clients||[]).find(x=>x.id===v);
   if(c&&mw){$('fMemo').value=c.memo||'';ag($('fMemo'));}
   if(!c){box.style.display='none';return;}
+  if(c.id&&!_wlSentReq[c.id]){_wlSentReq[c.id]=1;wlLoadSent(c.id);}   /* ★ [2026-09-14] 발송 이력 1회 조회 후 재렌더 */
   const P=[];
+  _wlCare=[];   /* ★ [2026-09-14] 이 고객의 발송 후보 — 버튼은 인덱스만 넘긴다 */
   if(c.birthDate&&c.birthDate.length===10){
-    P.push(`<div class="enr">🎂 생년월일 <b>${esc(c.birthDate)}</b> · 상령일 자동 관리 중</div>`);
+    const _due=wlNextDue(wlSangMmdd(c.birthDate)), _dd=_due?wlDday(_due):null;
+    let _tail='';
+    if(_due){
+      const _on=wlSentOn(c.id,'age',_due);
+      if(_on){
+        _tail=' <span class="wlSent">✅ '+wlSentTx(_on)+' 발송됨</span>';
+      }else if(_dd!=null&&_dd>=0&&_dd<=60){
+        _wlCare.push({clientId:c.id,name:c.name||'',kind:'age',date:_due,insurer:'',productName:''});
+        _tail=' '+wlCareBtn(_wlCare.length-1);
+      }
+    }
+    P.push(`<div class="enr">🎂 생년월일 <b>${esc(c.birthDate)}</b>`
+      +(_due?` · 상령일 <b>${Number(_due.slice(4,6))}월 ${Number(_due.slice(6,8))}일</b>${_dd!=null?` (D-${_dd})`:''}`:' · 상령일 자동 관리 중')
+      +_tail+`</div>`);
   }else{
     P.push(`<div class="enr miss">⚠️ 생년월일 미등록 — 알고 계시면 지금 채워두세요 (상령일 자동 관리)
       <span class="enfill"><input type="date" id="enBirth"><button type="button" class="sbtn" onclick="wlSaveBirth('${esc(c.id)}')">저장</button></span></div>`);
@@ -3884,6 +3988,21 @@ window.wlClientChanged=function(){
   const cts=c.contracts||[];
   if(cts.length){
     P.push('<div class="enr">📄 등록 계약 '+cts.length+'건 — '+cts.slice(0,3).map(t=>esc(t.productName||t.insurer||'계약')+(t.maturityDate?'('+esc(String(t.maturityDate).slice(2,7))+' 만기)':'')).join(' · ')+(cts.length>3?' 외':'')+'</div>');
+    cts.forEach(t=>{
+      const y8=String((t&&t.maturityDate)||'').replace(/-/g,'');
+      if(!/^\d{8}$/.test(y8))return;
+      const dd=wlDday(y8);
+      const on=wlSentOn(c.id,'maturity',y8);
+      if(!on&&(dd==null||dd<0||dd>60))return;
+      let tail;
+      if(on){ tail='<span class="wlSent">✅ '+wlSentTx(on)+' 발송됨</span>'; }
+      else{
+        _wlCare.push({clientId:c.id,name:c.name||'',kind:'maturity',date:y8,insurer:String(t.insurer||''),productName:String(t.productName||'')});
+        tail=wlCareBtn(_wlCare.length-1);
+      }
+      P.push('<div class="enr">📌 <b>'+esc(t.productName||t.insurer||'가입 상품')+'</b> '
+        +Number(y8.slice(4,6))+'월 '+Number(y8.slice(6,8))+'일 만기'+(dd!=null&&dd>=0?' (D-'+dd+')':'')+' '+tail+'</div>');
+    });
   }else{
     P.push('<div class="enr">📄 등록된 계약 없음 — 계약 추가는 채널의 <b>내 고객</b>에서 (만기 알림 자동 연동)</div>');
   }
