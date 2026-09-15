@@ -11824,9 +11824,9 @@ function renderMedicalWeeklyTable(){
   tbody.innerHTML=topics.map((t,i)=>{
     const c=contentMap[t.id];
     const job=_mwActiveJobs[t.id]; // ★ 진행 중인 작업
-    // ★ 제목 override 적용 + ✏️ 편집 버튼 (미생성 주제만)
+    // ★ 제목 override 적용 + ✏️ 편집 버튼 (생성 중이 아니면 언제나 수정 가능)
     const dispTitle=_mwTitleOverrides[t.id]||t.title;
-    const editBtn=(!c&&!job)?` <button onclick="mwEditTitle('${t.id}')" style="background:transparent;border:none;color:#1976D2;cursor:pointer;font-size:13px;padding:0 3px;margin-left:2px" title="제목 수정">✏️</button>`:'';
+    const editBtn=(!job)?` <button onclick="mwEditTitle('${t.id}')" style="background:transparent;border:none;color:#1976D2;cursor:pointer;font-size:13px;padding:0 3px;margin-left:2px" title="제목 수정">✏️</button>`:'';
     // 상태 표시: 생성 중 > 게시 > 대기 > 미생성 (우선순위)
     let status;
     if(job){
@@ -11916,6 +11916,15 @@ async function mwEditTitle(topicId){
       });
       _mwTitleOverrides[topicId]=trimmed;
       toast('제목 수정 완료 (드롭다운은 새로고침 후 반영)','success');
+    }
+    /* ★ 제목 변경 시에만 썸네일(contents)·게시예정(upcoming_contents) 동시 반영.
+       원본 복원(override 삭제)은 이미 발행된 콘텐츠 제목을 되돌리지 않는다. */
+    if(trimmed!==t.title){
+      try{
+        const _c=_mwContents.find(x=>x.topicId===topicId);
+        const _date=_c?.scheduledDate||t.pubDate||'';
+        if(_c||_date)await syncTitleAll({newTitle:trimmed,date:_date,category:'병의원 컨설팅',contentId:_c?.id});
+      }catch(e2){console.warn('[MW] 제목 전파 실패:',e2);}
     }
     renderMedicalWeeklyTable();
   }catch(e){
@@ -12955,6 +12964,12 @@ async function updateTopic(){
       }catch(e){console.warn('[TCW] contents 동기화 실패:',e);}
     }
 
+    /* ★ 게시예정(upcoming_contents) 동시 반영 — 수정 후 날짜 기준 */
+    try{
+      const _y=updates.year??topic.year,_w=updates.week??topic.week,_d=updates.day??topic.day;
+      if(_y&&_w&&_d)await syncTitleAll({newTitle:title,date:twWeekDate(_y,_w,_d),category:'택스컨설팅위클리'});
+    }catch(e){console.warn('[TCW] upcoming 제목 동기화 실패:',e);}
+
     toast('✅ 수정 완료','success');
     hideTcwAddTopicForm();
     await loadTaxWeeklyTopics();
@@ -13085,12 +13100,35 @@ async function _syncUpcomingCompleted(date,category,title){
     for(const d of snap.docs){
       const c=d.data();
       if(category&&c.category!==category)continue;
-      if(title&&c.title&&c.title!==title)continue;
-      if(c.completed===true)continue;
-      await updateDoc(d.ref,{completed:true,updatedAt:serverTimestamp()});
+      /* ★ 제목 완전일치 조건 제거 — 제목이 바뀐 건도 완료 처리 + 실게시 제목으로 정정 */
+      const patch={};
+      if(title&&c.title!==title)patch.title=title;
+      if(c.completed!==true)patch.completed=true;
+      if(!Object.keys(patch).length)continue;
+      patch.updatedAt=serverTimestamp();
+      await updateDoc(d.ref,patch);
     }
   }catch(e){console.warn('[upcoming sync] 실패:',e);}
 }
+
+/* ★ 제목 통합 전파 — 관리자에서 제목을 고치면 ①썸네일(contents) ②편성 원본 ③게시예정(upcoming_contents) 3곳 동시 반영.
+   date+category 로만 매칭하므로 이미 어긋난 옛 제목 행도 정정된다. */
+async function syncTitleAll({newTitle,date,category,contentId,scheduleRef}){
+  const t=(newTitle||'').trim();if(!t)return;
+  const stamp={title:t,updatedAt:serverTimestamp()};
+  if(contentId){try{await updateDoc(doc(db,'contents',contentId),stamp);}catch(e){console.warn('[syncTitleAll] contents:',e.message);}}
+  if(scheduleRef){try{await updateDoc(scheduleRef,stamp);}catch(e){console.warn('[syncTitleAll] schedule:',e.message);}}
+  if(date&&category){
+    try{
+      const snap=await getDocs(query(collection(db,'upcoming_contents'),where('date','==',date)));
+      for(const d of snap.docs){
+        if(d.data().category!==category)continue;
+        await updateDoc(d.ref,stamp);
+      }
+    }catch(e){console.warn('[syncTitleAll] upcoming:',e.message);}
+  }
+}
+window.syncTitleAll=syncTitleAll;
 
 async function saveNewTopic(andGenerate){
   const title=$('tcw-new-title').value.trim();
@@ -13475,6 +13513,11 @@ async function tcwEditTitle(topicId,currentTitle,contentId){
     if(contentId){
       try{await updateDoc(doc(db,'contents',contentId),{title:trimmed,updatedAt:serverTimestamp()});}catch(e){}
     }
+    /* ★ 게시예정(upcoming_contents) 동시 반영 */
+    try{
+      const _t=_twAll.find(x=>x.id===topicId);
+      if(_t)await syncTitleAll({newTitle:trimmed,date:twWeekDate(_t.year,_t.week,_t.day),category:'택스컨설팅위클리'});
+    }catch(e){console.warn('[TCW] upcoming 제목 동기화 실패:',e);}
     toast('✅ 제목 수정 완료','success');
     loadTaxWeeklyTopics();
   }catch(e){toast('제목 수정 실패: '+e.message,'error');}
@@ -17197,6 +17240,11 @@ async function mgEditTitle(kind,id){
     await updateDoc(doc(db,kind==='up'?'upcoming_master_guides':'master_guides',id),{title});
     // 양쪽 컬렉션에 같은 ID로 존재하면 동기화 (없으면 조용히 무시)
     try{await updateDoc(doc(db,kind==='up'?'master_guides':'upcoming_master_guides',id),{title});}catch(e2){}
+    /* ★ 게시예정(upcoming_contents) 동시 반영 */
+    try{
+      const _d=it.scheduledDate||it.publishDate||it.date||'';
+      if(_d)await syncTitleAll({newTitle:title,date:_d,category:'마스터가이드'});
+    }catch(e3){console.warn('[MG] upcoming 제목 동기화 실패:',e3);}
     toast('제목 수정 완료');loadMasterGuides();
   }catch(e){toast('제목 수정 실패: '+e.message);}
 }
@@ -17439,7 +17487,12 @@ async function mgSchedEdit(id,kind){
     const t=nt.trim();
     if(!t){toast('제목이 비어 있습니다');return;}
     if(t===(s.title||''))return;
-    try{await updateDoc(doc(db,'master_guide_schedule',id),{title:t,updatedAt:serverTimestamp()});toast('제목 수정 완료');mgLoadSchedule();}catch(e){toast('수정 실패: '+e.message);}
+    try{
+      await updateDoc(doc(db,'master_guide_schedule',id),{title:t,updatedAt:serverTimestamp()});
+      /* ★ 게시예정(upcoming_contents) 동시 반영 */
+      if(s.scheduledDate)await syncTitleAll({newTitle:t,date:s.scheduledDate,category:'마스터가이드'});
+      toast('제목 수정 완료');mgLoadSchedule();
+    }catch(e){toast('수정 실패: '+e.message);}
   }else{
     const nd=prompt('새 게시예정일 (YYYY-MM-DD):',s.scheduledDate||'');
     if(nd===null)return;
