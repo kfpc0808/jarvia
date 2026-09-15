@@ -8694,19 +8694,29 @@ function vmAddrOf(t){   /* ★ 주소 코드 추출 (2026-07-20, v2): 형태 검
   m=t.match(/([가-힣]{1,10}(?:시|군|구)\s?[가-힣0-9]{1,15}(?:로|길)\s?\d{1,4}(?:-\d{1,4})?)/);
   return m?m[1].slice(0,60):'';
 }
-function vmCompanyTitleOf(t){   /* ★ 회사·직함 코드 추출 (2026-07-20, v2): 직함을 최장 일치로 먼저 찾고 그 앞 토큰을 회사 후보로 — "대표이사"가 "대표+이사"로 절단되는 결함 수정 */
+function vmCompanyTitleOf(t){   /* ★ 회사·직함 코드 추출 (2026-07-20, v2) · ★ [2026-09-15] v3: 소개자·제3자의 직함이 고객 직함으로 저장되던 결함 수정 */
   t=String(t||'');
   const out={company:'',title:''};
-  const m=t.match(/(대표이사|부사장|본부장|지점장|센터장|팀장|실장|부장|차장|과장|대리|주임|사원|이사|상무|전무|사장|대표|원장|점장|소장|국장|교수|매니저|회계사|세무사|변호사|약사|의사)/);
-  if(!m)return out;
-  const pre=t.slice(0,m.index);
-  if(/(?:^|\s)[가-힣]$/.test(pre))return out;   /* "김대표"류 성+호칭 — 직함 아닌 사람 지칭이므로 둘 다 비움 */
-  if(m[1]==='이사'){   /* ★ 이사(移徙) 오추출 방어 (2026-07-20): "이사 준비/이사 갈/역삼동으로 이사"는 직함이 아니다 */
-    const _aft=t.slice(m.index+2);
-    if(/^\s*(?:준비|예정|계획|했|한|할|하|함|갈|간|감|가|를|왔|온|오|다니)/.test(_aft)||/(?:으로|로)\s*$/.test(pre))return out;
+  const _ref=vmReferrerOf(t);
+  const reT=/(대표이사|부사장|본부장|지점장|센터장|팀장|실장|부장|차장|과장|대리|주임|사원|이사|상무|전무|사장|대표|원장|점장|소장|국장|교수|매니저|회계사|세무사|변호사|약사|의사)/g;
+  let m,hit=null;
+  while((m=reT.exec(t))){
+    const pre=t.slice(0,m.index);
+    if(/(?:^|\s)[가-힣]$/.test(pre))continue;   /* "김대표"류 성+호칭 — 사람 지칭이므로 건너뛰고 다음 직함 탐색 */
+    if(m[1]==='이사'){   /* ★ 이사(移徙) 오추출 방어 (2026-07-20): "이사 준비/이사 갈/역삼동으로 이사"는 직함이 아니다 */
+      const _aft=t.slice(m.index+2);
+      if(/^\s*(?:준비|예정|계획|했|한|할|하|함|갈|간|감|가|를|왔|온|오|다니)/.test(_aft)||/(?:으로|로)\s*$/.test(pre))continue;
+    }
+    /* ★ [2026-09-15] 소개자·제3자 직함 배제 — 직함 뒤 12자 안에 소개·추천·통해가 오면 그 사람은 고객이 아니다 */
+    const post=t.slice(m.index+m[1].length,m.index+m[1].length+12);
+    if(/소개|추천|통해|통하/.test(post))continue;
+    const nb=(pre.match(/([가-힣]{2,4})\s*$/)||[])[1]||'';
+    if(_ref&&nb===_ref)continue;               /* 직함 앞 이름이 소개자면 그 직함도 소개자 것 */
+    hit={w:m[1],pre:pre};break;
   }
-  out.title=m[1];
-  const cm=pre.match(/([가-힣A-Za-z0-9&()㈜.]{2,20})\s*$/);
+  if(!hit)return out;
+  out.title=hit.w;
+  const cm=hit.pre.match(/([가-힣A-Za-z0-9&()㈜.]{2,20})\s*$/);
   if(cm){
     const comp=cm[1];
     const corpish=/[A-Za-z0-9㈜]|전자|기업|그룹|물산|건설|화학|제약|은행|증권|카드|캐피탈|통신|산업|상사|중공업|바이오|테크|시스템|솔루션|엔지|컨설팅|병원|의원|학원|공사|공단|주식회사|보험|금융|식품|제철|항공|해운|유통|백화점|마트/.test(comp);
