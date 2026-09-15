@@ -3859,6 +3859,79 @@ window.wlConsultPick=function(v){                       /* 탭=토글, 닫지 �
 };
 window.wlPremLive=el=>{const n=num(el.value);el.value=n==null?'':comma(n);};   /* 입력 즉시 3자리 콤마 */
 
+/* ═══ ★ [2026-09-15] 고객 상세(연락처·주소) — 회원 구글 드라이브에서 읽기 전용으로 가져온다.
+   연락처·주소는 서버에 없고 회원 드라이브의 '내고객.safe'(AES-GCM)에만 있다.
+   이 화면은 읽기만 한다 — 드라이브에도 기기 IndexedDB 에도 쓰지 않는다(fc.html 과 충돌 방지).
+   색인 키는 fccId = fc_clients 문서 ID 라 이름 대조 없이 정확히 매칭된다. ═══ */
+let _wlMcIdx=null, _wlMcState='idle', _wlMcNote='', _wlMcKeys=null, _wlMcTok=null, _wlMcTokAt=0, _wlMcAt=0, _wlMcBusy=false;
+function _wlMcMtKey(){ return 'wl_mc_mt:'+(_loginId||''); }
+
+async function _wlMcToken(){
+  if(_wlMcTok&&(Date.now()-_wlMcTokAt)<50*60000)return _wlMcTok;
+  let pin='';try{pin=localStorage.getItem('cc_pin_fc:'+_loginId)||'';}catch(_e){}
+  const tk=await httpsCallable(fns,'gdAccessToken')({slug:'fc:'+_loginId,pin:pin});
+  const td=(tk&&tk.data)||{};
+  if(!td.ok||!td.accessToken)throw new Error('no-token');
+  _wlMcTok=td.accessToken;_wlMcTokAt=Date.now();
+  return _wlMcTok;
+}
+
+/* force: 꼬리표가 같아도 다시 내려받는다 (수동 동기화·탭 복귀) */
+async function wlMcSync(force){
+  if(_wlMcBusy)return false;
+  if(!_loginId)return false;
+  if(!force&&_wlMcIdx&&(Date.now()-_wlMcAt)<60000)return false;   /* 60초 스로틀 */
+  _wlMcBusy=true;_wlMcState='load';_wlMcNote='';wlMcPaint();
+  try{
+    const T=await _wlMcToken();
+    const gapi=async pth=>{const r=await fetch('https://www.googleapis.com'+pth,{headers:{Authorization:'Bearer '+T}});if(!r.ok)throw new Error('drive-'+r.status);return r;};
+    const fr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='내고객.safe' and trashed=false")+'&fields=files(id,modifiedTime)&orderBy=modifiedTime desc&pageSize=1')).json();
+    const ff=(fr.files||[])[0];
+    if(!ff){_wlMcState='nofile';_wlMcNote='드라이브에 고객 백업이 아직 없습니다';_wlMcBusy=false;wlMcPaint();return false;}
+    let lastMt='';try{lastMt=localStorage.getItem(_wlMcMtKey())||'';}catch(_e){}
+    if(!force&&_wlMcIdx&&ff.modifiedTime===lastMt){_wlMcState='ok';_wlMcAt=Date.now();_wlMcBusy=false;wlMcPaint();return false;}
+    if(!_wlMcKeys||!_wlMcKeys.length){
+      const kr=await(await gapi('/drive/v3/files?q='+encodeURIComponent("name='vault_key.v1' and trashed=false")+'&spaces=appDataFolder&orderBy=createdTime&fields=files(id)&pageSize=25')).json();
+      const keys=[];
+      for(const f of (kr.files||[])){try{const kd=await(await gapi('/drive/v3/files/'+f.id+'?alt=media')).json();const raw=Uint8Array.from(atob(kd.k),ch=>ch.charCodeAt(0));keys.push(await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['decrypt']));}catch(_e){}}
+      if(!keys.length)throw new Error('no-key');
+      _wlMcKeys=keys;
+    }
+    const bytes=new Uint8Array(await(await gapi('/drive/v3/files/'+ff.id+'?alt=media')).arrayBuffer());
+    let plain=null;const iv=bytes.slice(0,12),ct=bytes.slice(12);
+    for(const k of _wlMcKeys){try{plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));break;}catch(_e){}}
+    if(!plain)throw new Error('decrypt');
+    const obj=JSON.parse(new TextDecoder().decode(plain));
+    const list=(obj&&obj.customers)||[];
+    const idx={};list.forEach(c=>{if(c&&c.fccId)idx[c.fccId]=c;});
+    _wlMcIdx=idx;_wlMcState=list.length?'ok':'empty';_wlMcAt=Date.now();
+    _wlMcNote=list.length?('고객 '+list.length+'명 상세'):'드라이브 백업이 비어 있습니다';
+    try{localStorage.setItem(_wlMcMtKey(),ff.modifiedTime||'');}catch(_e){}
+    _wlMcBusy=false;wlMcPaint();
+    if(_sel&&_sel.clientId&&_sel.clientId!=='__new')wlClientChanged();
+    return true;
+  }catch(e){
+    _wlMcIdx=null;_wlMcState='fail';
+    _wlMcNote=(String((e&&e.message)||'')==='no-token')?'드라이브가 연결되어 있지 않습니다':'드라이브 확인에 실패했습니다';
+    _wlMcBusy=false;wlMcPaint();
+    return false;
+  }
+}
+function wlMcGet(id){ return (_wlMcIdx&&id&&_wlMcIdx[id])||null; }
+function wlMcPaint(){
+  const el=document.getElementById('wlMcNote'); if(!el)return;
+  const c={load:'#6B7280',ok:'#0F6E56',empty:'#8B6914',nofile:'#8B6914',fail:'#B42318'}[_wlMcState]||'#6B7280';
+  const tx=_wlMcState==='load'?'회원님 구글 드라이브에서 고객 상세를 불러오는 중…':(_wlMcNote||'고객 상세 미확인');
+  el.innerHTML='<span style="color:'+c+'">☁ '+tx+'</span>'
+    +'<button type="button" onclick="wlMcSyncNow()" style="margin-left:6px;padding:2px 8px;font-size:10.5px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:6px;cursor:pointer">동기화</button>';
+}
+window.wlMcSyncNow=function(){ wlMcSync(true); };
+/* fc 탭에서 등록·수정하고 돌아오면 자동으로 다시 읽는다 */
+window.addEventListener('focus',function(){ if(_view==='vForm')wlMcSync(false); });
+window.wlGoCustNew=function(cid){
+  window.open('/fc.html?fc='+encodeURIComponent(_loginId)+'&open=cust'+(cid?('&cid='+encodeURIComponent(cid)):'')+'&from=worklog','_blank');
+};
+
 /* ═══ ★ [2026-09-14] 상령일·만기 알림톡 수동 발송
    번호는 기기 IndexedDB(내 고객)에서 읽어 요청에만 실어 보내고 서버에 저장하지 않는다.
    발송 근거는 업무일지 — 최근 24개월 기록이 있어야 서버가 발송을 허용한다. ═══ */
@@ -3898,10 +3971,14 @@ function wlDday(y8){
   const ms=Date.UTC(+y8.slice(0,4),+y8.slice(4,6)-1,+y8.slice(6,8))-Date.UTC(+t.slice(0,4),+t.slice(4,6)-1,+t.slice(6,8));
   return Math.round(ms/86400000);
 }
-function wlCareBtn(i){ return '<button type="button" class="sbtn" onclick="wlCareSend('+i+')">💬 알림톡 보내기</button>'; }
+const WL_SBTN='padding:3px 9px;font-size:11px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C9D8EE;border-radius:6px;cursor:pointer;vertical-align:1px';
+function wlCareBtn(i){ return '<button type="button" onclick="wlCareSend('+i+')" style="'+WL_SBTN+'">💬 알림톡</button>'; }
+function wlGoBtn(cid,tx){ return '<button type="button" onclick="wlGoCustNew(\''+esc(cid)+'\')" style="'+WL_SBTN+'">'+tx+' ↗</button>'; }
 
-/* 기기 '내 고객'에서 번호 찾기 — wlInfoOpen 과 같은 매칭 규칙 */
+/* 번호 찾기 — ① 드라이브 색인(fccId 정확 매칭) ② 기기 '내 고객' 이름 매칭 폴백 */
 async function wlCarePhone(c){
+  const D=wlMcGet(c.id);
+  if(D&&D.phone){const p=String(D.phone).replace(/\D/g,'');if(/^01\d{8,9}$/.test(p))return p;}
   try{
     const all=await wlMpcAll();
     const _norm=v=>String(v||'').replace(/\s+/g,'').trim();
@@ -3925,7 +4002,7 @@ window.wlCareSend=async function(i){
     return;
   }
   const md=Number(x.date.slice(4,6))+'월 '+Number(x.date.slice(6,8))+'일';
-  const kindTx=x.kind==='maturity'?'만기':'상령일';
+  const kindTx='상령일';   /* ★ [2026-09-15] 업무일지 경로는 상령일 전용 */
   if(!confirm((c.name||'고객')+'님에게 '+kindTx+' 안내를 보냅니다.\n\n기준일 '+md+'\n내용은 승인된 문구 그대로 나가며 수정할 수 없습니다.\n건당 20원이 차감됩니다.\n\n보낼까요?'))return;
 
   _wlCareBusy=true;
@@ -3966,6 +4043,17 @@ window.wlClientChanged=function(){
   if(c.id&&!_wlSentReq[c.id]){_wlSentReq[c.id]=1;wlLoadSent(c.id);}   /* ★ [2026-09-14] 발송 이력 1회 조회 후 재렌더 */
   const P=[];
   _wlCare=[];   /* ★ [2026-09-14] 이 고객의 발송 후보 — 버튼은 인덱스만 넘긴다 */
+  /* ★ [2026-09-15] 연락처·주소는 서버에 없다 — 회원 드라이브에서 읽어 보여준다(읽기 전용) */
+  P.push('<div class="enr" id="wlMcNote" style="font-size:11px;color:#6B7280"></div>');
+  const _D=wlMcGet(c.id)||{};
+  const _ph=String(_D.phone||'').replace(/\D/g,'');
+  const _ad=[_D.addr,_D.addrDetail].filter(Boolean).join(' ');
+  if(_ph||_ad){
+    P.push('<div class="enr">📞 <b>'+esc(_ph?_ph.replace(/^(\d{3})(\d{3,4})(\d{4})$/,'$1-$2-$3'):'번호 없음')+'</b>'
+      +(_ad?' · '+esc(_ad):'')+' '+wlGoBtn(c.id,'수정')+'</div>');
+  }else if(_wlMcState==='ok'||_wlMcState==='empty'){
+    P.push('<div class="enr">📞 연락처 없음 '+wlGoBtn(c.id,'내 고객에서 등록')+'</div>');
+  }
   if(c.birthDate&&c.birthDate.length===10){
     const _due=wlNextDue(wlSangMmdd(c.birthDate)), _dd=_due?wlDday(_due):null;
     let _tail='';
@@ -3994,19 +4082,17 @@ window.wlClientChanged=function(){
       const dd=wlDday(y8);
       const on=wlSentOn(c.id,'maturity',y8);
       if(!on&&(dd==null||dd<0||dd>60))return;
-      let tail;
-      if(on){ tail='<span class="wlSent">✅ '+wlSentTx(on)+' 발송됨</span>'; }
-      else{
-        _wlCare.push({clientId:c.id,name:c.name||'',kind:'maturity',date:y8,insurer:String(t.insurer||''),productName:String(t.productName||'')});
-        tail=wlCareBtn(_wlCare.length-1);
-      }
+      /* ★ [2026-09-15] 만기는 여기서 보내지 않는다 — 템플릿 고지가 "만기 알림을 요청하신 고객님께"라
+         고객이 직접 등록한 건에만 발송해야 한다. 여기서는 임박 여부와 발송 이력만 보여준다. */
+      const tail=on?'<span class="wlSent">✅ '+wlSentTx(on)+' 발송됨</span>':'';
       P.push('<div class="enr">📌 <b>'+esc(t.productName||t.insurer||'가입 상품')+'</b> '
-        +Number(y8.slice(4,6))+'월 '+Number(y8.slice(6,8))+'일 만기'+(dd!=null&&dd>=0?' (D-'+dd+')':'')+' '+tail+'</div>');
+        +Number(y8.slice(4,6))+'월 '+Number(y8.slice(6,8))+'일 만기'+(dd!=null&&dd>=0?' (D-'+dd+')':'')+(tail?' '+tail:'')+'</div>');
     });
   }else{
     P.push('<div class="enr">📄 등록된 계약 없음 — 계약 추가는 채널의 <b>내 고객</b>에서 (만기 알림 자동 연동)</div>');
   }
   box.innerHTML=P.join('');box.style.display='block';
+  try{ wlMcPaint(); if(!_wlMcIdx&&_wlMcState!=='load'&&_wlMcState!=='fail')wlMcSync(false); }catch(_e){}   /* ★ [2026-09-15] */
 };
 window.wlSaveBirth=async function(cid){
   const v=($('enBirth')?.value||'').trim();
