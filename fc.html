@@ -8530,6 +8530,10 @@ const VM_NEED_SYN={
   '법인컨설팅':['법인컨설팅','가지급금','가업승계','명의신탁','법인 컨설팅']
 };
 const VM_CUE=/관심|원하|희망|필요|고민|문의|요청|상담|알아보|궁금|준비|해달|해 달/;
+/* ★ [2026-09-15] 이름이 될 수 없는 토큰 — 소개자 추출에서 호칭·직함·일반명사 차단 */
+const VM_NOT_NAME=/(?:님|씨)$|^(?:고객|손님|지인|친구|동료|가족|본인|사람|누가|누군|모두|저희|우리|사장|대표|부장|과장|팀장|이사|실장|원장|차장|대리|소개|추천)$/;
+/* ★ [2026-09-15] 부정·기보유 표현 — 니즈 오탐 차단 */
+const VM_NEG=/없|아니|말고|제외|불필요|가입돼|가입되|가입했|가입함|들어놨|들어뒀/;
 function vmPad2(n){return (n<10?'0':'')+n;}
 function vmYmd(d){return d.getFullYear()+'-'+vmPad2(d.getMonth()+1)+'-'+vmPad2(d.getDate());}
 function vmPhoneOf(t){
@@ -8547,16 +8551,16 @@ function vmScanDates(t,base){   /* 원문에 등장한 날짜를 위치와 함�
   const reRel=/(내일모레|모레|글피|내일)/g;
   while((m=reRel.exec(t)))mk(m.index,m[0].length,add(m[1]==='내일'?1:(m[1]==='글피'?3:2)));
   const DOW=['일','월','화','수','목','금','토'];
-  const reDow=/(이번\s?주|다음\s?주|담주|차주|다다음\s?주)?\s*([일월화수목금토])요일/g;
+  const reDow=/(이번\s?주|다음\s?주|담주|차주|다다음\s?주|지난\s?주|저번\s?주|지지난\s?주)?\s*([일월화수목금토])요일/g;
   while((m=reDow.exec(t))){
     const target=DOW.indexOf(m[2]);const cur=B.getDay();
     let diff;
     if(m[1]){   /* 주 지정 — 월요일 시작 기준으로 해당 주의 그 요일 */
-      const wk=/다다음/.test(m[1])?2:(/이번/.test(m[1])?0:1);
+      const wk=/지지난/.test(m[1])?-2:(/지난|저번/.test(m[1])?-1:(/다다음/.test(m[1])?2:(/이번/.test(m[1])?0:1)));
       const monOff=-((cur+6)%7);                 /* 이번 주 월요일까지의 일수 */
       const idx=(target+6)%7;                    /* 월=0 … 일=6 */
       diff=monOff+7*wk+idx;
-      if(diff<0)diff+=7;   /* 일요일에 "이번주 금요일" = 다가오는 금요일 */
+      if(diff<0&&wk>=0)diff+=7;   /* 일요일에 "이번주 금요일" = 다가오는 금요일 · 지난주 지정은 보정하지 않는다 */
     }else{      /* 요일만 말한 경우 — 다가오는 그 요일 */
       diff=(target-cur+7)%7;if(diff===0)diff=7;
     }
@@ -8614,14 +8618,18 @@ function vmNeedsOf(t){   /* 관심 표현이 있는 구절에서만 추출 — "
   Object.keys(VM_NEED_SYN).forEach(canon=>{
     if(pool.indexOf(canon)<0)return;
     const words=[canon.toLowerCase()].concat(VM_NEED_SYN[canon]);
-    if(cLow.some(s=>words.some(w=>s.indexOf(w)>=0))&&hit.indexOf(canon)<0)hit.push(canon);
+    /* ★ [2026-09-15] 키워드 뒤 12자 안의 부정·기보유 표현이면 니즈로 보지 않는다 */
+    if(cLow.some(s=>words.some(w=>{const i=s.indexOf(w);return i>=0&&!VM_NEG.test(s.slice(i,i+12));}))&&hit.indexOf(canon)<0)hit.push(canon);
   });
-  pool.forEach(n=>{if(!VM_NEED_SYN[n]&&n&&cLow.some(s=>s.indexOf(n.toLowerCase())>=0)&&hit.indexOf(n)<0)hit.push(n);});
+  pool.forEach(n=>{if(!VM_NEED_SYN[n]&&n&&cLow.some(s=>{const i=s.indexOf(n.toLowerCase());return i>=0&&!VM_NEG.test(s.slice(i,i+12));})&&hit.indexOf(n)<0)hit.push(n);});
   return hit.slice(0,8);
 }
 function vmReferrerOf(t){
   t=String(t||'');
-  let m=t.match(/([가-힣]{2,4})\s*(?:사장님|대표님|부장님|과장님|팀장님|이사님|님)?\s*소개(?!팅|서|장)(?:로|를|해|받|(?=[\s,.·;!?]|$))/);
+  /* ★ [2026-09-15] 호칭 뒤 조사(이·가·께서) 허용 + 호칭·직함·일반명사가 이름으로 잡히는 결함 차단 */
+  let m=null,_mm;
+  const _reS=/([가-힣]{2,4})\s*(?:사장님|대표님|부장님|과장님|팀장님|이사님|본부장님|지점장님|실장님|원장님|선생님|고객님|님|씨)?\s*(?:이|가|께서|을|를)?\s*소개(?!팅|서|장)(?:로|를|해|받|시|(?=[\s,.·;!?]|$))/g;
+  while((_mm=_reS.exec(t))){ if(!VM_NOT_NAME.test(_mm[1])){m=_mm;break;} }
   if(m)return m[1];
   /* ★ 추천 어순 (2026-07-20, v2): "이규선 고객이 추천했어" · "박정민 추천으로" — 상품 접미(보험·상품 등)와 일반명사(고객·지인 등)는 이름이 아니므로 거부 */
   m=t.match(/([가-힣]{2,4})\s*(?:고객|사장님|대표님|부장님|과장님|팀장님|이사님|님|씨)?\s*(?:이|가|께서)\s*추천/)||t.match(/([가-힣]{2,4})\s*(?:고객|님|씨)?\s*추천으로/);
