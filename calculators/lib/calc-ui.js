@@ -12,10 +12,11 @@
 
   // ── 포맷 ──
   function num(v) {
-    const s = String(v == null ? '' : v).replace(/[^0-9.-]/g, '');
-    if (s === '' || s === '-' || s === '.') return null;   // 빈 칸은 0이 아니라 '미입력'
+    // 금액·인원·나이·비율은 모두 0 이상이므로 음수 기호는 입력 단계에서 제거한다
+    const s = String(v == null ? '' : v).replace(/[^0-9.]/g, '');
+    if (s === '' || s === '.') return null;   // 빈 칸은 0이 아니라 '미입력'
     const n = Number(s);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) && n >= 0 ? n : null;
   }
   function comma(n) { return (Math.round(n) || 0).toLocaleString('ko-KR'); }
 
@@ -44,6 +45,7 @@
     age: v => (Math.round(Number(v) * 10) / 10) + '세',
     year1: v => (Math.round(Number(v) * 10) / 10) + '년',
     month: v => comma(v) + '개월',
+    yn: v => (v === true || v === 'true' ? '해당' : v === false || v === 'false' ? '해당 없음' : String(v)),
     rate: v => (Math.round(Number(v) * 1000) / 10) + '%',
     won만: v => comma(Math.round(Number(v) / 10000)) + '만원',
     text: v => String(v)
@@ -135,13 +137,19 @@
       : d[row.k];
   }
 
+  // 엔진이 코드값을 돌려주는 항목은 spec의 map으로 한글 치환
+  function show(row, v) {
+    if (row.map && Object.prototype.hasOwnProperty.call(row.map, String(v))) return esc(row.map[String(v)]);
+    return esc(fmt(row.fmt, v));
+  }
+
   function resultHtml(r) {
     const o = SPEC.outputs, d = r.result || {};
     let h = '';
 
     const mv = pickVal(d, o.main);
     h += '<div class="res-main"><div class="lb">' + esc(o.main.label) + '</div>' +
-      '<div class="vl">' + fmt(o.main.fmt, mv) + '</div>' +
+      '<div class="vl">' + show(o.main, mv) + '</div>' +
       (o.main.fmt === 'won' ? '<div class="ko">' + korMoney(mv) + '</div>' : '') + '</div>';
 
     if (o.sub && o.sub.length) {
@@ -149,7 +157,7 @@
         const v = pickVal(d, s);
         let cls = '';
         if (s.sign) cls = Number(v) > 0 ? ' pos' : Number(v) < 0 ? ' neg' : '';
-        return '<div><div class="lb">' + esc(s.label) + '</div><div class="vl' + cls + '">' + fmt(s.fmt, v) + '</div></div>';
+        return '<div><div class="lb">' + esc(s.label) + '</div><div class="vl' + cls + '">' + show(s, v) + '</div></div>';
       }).join('') + '</div>';
     }
 
@@ -157,7 +165,7 @@
       const body = o.rows.map(row => {
         const v = pickVal(d, row);
         if (v === undefined || v === null || v === '') return '';
-        return '<tr' + (row.sum ? ' class="sum"' : '') + '><th>' + esc(row.label) + '</th><td>' + fmt(row.fmt || 'won', v) + '</td></tr>';
+        return '<tr' + (row.sum ? ' class="sum"' : '') + '><th>' + esc(row.label) + '</th><td>' + show({ fmt: row.fmt || 'won', map: row.map }, v) + '</td></tr>';
       }).join('');
       if (body) h += '<table class="rows">' + body + '</table>';
     }
