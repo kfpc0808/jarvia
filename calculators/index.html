@@ -710,6 +710,13 @@
 
     .sug { box-shadow: 0 12px 28px rgba(23, 43, 77, .14); }
 
+    .who {
+      background: var(--brand-tint); border: 1px solid var(--brand);
+      border-radius: 10px; padding: 12px 15px; margin-bottom: var(--spacing-md);
+      font-size: 13.5px; color: var(--brand);
+    }
+    .who b { color: var(--navy); }
+
     .nores .btn-ask { background: var(--brand-tint); }
     .nores .btn-ask:hover { background: var(--brand); color: #fff; }
 
@@ -807,6 +814,7 @@
         <b>JARVIA</b><span>Just A Rather Very Intelligent Advisor</span>
       </a>
       <div class="tb-act">
+        <a class="tb-btn" href="./guide.html">이용가이드</a>
         <button type="button" class="tb-btn" onclick="document.getElementById('suggestModal').classList.add('active')">계산기 제안</button>
         <button type="button" class="tb-btn gold" onclick="window.location.href=window.location.origin">메인으로</button>
       </div>
@@ -880,13 +888,16 @@
       <button class="modal-close" id="closeSuggest">&times;</button>
       <h2>계산기 제안하기</h2>
       <form id="suggestForm">
-        <div class="form-group">
-          <label for="userName">성명 <span style="color: var(--brand);">*</span></label>
-          <input type="text" id="userName" required />
-        </div>
-        <div class="form-group">
-          <label for="userContact">연락처 <small>(선택)</small></label>
-          <input type="tel" id="userContact" placeholder="010-1234-5678" inputmode="numeric" pattern="[0-9-]*" />
+        <div class="who" id="suggestWho" style="display:none"></div>
+        <div id="guestFields">
+          <div class="form-group">
+            <label for="userName">성명 <span style="color: var(--brand);">*</span></label>
+            <input type="text" id="userName" />
+          </div>
+          <div class="form-group">
+            <label for="userContact">연락처 <small>(선택)</small></label>
+            <input type="tel" id="userContact" placeholder="010-1234-5678" inputmode="numeric" pattern="[0-9-]*" />
+          </div>
         </div>
         <div class="form-group">
           <label for="suggestionTitle">제목 <span style="color: var(--brand);">*</span></label>
@@ -1418,6 +1429,7 @@
         const hash = _0x3b7c(userId);
         
         let loginSuccess = false;
+        let loginUserName = '';
         
         // 1. Firebase의 userIds 컬렉션에서 확인
         try {
@@ -1435,6 +1447,7 @@
             if (expiryDate >= today) {
               // 유효기간이 남아있으면 로그인 성공
               loginSuccess = true;
+              loginUserName = userData.name || userData.userName || '';
             } else {
               // 유효기간 만료
               document.getElementById('loginError').textContent = '유효기간이 만료된 ID입니다.';
@@ -1458,6 +1471,7 @@
         if (loginSuccess) {
           sessionStorage.setItem('userAuth', 'true');
           sessionStorage.setItem('calcUserId', userId);
+          if (loginUserName) sessionStorage.setItem('calcUserName', loginUserName);
           
           document.getElementById('loginModal').classList.remove('active');
           
@@ -1557,7 +1571,24 @@
         const adminModal = document.getElementById('adminModal');
         const closeAdmin = document.getElementById('closeAdmin');
 
+        // 제안 모달 — 로그인 회원이면 성명·연락처 입력 생략
+        function prepSuggestModal() {
+          const id = sessionStorage.getItem('calcUserId') || '';
+          const nm = sessionStorage.getItem('calcUserName') || '';
+          const who = document.getElementById('suggestWho');
+          const gf = document.getElementById('guestFields');
+          if (!who || !gf) return;
+          if (id) {
+            who.innerHTML = '<b>' + (nm || id) + '</b> 님으로 접수됩니다. 연락처는 회원 정보에서 확인합니다.';
+            who.style.display = 'block'; gf.style.display = 'none';
+          } else {
+            who.style.display = 'none'; gf.style.display = 'block';
+          }
+        }
+        document.querySelectorAll('[onclick*="suggestModal"]').forEach(b => b.addEventListener('click', prepSuggestModal));
+
         if(suggestBtn) suggestBtn.addEventListener('click', () => {
+          prepSuggestModal();
           suggestModal.classList.add('active');
         });
 
@@ -1607,7 +1638,7 @@
 
         // 폰 번호 입력 검증
         const contactInput = document.getElementById('userContact');
-        contactInput.addEventListener('input', (e) => {
+        if (contactInput) contactInput.addEventListener('input', (e) => {
           // 숫자와 - 만 허용
           e.target.value = e.target.value.replace(/[^0-9-]/g, '');
         });
@@ -1622,15 +1653,34 @@
           submitBtn.textContent = '전송 중...';
 
           try {
-            const { collection, addDoc } = window.firestoreImports;
-            
-            await addDoc(collection(window.db, 'suggestions'), {
-              name: document.getElementById('userName').value,
-              contact: document.getElementById('userContact').value || '',
-              title: document.getElementById('suggestionTitle').value,
-              content: document.getElementById('suggestionContent').value,
-              createdAt: new Date().toISOString()
-            });
+            const { collection, addDoc, serverTimestamp } = window.firestoreImports;
+
+            const calcUserId = sessionStorage.getItem('calcUserId') || '';
+            const calcUserName = sessionStorage.getItem('calcUserName') || '';
+            const isMember = !!calcUserId;
+
+            const guestName = (document.getElementById('userName').value || '').trim();
+            const guestPhone = (document.getElementById('userContact').value || '').trim();
+            if (!isMember && !guestName) {
+              alert('성명을 입력해 주세요.');
+              submitBtn.disabled = false; submitBtn.textContent = '제출';
+              return;
+            }
+
+            const pid = 'calc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            const payload = {
+              proposalId: pid,
+              source: 'calculator',
+              status: 'new',
+              title: document.getElementById('suggestionTitle').value.trim(),
+              body: document.getElementById('suggestionContent').value.trim(),
+              userId: isMember ? calcUserId : 'guest',
+              userNameSnapshot: isMember ? (calcUserName || calcUserId) : guestName,
+              createdAt: serverTimestamp()
+            };
+            if (!isMember) { payload.guestName = guestName; payload.guestPhone = guestPhone; }
+
+            await addDoc(collection(window.db, 'partner_proposals'), payload);
 
             suggestForm.reset();
             suggestModal.classList.remove('active');
