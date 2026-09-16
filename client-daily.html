@@ -287,6 +287,24 @@ body{
 /* ★ 한 행 가로 스크롤 (2026-07-16): 2×3 그리드 → flex */
 .market-grid{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .market-grid::-webkit-scrollbar{display:none}
+/* ★ PC 좌우 스크롤 내비 (2026-09-16) — 모바일은 기존 스와이프 그대로, 화살표 미표시 */
+.market-scroll{position:relative}
+.ms-fade{position:absolute;top:0;bottom:0;width:44px;pointer-events:none;display:none;opacity:1;transition:opacity .2s;z-index:2}
+.ms-fade-l{left:0;background:linear-gradient(90deg,var(--bg-card) 10%,rgba(255,255,255,0))}
+.ms-fade-r{right:0;background:linear-gradient(270deg,var(--bg-card) 10%,rgba(255,255,255,0))}
+.ms-arrow{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:34px;padding:0;border-radius:50%;
+  border:1px solid var(--border);background:var(--bg-card);color:var(--ink-mid);
+  font-size:19px;font-weight:700;line-height:1;cursor:pointer;display:none;
+  align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12);
+  transition:opacity .2s,background .2s;z-index:3}
+.ms-arrow:hover{background:var(--bg-warm)}
+.ms-prev{left:6px}
+.ms-next{right:6px}
+.ms-arrow.off,.ms-fade.off{opacity:0;pointer-events:none}
+@media(hover:hover) and (pointer:fine){
+  .market-scroll.scrollable .ms-arrow{display:flex}
+  .market-scroll.scrollable .ms-fade{display:block}
+}
 .market-item{flex:0 0 auto;min-width:138px;padding:16px 18px;border-right:1px solid var(--border-lt);position:relative;transition:background .2s}
 .market-item:hover{background:var(--bg-warm)}
 .market-item:last-child{border-right:none}
@@ -2848,6 +2866,7 @@ function renderSections(){
     const _ip=document.getElementById('insightP'),_ib=document.getElementById('insightToggleBtn');
     if(_ip&&_ib&&_ip.scrollHeight<=_ip.clientHeight+2)_ib.style.display='none';
   }catch(e){}
+  try{initMarketScroll();}catch(e){console.warn('[지표] 좌우 스크롤 초기화 실패',e);}   /* ★ [2026-09-16] PC 화살표 내비 */
 }
 
 // ★ 한 줄 해석 펼치기/접기 (2026-07-16) — module scope이므로 window 등록
@@ -3130,10 +3149,38 @@ function renderIndicators(d){
 
   return `<div class="wrap">
     <div class="sec-divider"><div class="sec-num">1</div><div class="sec-divider-text">오늘의 경제 흐름</div></div>
-    <div class="market-strip"><div class="market-grid">${grid}</div>
+    <div class="market-strip"><div class="market-scroll"><div class="market-grid">${grid}</div><div class="ms-fade ms-fade-l"></div><div class="ms-fade ms-fade-r"></div><button type="button" class="ms-arrow ms-prev" aria-label="이전 지표 보기">&lsaquo;</button><button type="button" class="ms-arrow ms-next" aria-label="다음 지표 보기">&rsaquo;</button></div>
     <div class="market-note">${esc(d.date||'')} 기준 · 한국은행 ECOS</div></div>
     ${insight}
   </div>`;
+}
+
+/* ★ 경제지표 좌우 스크롤 (2026-09-16) — PC: 화살표 클릭 이동 / 모바일: 기존 스와이프 유지 */
+function initMarketScroll(){
+  const sc=document.querySelector('#sectionsContainer .market-scroll');
+  if(!sc)return;
+  const grid=sc.querySelector('.market-grid');
+  const prev=sc.querySelector('.ms-prev'), next=sc.querySelector('.ms-next');
+  const fl=sc.querySelector('.ms-fade-l'), fr=sc.querySelector('.ms-fade-r');
+  if(!grid||!prev||!next)return;
+  const step=()=>{const it=grid.querySelector('.market-item');return it?it.offsetWidth:160;};
+  const sync=()=>{
+    const max=grid.scrollWidth-grid.clientWidth;
+    sc.classList.toggle('scrollable',max>4);
+    const atL=grid.scrollLeft<=1, atR=grid.scrollLeft>=max-1;
+    prev.classList.toggle('off',atL); next.classList.toggle('off',atR);
+    if(fl)fl.classList.toggle('off',atL);
+    if(fr)fr.classList.toggle('off',atR);
+  };
+  prev.onclick=()=>grid.scrollBy({left:-step(),behavior:'smooth'});
+  next.onclick=()=>grid.scrollBy({left:step(),behavior:'smooth'});
+  grid.addEventListener('scroll',sync,{passive:true});
+  window._msSync=sync;   /* 재렌더 시 최신 sync만 교체 — resize 리스너는 1회만 등록 */
+  if(!window._msResizeBound){
+    window.addEventListener('resize',()=>{try{window._msSync&&window._msSync();}catch(e){}});
+    window._msResizeBound=1;
+  }
+  sync(); setTimeout(sync,300);   /* 웹폰트 로드 후 폭 재계산 */
 }
 
 /* ═══ ★ 모닝 컨센서스 (2026-08 신설 → 2026-08-10 분리 구조: 클릭 로드) ═══
