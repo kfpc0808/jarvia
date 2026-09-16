@@ -42,6 +42,8 @@
     cnt: v => comma(v) + '명',
     year: v => v + '년',
     age: v => (Math.round(Number(v) * 10) / 10) + '세',
+    year1: v => (Math.round(Number(v) * 10) / 10) + '년',
+    month: v => comma(v) + '개월',
     rate: v => (Math.round(Number(v) * 1000) / 10) + '%',
     won만: v => comma(Math.round(Number(v) / 10000)) + '만원',
     text: v => String(v)
@@ -152,11 +154,12 @@
     }
 
     if (o.rows && o.rows.length) {
-      h += '<table class="rows">' + o.rows.map(row => {
+      const body = o.rows.map(row => {
         const v = pickVal(d, row);
         if (v === undefined || v === null || v === '') return '';
         return '<tr' + (row.sum ? ' class="sum"' : '') + '><th>' + esc(row.label) + '</th><td>' + fmt(row.fmt || 'won', v) + '</td></tr>';
-      }).join('') + '</table>';
+      }).join('');
+      if (body) h += '<table class="rows">' + body + '</table>';
     }
 
     const w = [].concat(r.warnings || [], d.warnings || []);
