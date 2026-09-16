@@ -9398,10 +9398,10 @@ async function zsNotifyApply(appId,btn){
   finally{btn.disabled=false;btn.textContent=_o;}
 }
 /* ★ [2026-09-16] 회원 활용교육 모집 안내 — 미리보기 후에만 발송 버튼이 열린다. 일정은 서버가 settings/zoom_seminar 에서 읽어 조립 */
-let _zsNoticeMonth='';
+let _zsNoticeMonth='',_zsNoticeRemain=null;
 async function zsNoticePreview(){
   const msg=$('zs-notice-msg'),pre=$('zs-notice-preview'),btn=$('zs-notice-send');
-  _zsNoticeMonth='';btn.disabled=true;btn.style.opacity='.5';
+  _zsNoticeMonth='';_zsNoticeRemain=null;btn.disabled=true;btn.style.opacity='.5';
   if(msg){msg.textContent='확인 중…';msg.style.color='#666';}
   try{
     const r=(await httpsCallable(functions,'seminarNoticeSend',{timeout:120000})({preview:true})).data;
@@ -9410,9 +9410,11 @@ async function zsNoticePreview(){
       if(msg){msg.textContent='❌ seminar_notice 템플릿 ID 미등록 — 카카오알림설정에서 먼저 입력하세요';msg.style.color='var(--danger)';}
       return;
     }
-    _zsNoticeMonth=r.monthKey||'';
+    _zsNoticeMonth=r.monthKey||'';_zsNoticeRemain=r.remain;
     btn.disabled=false;btn.style.opacity='1';
-    if(msg){msg.textContent=`대상 ${r.targetCount||0}명 · ${r.monthKey||''} 일정 기준 (수신거부 회원은 발송 시 자동 제외)`;msg.style.color='#238636';}
+    /* ★ [2026-09-16] 종료된 회차는 본문에서 자동 제외되므로 몇 회차가 나가는지 관리자에게 표시 */
+    const done=(r.doneNos||[]).length?` (${(r.doneNos||[]).map(n=>n+'주차').join('·')} 종료 — 본문에서 제외)`:'';
+    if(msg){msg.textContent=`대상 ${r.targetCount||0}명 · ${r.monthKey||''} 일정 기준 · 남은 회차 ${r.remain}/${r.total}${done}`;msg.style.color='#238636';}
   }catch(e){
     pre.style.display='none';
     if(msg){msg.textContent='❌ '+(e.message||'미리보기 실패');msg.style.color='var(--danger)';}
@@ -9420,14 +9422,14 @@ async function zsNoticePreview(){
 }
 async function zsNoticeSend(){
   if(!_zsNoticeMonth)return toast('먼저 미리보기를 실행하세요','warning');
-  if(!confirm(`${_zsNoticeMonth} 활용교육 모집 안내를 전체 회원에게 발송합니다.\n\n되돌릴 수 없습니다. 진행하시겠습니까?`))return;
+  if(!confirm(`${_zsNoticeMonth} 활용교육 모집 안내를 전체 회원에게 발송합니다.\n남은 ${_zsNoticeRemain}개 회차만 본문에 들어갑니다.\n\n되돌릴 수 없습니다. 진행하시겠습니까?`))return;
   const btn=$('zs-notice-send'),msg=$('zs-notice-msg'),_o=btn.textContent;
   btn.disabled=true;btn.textContent='발송 중…';
   try{
-    const r=(await httpsCallable(functions,'seminarNoticeSend',{timeout:540000})({confirmMonth:_zsNoticeMonth})).data;
-    if(msg){msg.textContent=`✅ 발송 완료 — 대상 ${r.totalCount||0}명 / 성공 ${r.successCount||0} / 실패 ${r.failCount||0} / 문자대체 ${r.fallbackCount||0} / 수신거부 제외 ${r.skippedCount||0}`;msg.style.color='#238636';}
+    const r=(await httpsCallable(functions,'seminarNoticeSend',{timeout:540000})({confirmMonth:_zsNoticeMonth,confirmRemain:_zsNoticeRemain})).data;
+    if(msg){msg.textContent=`✅ 발송 완료 (남은 회차 ${r.remain}/${r.total}) — 대상 ${r.totalCount||0}명 / 성공 ${r.successCount||0} / 실패 ${r.failCount||0} / 문자대체 ${r.fallbackCount||0} / 수신거부 제외 ${r.skippedCount||0}`;msg.style.color='#238636';}
     toast('모집 안내 발송 완료','success');
-    _zsNoticeMonth='';btn.style.opacity='.5';
+    _zsNoticeMonth='';_zsNoticeRemain=null;btn.style.opacity='.5';
   }catch(e){
     if(msg){msg.textContent='❌ '+(e.message||'발송 실패');msg.style.color='var(--danger)';}
     toast('발송 실패: '+(e.message||''),'error');
