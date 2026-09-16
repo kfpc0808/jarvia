@@ -55,6 +55,7 @@
     age: v => (Math.round(Number(v) * 10) / 10) + '세',
     year1: v => (Math.round(Number(v) * 10) / 10) + '년',
     month: v => comma(v) + '개월',
+    cases: v => comma(v) + '건',
     yn: v => (v === true || v === 'true' ? '해당' : v === false || v === 'false' ? '해당 없음' : String(v)),
     rate: v => (Math.round(Number(v) * 1000) / 10) + '%',
     won만: v => comma(Math.round(Number(v) / 10000)) + '만원',
@@ -75,7 +76,9 @@
     const req = f.required ? '<span class="req">*</span>' : '';
     const hint = f.hint ? '<span class="hint">' + esc(f.hint) + '</span>' : '';
     let input;
-    if (f.type === 'date') {
+    if (f.type === 'text') {
+      input = '<input type="text" data-k="' + f.k + '" value="' + esc(f.def || '') + '" placeholder="' + esc(f.ph || '') + '">';
+    } else if (f.type === 'date') {
       input = '<input type="date" data-k="' + f.k + '"' + (f.def ? ' value="' + esc(f.def) + '"' : '') + '>';
     } else if (f.type === 'select') {
       input = '<select data-k="' + f.k + '">' +
@@ -109,7 +112,7 @@
     allFields().forEach(f => {
       const el = ROOT.querySelector('[data-k="' + f.k + '"]');
       if (!el) return;
-      if (f.type === 'date') {
+      if (f.type === 'date' || f.type === 'text') {
         if (el.value) out[f.k] = el.value;
         return;
       }
@@ -132,6 +135,22 @@
       }
     });
     if (SPEC.fixed) Object.assign(out, SPEC.fixed);
+
+    // 반복 입력(목표·계좌 등)을 배열로 묶는다
+    (SPEC.arrays || []).forEach(spec => {
+      const list = [];
+      for (let i = 1; i <= spec.count; i++) {
+        const item = {};
+        let hasValue = false;
+        Object.entries(spec.map).forEach(([target, prefix]) => {
+          const v = out[prefix + i];
+          if (v !== undefined && v !== null && v !== '') { item[target] = v; if (typeof v === 'number' && v > 0) hasValue = true; }
+          delete out[prefix + i];
+        });
+        if (hasValue) list.push(item);
+      }
+      if (list.length) out[spec.key] = list;
+    });
     return out;
   }
 
@@ -232,7 +251,12 @@
     }
     const input = collect();
     const need = allFields().filter(f => f.required);
-    const empty = need.filter(f => input[f.k] === undefined || input[f.k] === null || input[f.k] === '' || (f.type !== 'date' && input[f.k] === 0));
+    const empty = need.filter(f => {
+      const key = f.arrayOf || f.k;
+      const v = input[key];
+      if (Array.isArray(v)) return v.length === 0;
+      return v === undefined || v === null || v === '' || (f.type !== 'date' && f.type !== 'text' && v === 0);
+    });
     ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
     if (empty.length) {
       empty.forEach(f => {
@@ -278,7 +302,7 @@
 
     const auto = debounce(() => { syncKo(); run(); }, 260);
 
-    ROOT.querySelectorAll('input[data-k]:not([type="date"])').forEach(el => {
+    ROOT.querySelectorAll('input.num[data-k]').forEach(el => {
       el.addEventListener('input', () => {
         const p = el.selectionStart, before = el.value.length;
         el.value = commaInput(el.value);
@@ -288,7 +312,8 @@
       });
     });
     ROOT.querySelectorAll('select[data-k]').forEach(el => el.addEventListener('change', auto));
-    ROOT.querySelectorAll('input[type="date"][data-k]').forEach(el => el.addEventListener('change', auto));
+    ROOT.querySelectorAll('input[type="date"][data-k], input[type="text"][data-k]').forEach(el => el.addEventListener('change', auto));
+    ROOT.querySelectorAll('input[type="text"][data-k]').forEach(el => el.addEventListener('input', auto));
 
     ROOT.querySelectorAll('.quick button').forEach(b => b.addEventListener('click', () => {
       const el = ROOT.querySelector('input[data-k="' + b.dataset.k + '"]');
@@ -309,7 +334,7 @@
         const el = ROOT.querySelector('[data-k="' + f.k + '"]');
         if (!el) return;
         if (f.type === 'select') el.value = f.def || f.options[0].v;
-        else if (f.type === 'date') el.value = f.def || '';
+        else if (f.type === 'date' || f.type === 'text') el.value = f.def || '';
         else el.value = (f.def !== undefined && f.def !== null) ? commaInput(f.def) : '';
       });
       ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));

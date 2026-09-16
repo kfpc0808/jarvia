@@ -891,6 +891,105 @@ corpKeymanNeed: {
           { k: 'requiredCoverageGap', label: '부족액' }
         ]
       }
+    },
+
+/* ══════════ 법인 · 상담 도구 3종 ══════════ */
+
+    shareBuyoutNeed: {
+      id: 'shareBuyoutNeed', bundle: 'corporate', icon: '🤲',
+      title: '지분 매입자금계산기',
+      lead: '공동대표나 주주의 지분을 사들일 때 필요한 자금 규모를 계산합니다.',
+      note: '회사가치와 지분율을 곱한 단순 추정입니다. 실제 매입가액은 비상장주식 평가액과 당사자 합의에 따라 달라지며, 매입 주체와 방식에 따라 세부담이 크게 달라집니다.',
+      groups: [{ label: '지분 매입', fields: [
+        { k: 'companyValue', label: '회사 전체 가치', hint: '비상장주식 평가액 기준', unit: '원', type: 'money', required: true, ph: '예) 5,000,000,000', quick: [100000000, 1000000000] },
+        { k: 'shareRatio', label: '매입할 지분율', unit: '%', type: 'num', required: true, def: 30, scale: 0.01 },
+        { k: 'existingFunding', label: '이미 준비된 자금', unit: '원', type: 'money', def: 0, ph: '예) 200,000,000' }
+      ]}],
+      outputs: {
+        main: { k: 'fundingGap', label: '추가로 필요한 자금', fmt: 'won' },
+        sub: [
+          { k: 'grossNeed', label: '총 매입자금', fmt: 'won' },
+          { k: 'existingFunding', label: '준비된 자금', fmt: 'won' }
+        ],
+        rows: [
+          { k: 'grossNeed', label: '지분 매입가액' },
+          { k: 'existingFunding', label: '준비된 자금' },
+          { k: 'fundingGap', label: '부족액', sum: true }
+        ]
+      }
+    },
+
+successionFundingNeed: {
+      id: 'successionFundingNeed', bundle: 'corporate', icon: '🏛️',
+      title: '승계 재원계산기',
+      lead: '회사를 물려줄 때 필요한 세금과 운영자금을 합쳐 얼마를 준비해야 하는지 계산합니다.',
+      note: '상속·증여세와 승계 과정의 유동성 소요를 합산한 추정치입니다. 세액은 가업승계 계산기나 상속세계산기 결과를 넣으시면 정확합니다.',
+      groups: [{ label: '승계 규모', fields: [
+        { k: 'shareValue', label: '주식 평가액', unit: '원', type: 'money', required: true, ph: '예) 3,000,000,000', quick: [100000000, 1000000000] },
+        { k: 'estimatedTax', label: '예상 상속·증여세', hint: '가업승계계산기 결과', unit: '원', type: 'money', def: 0, ph: '예) 800,000,000' },
+        { k: 'liquidityNeed', label: '승계 운영자금', unit: '원', type: 'money', def: 0, ph: '예) 200,000,000' },
+        { k: 'existingFunding', label: '이미 준비된 재원', unit: '원', type: 'money', def: 0 }
+      ]}],
+      outputs: {
+        main: { k: 'fundingGap', label: '추가로 필요한 재원', fmt: 'won' },
+        sub: [
+          { k: 'totalNeed', label: '총 필요재원', fmt: 'won' },
+          { k: 'existingFunding', label: '준비된 재원', fmt: 'won' }
+        ],
+        rows: [
+          { k: 'shareValue', label: '주식 평가액' },
+          { k: 'estimatedTax', label: '예상 세액' },
+          { k: 'liquidityNeed', label: '운영자금' },
+          { k: 'totalNeed', label: '총 필요재원', sum: true },
+          { k: 'existingFunding', label: '준비된 재원' }
+        ]
+      }
+    },
+
+policyFundEligibility: {
+      id: 'policyFundEligibility', bundle: 'corporate', icon: '🏦',
+      title: '정책자금 자격진단계산기',
+      lead: '업종·매출·업력으로 신청 가능한 정책자금을 한 번에 찾아줍니다.',
+      note: '중소기업 기준과 업종별 매출 한도로 판정한 사전 진단입니다. 실제 신청 자격은 신용등급·부채비율·기존 지원이력 등에 따라 달라지므로 각 기관 확인이 필요합니다.',
+      fixed: { currentYear: 2026 },
+      groups: [{ label: '기업 정보', fields: [
+        { k: 'industryCode', label: '업종', type: 'select', def: '25',
+          options: [
+            { v: '25', t: '제조업 (금속가공)' }, { v: '10', t: '제조업 (식품)' }, { v: '20', t: '제조업 (화학)' },
+            { v: '26', t: '제조업 (전자·반도체)' }, { v: '28', t: '제조업 (전기장비)' }, { v: '29', t: '제조업 (기계)' },
+            { v: '41', t: '건설업' }, { v: '46', t: '도매업' }, { v: '47', t: '소매업' },
+            { v: '49', t: '운수·창고업' }, { v: '55', t: '숙박업' }, { v: '56', t: '음식점업' },
+            { v: '58', t: '출판업' }, { v: '62', t: '정보서비스·소프트웨어' }, { v: '63', t: '정보서비스' },
+            { v: '70', t: '연구개발업' }, { v: '71', t: '전문서비스업' }, { v: '73', t: '기타 전문·과학기술' },
+            { v: '86', t: '보건업' }, { v: '96', t: '기타 개인서비스업' }
+          ] },
+        { k: 'revenue', label: '연간 매출액', unit: '원', type: 'money', required: true, ph: '예) 5,000,000,000', quick: [100000000, 1000000000] },
+        { k: 'employees', label: '상시근로자 수', unit: '명', type: 'num', required: true, def: 20 },
+        { k: 'foundedYear', label: '설립 연도', unit: '년', type: 'num', def: 2018 },
+        { k: 'totalAssets', label: '자산총계', unit: '원', type: 'money', def: 0, ph: '예) 3,000,000,000' },
+        { k: 'ceoAge', label: '대표 나이', unit: '세', type: 'num', def: 45 },
+        { k: 'exportAmount', label: '연간 수출액', unit: '원', type: 'money', def: 0 },
+        { k: 'isCapitalArea', label: '수도권 여부', type: 'select', cast: 'bool', def: 'false',
+          options: [{ v: 'false', t: '수도권 밖' }, { v: 'true', t: '수도권' }] },
+        { k: 'isVenture', label: '벤처기업 여부', type: 'select', cast: 'bool', def: 'false',
+          options: [{ v: 'false', t: '일반기업' }, { v: 'true', t: '벤처기업' }] }
+      ]}],
+      outputs: {
+        main: { k: 'totalOptions', label: '신청 가능한 정책자금', fmt: 'cases' },
+        sub: [
+          { path: 'classification.isSME', label: '중소기업 해당', fmt: 'yn' },
+          { path: 'classification.companyAge', label: '업력', fmt: 'year' }
+        ],
+        rows: [
+          { path: 'eligibleFunds.0.name', label: '1', fmt: 'text' },
+          { path: 'eligibleFunds.1.name', label: '2', fmt: 'text' },
+          { path: 'eligibleFunds.2.name', label: '3', fmt: 'text' },
+          { path: 'eligibleFunds.3.name', label: '4', fmt: 'text' },
+          { path: 'eligibleFunds.4.name', label: '5', fmt: 'text' },
+          { path: 'eligibleFunds.5.name', label: '6', fmt: 'text' },
+          { path: 'classification.isSmallBiz', label: '소기업 해당', fmt: 'yn', sum: true }
+        ]
+      }
     }
   };
 

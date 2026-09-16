@@ -788,6 +788,187 @@ medicalExpenseExposure: {
           { k: 'cumulativeBenefit', label: '누적 보장 효과', sum: true }
         ]
       }
+    },
+
+/* ══════════ 개인 · 상담 도구 5종 ══════════ */
+
+    emergencyFundAdequacy: {
+      id: 'emergencyFundAdequacy', bundle: 'personal', icon: '🧯',
+      title: '비상자금 진단계산기',
+      lead: '갑자기 소득이 끊겼을 때 몇 개월을 버틸 수 있는지 진단합니다.',
+      note: '즉시 현금화 가능한 자산에서 단기부채를 뺀 순유동자산 기준입니다. 권장 보유량은 일반적으로 3~6개월치이며, 소득이 불규칙하면 더 길게 잡습니다.',
+      groups: [{ label: '생활비와 자금', fields: [
+        { k: 'monthlyEssentialExpense', label: '월 필수 생활비', hint: '없으면 안 되는 지출만', unit: '원', type: 'money', required: true, ph: '예) 3,000,000', quick: [500000] },
+        { k: 'desiredMonths', label: '목표 보유 기간', unit: '개월', type: 'num', def: 6 },
+        { k: 'cash', label: '현금·수시입출금', unit: '원', type: 'money', def: 0, ph: '예) 20,000,000' },
+        { k: 'shortTermDeposit', label: '단기 예적금', unit: '원', type: 'money', def: 0 },
+        { k: 'otherLiquidAssets', label: '기타 즉시 현금화 자산', unit: '원', type: 'money', def: 0 },
+        { k: 'shortTermLiabilities', label: '단기 부채', hint: '1년 내 상환', unit: '원', type: 'money', def: 0 }
+      ]}],
+      outputs: {
+        main: { k: 'gap', label: '부족한 비상자금', fmt: 'won' },
+        sub: [
+          { k: 'adequacyRate', label: '목표 대비 충족률', fmt: 'rate' },
+          { k: 'netLiquidAssets', label: '순유동자산', fmt: 'won' }
+        ],
+        rows: [
+          { k: 'requiredFund', label: '필요 비상자금' },
+          { k: 'liquidAssets', label: '유동자산 합계' },
+          { k: 'netLiquidAssets', label: '단기부채 차감 후', sum: true }
+        ]
+      }
+    },
+
+goalFundingPlan: {
+      id: 'goalFundingPlan', bundle: 'personal', icon: '🎯',
+      title: '목표자금 계획계산기',
+      lead: '자녀 교육비·주택자금 같은 목표별로 매달 얼마씩 모아야 하는지 한 번에 계산합니다.',
+      note: '목표별 수익률을 반영한 적립식 계산입니다. 물가상승에 따른 목표금액 증가는 반영하지 않았으므로 목표금액에 미리 여유를 두시는 것이 좋습니다.',
+      arrays: [{ key: 'goals', count: 3, map: { name: 'goalName', targetAmount: 'goalTarget', currentAmount: 'goalCurrent', years: 'goalYears', annualRate: 'goalRate' } }],
+      groups: [
+        { label: '목표 1', fields: [
+          { k: 'goalName1', label: '목표 이름', type: 'text', def: '자녀 교육비' },
+          { k: 'goalTarget1', arrayOf: 'goals', label: '목표 금액', unit: '원', type: 'money', required: true, ph: '예) 100,000,000', quick: [10000000] },
+          { k: 'goalCurrent1', label: '현재 모은 금액', unit: '원', type: 'money', def: 0 },
+          { k: 'goalYears1', label: '남은 기간', unit: '년', type: 'num', def: 10 },
+          { k: 'goalRate1', label: '연 수익률', unit: '%', type: 'num', def: 4, scale: 0.01 }
+        ]},
+        { label: '목표 2', collapsed: true, fields: [
+          { k: 'goalName2', label: '목표 이름', type: 'text', def: '주택 자금' },
+          { k: 'goalTarget2', label: '목표 금액', unit: '원', type: 'money', def: 0 },
+          { k: 'goalCurrent2', label: '현재 모은 금액', unit: '원', type: 'money', def: 0 },
+          { k: 'goalYears2', label: '남은 기간', unit: '년', type: 'num', def: 15 },
+          { k: 'goalRate2', label: '연 수익률', unit: '%', type: 'num', def: 4, scale: 0.01 }
+        ]},
+        { label: '목표 3', collapsed: true, fields: [
+          { k: 'goalName3', label: '목표 이름', type: 'text', def: '노후 자금' },
+          { k: 'goalTarget3', label: '목표 금액', unit: '원', type: 'money', def: 0 },
+          { k: 'goalCurrent3', label: '현재 모은 금액', unit: '원', type: 'money', def: 0 },
+          { k: 'goalYears3', label: '남은 기간', unit: '년', type: 'num', def: 20 },
+          { k: 'goalRate3', label: '연 수익률', unit: '%', type: 'num', def: 4, scale: 0.01 }
+        ]},
+        { label: '저축 여력', fields: [
+          { k: 'availableMonthly', label: '매달 저축 가능액', unit: '원', type: 'money', def: 0, ph: '예) 800,000' }
+        ]}
+      ],
+      outputs: {
+        main: { k: 'totalMonthlyRequired', label: '매달 필요한 저축액', fmt: 'won' },
+        sub: [
+          { k: 'monthlyShortfall', label: '부족액', fmt: 'won' },
+          { k: 'availableMonthly', label: '저축 가능액', fmt: 'won' }
+        ],
+        rows: [
+          { path: 'plans.0.name', label: '목표 1', fmt: 'text' },
+          { path: 'plans.0.monthlyRequired', label: '목표 1 월 필요액' },
+          { path: 'plans.1.name', label: '목표 2', fmt: 'text' },
+          { path: 'plans.1.monthlyRequired', label: '목표 2 월 필요액' },
+          { path: 'plans.2.name', label: '목표 3', fmt: 'text' },
+          { path: 'plans.2.monthlyRequired', label: '목표 3 월 필요액' },
+          { k: 'totalMonthlyRequired', label: '합계', sum: true }
+        ]
+      }
+    },
+
+retirementSave: {
+      id: 'retirementSave', bundle: 'personal', icon: '🪙',
+      title: '은퇴저축계산기',
+      lead: '목표 은퇴자금을 만들려면 지금부터 매달 얼마를 넣어야 하는지 계산합니다.',
+      note: '목표금액을 오늘 가치로 보고 물가를 뺀 실질수익률(수익률 − 물가상승률)로 계산합니다. 그래서 명목수익률로 단순 계산한 값보다 보수적으로 나옵니다. 목표금액은 은퇴계산기에서 산출한 금액을 넣으시면 됩니다.',
+      groups: [{ label: '목표와 현재', fields: [
+        { k: 'currentAge', label: '현재 나이', unit: '세', type: 'num', required: true, def: 40 },
+        { k: 'retireAge', label: '은퇴 예정 나이', unit: '세', type: 'num', required: true, def: 60 },
+        { k: 'goalAmount', label: '목표 은퇴자금', unit: '원', type: 'money', required: true, ph: '예) 500,000,000', quick: [50000000, 100000000] },
+        { k: 'currentSaving', label: '현재 모은 금액', unit: '원', type: 'money', def: 0, ph: '예) 50,000,000' },
+        { k: 'returnRate', label: '연 운용수익률', unit: '%', type: 'num', def: 4, scale: 0.01 },
+        { k: 'inflationRate', label: '연 물가상승률', unit: '%', type: 'num', def: 2.5, scale: 0.01 }
+      ]}],
+      outputs: {
+        main: { k: 'monthlyNeeded', label: '매달 필요한 저축액', fmt: 'won' },
+        sub: [
+          { k: 'yearsToRetire', label: '은퇴까지', fmt: 'year' },
+          { k: 'remainingGoal', label: '추가로 모을 금액', fmt: 'won' }
+        ],
+        rows: [
+          { k: 'currentSavingFV', label: '현재 자금의 미래가치' },
+          { k: 'remainingGoal', label: '부족한 금액' },
+          { k: 'totalDeposit', label: '총 납입 예정액' },
+          { k: 'totalReturn', label: '운용수익', sum: true }
+        ]
+      }
+    },
+
+opportunityCost: {
+      id: 'opportunityCost', bundle: 'personal', icon: '🔀',
+      title: '기회비용계산기',
+      lead: '매달 나가는 돈을 대신 모았다면 나중에 얼마가 됐을지 보여줍니다. 시작을 미룰수록 얼마를 잃는지도 함께 계산합니다.',
+      note: '단순 적립 운용을 가정한 추정치입니다. 실제 수익률은 변동하며 세금과 수수료는 반영하지 않았습니다.',
+      groups: [{ label: '금액과 기간', fields: [
+        { k: 'monthlyAmount', label: '매달 나가는 금액', unit: '원', type: 'money', required: true, ph: '예) 300,000', quick: [100000] },
+        { k: 'baseYears', label: '기간', unit: '년', type: 'num', required: true, def: 20 },
+        { k: 'annualRate', label: '연 수익률', unit: '%', type: 'num', def: 4, scale: 0.01 }
+      ]}],
+      outputs: {
+        main: { k: 'baseFV', label: '기간 후 모였을 금액', fmt: 'won' },
+        sub: [
+          { k: 'baseMonthly', label: '월 금액', fmt: 'won' },
+          { k: 'baseYears', label: '기간', fmt: 'year' }
+        ],
+        rows: [
+          { path: 'comparisons.0.delayYears', label: '5년 늦게 시작하면', fmt: 'year' },
+          { path: 'comparisons.0.fvWithSameAmount', label: '그때의 금액' },
+          { path: 'comparisons.0.fvLoss', label: '줄어드는 금액' },
+          { path: 'comparisons.0.monthlyNeeded', label: '같은 금액 만들려면 월' },
+          { path: 'comparisons.1.delayYears', label: '10년 늦게 시작하면', fmt: 'year' },
+          { path: 'comparisons.1.fvWithSameAmount', label: '그때의 금액' },
+          { path: 'comparisons.1.fvLoss', label: '줄어드는 금액' },
+          { path: 'comparisons.1.monthlyNeeded', label: '같은 금액 만들려면 월', sum: true }
+        ]
+      }
+    },
+
+pensionWithdrawalOrder: {
+      id: 'pensionWithdrawalOrder', bundle: 'personal', icon: '🔢',
+      title: '연금 인출순서계산기',
+      lead: '연금저축·IRP·일반계좌 중 어느 것부터 빼 쓰는 게 세금이 적은지 순서를 정해줍니다.',
+      note: '계좌별 적용 세율을 기준으로 낮은 쪽부터 인출하는 단순 비교입니다. 건강보험료 영향과 연금소득 합산 과세는 반영하지 않았습니다.',
+      arrays: [{ key: 'accounts', count: 3, map: { name: 'accName', balance: 'accBalance', taxRate: 'accRate' } }],
+      groups: [
+        { label: '인출 계획', fields: [
+          { k: 'monthlyNetNeed', label: '월 필요 생활비', unit: '원', type: 'money', required: true, ph: '예) 3,000,000', quick: [500000] },
+          { k: 'years', label: '인출 기간', unit: '년', type: 'num', def: 20 }
+        ]},
+        { label: '계좌 1', fields: [
+          { k: 'accName1', label: '계좌 이름', type: 'text', def: '연금저축·IRP' },
+          { k: 'accBalance1', arrayOf: 'accounts', label: '잔액', unit: '원', type: 'money', required: true, ph: '예) 100,000,000', quick: [10000000] },
+          { k: 'accRate1', label: '적용 세율', unit: '%', type: 'num', def: 5.5, scale: 0.01 }
+        ]},
+        { label: '계좌 2', collapsed: true, fields: [
+          { k: 'accName2', label: '계좌 이름', type: 'text', def: '일반 투자계좌' },
+          { k: 'accBalance2', label: '잔액', unit: '원', type: 'money', def: 0 },
+          { k: 'accRate2', label: '적용 세율', unit: '%', type: 'num', def: 15.4, scale: 0.01 }
+        ]},
+        { label: '계좌 3', collapsed: true, fields: [
+          { k: 'accName3', label: '계좌 이름', type: 'text', def: '예적금' },
+          { k: 'accBalance3', label: '잔액', unit: '원', type: 'money', def: 0 },
+          { k: 'accRate3', label: '적용 세율', unit: '%', type: 'num', def: 15.4, scale: 0.01 }
+        ]}
+      ],
+      outputs: {
+        main: { path: 'order.0.name', k: 'firstAccount', label: '먼저 인출할 계좌', fmt: 'text' },
+        sub: [
+          { k: 'targetWithdrawal', label: '기간 총 인출 필요액', fmt: 'won' },
+          { k: 'shortfall', label: '부족액', fmt: 'won' }
+        ],
+        rows: [
+          { path: 'order.0.name', label: '1순위', fmt: 'text' },
+          { path: 'order.0.suggestedWithdrawal', label: '1순위 인출액' },
+          { path: 'order.1.name', label: '2순위', fmt: 'text' },
+          { path: 'order.1.suggestedWithdrawal', label: '2순위 인출액' },
+          { path: 'order.2.name', label: '3순위', fmt: 'text' },
+          { path: 'order.2.suggestedWithdrawal', label: '3순위 인출액' },
+          { k: 'fundedAmount', label: '조달 가능액', sum: true }
+        ]
+      }
     }
   };
 
