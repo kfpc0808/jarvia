@@ -65,7 +65,9 @@
     const req = f.required ? '<span class="req">*</span>' : '';
     const hint = f.hint ? '<span class="hint">' + esc(f.hint) + '</span>' : '';
     let input;
-    if (f.type === 'select') {
+    if (f.type === 'date') {
+      input = '<input type="date" data-k="' + f.k + '"' + (f.def ? ' value="' + esc(f.def) + '"' : '') + '>';
+    } else if (f.type === 'select') {
       input = '<select data-k="' + f.k + '">' +
         f.options.map(o => '<option value="' + esc(o.v) + '"' + (o.v === f.def ? ' selected' : '') + '>' + esc(o.t) + '</option>').join('') +
         '</select>';
@@ -97,6 +99,10 @@
     allFields().forEach(f => {
       const el = ROOT.querySelector('[data-k="' + f.k + '"]');
       if (!el) return;
+      if (f.type === 'date') {
+        if (el.value) out[f.k] = el.value;
+        return;
+      }
       if (f.type === 'select') {
         let sv = el.value;
         if (f.cast === 'bool') sv = (sv === 'true' || sv === '1');
@@ -216,7 +222,7 @@
     }
     const input = collect();
     const need = allFields().filter(f => f.required);
-    const empty = need.filter(f => input[f.k] === undefined || input[f.k] === null || input[f.k] === 0);
+    const empty = need.filter(f => input[f.k] === undefined || input[f.k] === null || input[f.k] === '' || (f.type !== 'date' && input[f.k] === 0));
     ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
     if (empty.length) {
       empty.forEach(f => {
@@ -262,7 +268,7 @@
 
     const auto = debounce(() => { syncKo(); run(); }, 260);
 
-    ROOT.querySelectorAll('input[data-k]').forEach(el => {
+    ROOT.querySelectorAll('input[data-k]:not([type="date"])').forEach(el => {
       el.addEventListener('input', () => {
         const p = el.selectionStart, before = el.value.length;
         const v = num(el.value);
@@ -273,6 +279,7 @@
       });
     });
     ROOT.querySelectorAll('select[data-k]').forEach(el => el.addEventListener('change', auto));
+    ROOT.querySelectorAll('input[type="date"][data-k]').forEach(el => el.addEventListener('change', auto));
 
     ROOT.querySelectorAll('.quick button').forEach(b => b.addEventListener('click', () => {
       const el = ROOT.querySelector('input[data-k="' + b.dataset.k + '"]');
@@ -293,6 +300,7 @@
         const el = ROOT.querySelector('[data-k="' + f.k + '"]');
         if (!el) return;
         if (f.type === 'select') el.value = f.def || f.options[0].v;
+        else if (f.type === 'date') el.value = f.def || '';
         else el.value = (f.def !== undefined && f.def !== null) ? comma(f.def) : '';
       });
       ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
