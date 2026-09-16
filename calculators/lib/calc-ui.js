@@ -20,6 +20,16 @@
   }
   function comma(n) { return (Math.round(n) || 0).toLocaleString('ko-KR'); }
 
+  // 입력칸 표시용 — 정수부만 천단위 구분, 소수점은 그대로 둔다 (이자율 4.6% 등)
+  function commaInput(raw) {
+    const s = String(raw == null ? '' : raw).replace(/[^0-9.]/g, '');
+    if (s === '') return '';
+    const p = s.split('.');
+    const ip = p[0].replace(/^0+(?=\d)/, '');
+    const dp = p.length > 1 ? '.' + p.slice(1).join('').slice(0, 3) : '';
+    return (ip ? Number(ip).toLocaleString('ko-KR') : (dp ? '0' : '')) + dp;
+  }
+
   function korMoney(n) {
     n = Math.round(Math.abs(Number(n) || 0));
     if (!n) return '';
@@ -72,7 +82,7 @@
         f.options.map(o => '<option value="' + esc(o.v) + '"' + (o.v === f.def ? ' selected' : '') + '>' + esc(o.t) + '</option>').join('') +
         '</select>';
     } else {
-      const val = (f.def !== undefined && f.def !== null) ? comma(f.def) : '';
+      const val = (f.def !== undefined && f.def !== null) ? commaInput(f.def) : '';
       input = '<input type="text" inputmode="numeric" class="num" data-k="' + f.k + '" value="' + val + '" placeholder="' + esc(f.ph || '0') + '">';
     }
     const unit = f.unit ? '<span class="unit">' + esc(f.unit) + '</span>' : '';
@@ -271,8 +281,7 @@
     ROOT.querySelectorAll('input[data-k]:not([type="date"])').forEach(el => {
       el.addEventListener('input', () => {
         const p = el.selectionStart, before = el.value.length;
-        const v = num(el.value);
-        el.value = v === null ? '' : comma(v);
+        el.value = commaInput(el.value);
         const after = el.value.length;
         try { el.setSelectionRange(Math.max(0, p + (after - before)), Math.max(0, p + (after - before))); } catch (e) {}
         auto();
@@ -283,7 +292,7 @@
 
     ROOT.querySelectorAll('.quick button').forEach(b => b.addEventListener('click', () => {
       const el = ROOT.querySelector('input[data-k="' + b.dataset.k + '"]');
-      el.value = comma((num(el.value) || 0) + Number(b.dataset.add));
+      el.value = commaInput((num(el.value) || 0) + Number(b.dataset.add));
       syncKo(); run();
     }));
 
@@ -301,7 +310,7 @@
         if (!el) return;
         if (f.type === 'select') el.value = f.def || f.options[0].v;
         else if (f.type === 'date') el.value = f.def || '';
-        else el.value = (f.def !== undefined && f.def !== null) ? comma(f.def) : '';
+        else el.value = (f.def !== undefined && f.def !== null) ? commaInput(f.def) : '';
       });
       ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
       syncKo();
