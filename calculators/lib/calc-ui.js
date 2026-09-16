@@ -41,6 +41,9 @@
     num: v => comma(v),
     cnt: v => comma(v) + '명',
     year: v => v + '년',
+    age: v => (Math.round(Number(v) * 10) / 10) + '세',
+    rate: v => (Math.round(Number(v) * 1000) / 10) + '%',
+    won만: v => comma(Math.round(Number(v) / 10000)) + '만원',
     text: v => String(v)
   };
   function fmt(kind, v) { return (FMT[kind] || FMT.num)(v); }
@@ -90,10 +93,23 @@
     allFields().forEach(f => {
       const el = ROOT.querySelector('[data-k="' + f.k + '"]');
       if (!el) return;
-      if (f.type === 'select') { out[f.k] = el.value; return; }
+      if (f.type === 'select') {
+        let sv = el.value;
+        if (f.cast === 'bool') sv = (sv === 'true' || sv === '1');
+        else if (f.cast === 'num') sv = Number(sv);
+        out[f.k] = sv;
+        (f.alias || []).forEach(a => { out[a] = sv; });
+        return;
+      }
       const v = num(el.value);
-      if (v !== null) out[f.k] = f.scale ? v * f.scale : v;
-      else if (f.def !== undefined) out[f.k] = f.def;
+      if (v !== null) {
+        const val = f.scale ? v * f.scale : v;
+        out[f.k] = val;
+        (f.alias || []).forEach(a => { out[a] = val; });
+      } else if (f.def !== undefined) {
+        out[f.k] = f.def;
+        (f.alias || []).forEach(a => { out[a] = f.def; });
+      }
     });
     if (SPEC.fixed) Object.assign(out, SPEC.fixed);
     return out;
@@ -111,18 +127,24 @@
   }
 
   // ── 결과 그리기 ──
+  function pickVal(d, row) {
+    return row.path
+      ? row.path.split('.').reduce((a, k) => (a == null ? a : a[k]), d)
+      : d[row.k];
+  }
+
   function resultHtml(r) {
     const o = SPEC.outputs, d = r.result || {};
     let h = '';
 
-    const mv = d[o.main.k];
+    const mv = pickVal(d, o.main);
     h += '<div class="res-main"><div class="lb">' + esc(o.main.label) + '</div>' +
       '<div class="vl">' + fmt(o.main.fmt, mv) + '</div>' +
       (o.main.fmt === 'won' ? '<div class="ko">' + korMoney(mv) + '</div>' : '') + '</div>';
 
     if (o.sub && o.sub.length) {
       h += '<div class="res-sub">' + o.sub.map(s => {
-        const v = d[s.k];
+        const v = pickVal(d, s);
         let cls = '';
         if (s.sign) cls = Number(v) > 0 ? ' pos' : Number(v) < 0 ? ' neg' : '';
         return '<div><div class="lb">' + esc(s.label) + '</div><div class="vl' + cls + '">' + fmt(s.fmt, v) + '</div></div>';
@@ -131,8 +153,8 @@
 
     if (o.rows && o.rows.length) {
       h += '<table class="rows">' + o.rows.map(row => {
-        const v = row.path ? row.path.split('.').reduce((a, k) => (a == null ? a : a[k]), d) : d[row.k];
-        if (v === undefined || v === null) return '';
+        const v = pickVal(d, row);
+        if (v === undefined || v === null || v === '') return '';
         return '<tr' + (row.sum ? ' class="sum"' : '') + '><th>' + esc(row.label) + '</th><td>' + fmt(row.fmt || 'won', v) + '</td></tr>';
       }).join('') + '</table>';
     }
@@ -146,8 +168,14 @@
     return h;
   }
 
+  // 엔진이 돌려주는 공통 코드 → 한글 라벨
+  const CODE_LABEL = {
+    amount: '금액', rate: '비율', age: '나이', years: '기간',
+    date: '날짜', count: '인원', input: '입력값'
+  };
+
   function errHtml(r) {
-    const labels = {};
+    const labels = Object.assign({}, CODE_LABEL);
     allFields().forEach(f => { labels[f.k] = f.label; });
     const miss = (r.missingInputs || []).map(k => labels[String(k).split('|')[0]] || k);
     const bad = (r.invalidInputs || []).map(k => labels[k] || k);
@@ -159,7 +187,11 @@
     return h;
   }
 
-  function placeholder() {
+  function placeholder(needLabels) {
+    if (needLabels && needLabels.length) {
+      return '<div class="ph"><div class="ico">✏️</div><p><b>' + esc(needLabels.join(', ')) +
+        '</b> 입력이 필요합니다.<br>연한 회색 글씨는 입력된 값이 아니라 예시입니다.</p></div>';
+    }
     return '<div class="ph"><div class="ico">🧮</div><p>값을 입력하면 결과가 표시됩니다.<br>필수 항목만 넣어도 계산됩니다.</p></div>';
   }
 
@@ -173,9 +205,14 @@
     }
     const input = collect();
     const need = allFields().filter(f => f.required);
-    if (need.some(f => input[f.k] === undefined || input[f.k] === null || input[f.k] === 0)) {
-      out.innerHTML = placeholder();
-      ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad'));
+    const empty = need.filter(f => input[f.k] === undefined || input[f.k] === null || input[f.k] === 0);
+    ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
+    if (empty.length) {
+      empty.forEach(f => {
+        const el = ROOT.querySelector('.fld[data-f="' + f.k + '"]');
+        if (el) el.classList.add('need');
+      });
+      out.innerHTML = placeholder(empty.map(f => f.label));
       return;
     }
 
@@ -183,7 +220,7 @@
     try { r = api.calculate({ calculatorId: SPEC.id, input: input }); }
     catch (e) { out.innerHTML = '<div class="msg err">계산 중 오류가 발생했습니다.</div>'; return; }
 
-    ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad'));
+    ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
     const flag = [].concat(r.missingInputs || [], r.invalidInputs || []);
     flag.forEach(k => {
       const el = ROOT.querySelector('.fld[data-f="' + String(k).split('|')[0] + '"]');
@@ -247,7 +284,7 @@
         if (f.type === 'select') el.value = f.def || f.options[0].v;
         else el.value = (f.def !== undefined && f.def !== null) ? comma(f.def) : '';
       });
-      ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad'));
+      ROOT.querySelectorAll('.fld').forEach(e => e.classList.remove('bad', 'need'));
       syncKo();
       ROOT.querySelector('[data-res]').innerHTML = placeholder();
     });
