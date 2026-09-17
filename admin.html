@@ -6974,8 +6974,50 @@ async function changeReferrer(uid){
 }
 window.searchReferrer=searchReferrer;window.selectReferrer=selectReferrer;window.registerReferrer=registerReferrer;window.changeReferrer=changeReferrer;window.clearReferrer=clearReferrer;window.refAmtSel=refAmtSel;
 /* ★ 회원 메모 (특이사항) — 2026-08-05 재추가, fixed 오버레이(오버플로우 조상 회피) */
-function memoExpand(uid){const t=$('memo-'+uid);if(!t)return;const b=$('memobtn-'+uid);const r=t.getBoundingClientRect();t.dataset.pw=t.style.width;t.dataset.ph=t.style.height;t.style.position='fixed';t.style.zIndex='9998';t.style.top=r.top+'px';t.style.left=r.left+'px';t.style.width='320px';t.style.height='150px';t.style.overflow='auto';t.style.background='#fff';t.style.boxShadow='0 6px 20px rgba(0,0,0,.18)';if(b){b.style.position='fixed';b.style.zIndex='9999';b.style.top=r.top+'px';b.style.left=(r.left+324)+'px';}}
-function memoCollapse(uid){const t=$('memo-'+uid);if(!t)return;const b=$('memobtn-'+uid);t.style.position='';t.style.zIndex='';t.style.top='';t.style.left='';t.style.width=t.dataset.pw||'170px';t.style.height=t.dataset.ph||'30px';t.style.overflow='hidden';t.style.background='';t.style.boxShadow='';if(b){b.style.position='';b.style.zIndex='';b.style.top='';b.style.left='';}}
+/* ★ [2026-09-17] 펼친 메모가 표 가로/세로 스크롤을 따라오도록 위치 추종 + 화면 경계 보정 */
+let _memoTrackUid=null,_memoTrackFn=null,_memoRaf=0;
+function _memoReposition(uid){
+  const t=$('memo-'+uid);if(!t||t.style.position!=='fixed')return;
+  const b=$('memobtn-'+uid);const td=t.closest('td');if(!td)return;
+  const r=td.getBoundingClientRect();
+  const dx=parseFloat(t.dataset.dx||'0'),dy=parseFloat(t.dataset.dy||'0');
+  const W=320,GAP=4,H=150,M=8;const BW=(b&&b.offsetWidth)||44;
+  let left=r.left+dx,top=r.top+dy;
+  if(left+W+GAP+BW>window.innerWidth-M)left=window.innerWidth-M-W-GAP-BW;
+  if(left<M)left=M;
+  if(top+H>window.innerHeight-M)top=window.innerHeight-M-H;
+  if(top<M)top=M;
+  t.style.top=top+'px';t.style.left=left+'px';
+  if(b){b.style.top=top+'px';b.style.left=(left+W+GAP)+'px';}
+}
+function _memoTrackOn(uid){
+  _memoTrackOff();
+  _memoTrackUid=uid;
+  _memoTrackFn=function(){if(_memoRaf)return;_memoRaf=requestAnimationFrame(function(){_memoRaf=0;_memoReposition(uid);});};
+  window.addEventListener('scroll',_memoTrackFn,true);
+  window.addEventListener('resize',_memoTrackFn);
+}
+function _memoTrackOff(){
+  if(_memoTrackFn){window.removeEventListener('scroll',_memoTrackFn,true);window.removeEventListener('resize',_memoTrackFn);}
+  if(_memoRaf){cancelAnimationFrame(_memoRaf);_memoRaf=0;}
+  _memoTrackFn=null;_memoTrackUid=null;
+}
+function memoExpand(uid){
+  const t=$('memo-'+uid);if(!t)return;const b=$('memobtn-'+uid);
+  const r=t.getBoundingClientRect();const td=t.closest('td');
+  if(td){const tr=td.getBoundingClientRect();t.dataset.dx=String(r.left-tr.left);t.dataset.dy=String(r.top-tr.top);t.dataset.ptdw=td.style.minWidth;td.style.minWidth=td.offsetWidth+'px';}
+  t.dataset.pw=t.style.width;t.dataset.ph=t.style.height;
+  t.style.position='fixed';t.style.zIndex='9998';t.style.top=r.top+'px';t.style.left=r.left+'px';t.style.width='320px';t.style.height='150px';t.style.overflow='auto';t.style.background='#fff';t.style.boxShadow='0 6px 20px rgba(0,0,0,.18)';
+  if(b){b.style.position='fixed';b.style.zIndex='9999';b.style.top=r.top+'px';b.style.left=(r.left+324)+'px';}
+  _memoReposition(uid);_memoTrackOn(uid);
+}
+function memoCollapse(uid){
+  const t=$('memo-'+uid);if(!t)return;const b=$('memobtn-'+uid);
+  if(_memoTrackUid===uid)_memoTrackOff();
+  const td=t.closest('td');if(td)td.style.minWidth=t.dataset.ptdw||'';
+  t.style.position='';t.style.zIndex='';t.style.top='';t.style.left='';t.style.width=t.dataset.pw||'170px';t.style.height=t.dataset.ph||'30px';t.style.overflow='hidden';t.style.background='';t.style.boxShadow='';
+  if(b){b.style.position='';b.style.zIndex='';b.style.top='';b.style.left='';}
+}
 async function saveMemo(uid){const t=$('memo-'+uid);if(!t)return;const memo=t.value.trim();try{await updateDoc(doc(db,'users',uid),{memo,updatedAt:serverTimestamp()});toast('메모 저장 완료','success');t.blur();}catch(e){toast('메모 저장 실패: '+e.message,'error');console.error(e);}}
 /* ★ 전체 회원 엑셀 다운로드 (메모 포함) — 2026-08-05 */
 async function exportMembersExcel(){
