@@ -345,6 +345,7 @@
   <!-- 💬 고객 후기 샘플 라이브러리 (30개, Phase 2) -->
   <script src="sampleTestimonials.js"></script>
   <script src="sms-core.js"></script>
+<script src="lms-core.js"></script>   <!-- ★ [2026-09-20] LMS 학습 진도 기록 -->
 </head>
 <body>
 <!-- ★ [2026-07-25] action 딥링크 이동 게이트 — fc.html 등에서 ?action=…으로 들어올 때
@@ -7798,6 +7799,14 @@ onAuthStateChanged(auth,async u=>{
       await applyGroupSettings(me.uid, meData);
       updateBal();nav(new URLSearchParams(location.search).get('page')==='partnership'?'partnership':'main');if($('calc-banner'))$('calc-banner').classList.remove('hidden');
       checkPaymentResult();
+      /* ★ [2026-09-20] LMS — 학습 진도 기록 시작 (실패해도 본 기능에 영향 없음) */
+      try{
+        if(window.JvLms) JvLms.init({
+          db, uid: me.uid,
+          fs:{ doc, getDoc, setDoc, serverTimestamp },
+          meta:{ branchId: meData?.branchId||'', teamId: meData?.teamId||'', name: meData?.name||'' }
+        });
+      }catch(_e){ console.warn('[LMS] 초기화 건너뜀', _e); }
       showLoginPopups();   // 프로모 팝업 삭제 — 로그인 공지 체인 직접 실행
       checkConsultRequests();
       loadFcAlertBoard();   // 🔔 FC 고객 알림 보드 (2026-06-11)
@@ -8613,7 +8622,7 @@ async function spendCredit(uid,cid){
 }
 
 // ── Premium Audio Player ──
-function _renderPremiumAudio(url,title){
+function _renderPremiumAudio(url,title,lms){   /* ★ [2026-09-20] lms: 학습 진도 기록용 (선택) */
   const _wh=[20,32,16,40,24,36,18,44,28,36,16,40,24,32,20,36,28,44,20,36];
   const _wd=[0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1,1.1,.4,.3,.2,.1,.5,.8,.6,.2];
   const _wb=_wh.map((h,i)=>'<div class="pap-wb" style="height:'+h+'px;animation-delay:'+_wd[i]+'s"></div>').join('');
@@ -8644,14 +8653,24 @@ function _renderPremiumAudio(url,title){
   $('pap-fw').onclick=function(){au.currentTime=Math.min(au.duration||0,au.currentTime+15);};
   $('pap-seek').onclick=function(e){if(!au.duration)return;var r=this.getBoundingClientRect();au.currentTime=Math.max(0,Math.min(au.duration,((e.clientX-r.left)/r.width)*au.duration));};
   $('pap-spd').onclick=function(){si=(si+1)%speeds.length;au.playbackRate=speeds[si];this.textContent=speeds[si]+'x';};
+  /* ★ [2026-09-20] LMS — 진도 기록 + 이어 듣기 */
+  if(lms&&lms.courseId&&window.JvLms){
+    try{
+      JvLms.attach(au,{courseId:lms.courseId,courseType:lms.courseType||'',courseTitle:lms.courseTitle||title||'',
+                       trackId:'main',trackTitle:'본편'});
+      JvLms.resumeAt(lms.courseId,'main').then(function(pos){
+        if(pos>5){ au.addEventListener('loadedmetadata',function(){ try{au.currentTime=pos;}catch(_e){} },{once:true}); }
+      });
+    }catch(_e){ console.warn('[LMS] 재생 기록 연결 실패',_e); }
+  }
 }
 
 // ── Viewer ──
-function openViewer(url,title,type){
+function openViewer(url,title,type,lms){   /* ★ [2026-09-20] lms: 학습 진도 기록용 (선택) */
   $('v-title').textContent=title||'콘텐츠 열람';
   const lUrl=url.toLowerCase();
   if(type==='audio'){
-    _renderPremiumAudio(url,title);
+    _renderPremiumAudio(url,title,lms);
   }else if(lUrl.endsWith('.pptx')||lUrl.endsWith('.ppt')){
     window.open(url,'_blank');closeM('mdl-viewer');return;
   }else if(url.includes('vimeo.com')){
@@ -8691,7 +8710,7 @@ function openViewer(url,title,type){
     }
     // ★ 특급보고서 HTML: 새 탭에서 열기 (TOC 정상 작동)
     if(type==='report'&&(url.split('?')[0]||'').toLowerCase().endsWith('.m4a')){
-      _renderPremiumAudio(url,title);
+      _renderPremiumAudio(url,title,lms);
     }else if(type==='report'){
       window.open(url,'_blank');return;
     }else{
@@ -15344,7 +15363,8 @@ window.copyAccountInfo=copyAccountInfo;window.closeWelcomeAndLogin=closeWelcomeA
 function openTaxWeeklyAudio(cid){
   const c=allContents.find(x=>x.contentId===cid);if(!c||!c.audioUrl)return;
   closeM('mdl-detail');
-  openViewer(c.audioUrl,c.title,'audio');
+  /* ★ [2026-09-20] LMS — 강좌 정보 전달 */
+  openViewer(c.audioUrl,c.title,'audio',{courseId:c.contentId,courseType:'tax_weekly',courseTitle:c.title});
 }
 // ★ 택스컨설팅위클리 HTML 풀스크린 뷰어 (iframe)
 function openTaxWeeklyHtml(cid){
@@ -15459,7 +15479,10 @@ async function crPayAndOpen(cid,action){
     }catch(e){}
   }
   const url=action==='audio'?c.audioUrl:action==='pdf'?c.pdfUrl:c.url;
-  if(url)window.open(url,'_blank');else toast('콘텐츠 URL이 없습니다.','warning');
+  if(!url){toast('콘텐츠 URL이 없습니다.','warning');return;}
+  /* ★ [2026-09-20] LMS — 오디오는 자비아 플레이어로 재생해 진도를 기록한다. HTML·PDF 는 기존대로 새 탭 */
+  if(action==='audio'){openViewer(url,c.title,'audio',{courseId:cid,courseType:'case_report',courseTitle:c.title});}
+  else{window.open(url,'_blank');}
 }
 window.crPayAndOpen=crPayAndOpen;
 /* ★ 마스터가이드 열람 — 가격·권한 클로징(crPayAndOpen)과 완전 동일: 일반회원 2,000원 차감, 그 외 무료. 이용내역(view_logs) 기록 + 조회수 증가 */
@@ -15486,7 +15509,10 @@ async function mgPayAndOpen(cid,action){
   }
   try{await updateDoc(doc(db,'master_guides',cid),{viewCount:increment(1)});}catch(e){}
   const url=action==='audio'?c.audioUrl:action==='pdf'?c.pdfUrl:c.url;
-  if(url)window.open(url,'_blank');else toast('콘텐츠 URL이 없습니다.','warning');
+  if(!url){toast('콘텐츠 URL이 없습니다.','warning');return;}
+  /* ★ [2026-09-20] LMS — 오디오는 자비아 플레이어로 재생해 진도를 기록한다. HTML·PDF 는 기존대로 새 탭 */
+  if(action==='audio'){openViewer(url,c.title,'audio',{courseId:cid,courseType:'master_guide',courseTitle:c.title});}
+  else{window.open(url,'_blank');}
 }
 window.mgPayAndOpen=mgPayAndOpen;
 // ═══════════════════════════════════════════════════════════
@@ -15497,7 +15523,8 @@ window.mgPayAndOpen=mgPayAndOpen;
 function openMedicalWeeklyAudio(cid){
   const c=allContents.find(x=>x.contentId===cid);if(!c||!c.audioUrl)return;
   closeM('mdl-detail');
-  openViewer(c.audioUrl,c.title,'audio');
+  /* ★ [2026-09-20] LMS — 강좌 정보 전달 */
+  openViewer(c.audioUrl,c.title,'audio',{courseId:c.contentId,courseType:'medical_weekly',courseTitle:c.title});
 }
 function openMedicalWeeklyHtml(cid){
   const c=allContents.find(x=>x.contentId===cid);if(!c||!c.url)return;
@@ -15594,7 +15621,7 @@ window.openMedicalWeeklyHtml=openMedicalWeeklyHtml;
 window.openMedicalWeeklyAudio=openMedicalWeeklyAudio;
 window.openMedicalWeeklyCards=openMedicalWeeklyCards;
 window.openMedicalWeeklyCardsSeamless=openMedicalWeeklyCardsSeamless;
-function openReportAudio(cid){_lastDetailCid=cid;const c=allContents.find(x=>x.contentId===cid);if(c&&c.audioUrl)openViewer(c.audioUrl,c.title,'audio');}
+function openReportAudio(cid){_lastDetailCid=cid;const c=allContents.find(x=>x.contentId===cid);if(c&&c.audioUrl)openViewer(c.audioUrl,c.title,'audio',{courseId:c.contentId,courseType:'report',courseTitle:c.title});}   /* ★ [2026-09-20] LMS */
 window.openReportAudio=openReportAudio;
 async function doViewPdf(cid){
   _lastDetailCid=cid;
