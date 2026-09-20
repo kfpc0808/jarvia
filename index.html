@@ -9507,6 +9507,51 @@ async function fccEnsureDlKey(cid){
   }catch(e){console.warn('[dlkey] 발급 실패:',e&&e.message);return '';}
 }
 function fccDlKeyMissing(){return _dlToday()>=DAILY_KEY_FROM;}   /* 발효 후 키 없이 복사하면 잠긴 링크가 나간다 */
+/* ★ [2026-09-20] 모닝 컨센서스 고객별 공유 키 — 위 데일리(fccEnsureDlKey/fccBuildLink)와 동일 구조.
+   mcShareKey(make) 가 cid 를 서명에 봉인하므로 고객마다 k 가 달라지고, 열람이 고객별로 기록된다.
+   링크는 데일리와 같은 /briefing 프록시를 쓰되 t=mc 로 컨센서스 화면으로 보낸다. */
+let _mcKeysC={},_mcKeyDay='',_mcLatestFd='';
+/* 컨센서스는 휴일·보류가 있어 '오늘'이 곧 발행일이 아니다 — 실제 최신 발행분(done·fallback)을 찾아 그 날짜로 서명한다.
+   consensus.html 아카이브·index.js latest 모드와 같은 기준이다. */
+async function fccMcLatestDate(){
+  const t=_dlToday();
+  if(_mcKeyDay===t&&_mcLatestFd)return _mcLatestFd;
+  try{
+    const snap=await getDocs(query(collection(db,'morning_consensus'),orderBy('fileDate','desc'),limit(10)));
+    for(const d of snap.docs){
+      const r=d.data()||{};
+      if(r.status!=='done'&&r.status!=='fallback')continue;
+      const fd=String(r.fileDate||d.id||'').replace(/\D/g,'');
+      if(/^\d{8}$/.test(fd)){_mcLatestFd=fd;break;}
+    }
+  }catch(e){console.warn('[mckey] 최신 발행분 조회 실패:',e&&e.message);}
+  return _mcLatestFd;
+}
+async function fccEnsureMcKey(cid){
+  cid=String(cid||'');
+  const t=_dlToday();
+  if(_mcKeyDay!==t){_mcKeysC={};_mcLatestFd='';_mcKeyDay=t;}   /* 자정 넘김 — 전일 키·발행일 폐기 */
+  if(_mcKeysC[cid])return _mcKeysC[cid];
+  if(!me)return null;
+  const fd=await fccMcLatestDate();
+  if(!fd)return null;
+  try{
+    const r=await httpsCallable(functions,'mcShareKey')({mode:'make',fileDate:fd,cid:cid});
+    if(r&&r.data&&r.data.success&&r.data.key){
+      /* 링크의 fc= 는 서버가 서명에 쓴 loginId 를 그대로 써야 한다 — 화면 값과 어긋나면 고객 쪽에서 잠긴다 */
+      _mcKeysC[cid]={key:String(r.data.key||''),lid:String(r.data.loginId||'')};
+      return _mcKeysC[cid];
+    }
+    return null;
+  }catch(e){console.warn('[mckey] 발급 실패:',e&&e.message);return null;}
+}
+function fccBuildMcLink(cid,ent){
+  if(!ent||!ent.lid||!ent.key)return '';
+  let u='https://jarvia.co.kr/briefing?fc='+encodeURIComponent(ent.lid)+'&t=mc';
+  if(cid)u+='&c='+encodeURIComponent(cid);
+  u+='&k='+encodeURIComponent(ent.key);
+  return u;
+}
 function fccBuildLink(cid){
   const lid=(meData&&meData.loginId)||'';
   if(!lid)return 'https://jarvia.co.kr';
@@ -10519,7 +10564,7 @@ window.fccRenderTable=function(){
       +'<td>'+(D.nextContact?fccEsc(D.nextContact):dash)+'</td>'
       +'<td class="ov" title="'+fccEsc(D.memo||'')+'">'+(memoTxt||dash)+'</td>'
       +'<td>'+(exKeys.length?('<span style="font-size:11px;font-weight:700;color:#1B3A5C;background:#EDF0FB;border-radius:8px;padding:2px 7px">'+exKeys.length+'항목</span>'):dash)+'</td>'
-      +'<td class="tc" style="white-space:nowrap"><button type="button" data-fcccopy="'+fccEsc(c.id)+'" style="font-size:12px;color:#0F6E56;background:none;border:1px solid #9FE1CB;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">🔗 데일리</button><button type="button" data-fccedit="'+fccEsc(c.id)+'" style="font-size:12px;color:#1B3A5C;background:none;border:1px solid #C7D2DE;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">✏️</button><button type="button" data-fcccal="'+fccEsc(c.id)+'" style="font-size:12px;color:#7C5C1A;background:none;border:1px solid #E0C36B;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">📅</button></td>'
+      +'<td class="tc" style="white-space:nowrap"><button type="button" data-fcccopy="'+fccEsc(c.id)+'" style="font-size:12px;color:#0F6E56;background:none;border:1px solid #9FE1CB;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">🔗 데일리</button><button type="button" data-fccmccopy="'+fccEsc(c.id)+'" style="font-size:12px;color:#14548F;background:#EEF5FC;border:1px solid #1B5E9E;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">🧭 컨센서스</button><button type="button" data-fccedit="'+fccEsc(c.id)+'" style="font-size:12px;color:#1B3A5C;background:none;border:1px solid #C7D2DE;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">✏️</button><button type="button" data-fcccal="'+fccEsc(c.id)+'" style="font-size:12px;color:#7C5C1A;background:none;border:1px solid #E0C36B;border-radius:6px;padding:3px 8px;cursor:pointer;margin-right:4px">📅</button></td>'
       +'</tr>';
   }).join('');
   /* ★ [2026-07-25] 표 다시 그릴 때마다 선택·삭제바 초기화 (페이지 이동·검색·정렬 시 선택 유지되면 위험) */
@@ -10650,6 +10695,9 @@ window.fccRowAction=async function(ev){
   if(calb){fccExportIcs(calb.getAttribute('data-fcccal'));return;}
   const cpb=ev.target&&ev.target.closest?ev.target.closest('[data-fcccopy]'):null;
   if(cpb){const _cid=cpb.getAttribute('data-fcccopy');fccEnsureDlKey(_cid).then(_k=>{if(!_k&&fccDlKeyMissing()){toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요','error');return;}const _u=fccBuildLink(_cid);if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(_u).then(()=>toast('링크가 복사되었습니다 — 카톡·문자에 붙여넣으세요','success')).catch(()=>fccCopyText(_u));}else fccCopyText(_u);});return;}   /* ★ [2026-08-22] 서명 키 확보 후 복사 */
+  /* ★ [2026-09-20] 모닝 컨센서스 고객별 링크 복사 — 위 데일리와 동일 흐름(키 확보 → 조립 → 복사) */
+  const mcb=ev.target&&ev.target.closest?ev.target.closest('[data-fccmccopy]'):null;
+  if(mcb){const _cid=mcb.getAttribute('data-fccmccopy');fccEnsureMcKey(_cid).then(_e=>{const _u=fccBuildMcLink(_cid,_e);if(!_u){toast('컨센서스 링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요','error');return;}if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(_u).then(()=>toast('모닝 컨센서스 링크가 복사되었습니다 — 카톡·문자에 붙여넣으세요','success')).catch(()=>fccCopyText(_u));}else fccCopyText(_u);});return;}
   /* ★ [2026-07-24] 정본 1곳 원칙: 등록·수정·삭제는 FC 채널에서만 — 마이페이지는 조회 전용 */
   const eb=ev.target&&ev.target.closest?ev.target.closest('[data-fccedit]'):null;
   if(eb){jvGoFc('고객 정보 수정은 고객입력에서 합니다 — 이동합니다');return;}

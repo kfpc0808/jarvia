@@ -3944,11 +3944,95 @@ window.goExpertHome=function(){
    발효(DAILY_KEY_FROM) 후 서명 없는 링크는 잠기므로 cdShareGuard 를 먼저 통과해야 한다 */
 window.shareKakao=function(){
   if(!cdShareGuard())return;
+  /* ★ [2026-09-20] 컨설턴트 본인(로그인)일 때만 고객 선택 시트 — 고객 화면에서는 종전 동작 그대로.
+     고객에게 회원의 고객 명단이 보이면 안 되므로 _jvOwner 판정이 유일한 분기 기준이다. */
+  if(_jvOwner){ cdPickClient(); return; }
+  _cdSharePlain();
+};
+function _cdSharePlain(){
   // 카톡 SDK 카드 대신 OG 링크 복사 (붙여넣기 시 저장 이미지 카드 자동생성 · 자비아 푸터 노출 방지)
   const url='https://briefingog-cvmdsjgzxa-du.a.run.app?'+cdShareQS();
   if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>showToast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.'));}
   else{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.');}
-};
+}
+/* 고객별 링크 복사 — dailyShareKey(make) 에 cid 를 실어 그 고객만의 서명 링크를 만든다 */
+async function _cdShareForClient(cid,nm){
+  let key='',lid='';
+  try{
+    const r=await httpsCallable(fns,'dailyShareKey')({mode:'make',fileDate:getTodayKST(),cid:cid});
+    if(r&&r.data&&r.data.success){key=String(r.data.key||'');lid=String(r.data.loginId||'');}
+  }catch(e){ console.warn('[cdshare] 고객별 키 발급 실패:',e&&e.message); }
+  if(!key||!lid){ showToast('링크 서명 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.'); return; }
+  const url='https://briefingog-cvmdsjgzxa-du.a.run.app?fc='+encodeURIComponent(lid)+'&c='+encodeURIComponent(cid)+'&k='+encodeURIComponent(key)+'&v=2';
+  const done=()=>showToast((nm||'고객')+'님께 보낼 링크를 복사했습니다 — 열람하면 [열람현황]에 기록됩니다.');
+  if(navigator.clipboard){navigator.clipboard.writeText(url).then(done).catch(()=>{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();});}
+  else{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();}
+}
+/* 고객 선택 바텀시트 — 컨설턴트 본인 전용. 검색·2열 20명·페이지 이동·미지정 구성은 마이페이지와 동일 */
+async function cdPickClient(){
+  const old=document.getElementById('cd-pick-ov'); if(old)old.remove();
+  const ov=document.createElement('div');
+  ov.id='cd-pick-ov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:flex;align-items:flex-end;justify-content:center';
+  ov.innerHTML='<div style="background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:520px;max-height:86vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:max(0px,env(safe-area-inset-bottom))">'
+    +'<div style="display:flex;justify-content:center;padding:8px 0 2px"><div style="width:38px;height:4px;border-radius:2px;background:#D7D4CB"></div></div>'
+    +'<div style="padding:8px 14px 10px;border-bottom:1px solid #ECEEF3;display:flex;align-items:center;gap:7px"><b style="font-size:13.5px;color:#1C2024">고객에게 보낼 링크</b>'
+    +'<span style="flex:0 0 auto;font-size:10.5px;font-weight:800;color:#0A7B61;background:#E6F5F0;border:1px solid #9FE1CB;border-radius:5px;padding:2px 6px">📰 데일리 리포트</span>'
+    +'<button type="button" data-cdpclose style="margin-left:auto;border:none;background:none;font-size:16px;cursor:pointer;color:#8A9098;padding:2px 4px">✕</button></div>'
+    +'<div style="padding:9px 14px;border-bottom:1px solid #ECEEF3"><input id="cd-pick-q" placeholder="이름 검색..." style="width:100%;padding:10px 11px;border:1px solid #DFE2EA;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit"></div>'
+    +'<div id="cd-pick-list" style="overflow-y:auto;flex:1;min-height:120px"><div style="padding:26px 16px;font-size:12.5px;color:#8A9098;text-align:center">고객 목록을 불러오는 중…</div></div>'
+    +'<div style="padding:10px 14px 16px;border-top:1px solid #ECEEF3"><button type="button" data-cdpick="" data-cdnm="" style="width:100%;padding:12px;border:1px solid #DFE2EA;border-radius:9px;background:#fff;font-size:12.5px;font-weight:700;cursor:pointer;color:#1C2024;font-family:inherit">🔗 고객 미지정 링크 복사</button>'
+    +'<div style="font-size:10.5px;color:#B91C1C;font-weight:700;margin-top:7px;line-height:1.55">고객을 선택하면 해당 고객의 열람 여부를 마이페이지 <b>[열람현황]</b>에서 확인할 수 있습니다.</div></div></div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('click',function(ev){
+    if(ev.target===ov||ev.target.closest('[data-cdpclose]')){ov.remove();return;}
+    const b=ev.target.closest('[data-cdpick]');
+    if(b){
+      const cid=b.getAttribute('data-cdpick')||'',nm=b.getAttribute('data-cdnm')||'';
+      ov.remove();
+      if(cid)_cdShareForClient(cid,nm); else _cdSharePlain();
+    }
+  });
+  const q=document.getElementById('cd-pick-q'),listEl=document.getElementById('cd-pick-list');
+  let _all=[],_pg=1; const PP=20;
+  function draw(){
+    if(!listEl||!document.getElementById('cd-pick-ov'))return;
+    const v=(q&&q.value.trim())||'';
+    const f=v?_all.filter(c=>String(c.name||'').includes(v)):_all;
+    const tp=Math.max(1,Math.ceil(f.length/PP));
+    if(_pg>tp)_pg=tp; if(_pg<1)_pg=1;
+    if(!f.length){
+      listEl.innerHTML='<div style="padding:22px 16px;font-size:12.5px;color:#8A9098;text-align:center;line-height:1.7">'+(v?(esc(v)+' 검색 결과가 없습니다.'):'등록된 고객이 없습니다.<br>아래 버튼으로 미지정 링크를 공유할 수 있습니다.')+'</div>';
+      return;
+    }
+    let h='<div style="display:grid;grid-template-columns:1fr 1fr">'
+      +f.slice((_pg-1)*PP,_pg*PP).map((c,i)=>'<button type="button" data-cdpick="'+esc(c.id)+'" data-cdnm="'+esc(c.name||'고객')+'" style="display:block;width:100%;text-align:left;padding:12px 13px;border:none;border-bottom:1px solid #F1F1ED;'+(i%2===0?'border-right:1px solid #F1F1ED;':'')+'background:#fff;font-size:13px;cursor:pointer;font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(c.name||'고객')+'</button>').join('')
+      +'</div>';
+    if(tp>1){
+      h+='<div style="display:flex;justify-content:center;align-items:center;gap:12px;padding:9px 0 7px">'
+        +'<button type="button" data-cdpg="-1" '+(_pg<=1?'disabled':'')+' style="border:1px solid #DFE2EA;background:#fff;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;'+(_pg<=1?'opacity:.35;cursor:default':'')+'">◀ 이전</button>'
+        +'<span style="font-size:12px;color:#1C2024;font-weight:700">'+_pg+' / '+tp+'</span>'
+        +'<button type="button" data-cdpg="1" '+(_pg>=tp?'disabled':'')+' style="border:1px solid #DFE2EA;background:#fff;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;'+(_pg>=tp?'opacity:.35;cursor:default':'')+'">다음 ▶</button>'
+        +'</div>';
+    }
+    listEl.innerHTML=h;
+  }
+  if(listEl)listEl.addEventListener('click',function(ev){
+    const p=ev.target.closest('[data-cdpg]');
+    if(p&&!p.disabled){ev.stopPropagation();_pg+=parseInt(p.getAttribute('data-cdpg'),10);draw();}
+  });
+  if(q)q.addEventListener('input',function(){_pg=1;draw();});
+  try{
+    const u=auth.currentUser;
+    if(!u||u.isAnonymous)throw new Error('로그인 세션이 아직 준비되지 않았습니다 — 잠시 후 다시 눌러주세요.');
+    const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',u.uid)));
+    _all=snap.docs.map(d=>({id:d.id,name:(d.data()||{}).name||'고객'}))
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name),'ko'));
+    draw();
+  }catch(e){
+    if(listEl)listEl.innerHTML='<div style="padding:22px 16px;font-size:12.5px;color:#B91C1C;text-align:center;line-height:1.7">고객 목록을 불러오지 못했습니다.<br>'+esc(e&&e.message||'')+'</div>';
+  }
+}
 window.copyLink=function(){
   if(!cdShareGuard())return;
   const url='https://jarvia.co.kr/client-daily?'+cdShareQS();
