@@ -6177,8 +6177,11 @@ async function jvCardGateNeed(){
       if((_t.getFullYear()*12+_t.getMonth())<((+_bsm.slice(0,4))*12+(+_bsm.slice(5,7)-1))){_cgNeed=false;return false;}
     }
     const snap=await getDoc(doc(db,'billing_cards',me.uid));
-    _cgNeed=!(snap.exists()&&snap.data().status==='active');
-    return _cgNeed;
+    const _need=!(snap.exists()&&snap.data().status==='active');
+    /* ★ 통과(false)만 캐시 — '등록필요(true)'는 캐시하지 않고 매번 재조회.
+       등록 직후·타 탭 등록 시에도 팝업이 다시 뜨지 않도록 보장 */
+    _cgNeed=_need?null:false;
+    return _need;
   }catch(_){_cgNeed=false;return false;}   // 조회 실패 시 막지 않는다
 }
 function jvCardGateOpen(onPass){
@@ -6784,6 +6787,7 @@ async function loadCard(){
       const c=snap.data();
       $('card-name-disp').textContent=c.cardName?c.cardName+'카드':'등록 카드';
       $('card-masked-disp').textContent=c.cardMasked||'';
+      _cgNeed=false;   /* ★ 활성 카드 확인 — 게이트 통과 확정 */
       $('card-loading').style.display='none';$('card-registered').style.display='block';const _db=$('card-del-btn');if(_db){_db.disabled=false;_db.textContent='카드 삭제';}
     }else{
       $('card-loading').style.display='none';cardShowForm();
@@ -6806,7 +6810,7 @@ window.doRegisterCard=async function(btn){
   try{
     const fn=httpsCallable(functions,'innopayIssueBillKey');
     const r=await fn({buyerName:(meData&&meData.name)||'',buyerEmail:(meData&&meData.email)||'',buyerHp:(meData&&meData.phone)||'',cardNum,expMonth,expYear,cardPwd,idNum});
-    if(r.data&&r.data.success){toast('카드가 등록되었습니다.','success');await loadCard();await _acResumeAfterCard();}   /* ★ [2026-08-16] 자동충전 이어가기 */
+    if(r.data&&r.data.success){_cgNeed=false;toast('카드가 등록되었습니다.','success');await loadCard();await _acResumeAfterCard();}   /* ★ [2026-08-16] 자동충전 이어가기 / ★ 게이트 캐시 즉시 해제 */
     else{toast((r.data&&r.data.error)||'카드 등록에 실패했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
   }catch(e){console.error('카드 등록 오류:',e);toast('카드 등록 처리 중 오류가 발생했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
 };
@@ -6816,7 +6820,7 @@ window.doDeleteCard=async function(btn){
   try{
     const fn=httpsCallable(functions,'innopayDeleteBillKey');
     const r=await fn({});
-    if(r.data&&r.data.success){toast('카드가 삭제되었습니다.','success');await loadCard();}
+    if(r.data&&r.data.success){_cgNeed=null;toast('카드가 삭제되었습니다.','success');await loadCard();}   /* ★ 캐시 초기화 → 다음 진입 시 재조회 */
     else{toast((r.data&&r.data.error)||'카드 삭제에 실패했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
   }catch(e){console.error('카드 삭제 오류:',e);toast('카드 삭제 처리 중 오류가 발생했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
 };
@@ -6854,7 +6858,7 @@ window.doSignupRegisterCard=async function(btn){
   try{
     const fn=httpsCallable(functions,'innopayIssueBillKey');
     const r=await fn({buyerName:(_signupInfo&&_signupInfo.name)||'',buyerEmail:(_signupInfo&&_signupInfo.email)||'',buyerHp:(_signupInfo&&_signupInfo.phone)||'',cardNum,expMonth,expYear,cardPwd,idNum});
-    if(r.data&&r.data.success){toast('카드가 등록되었습니다.','success');finishSignupFlow();}
+    if(r.data&&r.data.success){_cgNeed=false;toast('카드가 등록되었습니다.','success');finishSignupFlow();}   /* ★ 게이트 캐시 통과 처리 */
     else{toast((r.data&&r.data.error)||'카드 등록에 실패했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
   }catch(e){console.error('가입 카드 등록 오류:',e);toast('카드 등록 처리 중 오류가 발생했습니다.','error');btn.disabled=false;btn.textContent=_orig;}
 };
