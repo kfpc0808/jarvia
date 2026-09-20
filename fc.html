@@ -7206,6 +7206,21 @@ function aiRosterMeterHtml(m){
 window.aiRosterMeterRender=function(m){
   try{['aiRosterMeter','mpcRosterMeter','vmRosterMeter'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=aiRosterMeterHtml(m);});}catch(_e){}   /* vmRosterMeter: 음성 고객입력 화면 (2026-07-25) */
 };
+/* ★ [2026-09-20] 고객이 직접 고른 관심사 (fc_client_interests) — client-daily·consensus 「오늘의 관심사」 수집분.
+   회원이 건 니즈 태그·미팅 노트 스캔과 별개 갈래로 AI 색인에 넣는다(출처가 고객 본인이라 추측이 아니다).
+   조회는 본인 uid 기준 1회 후 3분 캐시. 실패해도 색인만 비고 나머지 맥락은 그대로 나간다. */
+let aiCiCache=null,aiCiAt=0;
+async function aiCiMap(){
+  if(aiCiCache&&(Date.now()-aiCiAt)<180000)return aiCiCache;
+  const m={};
+  try{
+    if(currentUser&&currentUser.uid){
+      const snap=await getDocs(query(collection(db,'fc_client_interests'),where('fcAuthUid','==',currentUser.uid)));
+      snap.forEach(d=>{const v=d.data()||{};if(v.clientId)m[v.clientId]={items:Array.isArray(v.items)?v.items:[],detail:(v.detail&&typeof v.detail==='object')?v.detail:{}};});
+    }
+  }catch(e){ try{console.warn('[AI] 고객 관심사 조회 실패:',e&&e.message);}catch(_e){} }
+  aiCiCache=m;aiCiAt=Date.now();return m;
+}
 async function aiBuildContext(q){
   const ctx={consultant:(fcData&&fcData.name)||loginId||'',today:vmYmd(new Date())};
   const customers=await new Promise(res=>{try{if(window.__mpcEnsureCustomers)window.__mpcEnsureCustomers(res);else res([]);}catch(_e){res([]);}});
@@ -7273,7 +7288,9 @@ async function aiBuildContext(q){
     const f=(fcc&&fcc[key])||null;
     const cts=[].concat((hit.contracts||[]).map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,insurer:x.insurer,premium:x.premium})),f?f.contracts.map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,src:'내고객관리'})):[]);
     const seen={};const dedup=cts.filter(x=>{if(!x.product)return false;if(seen[x.product])return false;seen[x.product]=1;return true;}).slice(0,12).map(x=>{const dd=aiDday(x.expiry);return Object.assign({},x,dd!=null?{maturityDday:dd}:{});});
-    ctx.customer={name:hit.name,age:aiAge(hit.birthDate),birthDate:hit.birthDate||'',status:hit.status||(f&&f.status)||'',needs:(hit.needs&&hit.needs.length)?hit.needs:((f&&f.needs)||[]),rels:(hit.rels&&hit.rels.length)?hit.rels:((f&&f.rels)||[]),referrer:hit.referrer||'',nextContact:hit.nextContact||(f&&f.nextContact)||'',/* ★ [2026-09-10] 서버 속성 보완 */prefChannel:hit.prefChannel||'',prefTime:hit.prefTime||'',
+    /* ★ [2026-09-20] 이 고객이 직접 알려준 관심사 — "뭐에 관심 있어?" 질문에 추측 대신 본인 답으로 응답 */
+    let _hitCi=[];try{ const _m=await aiCiMap(); const _r=_m[hit.id]; if(_r&&_r.items)_hitCi=_r.items.slice(0,20); }catch(_e){}
+    ctx.customer={name:hit.name,clientInterests:_hitCi,age:aiAge(hit.birthDate),birthDate:hit.birthDate||'',status:hit.status||(f&&f.status)||'',needs:(hit.needs&&hit.needs.length)?hit.needs:((f&&f.needs)||[]),rels:(hit.rels&&hit.rels.length)?hit.rels:((f&&f.rels)||[]),referrer:hit.referrer||'',nextContact:hit.nextContact||(f&&f.nextContact)||'',/* ★ [2026-09-10] 서버 속성 보완 */prefChannel:hit.prefChannel||'',prefTime:hit.prefTime||'',
       company:hit.company||'',title:hit.title||'',job:hit.job||'',phone:hit.phone||'',email:hit.email||'',mgTitle:hit.mgTitle||'',addr:hit.addr||'',addrLabel:hit.addr2?(hit.addrLabel||'집'):'',addrDetail:hit.addrDetail||'',addr2:hit.addr2||'',addr2Label:hit.addr2?(hit.addr2Label||'직장'):'',addr2Detail:hit.addr2Detail||'',files:(hit.files||[]).map(function(f){return f&&f.name;}).filter(Boolean).slice(0,15),   /* ★ [2026-07-29 v2] 등록 항목 완전판 — 주소①라벨·상세, 주소②, 호칭, 첨부 파일명까지 AI 열람 */
       family:(hit.family||[]).slice(0,6),memo:(hit.memo||'').slice(0,600),extra:(function(){var _ex=hit.extra||{},_eo={};Object.keys(_ex).slice(0,30).forEach(function(_k){var _v=String(_ex[_k]==null?'':_ex[_k]).trim();if(_v)_eo[_k]=_v.slice(0,200);});return _eo;})(),contracts:dedup,   /* ★ [2026-07-27] 엑셀 미매핑 열(추가 정보)도 AI가 열람 — 키 30개·값 200자 상한 */
       sangryeongDday:hit.birthDate?aiDdayMmdd(aiSangMmdd(hit.birthDate)):null,
@@ -7325,8 +7342,21 @@ async function aiBuildContext(q){
        태그를 걸어두지 않은 고객도 잡을 수 있게 한다. AI 호출 0회.
        ★ [2026-07-25] 스캔 대상에서 AI 브리핑 노트 제외 — AI가 쓴 단어로 고객이 분류되는 오염을 막는다. */
     let _ndPool=[];try{_ndPool=(window.__mpcNeedsAll&&window.__mpcNeedsAll())||[];}catch(_e){_ndPool=[];}
+    /* ★ [2026-09-20] 고객이 직접 고른 관심사 — '<군>(고객 선택)' 키로 병합. 위 두 갈래와 같은 자료구조 */
+    const _ciM=await aiCiMap();
     (customers||[]).forEach(c=>{
       const nm=(c.name||'').trim();if(!nm)return;
+      const _ci=_ciM[c.id];
+      if(_ci&&_ci.items&&_ci.items.length){
+        const _seen={};
+        _ci.items.forEach(k=>{
+          const g=(_ci.detail[k]&&_ci.detail[k].g)?String(_ci.detail[k].g):'';
+          if(!g||_seen[g])return; _seen[g]=1;
+          const _ck=g+'(고객 선택)';
+          if(!needByTag[_ck])needByTag[_ck]=[];
+          if(needByTag[_ck].length<40&&needByTag[_ck].indexOf(nm)<0)needByTag[_ck].push(nm);
+        });
+      }
       (c.needs||[]).forEach(t=>{
         if(!t)return;
         if(!needByTag[t])needByTag[t]=[];
