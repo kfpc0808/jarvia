@@ -6,6 +6,7 @@
 <title>JARVIA Daily Report</title>
 <script src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js"></script>
 <script>if(window.Kakao&&!Kakao.isInitialized())Kakao.init('2953646393fc63c68eaad8a2467e35bf');</script>
+<script src="lms-core.js"></script>   <!-- ★ [2026-09-21] LMS 학습 진도 기록 -->
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9FC;height:100vh;overflow:hidden}
@@ -46,7 +47,7 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,getDoc}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,serverTimestamp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const app=initializeApp({apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"});
 const auth=getAuth(app);
@@ -68,6 +69,7 @@ if(!id){
       let _userName='';
       let _loginId='';
       let _shareData=null;
+      let _lmsMeta={};   /* ★ [2026-09-21] LMS 기록용 소속 정보 */
       try{
         const uDoc=await getDoc(doc(db,'users',u.uid));
         /* ★ [2026-08-20] 자비아(기간제) 차단 해제 — 이용기간 내에는 자비아멤버십과 동일 권한.
@@ -75,6 +77,7 @@ if(!id){
         if(uDoc.exists()){
           _userName=uDoc.data().name||'';
           _loginId=uDoc.data().loginId||'';
+          _lmsMeta={branchId:uDoc.data().branchId||'',teamId:uDoc.data().teamId||'',name:_userName};
         }
       }catch(e){}
       // ★ fc_share_profiles에서 공유 설정 로드
@@ -95,10 +98,24 @@ if(!id){
       if(!_shareData&&_loginId){
         _shareData={title:'',desc:'',imageUrl:'',link:'https://jarvia.co.kr/client-daily?fc='+_loginId};
       }
+      /* ★ [2026-09-21] LMS — 학습 진도 기록 시작 (실패해도 본 기능에 영향 없음) */
+      try{
+        if(window.JvLms) JvLms.init({db,uid:u.uid,fs:{doc,getDoc,setDoc,serverTimestamp},meta:_lmsMeta});
+      }catch(_e){console.warn('[LMS] 초기화 건너뜀',_e);}
       const url='https://storage.googleapis.com/jarvia-platform.firebasestorage.app/daily-reports/'+id+'_daily-report.html';
       const viewer=document.getElementById('dr-viewer');
       viewer.src=url+'?t='+Date.now();
       viewer.style.display='block';
+      /* ★ [2026-09-21] LMS — 생성물(iframe)의 lms-bridge.js 가 보낸 청취 진도를 기록 */
+      if(!window.__jvLmsRecv){
+        window.__jvLmsRecv=true;
+        window.addEventListener('message',function(e){
+          if(!e.data||e.data.type!=='jvLmsProgress'||!e.data.payload)return;
+          if(!/^https:\/\/(storage|firebasestorage)\.googleapis\.com$/.test(e.origin))return;
+          if(e.source!==viewer.contentWindow)return;
+          if(window.JvLms)JvLms.applyRemote(e.data.payload).catch(function(){});
+        });
+      }
       // ★ 회원명 + 공유설정 전달
       viewer.addEventListener('load',function(){
         viewer.contentWindow.postMessage({type:'setMemberData',name:_userName,share:_shareData},'*');
