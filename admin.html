@@ -688,7 +688,7 @@
         <button class="tab" onclick="rvTab('rewards',this)">지급 내역</button>
         <button class="tab" onclick="rvTab('members',this)">회원별 현황</button>
       </div>
-      <div id="rv-pane-pending"><p style="color:var(--text-lt);font-size:13px;margin-bottom:12px">승인 시 작성자에게 <b>2,500P</b>가 즉시 지급되고 글이 메인에 게시됩니다. (지급 한도: 회원당 월 2회)</p><div id="rv-pending-list"></div></div>
+      <div id="rv-pane-pending"><p style="color:var(--text-lt);font-size:13px;margin-bottom:12px">승인 시 작성자에게 <b>10,000P</b>가 즉시 지급되고 글이 메인에 게시됩니다. (지급 한도: 회원당 두 달에 1회 · 9월 22일 이전에 쓴 글은 옛 기준 2,500P)</p><div id="rv-pending-list"></div></div>
       <div id="rv-pane-list" class="hidden">
         <div class="toolbar">
           <select id="rv-list-status" onchange="renderRvList()"><option value="all">전체 상태</option><option value="approved">게시중</option><option value="pending">대기</option><option value="rejected">거절</option><option value="hidden">숨김</option><option value="deleted">삭제(보관)</option></select>
@@ -4786,8 +4786,22 @@ async function bsRestoreJSON(input){
 window.loadBizSignals=loadBizSignals;window.bsRender=bsRender;window.bsDelete=bsDelete;window.bsToggleImp=bsToggleImp;window.bsExportJSON=bsExportJSON;window.bsExportXlsx=bsExportXlsx;window.bsRestorePick=bsRestorePick;window.bsRestoreJSON=bsRestoreJSON;
 
 // ═══ ✍️ 노하우 & 후기 관리 (2026-07) ═══
-// 승인 시 runTransaction: users.point +2,500 + transactions(type:'review_reward') + 글 status:'approved' 원자 처리
-const RVA_REWARD=2500,RVA_LIMIT=2;
+// 승인 시 runTransaction: users.point +보상 + transactions(type:'review_reward') + 글 status:'approved' 원자 처리
+// ★ [2026-09-22] 보상 변경 — 9/22 이후 작성 글: 10,000P · 두 달(60일)에 1회 / 이전 작성 글: 2,500P · 월 2회 (옛 기준 그대로)
+const RVA_REWARD=2500,RVA_LIMIT=2;   /* 옛 기준 (지급 기록에 금액이 없는 옛 글의 표시에도 쓴다) */
+const RVA_REWARD_NEW=10000,RVA_GAP_DAYS=60,RVA_RULE_FROM=Date.parse('2026-09-22T00:00:00+09:00');
+function _rvMs(t){return t&&t.toMillis?t.toMillis():0;}
+function _rvIsNew(r){const t=_rvMs(r.createdAt);return !t||t>=RVA_RULE_FROM;}
+function _rvRewardOf(r){return _rvIsNew(r)?RVA_REWARD_NEW:RVA_REWARD;}
+/* 새 기준 글 — 같은 회원이 이 글 앞 60일 안에 지급받은(또는 대기 중인 앞선) 새 기준 글이 있으면 그 글을 돌려준다 */
+function _rvGapHit(r){
+  const t=_rvMs(r.createdAt)||Date.now();
+  return _rvAll.filter(x=>x.userId===r.userId&&x.reviewId!==r.reviewId&&_rvIsNew(x)&&(x.rewardGiven===true||x.status==='approved'||x.status==='hidden'||x.status==='pending'))
+    .map(x=>({x,t:_rvMs(x.createdAt)||Date.now()}))
+    .filter(o=>o.t<t&&t-o.t<RVA_GAP_DAYS*86400000)
+    .sort((a,b)=>b.t-a.t)[0]||null;
+}
+function _rvMD(ms){const d=new Date(ms);return (d.getMonth()+1)+'/'+d.getDate();}
 let _rvAll=[],_rvRewards=[],_rvTab='pending';
 function _rvYM(t){const d=t&&t.toDate?t.toDate():null;return d?(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')):'';}
 function _rvMonthRank(r){const ym=_rvYM(r.createdAt);const my=_rvAll.filter(x=>x.userId===r.userId&&_rvYM(x.createdAt)===ym).sort((a,b)=>(a.createdAt?.toMillis?.()??0)-(b.createdAt?.toMillis?.()??0));return my.findIndex(x=>x.reviewId===r.reviewId)+1;}
@@ -4828,15 +4842,16 @@ function renderRvPending(){
   const items=_rvAll.filter(r=>r.status==='pending').sort((a,b)=>(a.createdAt?.toMillis?.()??0)-(b.createdAt?.toMillis?.()??0));
   if(!items.length){box.innerHTML='<p style="color:var(--text-lt);padding:20px 0;text-align:center">승인 대기 중인 글이 없습니다.</p>';return;}
   box.innerHTML=items.map(r=>{
-    const rank=_rvMonthRank(r),over=rank>RVA_LIMIT;
-    const rankBadge=over?'<span style="font-size:11px;font-weight:600;color:#993C1D;background:#FAECE7;border-radius:4px;padding:2px 8px">이번 달 '+rank+'회째 · 한도 초과</span>':'<span style="font-size:11px;color:#185FA5;background:#E6F1FB;border-radius:4px;padding:2px 8px">이번 달 '+rank+'/'+RVA_LIMIT+'회</span>';
+    const _nw=_rvIsNew(r),_hit=_nw?_rvGapHit(r):null;
+    const rank=_nw?0:_rvMonthRank(r),over=_nw?!!_hit:rank>RVA_LIMIT;
+    const rankBadge=_nw?(_hit?'<span style="font-size:11px;font-weight:600;color:#993C1D;background:#FAECE7;border-radius:4px;padding:2px 8px">두 달 한도 초과 · 앞선 글 '+_rvMD(_hit.t)+'</span>':'<span style="font-size:11px;color:#185FA5;background:#E6F1FB;border-radius:4px;padding:2px 8px">두 달 1회 · 지급 가능</span>'):over?'<span style="font-size:11px;font-weight:600;color:#993C1D;background:#FAECE7;border-radius:4px;padding:2px 8px">이번 달 '+rank+'회째 · 한도 초과</span>':'<span style="font-size:11px;color:#185FA5;background:#E6F1FB;border-radius:4px;padding:2px 8px">이번 달 '+rank+'/'+RVA_LIMIT+'회</span>';
     return `<div class="form-box" style="margin:0 0 12px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">${_rvCatBadge(r.category)}${r.topic?'<span style="font-size:11px;color:#64748B;background:#F1F5F9;border-radius:4px;padding:2px 8px">'+esc(r.topic)+'</span>':''}<b style="font-size:14px">${esc(r.userName||'')}</b><span style="color:var(--text-lt);font-size:13px">(${esc(r.loginId||'')})</span><span style="color:var(--text-lt);font-size:12px">· ${fdatetime(r.createdAt)}</span><span style="margin-left:auto">${rankBadge}</span></div>
       <div style="font-size:15px;font-weight:600;margin-bottom:6px">${esc(r.title||'')}</div>
       <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:130px;overflow:hidden;position:relative" id="rv-body-p-${r.reviewId}">${esc(r.body||'')}</div>
       <div style="font-size:12px;color:var(--text-lt);margin:4px 0 10px">본문 ${fmt((r.body||'').length)}자 · <a style="color:var(--accent);cursor:pointer" onclick="rvToggleBody('p-${r.reviewId}')">전문 보기/접기</a></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" style="background:#27AE60" onclick="rvApprove('${r.reviewId}')">✅ 승인 + ${fmt(RVA_REWARD)}P 지급</button>
+        <button class="btn" style="background:#27AE60" onclick="rvApprove('${r.reviewId}')">✅ 승인 + ${fmt(_rvRewardOf(r))}P 지급</button>
         <button class="btn btn-danger" style="padding:10px 24px;font-size:14px" onclick="rvRejectOpen('${r.reviewId}')">거절</button>
         <button class="btn btn-sec" style="padding:10px 18px;font-size:13px" onclick="rvTopicEditToggle('${r.reviewId}','p')">분야 ${r.topic?'수정':'지정'}</button>
       </div>
@@ -4852,8 +4867,10 @@ function renderRvPending(){
 function rvToggleBody(rid){const el=$('rv-body-'+rid);if(!el)return;if(el.dataset.cl){el.classList.toggle('hidden');}else{el.style.maxHeight=el.style.maxHeight==='none'?'130px':'none';}}
 async function rvApprove(rid){
   const r=_rvAll.find(x=>x.reviewId===rid);if(!r)return;
-  const over=_rvMonthRank(r)>RVA_LIMIT;
-  if(!confirm((over?'⚠ 월 '+RVA_LIMIT+'회 지급 한도 초과 건입니다.\n\n':'')+'「'+(r.title||'')+'」\n\n승인하고 '+fmt(RVA_REWARD)+'P를 지급하시겠습니까?\n대상: '+(r.userName||'')+' ('+(r.loginId||'')+')'))return;
+  const _nw=_rvIsNew(r),_hit=_nw?_rvGapHit(r):null,AMT=_rvRewardOf(r);
+  const over=_nw?!!_hit:_rvMonthRank(r)>RVA_LIMIT;
+  const overMsg=_nw?('⚠ 두 달(60일) 지급 한도 초과 건입니다. (앞선 글 '+(_hit?_rvMD(_hit.t):'')+')\n\n'):('⚠ 월 '+RVA_LIMIT+'회 지급 한도 초과 건입니다.\n\n');
+  if(!confirm((over?overMsg:'')+'「'+(r.title||'')+'」\n\n승인하고 '+fmt(AMT)+'P를 지급하시겠습니까?\n대상: '+(r.userName||'')+' ('+(r.loginId||'')+')'))return;
   try{
     const uRef=doc(db,'users',r.userId),rRef=doc(db,'user_reviews',rid);
     await runTransaction(db,async tx=>{
@@ -4861,12 +4878,12 @@ async function rvApprove(rid){
       if(!rd||rd.status!=='pending')throw new Error('이미 처리된 글입니다.');
       const ud=(await tx.get(uRef)).data();
       if(!ud)throw new Error('회원 정보를 찾을 수 없습니다.');
-      const np=(ud.point||0)+RVA_REWARD;const tid=gid();
+      const np=(ud.point||0)+AMT;const tid=gid();
       tx.update(uRef,{point:np,updatedAt:serverTimestamp()});
-      tx.set(doc(db,'transactions',tid),{txId:tid,userId:r.userId,userName:r.userName||'',loginId:r.loginId||'',type:'review_reward',amount:RVA_REWARD,pointAfter:np,refType:'review',refId:rid,memo:'노하우&후기 보상: '+(r.title||''),adminId:admUser?admUser.uid:'',createdAt:serverTimestamp()});
-      tx.update(rRef,{status:'approved',approvedAt:serverTimestamp(),rewardGiven:true,rewardPoint:RVA_REWARD,rewardTxId:tid});
+      tx.set(doc(db,'transactions',tid),{txId:tid,userId:r.userId,userName:r.userName||'',loginId:r.loginId||'',type:'review_reward',amount:AMT,pointAfter:np,refType:'review',refId:rid,memo:'노하우&후기 보상: '+(r.title||''),adminId:admUser?admUser.uid:'',createdAt:serverTimestamp()});
+      tx.update(rRef,{status:'approved',approvedAt:serverTimestamp(),rewardGiven:true,rewardPoint:AMT,rewardTxId:tid});
     });
-    toast('승인 및 '+fmt(RVA_REWARD)+'P 지급 완료','success');
+    toast('승인 및 '+fmt(AMT)+'P 지급 완료','success');
     loadReviewAdmin();
   }catch(e){toast('처리 실패: '+(e.message||e),'error');}
 }
