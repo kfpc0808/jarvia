@@ -8891,20 +8891,20 @@ async function doView(cid){
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
           await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
         }catch(e){}
-      closeM('mdl-detail');openViewer(c.url,c.title,c.type);return;
+      closeM('mdl-detail');openViewer(c.url,c.title,c.type,{courseId:lmsCourseId(cid),courseType:c.type,courseTitle:c.title});return;   /* ★ [2026-09-22] LMS */
     }
     if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager'||meData.role==='jarvia_report'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
           await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
         }catch(e){}
-      closeM('mdl-detail');openViewer(c.url,c.title,c.type);return;
+      closeM('mdl-detail');openViewer(c.url,c.title,c.type,{courseId:lmsCourseId(cid),courseType:c.type,courseTitle:c.title});return;   /* ★ [2026-09-22] LMS */
     }
     const result=await spendCredit(me.uid,cid);
     meData.balance=result.balance;if(result.point!==undefined)meData.point=result.point;updateBal();closeM('mdl-detail');
     if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n포인트: ${fmt(result.point||0)}P | 잔액: ${fmt(result.balance)}원\n${fdate(result.expiresAt)}까지 재열람 가능`);
     else alert('무료 재열람 (30일 이내 결제 이력)');
-    openViewer(result.url,result.title,result.type);
+    openViewer(result.url,result.title,result.type,{courseId:lmsCourseId(cid),courseType:result.type,courseTitle:result.title});   /* ★ [2026-09-22] LMS */
   }catch(err){
     if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다. 충전 후 이용해주세요.','warning');closeM('mdl-detail');openCharge();}
     else toast('열람 오류: '+err.message,'error');
@@ -8987,6 +8987,44 @@ function _renderPremiumAudio(url,title,lms){   /* ★ [2026-09-20] lms: 학습 �
   }
 }
 
+/* ★ [2026-09-22] LMS — Vimeo 영상 진도 기록.
+   Vimeo 이벤트를 <audio> 와 같은 모양(currentTime·duration·play/pause/ended/timeupdate)으로 바꿔
+   JvLms.attach 에 넘긴다 — lms-core.js 는 수정하지 않는다. SDK 로딩이 실패해도 영상 재생은 그대로. */
+let _lmsVidStop=null;
+function _lmsLoadVimeo(){
+  if(window.Vimeo&&window.Vimeo.Player)return Promise.resolve(true);
+  if(window._lmsVimeoP)return window._lmsVimeoP;
+  window._lmsVimeoP=new Promise(function(res){
+    const s=document.createElement('script');s.src='https://player.vimeo.com/api/player.js';
+    s.onload=function(){res(!!(window.Vimeo&&window.Vimeo.Player));};
+    s.onerror=function(){window._lmsVimeoP=null;res(false);};
+    document.head.appendChild(s);
+  });
+  return window._lmsVimeoP;
+}
+function _lmsVimeo(ifr,title,lms){
+  if(_lmsVidStop)_lmsVidStop();
+  if(!ifr||!lms||!lms.courseId||!window.JvLms)return;
+  _lmsLoadVimeo().then(function(ok){
+    if(!ok||!ifr.isConnected)return;
+    try{
+      const pl=new window.Vimeo.Player(ifr);
+      const el=document.createElement('div');el.currentTime=0;el.duration=NaN;
+      const fire=function(n){el.dispatchEvent(new Event(n));};
+      pl.on('timeupdate',function(d){el.currentTime=d.seconds||0;if(d.duration)el.duration=d.duration;fire('timeupdate');});
+      pl.on('play',function(){fire('play');});
+      pl.on('pause',function(){fire('pause');});
+      pl.on('ended',function(){fire('ended');});
+      JvLms.attach(el,{courseId:lms.courseId,courseType:lms.courseType||'video',courseTitle:lms.courseTitle||title||'',
+                       trackId:'main',trackTitle:'본편'});
+      _lmsVidStop=function(){_lmsVidStop=null;fire('pause');};
+      pl.ready().then(function(){return pl.getDuration();}).then(function(d){el.duration=d;fire('loadedmetadata');
+        return JvLms.resumeAt(lms.courseId,'main');
+      }).then(function(pos){if(pos>5)pl.setCurrentTime(pos).catch(function(){});}).catch(function(){});
+    }catch(_e){ console.warn('[LMS] 영상 기록 연결 실패',_e); }
+  });
+}
+
 // ── Viewer ──
 function openViewer(url,title,type,lms){   /* ★ [2026-09-20] lms: 학습 진도 기록용 (선택) */
   $('v-title').textContent=title||'콘텐츠 열람';
@@ -8997,6 +9035,7 @@ function openViewer(url,title,type,lms){   /* ★ [2026-09-20] lms: 학습 진�
     window.open(url,'_blank');closeM('mdl-viewer');return;
   }else if(url.includes('vimeo.com')){
     $('v-body').innerHTML=`<iframe src="${url}" style="width:100%;height:100%;border:none" allow="autoplay;fullscreen;picture-in-picture" allowfullscreen></iframe>`;
+    _lmsVimeo($('v-body').querySelector('iframe'),title,lms);   /* ★ [2026-09-22] LMS */
   }else{
     const isPdf=lUrl.endsWith('.pdf');
     if(isPdf){
@@ -9206,7 +9245,8 @@ async function doPreview(cid){
 }
 
 let _lastDetailCid=null;
-function closeViewer(){$('v-body').innerHTML='';closeM('mdl-viewer');if(_lastDetailCid){showDetail(_lastDetailCid);}}
+function closeViewer(){if(_lmsVidStop)_lmsVidStop();   /* ★ [2026-09-22] LMS — 닫기 전 영상 진도 저장 */
+  $('v-body').innerHTML='';closeM('mdl-viewer');if(_lastDetailCid){showDetail(_lastDetailCid);}}
 // ── 콘텐츠 보호: 뷰어 내 Ctrl+S, Ctrl+U, Ctrl+P, F12 차단 ──
 document.addEventListener('keydown',function(e){
   if(!$('mdl-viewer')||$('mdl-viewer').classList.contains('hidden'))return;
@@ -9228,21 +9268,21 @@ async function doViewVideo(cid){
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
           await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
         }catch(e){}
-      closeM('mdl-detail');openViewer(c.videoUrl||c.url,c.title,'video');return;
+      closeM('mdl-detail');openViewer(c.videoUrl||c.url,c.title,'video',{courseId:lmsCourseId(cid),courseType:c.type,courseTitle:c.title});return;   /* ★ [2026-09-22] LMS */
     }
     if(meData.role==='admin'||meData.role==='free_user'||meData.role==='jarvia_member'||meData.role==='jarvia_inner'||meData.role==='inner_circle'||meData.role==='con_homepage'||meData.role==='branch_manager'||meData.role==='jarvia_report'){
       const c=allContents.find(x=>x.contentId===cid);if(!c){toast('콘텐츠 오류','error');return;}
       try{const logId=gid();const now=new Date();const expiresAt=new Date(now.getTime()+30*24*60*60*1000);
           await setDoc(doc(db,'view_logs',logId),{logId,userId:me.uid,contentId:cid,price:0,txId:'',paidAt:serverTimestamp(),expiresAt:Timestamp.fromDate(expiresAt),createdAt:serverTimestamp()});
         }catch(e){}
-      closeM('mdl-detail');openViewer(c.videoUrl||c.url,c.title,'video');return;
+      closeM('mdl-detail');openViewer(c.videoUrl||c.url,c.title,'video',{courseId:lmsCourseId(cid),courseType:c.type,courseTitle:c.title});return;   /* ★ [2026-09-22] LMS */
     }
     const result=await spendCredit(me.uid,cid);
     const c=allContents.find(x=>x.contentId===cid);
     meData.balance=result.balance;if(result.point!==undefined)meData.point=result.point;updateBal();closeM('mdl-detail');
     if(result.charged)alert(`💰 ${fmt(result.price)}원 차감\n포인트: ${fmt(result.point||0)}P | 잔액: ${fmt(result.balance)}원`);
     else alert('무료 재열람 (30일 이내 결제 이력)');
-    openViewer(c?.videoUrl||result.url,result.title,'video');
+    openViewer(c?.videoUrl||result.url,result.title,'video',{courseId:lmsCourseId(cid),courseType:(c&&c.type)||'video',courseTitle:result.title});   /* ★ [2026-09-22] LMS */
   }catch(err){
     if(err.message==='INSUFFICIENT_BALANCE'){toast('잔액이 부족합니다.','warning');closeM('mdl-detail');openCharge();}
     else toast('열람 오류: '+err.message,'error');
@@ -15780,6 +15820,9 @@ function openTaxWeeklyCardsSeamless(cid){
   document.body.appendChild(wrap);
 }
 window.twPayAndOpen=twPayAndOpen;
+/* ★ [2026-09-22] LMS 강좌 ID — 케이스리포트 contentId 의 중복 접두어(cr_cr_) 정리. contentId 자체(결제·즐겨찾기 키)는 그대로 둔다 */
+function lmsCourseId(cid){return String(cid||'').replace(/^cr_(?=cr_)/,'');}
+window.lmsCourseId=lmsCourseId;
 // ★ 클로징 Report 결제·열람 (TCW 동일: 일반회원 2,000원 차감 / 그 외 무료)
 async function crPayAndOpen(cid,action){
   const c=allContents.find(x=>x.contentId===cid);if(!c)return;
@@ -15803,7 +15846,7 @@ async function crPayAndOpen(cid,action){
   const url=action==='audio'?c.audioUrl:action==='pdf'?c.pdfUrl:c.url;
   if(!url){toast('콘텐츠 URL이 없습니다.','warning');return;}
   /* ★ [2026-09-20] LMS — 오디오는 자비아 플레이어로 재생해 진도를 기록한다. HTML·PDF 는 기존대로 새 탭 */
-  if(action==='audio'){openViewer(url,c.title,'audio',{courseId:cid,courseType:'case_report',courseTitle:c.title});}
+  if(action==='audio'){openViewer(url,c.title,'audio',{courseId:lmsCourseId(cid),courseType:'case_report',courseTitle:c.title});}
   else{window.open(url,'_blank');}
 }
 window.crPayAndOpen=crPayAndOpen;
