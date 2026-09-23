@@ -42,6 +42,7 @@
     timer: null,
     bound: false,
     playedBase: null,        /* ★ [2026-09-23] 일자별 학습시간 계산 기준값 */
+    baseByCourse: null,      /* ★ [2026-09-23] 강좌별 기준값 — 일자·강좌별 학습시간용 */
   };
 
   function ymNow() {
@@ -98,7 +99,11 @@
       /* 문서에 이미 쌓인 학습시간을 기준값으로 잡는다 — 이후 늘어난 만큼만 오늘 몫으로 센다 */
       if (S.playedBase === null) {
         var b0 = 0;
-        Object.keys(S.cache.courses).forEach(function (k) { b0 += (S.cache.courses[k].playedSec || 0); });
+        S.baseByCourse = {};
+        Object.keys(S.cache.courses).forEach(function (k) {
+          var v = S.cache.courses[k].playedSec || 0;
+          b0 += v; S.baseByCourse[k] = v;
+        });
         S.playedBase = b0;
       }
     } catch (e) {
@@ -132,16 +137,29 @@
     try {
       /* 이수 여부를 저장 직전에 갱신한다 */
       var totalPlayed = 0, newDone = 0;
+      var day = todayKey();
+      if (!S.baseByCourse) S.baseByCourse = {};
+      payload.dayC = payload.dayC || {};     /* 일자·강좌별 학습시간 */
+      payload.doneC = payload.doneC || {};   /* 일자·강좌별 이수 */
       Object.keys(payload.courses).forEach(function (cid) {
         var c = payload.courses[cid];
         var r = calcCourse(c);
         c.playedSec = r.playedSec;
         c.ratio = Math.round(r.ratio * 1000) / 1000;
         totalPlayed += r.playedSec;
+        /* 이 강좌에서 늘어난 만큼을 오늘 몫으로 기록한다 */
+        var was = S.baseByCourse[cid] || 0;
+        if (r.playedSec > was) {
+          payload.dayC[day] = payload.dayC[day] || {};
+          payload.dayC[day][cid] = (payload.dayC[day][cid] || 0) + (r.playedSec - was);
+          S.baseByCourse[cid] = r.playedSec;
+        }
         if (!c.completed && r.ratio >= DONE_RATIO) {
           c.completed = true;
-          c.completedAt = todayKey();
+          c.completedAt = day;
           newDone++;
+          payload.doneC[day] = payload.doneC[day] || {};
+          payload.doneC[day][cid] = 1;
         }
       });
       /* ★ [2026-09-23] 일자별 학습시간·이수 건수 — 관리자 기간 통계용 */

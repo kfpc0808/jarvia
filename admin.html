@@ -22886,6 +22886,31 @@ function _lmsaDailySeries(){
   });
   return Object.keys(map).sort().reverse().map(d=>({day:d,sec:map[d].sec,done:map[d].done,members:map[d].who.size}));
 }
+/* 선택 구간의 콘텐츠별 통계 — 회원별 일자·강좌 기록에서 만든다 */
+function _lmsaCourseRowsRange(){
+  const R=_lmsaRange(), meta=((_lmsaData.courseMeta||{}).map)||{}, acc={};
+  (((_lmsaData.members||{}).rows)||[]).forEach(r=>{
+    Object.keys(r.months||{}).forEach(ym=>{
+      const m=r.months[ym]||{};
+      Object.keys(m.dayC||{}).forEach(d=>{ if(d<R.from||d>R.to)return;
+        Object.keys(m.dayC[d]||{}).forEach(cid=>{
+          const a=acc[cid]=acc[cid]||{courseId:cid,sec:0,done:0,who:new Set()};
+          a.sec+=m.dayC[d][cid]||0; a.who.add(r.uid); });
+      });
+      Object.keys(m.doneC||{}).forEach(d=>{ if(d<R.from||d>R.to)return;
+        Object.keys(m.doneC[d]||{}).forEach(cid=>{
+          const a=acc[cid]=acc[cid]||{courseId:cid,sec:0,done:0,who:new Set()};
+          a.done+=1; a.who.add(r.uid); });
+      });
+    });
+  });
+  return Object.values(acc).map(a=>{
+    const mt=meta[a.courseId]||{};
+    return {courseId:a.courseId, title:mt.t||a.courseId, label:mt.l||'콘텐츠', totalSec:mt.s||0,
+            learners:a.who.size, done:a.done, playedSec:a.sec,
+            doneRate:a.who.size?Math.round(a.done/a.who.size*1000)/10:0};
+  }).sort((x,y)=>y.learners-x.learners);
+}
 function _lmsaTimeMap(){
   const R=_lmsaRange();
   if(R.from==='00000000')return _lmsaData.time||{hours:{},wdays:{}};
@@ -22903,7 +22928,7 @@ function _lmsaTimeMap(){
 async function loadLmsAdmin(){
   $('lmsa-body').innerHTML='<tr><td colspan="8">불러오는 중...</td></tr>';
   try{
-    const ids=['overview','courses','dropoff','time','certs'];
+    const ids=['overview','courses','dropoff','time','certs','courseMeta'];
     const snaps=await Promise.all(ids.map(i=>getDoc(doc(db,'lms_stats',i)).catch(()=>null)));
     _lmsaData={};
     ids.forEach((i,k)=>{ _lmsaData[i]=(snaps[k]&&snaps[k].exists())?snaps[k].data():null; });
@@ -22935,19 +22960,24 @@ window.lmsaTab=function(k){
 function _lmsaSummary(){
   const rows=_lmsaMemberRows();
   const ov=_lmsaData.overview||{};
+  const R=_lmsaRange(), whole=(R.from==='00000000');
   const played=rows.reduce((a,r)=>a+(r.playedSec||0),0);
   const done=rows.reduce((a,r)=>a+(r.done||0),0);
   const act=rows.filter(r=>r.active30).length;
+  /* 강좌 수·수료증도 같은 구간 기준으로 센다 */
+  const courseN=whole?(ov.courseCount||0):_lmsaCourseRowsRange().length;
+  const certN=whole?(ov.certCount||0)
+    :(((_lmsaData.certs||{}).rows)||[]).filter(c=>String(c.issuedAt||'')>=R.from&&String(c.issuedAt||'')<=R.to).length;
   const box=(k,v,s,gold)=>'<div class="lms-card'+(gold?' gold':'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div>'
     +(s?'<div class="s">'+s+'</div>':'')+'</div>';
-  const lab=_lmsaRange().label;
+  const lab=R.label;
   $('lmsa-sum').innerHTML=
      box('학습 회원',rows.length+'명',lab)
-    +box('최근 30일 활동',act+'명','30일 내 학습')
+    +box(whole?'최근 30일 활동':'학습한 회원',(whole?act:rows.length)+'명',whole?'30일 내 학습':lab)
     +box('이수 건수',done+'건',lab)
     +box('총 학습 시간',_lmsaSec(played),lab)
-    +box('강좌 수',(ov.courseCount||0)+'개','전체 기준')
-    +box('수료증',(ov.certCount||0)+'건','전체 기준',true);
+    +box('학습된 강좌',courseN+'개',lab)
+    +box('수료증',certN+'건',lab,true);
 }
 window.lmsaRender=function(){
   if(!_lmsaData)return;
@@ -22955,9 +22985,10 @@ window.lmsaRender=function(){
   const q=($('lmsa-q').value||'').trim().toLowerCase();
   const sort=$('lmsa-sort').value||'';
   const H=(...c)=>'<tr>'+c.map(x=>'<th'+(/^\s*<r>/.test(x)?' class="num"':'')+'>'+x.replace(/^\s*<r>/,'')+'</th>').join('')+'</tr>';
-  const R=_lmsaRange();
-  const rangeOnly=['members','time','daily'].includes(_lmsaTab);
-  $('lmsa-note').textContent=rangeOnly?(R.label+' 기준'+(_lmsaTab==='time'?' (월 단위 집계)':'')):'전체 기간 기준';
+  const R=_lmsaRange(), whole=(R.from==='00000000');
+  $('lmsa-note').textContent=R.label+' 기준'
+    +(_lmsaTab==='time'?' · 시간대는 월 단위 집계':'')
+    +(_lmsaTab==='dropoff'&&!whole?' · 이탈 지점은 누적 진도 기준이라 전체 기간만 제공':'');
 
   if(_lmsaTab==='daily'){
     const ser=_lmsaDailySeries();
@@ -22985,7 +23016,13 @@ window.lmsaRender=function(){
     return;
   }
 
-  const src=_lmsaTab==='members'?_lmsaMemberRows():(((_lmsaData[_lmsaTab]||{}).rows)||[]);
+  let src;
+  if(_lmsaTab==='members') src=_lmsaMemberRows();
+  else if(_lmsaTab==='courses') src=whole?((((_lmsaData.courses)||{}).rows)||[]):_lmsaCourseRowsRange();
+  else if(_lmsaTab==='dropoff') src=whole?((((_lmsaData.dropoff)||{}).rows)||[]):[];
+  else if(_lmsaTab==='certs') src=((((_lmsaData.certs)||{}).rows)||[])
+      .filter(c=>whole||(String(c.issuedAt||'')>=R.from&&String(c.issuedAt||'')<=R.to));
+  else src=[];
   const key={members:r=>(r.name||'')+(r.company||'')+(r.loginId||''),
              courses:r=>(r.title||'')+(r.label||''),
              dropoff:r=>(r.title||'')+(r.label||''),
@@ -22999,7 +23036,8 @@ window.lmsaRender=function(){
                                         : String(b[sort]||'').localeCompare(String(a[sort]||'')));
   }
   const head={members:H('회원','소속','<r>수강 강좌','<r>수강 중','<r>이수','<r>학습 시간','최근 학습','활동'),
-              courses:H('강좌','종류','<r>수강자','<r>이수','<r>이수율','평균 진도','<r>전체 길이'),
+              courses:whole?H('강좌','종류','<r>수강자','<r>이수','<r>이수율','평균 진도','<r>전체 길이')
+                           :H('강좌','종류','<r>학습자','<r>이수','<r>이수율','<r>학습 시간','<r>전체 길이'),
               dropoff:H('강좌','종류','<r>수강자','<r>미이수','<r>이수율','가장 많이 멈춘 구간','구간 분포(0→100%)'),
               certs:H('수료증 번호','성명','소속','교육 기간','발급일','<r>이수 건수')}[_lmsaTab];
   lmsaRenderRows(head,rows);
@@ -23013,9 +23051,14 @@ function lmsaRenderRows(head,rows){
     +'<td class="num">'+(r.courses||0)+'</td><td class="num">'+(r.ing||0)+'</td><td class="num">'+(r.done||0)+'</td>'
     +'<td class="num">'+_lmsaSec(r.playedSec)+'</td><td>'+_lmsaDay(r.lastAt)+'</td>'
     +'<td>'+(r.active30?'<span class="pill on">활동</span>':'<span class="pill">휴면</span>')+'</td></tr>').join('');
-  else if(_lmsaTab==='courses') body=rows.map(r=>'<tr><td>'+e(r.title)+'</td><td><span class="pill">'+e(r.label)+'</span></td>'
-    +'<td class="num">'+(r.learners||0)+'</td><td class="num">'+(r.done||0)+'</td><td class="num">'+(r.doneRate||0)+'%</td>'
-    +'<td style="width:180px">'+prog(r.avgRatio)+'</td><td class="num">'+_lmsaSec(r.totalSec)+'</td></tr>').join('');
+  else if(_lmsaTab==='courses'){
+    const whole=_lmsaRange().from==='00000000';
+    body=rows.map(r=>'<tr><td>'+e(r.title)+'</td><td><span class="pill">'+e(r.label)+'</span></td>'
+      +'<td class="num">'+(r.learners||0)+'</td><td class="num">'+(r.done||0)+'</td><td class="num">'+(r.doneRate||0)+'%</td>'
+      +(whole?'<td style="width:180px">'+prog(r.avgRatio)+'</td>':'<td class="num">'+_lmsaSec(r.playedSec)+'</td>')
+      +'<td class="num">'+_lmsaSec(r.totalSec)+'</td></tr>').join('');
+  }
+  else if(_lmsaTab==='dropoff'&&!rows.length) body='<tr><td colspan="7" style="color:#9FAEBF">이탈 지점은 누적 진도 기준이라 「전체 기간」에서만 볼 수 있습니다.</td></tr>';
   else if(_lmsaTab==='dropoff') body=rows.map(r=>{const b=r.buckets||[],mx=Math.max(1,...b);
       const spark='<div class="spark">'+b.map(v=>'<span title="'+v+'명" style="height:'+(4+Math.round(v/mx*18))+'px;opacity:'+(v?1:.15)+'"></span>').join('')+'</div>';
       return '<tr><td>'+e(r.title)+'</td><td><span class="pill">'+e(r.label)+'</span></td><td class="num">'+(r.learners||0)+'</td>'
