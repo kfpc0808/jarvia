@@ -3478,6 +3478,31 @@
     <button class="cat-tab-btn" id="lms-st-done" onclick="lmsSubTab('done',this)">이수 완료</button>
     <button class="cat-tab-btn" id="lms-st-all" onclick="lmsSubTab('all',this)">전체 보기</button>
   </div>
+  <!-- ★ [2026-09-23] 검색 · 종류 · 정렬 -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+    <input id="lms-q" type="search" placeholder="제목 검색" oninput="lmsApply()"
+      style="flex:1;min-width:180px;padding:9px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px;font-family:var(--font)">
+    <select id="lms-kind" onchange="lmsApply()" style="padding:9px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px;font-family:var(--font)">
+      <option value="">전체 종류</option>
+      <option value="daily">데일리리포트</option>
+      <option value="client">고객데일리</option>
+      <option value="consensus">모닝 컨센서스</option>
+      <option value="monthly">월간 영업리포트</option>
+      <option value="master_guide">마스터가이드</option>
+      <option value="medical_weekly">메디컬 위클리</option>
+      <option value="tax_weekly">택스컨설팅 위클리</option>
+      <option value="case_report">클로징 리포트</option>
+      <option value="video">영상</option>
+    </select>
+    <select id="lms-sort" onchange="lmsApply()" style="padding:9px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px;font-family:var(--font)">
+      <option value="recent">최근순</option>
+      <option value="ratio_desc">진도 높은순</option>
+      <option value="ratio_asc">진도 낮은순</option>
+      <option value="played_desc">학습 시간 많은순</option>
+      <option value="title">제목순</option>
+    </select>
+    <span id="lms-count" style="font-size:13px;color:#7C8CA5"></span>
+  </div>
   <div id="lms-list" style="display:flex;flex-direction:column;gap:8px"></div>
   <div id="lms-empty" class="empty hidden">아직 학습 기록이 없습니다. 콘텐츠의 음성·영상을 들으시면 이곳에 진도가 쌓입니다.</div>
 </div>
@@ -12566,13 +12591,27 @@ window.lmsSubTab=function(k,btn){
   ['ing','done','all'].forEach(x=>{const b=$('lms-st-'+x); if(b)b.classList.toggle('active',x===k);});
   _lmsRender();
 };
+window.lmsApply=function(){ _lmsRender(); };
 function _lmsRender(){
   if(!_lmsRows)return;
   let rows=_lmsRows;
   if(_lmsSub==='ing') rows=rows.filter(r=>!r.completed && r.ratio>=LMS_MIN && r.recent);
   else if(_lmsSub==='done') rows=rows.filter(r=>r.completed);
-  else rows=rows.filter(r=>r.completed || r.ratio>=LMS_MIN);
+  /* 전체 보기는 2.5% 미만 기록까지 모두 보여준다 */
+  const q=(($('lms-q')&&$('lms-q').value)||'').trim().toLowerCase();
+  const kind=($('lms-kind')&&$('lms-kind').value)||'';
+  if(q) rows=rows.filter(r=>((r.title||'')+' '+_lmsKind(r)).toLowerCase().includes(q));
+  if(kind) rows=rows.filter(r=>(r.type||'')===kind);
+  const sort=($('lms-sort')&&$('lms-sort').value)||'recent';
+  rows=rows.slice().sort((a,b)=>{
+    if(sort==='ratio_desc')return b.ratio-a.ratio;
+    if(sort==='ratio_asc')return a.ratio-b.ratio;
+    if(sort==='played_desc')return (b.playedSec||0)-(a.playedSec||0);
+    if(sort==='title')return String(a.title||'').localeCompare(String(b.title||''),'ko');
+    return String(b.completedAt||b.ym).localeCompare(String(a.completedAt||a.ym));
+  });
   $('lms-list').innerHTML=rows.map(_lmsCard).join('');
+  $('lms-count').textContent=rows.length+'개';
   $('lms-empty').classList.toggle('hidden',rows.length>0);
 }
 async function loadLmsStatus(){
