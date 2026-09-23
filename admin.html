@@ -472,13 +472,20 @@
 <div class="lms-head">
   <div class="lms-when" id="lmsa-when"></div>
   <div class="lms-act">
-    <select id="lmsa-range" onchange="lmsaRender()">
+    <select id="lmsa-range" onchange="lmsaRangeChange()">
       <option value="all">전체 기간</option>
+      <option value="d7">최근 7일</option>
+      <option value="d30">최근 30일</option>
       <option value="cur">이번 달</option>
       <option value="prev">지난달</option>
       <option value="m3">최근 3개월</option>
-      <option value="m6">최근 6개월</option>
+      <option value="custom">직접 지정</option>
     </select>
+    <span id="lmsa-custom" style="display:none;gap:6px;align-items:center">
+      <input type="date" id="lmsa-from" onchange="lmsaRender()">
+      <span style="color:#8A97A8">~</span>
+      <input type="date" id="lmsa-to" onchange="lmsaRender()">
+    </span>
     <button class="btn" onclick="lmsaRun()">지금 집계</button>
   </div>
 </div>
@@ -487,6 +494,7 @@
   <button class="lms-tab on" data-k="members" onclick="lmsaTab('members')">회원별 현황</button>
   <button class="lms-tab" data-k="courses" onclick="lmsaTab('courses')">콘텐츠별 수강률</button>
   <button class="lms-tab" data-k="dropoff" onclick="lmsaTab('dropoff')">이탈 지점</button>
+  <button class="lms-tab" data-k="daily" onclick="lmsaTab('daily')">일별 추이</button>
   <button class="lms-tab" data-k="time" onclick="lmsaTab('time')">요일·시간대</button>
   <button class="lms-tab" data-k="certs" onclick="lmsaTab('certs')">수료증 발급</button>
 </div>
@@ -22815,48 +22823,80 @@ const LMSA_SORT={
   courses:[['learners','수강자 많은순'],['doneRate','이수율 높은순'],['avgRatio','평균 진도 높은순'],['title','제목순']],
   dropoff:[['dropCount','미이수 많은순'],['doneRate','이수율 낮은순'],['title','제목순']],
   certs:[['issuedAt','최근 발급순'],['name','이름순'],['total','건수 많은순']],
-  time:[]
+  time:[],daily:[]
 };
 function _lmsaSec(v){v=v|0;const h=Math.floor(v/3600),m=Math.floor(v%3600/60);return h?h+'시간 '+m+'분':m+'분';}
 function _lmsaDay(v){return v?String(v).slice(0,4)+'.'+String(v).slice(4,6)+'.'+String(v).slice(6,8):'-';}
 function _lmsaYm(v){return v?(+String(v).slice(0,4))+'.'+(+String(v).slice(4,6)):'-';}
 function _lmsaYmNow(off){const d=new Date();const x=new Date(d.getFullYear(),d.getMonth()-(off||0),1);
   return x.getFullYear()+String(x.getMonth()+1).padStart(2,'0');}
-/* 선택한 구간에 해당하는 월 목록 — 전체면 null */
-function _lmsaMonths(){
+function _lmsaDayKey(d){return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');}
+function _lmsaAddDays(n){return _lmsaDayKey(new Date(Date.now()+n*86400000));}
+/* 선택한 구간 → 시작일·종료일(YYYYMMDD) */
+function _lmsaRange(){
   const r=($('lmsa-range')&&$('lmsa-range').value)||'all';
-  if(r==='all')return null;
-  if(r==='cur')return [_lmsaYmNow(0)];
-  if(r==='prev')return [_lmsaYmNow(1)];
-  const n=r==='m3'?3:6, out=[];
-  for(let i=0;i<n;i++) out.push(_lmsaYmNow(i));
-  return out;
+  const today=_lmsaDayKey(new Date());
+  if(r==='all')return {from:'00000000',to:'99999999',label:'전체 기간'};
+  if(r==='d7')return {from:_lmsaAddDays(-6),to:today,label:'최근 7일'};
+  if(r==='d30')return {from:_lmsaAddDays(-29),to:today,label:'최근 30일'};
+  if(r==='cur'){const ym=_lmsaYmNow(0);return {from:ym+'01',to:ym+'31',label:'이번 달'};}
+  if(r==='prev'){const ym=_lmsaYmNow(1);return {from:ym+'01',to:ym+'31',label:'지난달'};}
+  if(r==='m3'){const ym=_lmsaYmNow(2);return {from:ym+'01',to:today,label:'최근 3개월'};}
+  const f=($('lmsa-from').value||'').replace(/-/g,''), t=($('lmsa-to').value||'').replace(/-/g,'');
+  if(!f||!t)return {from:'00000000',to:'99999999',label:'전체 기간'};
+  return {from:f,to:t,label:_lmsaD(f)+' ~ '+_lmsaD(t)};
 }
-function _lmsaRangeLabel(){
-  const r=($('lmsa-range')&&$('lmsa-range').value)||'all';
-  return {all:'전체 기간',cur:'이번 달',prev:'지난달',m3:'최근 3개월',m6:'최근 6개월'}[r];
-}
-/* 회원 요약에 저장된 월별 내역으로 구간 합계를 만든다 */
+const _lmsaD=v=>v&&v.length===8?(+v.slice(0,4))+'.'+(+v.slice(4,6))+'.'+(+v.slice(6,8)):'';
+window.lmsaRangeChange=function(){
+  const custom=$('lmsa-range').value==='custom';
+  $('lmsa-custom').style.display=custom?'inline-flex':'none';
+  if(custom&&!$('lmsa-from').value){
+    const t=new Date(), f=new Date(Date.now()-29*86400000);
+    const iso=d=>d.toISOString().slice(0,10);
+    $('lmsa-from').value=iso(f); $('lmsa-to').value=iso(t);
+  }
+  lmsaRender();
+};
+/* 회원별 일자 내역을 모아 구간 합계를 만든다 */
 function _lmsaMemberRows(){
   const src=((_lmsaData.members||{}).rows)||[];
-  const yms=_lmsaMonths();
-  if(!yms)return src;
+  const R=_lmsaRange();
+  if(R.from==='00000000'&&R.to==='99999999')return src.map(r=>Object.assign({},r));
   return src.map(r=>{
-    const t={playedSec:0,done:0,ing:0,courses:0,lastAt:''};
-    yms.forEach(ym=>{ const m=(r.months||{})[ym]; if(!m)return;
-      t.playedSec+=m.playedSec||0; t.done+=m.done||0; t.ing+=m.ing||0; t.courses+=m.courses||0;
-      if(String(m.lastAt||'')>t.lastAt)t.lastAt=String(m.lastAt||''); });
-    return Object.assign({},r,t,{inRange:t.courses>0});
+    let sec=0,done=0,last='';
+    Object.keys(r.months||{}).forEach(ym=>{
+      const m=r.months[ym]||{};
+      Object.keys(m.days||{}).forEach(d=>{ if(d>=R.from&&d<=R.to){ sec+=m.days[d]||0; if(d>last)last=d; } });
+      Object.keys(m.dones||{}).forEach(d=>{ if(d>=R.from&&d<=R.to) done+=m.dones[d]||0; });
+    });
+    return Object.assign({},r,{playedSec:sec,done:done,lastAt:last||r.lastAt,inRange:sec>0||done>0});
   }).filter(r=>r.inRange);
 }
+/* 구간 안의 일자별 학습시간·이수 건수·학습 회원 수 */
+function _lmsaDailySeries(){
+  const R=_lmsaRange(), map={};
+  (((_lmsaData.members||{}).rows)||[]).forEach(r=>{
+    Object.keys(r.months||{}).forEach(ym=>{
+      const m=r.months[ym]||{};
+      Object.keys(m.days||{}).forEach(d=>{ if(d<R.from||d>R.to)return;
+        const x=map[d]=map[d]||{sec:0,done:0,who:new Set()}; x.sec+=m.days[d]||0; x.who.add(r.uid); });
+      Object.keys(m.dones||{}).forEach(d=>{ if(d<R.from||d>R.to)return;
+        const x=map[d]=map[d]||{sec:0,done:0,who:new Set()}; x.done+=m.dones[d]||0; x.who.add(r.uid); });
+    });
+  });
+  return Object.keys(map).sort().reverse().map(d=>({day:d,sec:map[d].sec,done:map[d].done,members:map[d].who.size}));
+}
 function _lmsaTimeMap(){
-  const yms=_lmsaMonths();
-  if(!yms) return _lmsaData.time||{hours:{},wdays:{}};
+  const R=_lmsaRange();
+  if(R.from==='00000000')return _lmsaData.time||{hours:{},wdays:{}};
   const hours={},wdays={};
   (((_lmsaData.members||{}).rows)||[]).forEach(r=>{
-    yms.forEach(ym=>{ const m=(r.months||{})[ym]; if(!m)return;
+    Object.keys(r.months||{}).forEach(ym=>{
+      if(ym<R.from.slice(0,6)||ym>R.to.slice(0,6))return;      /* 시간대는 월 단위로만 모인다 */
+      const m=r.months[ym]||{};
       Object.keys(m.hours||{}).forEach(h=>hours[h]=(hours[h]||0)+(m.hours[h]||0));
-      Object.keys(m.wdays||{}).forEach(w=>wdays[w]=(wdays[w]||0)+(m.wdays[w]||0)); });
+      Object.keys(m.wdays||{}).forEach(w=>wdays[w]=(wdays[w]||0)+(m.wdays[w]||0));
+    });
   });
   return {hours,wdays};
 }
@@ -22889,19 +22929,18 @@ window.lmsaTab=function(k){
   const opts=LMSA_SORT[k]||[];
   $('lmsa-sort').innerHTML=opts.map(o=>'<option value="'+o[0]+'">'+o[1]+'</option>').join('');
   $('lmsa-sort').style.display=opts.length?'':'none';
-  $('lmsa-q').style.display=(k==='time')?'none':'';
+  $('lmsa-q').style.display=(k==='time'||k==='daily')?'none':'';
   lmsaRender();
 };
 function _lmsaSummary(){
   const rows=_lmsaMemberRows();
-  const yms=_lmsaMonths();
   const ov=_lmsaData.overview||{};
   const played=rows.reduce((a,r)=>a+(r.playedSec||0),0);
   const done=rows.reduce((a,r)=>a+(r.done||0),0);
   const act=rows.filter(r=>r.active30).length;
   const box=(k,v,s,gold)=>'<div class="lms-card'+(gold?' gold':'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div>'
     +(s?'<div class="s">'+s+'</div>':'')+'</div>';
-  const lab=_lmsaRangeLabel();
+  const lab=_lmsaRange().label;
   $('lmsa-sum').innerHTML=
      box('학습 회원',rows.length+'명',lab)
     +box('최근 30일 활동',act+'명','30일 내 학습')
@@ -22916,8 +22955,23 @@ window.lmsaRender=function(){
   const q=($('lmsa-q').value||'').trim().toLowerCase();
   const sort=$('lmsa-sort').value||'';
   const H=(...c)=>'<tr>'+c.map(x=>'<th'+(/^\s*<r>/.test(x)?' class="num"':'')+'>'+x.replace(/^\s*<r>/,'')+'</th>').join('')+'</tr>';
-  const rangeOnly=['members','time'].includes(_lmsaTab);
-  $('lmsa-note').textContent=rangeOnly?(_lmsaRangeLabel()+' 기준'):'전체 기간 기준';
+  const R=_lmsaRange();
+  const rangeOnly=['members','time','daily'].includes(_lmsaTab);
+  $('lmsa-note').textContent=rangeOnly?(R.label+' 기준'+(_lmsaTab==='time'?' (월 단위 집계)':'')):'전체 기간 기준';
+
+  if(_lmsaTab==='daily'){
+    const ser=_lmsaDailySeries();
+    const mx=Math.max(1,...ser.map(x=>x.sec));
+    const WD=['일','월','화','수','목','금','토'];
+    const wd=d=>WD[new Date(+d.slice(0,4),+d.slice(4,6)-1,+d.slice(6,8)).getDay()];
+    $('lmsa-head').innerHTML='<tr><th>일자</th><th>요일</th><th style="width:44%">학습 시간</th><th class="num">시간</th><th class="num">이수</th><th class="num">학습 회원</th></tr>';
+    $('lmsa-body').innerHTML=ser.length?ser.map(x=>'<tr><td>'+_lmsaD(x.day)+'</td><td>'+wd(x.day)+'</td>'
+      +'<td><div class="prog"><i style="width:'+Math.round(x.sec/mx*100)+'%"></i></div></td>'
+      +'<td class="num">'+_lmsaSec(x.sec)+'</td><td class="num">'+(x.done||0)+'</td><td class="num">'+x.members+'</td></tr>').join('')
+      : '<tr><td colspan="6" style="color:#9FAEBF">이 구간에 학습 기록이 없습니다.</td></tr>';
+    $('lmsa-cnt').textContent=ser.length+'일';
+    return;
+  }
 
   if(_lmsaTab==='time'){
     const t=_lmsaTimeMap(), WD=['일','월','화','수','목','금','토'];

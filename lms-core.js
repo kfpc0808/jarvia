@@ -41,12 +41,15 @@
     saving: false,
     timer: null,
     bound: false,
+    playedBase: null,        /* ★ [2026-09-23] 일자별 학습시간 계산 기준값 */
   };
 
   function ymNow() {
     var d = new Date();
     return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0");
   }
+  function hourKey() { return String(new Date().getHours()); }
+  function wdayKey() { return String(new Date().getDay()); }   /* 0=일 */
   function todayKey() {
     var d = new Date();
     return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
@@ -92,6 +95,12 @@
       var snap = await S.fs.getDoc(S.fs.doc(S.db, "lms_progress", id));
       S.cache = snap.exists() ? Object.assign(base, snap.data()) : base;
       if (!S.cache.courses) S.cache.courses = {};
+      /* 문서에 이미 쌓인 학습시간을 기준값으로 잡는다 — 이후 늘어난 만큼만 오늘 몫으로 센다 */
+      if (S.playedBase === null) {
+        var b0 = 0;
+        Object.keys(S.cache.courses).forEach(function (k) { b0 += (S.cache.courses[k].playedSec || 0); });
+        S.playedBase = b0;
+      }
     } catch (e) {
       console.warn("[LMS] 진도 로드 실패", e);
       S.cache = base;
@@ -122,16 +131,36 @@
     var payload = S.cache;
     try {
       /* 이수 여부를 저장 직전에 갱신한다 */
+      var totalPlayed = 0, newDone = 0;
       Object.keys(payload.courses).forEach(function (cid) {
         var c = payload.courses[cid];
         var r = calcCourse(c);
         c.playedSec = r.playedSec;
         c.ratio = Math.round(r.ratio * 1000) / 1000;
+        totalPlayed += r.playedSec;
         if (!c.completed && r.ratio >= DONE_RATIO) {
           c.completed = true;
           c.completedAt = todayKey();
+          newDone++;
         }
       });
+      /* ★ [2026-09-23] 일자별 학습시간·이수 건수 — 관리자 기간 통계용 */
+      if (S.playedBase === null) S.playedBase = totalPlayed;
+      var gain = totalPlayed - S.playedBase;
+      if (gain > 0) {
+        payload.days = payload.days || {};
+        payload.days[todayKey()] = (payload.days[todayKey()] || 0) + gain;
+        S.playedBase = totalPlayed;
+      }
+      if (newDone > 0) {
+        payload.dones = payload.dones || {};
+        payload.dones[todayKey()] = (payload.dones[todayKey()] || 0) + newDone;
+      }
+      /* ★ [2026-09-23] 학습 시각 분포 — 저장 시점의 시간대·요일을 센다 (관리자 통계용) */
+      payload.hours = payload.hours || {};
+      payload.wdays = payload.wdays || {};
+      payload.hours[hourKey()] = (payload.hours[hourKey()] || 0) + 1;
+      payload.wdays[wdayKey()] = (payload.wdays[wdayKey()] || 0) + 1;
       payload.updatedAt = S.fs.serverTimestamp();
       payload.lastAt = todayKey();
       await S.fs.setDoc(S.fs.doc(S.db, "lms_progress", S.uid + "_" + S.ym), payload, { merge: true });
@@ -214,6 +243,7 @@
         var t = c.tracks[tid];
         if (!t) return;
         t.slots = setToSlots(slots || new Set());
+        c.lastAt = todayKey();            /* ★ [2026-09-23] 강좌별 마지막 학습일 */
         t.pos = Math.floor(el.currentTime || 0);
         if (el.duration && isFinite(el.duration)) t.dur = Math.round(el.duration);
         /* 강좌 전체 길이를 아직 모르면 트랙 길이 합으로 채워둔다 */
@@ -303,6 +333,7 @@
       var merged = slotsToSet(t.slots);
       slotsToSet(payload.slots).forEach(function (v) { merged.add(v); });
       t.slots = setToSlots(merged);
+      c.lastAt = todayKey();              /* ★ [2026-09-23] 강좌별 마지막 학습일 */
       if (payload.pos !== undefined) t.pos = payload.pos | 0;
       if (payload.dur) t.dur = payload.dur | 0;
       if (!c.totalSec) {
