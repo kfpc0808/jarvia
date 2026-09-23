@@ -51,6 +51,24 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .btn-reset{background:#EEF2F6;color:#5A6B7B}
 .saved{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center}
 .saved-label{font-size:12px;color:#8A99A8}
+/* ★ [2026-09-23] 신규 지원사업 알림 (ba-) */
+.ba-open{font-size:12px;font-weight:700;color:#8B6914;background:#FBF1DE;border:0;border-radius:12px;padding:5px 11px;cursor:pointer;margin-left:auto}
+.ba-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.ba-hd b{font-size:15px;color:#1B3A5C}
+.ba-hd select{height:30px;border:1px solid #D5DEE8;border-radius:8px;font-size:12px;padding:0 6px}
+.ba-sum{font-size:12px;color:#8A99A8}
+.ba-co{border-top:1px solid #EEF2F6;padding:9px 2px}
+.ba-co-hd{display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:8px}
+.ba-co-hd b{font-size:13.5px;color:#1E2A38}
+.ba-co-hd .c{font-size:12.5px;color:#1B3A5C;white-space:nowrap}
+.ba-co-sub{font-size:11.5px;color:#8A99A8;margin-top:2px}
+.ba-co-sub a{color:#1B3A5C;cursor:pointer;text-decoration:underline}
+.ba-pg{display:block;font-size:12.5px;color:#1E2A38;padding:6px 0 6px 10px;text-decoration:none;line-height:1.45}
+.ba-pg:hover{background:#F4F7FA}
+.ba-pg span{display:block;font-size:11px;color:#8A99A8}
+.ba-note{font-size:11.5px;color:#6B7B8C;background:#F8FAFC;border-radius:8px;padding:9px 11px;margin-top:10px;line-height:1.75}
+.ba-empty{font-size:12.5px;color:#8A99A8;padding:14px 4px}
+.saved .sc .bell{cursor:pointer;font-size:12px}
 .saved .sc{font-size:12px;padding:4px 10px;border-radius:12px;background:#EAF1F8;color:#1B3A5C;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
 .saved .sc b{font-weight:700}
 .saved .sc .x{color:#A0AEBB;cursor:pointer;font-weight:700}
@@ -203,8 +221,11 @@ input:focus,select:focus{outline:none;border-color:#1B3A5C!important;box-shadow:
 
   <!-- 📂 저장된 고객기업 — 상단 배치 (2026-06-12) -->
   <div class="cond saved" id="saved-row" style="display:none;margin-bottom:14px">
-    <span class="saved-label">📂 저장된 고객기업 <span style="font-weight:400;color:#A0AEBB">— 클릭하면 아래 조건이 채워집니다</span></span><span id="saved-chips"></span>
+    <span class="saved-label">📂 저장된 고객기업 <span style="font-weight:400;color:#A0AEBB">— 클릭하면 아래 조건이 채워집니다</span></span><button class="ba-open" id="ba-open" style="display:none">🔔 신규 공고 알림</button><span id="saved-chips"></span>
   </div>
+
+  <!-- ★ [2026-09-23] 신규 지원사업 알림 — 알림톡 버튼(?digest=YYYYMMDD) 또는 🔔 버튼으로 열림 -->
+  <div class="cond" id="ba-panel" style="display:none;margin-bottom:14px"></div>
 
   <div class="cond cond-main">
     <div class="cond-hd">
@@ -303,6 +324,7 @@ input:focus,select:focus{outline:none;border-color:#1B3A5C!important;box-shadow:
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFirestore,doc,getDoc,setDoc}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';   // ★ [2026-09-23] 알림 미리보기(bizAlertPreview)
 
 /* ════════ 설정 ════════ */
 const BIZ_ALLOW_FREE = true; // ★ free_user 허용 여부 — [2026-08-20] 자비아(기간제)는 이용기간 내 자비아멤버십과 동일 권한이므로 true
@@ -375,6 +397,7 @@ const ALL_SIZE_WORDS=['소상공인','중소기업','중견기업','중견'];
 let PROGRAMS=[];          // 전처리된 공고
 let KSIC=null;            // 지연 로드
 let ME=null;              // 로그인 사용자 (Firestore 저장용)
+let ME_INFO={};           // ★ [2026-09-23] users 문서 (role·loginId)
 let state={chip:'',q:'',region:'',dist:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[],fNew:'',fDue:''};
 let shown=PAGE_SIZE;
 const todayStr=(()=>{const d=new Date(Date.now()+9*3600*1000);return d.toISOString().slice(0,10).replace(/-/g,'');})();
@@ -520,6 +543,7 @@ onAuthStateChanged(auth, async u=>{
      카운터는 _RELOAD_WINDOW_MS 경과 시 위쪽 로직에서 자연 리셋된다. */
   try{
     const uDoc=await getDoc(doc(db,'users',u.uid));
+    ME_INFO=uDoc.exists()?(uDoc.data()||{}):{};   // ★ [2026-09-23] 알림 기능 노출 판정용 (role·loginId)
     if(uDoc.exists() && uDoc.data().role==='free_user' && !BIZ_ALLOW_FREE){
       _showLock('이용 권한이 없습니다','유료회원 전용 기능입니다.');
       return;
@@ -635,7 +659,11 @@ async function init(){
     if(_qf&&/^\d{1,2}$/.test(_qf))window._bannerFresh=_qf;
     const qp=_sp.get('company');
     if(qp){ const i=SAVED.findIndex(x=>x.name===qp); if(i>=0) applyCompany(i); }
+    /* ★ [2026-09-23] 알림톡 버튼 진입: ?digest=YYYYMMDD → 신규 공고 알림 화면 */
+    const qd=_sp.get('digest');
+    if(qd&&/^\d{8}$/.test(qd)) baOpen(qd);
   }catch(e){}
+  $('ba-open').addEventListener('click',()=>baOpen(''));
 
   // 첫 방문 안내 팝업
   $('onb-start').addEventListener('click',()=>{
@@ -855,6 +883,7 @@ async function saveCompany(){
     const name=prompt('고객기업 이름(라벨) — 수정 가능', cur.name);
     if(name===null) return;
     SAVED[editIdx]={name:(name.trim()||cur.name).slice(0,20), cond:curCond(), savedAt:cur.savedAt||Date.now()};
+    if(cur.alert===false) SAVED[editIdx].alert=false;   /* ★ [2026-09-23] 기업별 알림 설정 유지 */
     await persistSaved(); setEdit(-1); renderSaved();
   }else{
     const name=prompt('고객기업 이름(라벨)을 입력하세요','예: 김대표님');
@@ -902,9 +931,11 @@ function applyCompany(i,edit){
 }
 function renderSaved(){
   $('saved-row').style.display=SAVED.length?'flex':'none';
+  $('ba-open').style.display=baEnabled()?'inline-block':'none';   /* ★ [2026-09-23] */
   const mkChip=(c,i)=>{
     const parts=[c.cond.dist?c.cond.region+' '+c.cond.dist:c.cond.region,c.cond.ind?(IND_GROUPS.find(g=>g.v===c.cond.ind)||{}).label:'',c.cond.size].filter(Boolean).join('·');
-    return `<span class="sc" data-i="${i}"><b>${esc(c.name)}</b>${parts?' '+esc(parts):''} <span class="x" data-e="${i}" title="조건 수정">✏️</span><span class="x" data-x="${i}" title="삭제">✕</span></span>`;
+    const bell=baEnabled()?`<span class="bell" data-a="${i}" title="${c.alert===false?'신규 공고 알림 꺼짐 — 눌러서 켜기':'신규 공고 알림 받는 중 — 눌러서 끄기'}">${c.alert===false?'🔕':'🔔'}</span>`:'';   /* ★ [2026-09-23] */
+    return `<span class="sc" data-i="${i}">${bell}<b>${esc(c.name)}</b>${parts?' '+esc(parts):''} <span class="x" data-e="${i}" title="조건 수정">✏️</span><span class="x" data-x="${i}" title="삭제">✕</span></span>`;
   };
   let html='';
   /* ★ [2026-07-07] 정렬 선택 UI — 가나다순(기본)·최근저장순·최근사용순 */
@@ -936,6 +967,12 @@ function renderSaved(){
       const el=document.getElementById('saved-q'); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } });
   }
   document.querySelectorAll('#saved-chips .sc[data-i]').forEach(el=>el.addEventListener('click',async e=>{
+    if(e.target.dataset.a!==undefined){   /* ★ [2026-09-23] 기업별 신규 공고 알림 켜기/끄기 */
+      e.stopPropagation();
+      const i=parseInt(e.target.dataset.a,10); if(!SAVED[i]) return;
+      if(SAVED[i].alert===false) delete SAVED[i].alert; else SAVED[i].alert=false;
+      await persistSaved(); renderSaved(); return;
+    }
     if(e.target.dataset.x!==undefined){
       e.stopPropagation();
       const i=parseInt(e.target.dataset.x,10);
@@ -952,6 +989,76 @@ function renderSaved(){
     }
     applyCompany(parseInt(el.dataset.i,10));               // 칩 → 조회만
   }));
+}
+
+/* ════════ ★ [2026-09-23] 신규 지원사업 알림 (ba-) ════════
+   서버 bizProgramAlert 가 만든 biz_alert_digest/{uid}_{YYYYMMDD} 를 읽어 고객기업별 목록으로 보여준다.
+   날짜 목록은 biz_alert_state/{uid}.dates (최근 30일). 오픈 전에는 BA_TEST_IDS 회원·관리자만 노출. */
+const BA_TEST_IDS=['gildong'];   // ★ 전체 오픈 시 [] 로 (serviceAlimtalk.js·index.html 의 같은 상수도 함께)
+function baEnabled(){ const id=String((ME_INFO||{}).loginId||''); return !BA_TEST_IDS.length || BA_TEST_IDS.includes(id) || (ME_INFO||{}).role==='admin'; }
+const baYmd=c=>`${c.slice(0,4)}-${c.slice(4,6)}-${c.slice(6,8)}`;
+let _baOpenCo=0;
+async function baOpen(dateCode){
+  const pn=$('ba-panel'); if(!ME) return;
+  pn.style.display='block';
+  pn.innerHTML='<div class="ba-empty">🔄 알림 기록을 불러오는 중…</div>';
+  let dates=[];
+  try{ const st=await getDoc(doc(db,'biz_alert_state',ME.uid)); dates=st.exists()?((st.data()||{}).dates||[]):[]; }catch(e){}
+  const code=dateCode||(dates[0]?String(dates[0].d).replace(/-/g,''):'');
+  let dg=null;
+  if(code){ try{ const s2=await getDoc(doc(db,'biz_alert_digest',ME.uid+'_'+code)); dg=s2.exists()?s2.data():null; }catch(e){} }
+  _baOpenCo=0; baRender(code,dates,dg);
+  pn.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function baCondTxt(c){
+  const g=c.ind?(IND_GROUPS.find(x=>x.v===c.ind)||{}).label:'';
+  return [c.dist?(c.region+' '+c.dist):c.region, g, c.size].filter(Boolean).join(' · ')||'조건 일부만 저장됨';
+}
+function baRender(code,dates,dg){
+  const pn=$('ba-panel');
+  const opts=dates.map(x=>{const c=String(x.d).replace(/-/g,''); const lab={sent:'',preview:' · 미리보기',failed:' · 발송 실패'}[x.s]||''; return `<option value="${c}"${c===code?' selected':''}>${esc(x.d)} (${x.c||0}곳 ${x.n||0}건${lab})</option>`;}).join('');
+  const sel=dates.length?`<select id="ba-date">${(!code||dates.some(x=>String(x.d).replace(/-/g,'')===code))?'':`<option value="${code}" selected>${esc(baYmd(code))}</option>`}${opts}</select>`:'';
+  let body='';
+  if(!dg){
+    body=`<div class="ba-empty">${code?esc(baYmd(code))+' 알림 기록이 없습니다. 기록은 최근 30일만 보관됩니다.':'아직 받은 신규 공고 알림이 없습니다. 저장한 고객기업에 맞는 새 공고가 나오면 화·금 오전 9시에 카카오톡으로 알려드립니다.'}</div>`;
+  }else{
+    body=(dg.companies||[]).map((co,ci)=>{
+      const more=co.count>(co.programs||[]).length?`<div class="ba-co-sub" style="padding-left:10px">외 ${co.count-(co.programs||[]).length}건 — <a data-co="${esc(co.key)}">이 기업 조건으로 전체 보기</a></div>`:'';
+      const pgs=ci===_baOpenCo?(co.programs||[]).map(p=>`<a class="ba-pg" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}${p.dlim?` <span class="dlim" style="display:inline-block">${esc(p.dlim)}</span>`:''}<span>${esc(p.organization||'')}${p.period?' · '+esc(p.period):''}</span></a>`).join('')+more:'';
+      return `<div class="ba-co"><div class="ba-co-hd" data-ci="${ci}"><b>${esc(co.key)}</b><span class="c">${co.count}건 ${ci===_baOpenCo?'▴':'▾'}</span></div>
+        <div class="ba-co-sub">${esc(baCondTxt(co.cond||{}))} · <a data-co="${esc(co.key)}">이 조건으로 전체 검색</a></div>${pgs}</div>`;
+    }).join('')||'<div class="ba-empty">이 날짜에 새로 매칭된 공고가 없습니다.</div>';
+  }
+  const canPrev=(ME_INFO||{}).role==='admin'||BA_TEST_IDS.includes(String((ME_INFO||{}).loginId||''));
+  pn.innerHTML=`<div class="ba-hd"><b>🔔 고객기업 신규 지원사업</b>${sel}${dg?`<span class="ba-sum">고객기업 ${dg.companyCount||0}곳 · 새 공고 ${dg.programCount||0}건${dg.preview?' · 미리보기(발송 안 함)':''}</span>`:''}
+    ${canPrev?'<button class="ba-open" id="ba-prev" style="margin-left:auto">지금 매칭해 보기</button>':''}<button class="ba-open" id="ba-close" style="${canPrev?'margin-left:0':''};background:#EEF2F6;color:#5A6B7B">닫기</button></div>
+    ${body}
+    <div class="ba-note">
+      · 저장한 고객기업 조건으로 <b>새로 등록된 공고 중 핵심 일치</b>만 모았습니다. 이미 알려드린 공고는 다시 보내지 않습니다.<br>
+      · 공고 자격요건은 AI가 원문을 읽어 정리한 결과라 <b>일부 오차</b>가 있을 수 있습니다. 신청 전 반드시 원문(제목 클릭)을 확인하세요.<br>
+      · 시·군·구를 저장하지 않은 기업은 구청·군청 한정 공고가 함께 표시될 수 있습니다(「○○구 한정」 표시).<br>
+      · 설립연도·직원수·보유 인증 등 <b>저장하지 않은 조건은 판정하지 않습니다</b> — 고객기업 조건을 자세히 저장할수록 정확해집니다.<br>
+      · 산업단지·읍면동 한정, 첨부 공고문에만 있는 세부 요건은 원문에서 확인하세요.<br>
+      · 기업별 알림은 저장된 고객기업의 🔔 를 눌러 끌 수 있고, 수신 주기(기본 화·금)는 JARVIA 마이페이지에서 바꿀 수 있습니다.
+    </div>`;
+  const ds=document.getElementById('ba-date'); if(ds) ds.addEventListener('change',e=>baOpen(e.target.value));
+  document.getElementById('ba-close').addEventListener('click',()=>{ pn.style.display='none'; });
+  pn.querySelectorAll('.ba-co-hd').forEach(h=>h.addEventListener('click',()=>{ const ci=parseInt(h.dataset.ci,10); _baOpenCo=(_baOpenCo===ci?-1:ci); baRender(code,dates,dg); }));
+  pn.querySelectorAll('a[data-co]').forEach(a=>a.addEventListener('click',()=>{
+    const i=SAVED.findIndex(x=>String(x.name).slice(0,40)===a.dataset.co);
+    if(i<0){ alert('저장된 고객기업에서 찾을 수 없습니다. 이름을 바꾸셨거나 삭제하신 경우입니다.'); return; }
+    applyCompany(i); const L=document.getElementById('list'); if(L) L.scrollIntoView({behavior:'smooth',block:'start'});
+  }));
+  const pb=document.getElementById('ba-prev');
+  if(pb) pb.addEventListener('click',async()=>{
+    pb.disabled=true; pb.textContent='매칭 중…';
+    try{
+      const f=httpsCallable(getFunctions(app,'asia-northeast3'),'bizAlertPreview',{timeout:120000});
+      const r=(await f({})).data||{};
+      if(!r.programCount){ alert('새로 매칭된 공고가 없습니다.'+(r.reason?' ('+r.reason+')':'')); pb.disabled=false; pb.textContent='지금 매칭해 보기'; return; }
+      baOpen(r.dateCode);
+    }catch(e){ alert('미리보기 실패: '+e.message); pb.disabled=false; pb.textContent='지금 매칭해 보기'; }
+  });
 }
 
 /* ════════ KSIC 모달 ════════ */
