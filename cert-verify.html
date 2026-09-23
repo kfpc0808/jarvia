@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>수료증 진위 확인 · JARVIA</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#F0F3F7;color:#1B2A41;padding:28px 16px 60px}
+.wrap{max-width:720px;margin:0 auto}
+.head{display:flex;align-items:baseline;gap:10px;margin-bottom:18px}
+.head h1{font-size:20px;font-weight:700}
+.head span{font-size:13px;color:#7C8CA5}
+.card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:22px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input{flex:1;min-width:220px;font-family:inherit;font-size:15px;padding:11px 13px;border:1px solid #CBD5E1;border-radius:8px}
+button{font-family:inherit;font-size:14px;font-weight:600;border:0;border-radius:8px;padding:11px 20px;background:#1B3A5C;color:#fff;cursor:pointer}
+button:hover{background:#2E5580}
+.note{font-size:13px;color:#7C8CA5;margin-top:10px;line-height:1.7}
+#out{margin-top:18px}
+.ok{display:inline-flex;align-items:center;gap:8px;background:#E8F5EE;color:#1E7B4E;font-size:14px;font-weight:700;padding:8px 14px;border-radius:999px}
+.ng{display:inline-flex;align-items:center;gap:8px;background:#FDECEA;color:#C0392B;font-size:14px;font-weight:700;padding:8px 14px;border-radius:999px}
+.info{margin-top:16px;font-size:15px;line-height:2.1}
+.info div{display:flex;gap:14px}
+.info span{width:92px;color:#5B6B82}
+.info b{font-weight:700}
+h3{font-size:13px;color:#7C8CA5;letter-spacing:.1em;margin:22px 0 8px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th,.tbl td{border-bottom:1px solid #EDF1F5;padding:9px 6px;text-align:left}
+.tbl th{color:#5B6B82;font-weight:600;font-size:13px}
+.days{color:#7C8CA5;font-size:12.5px;margin-top:4px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><h1>수료증 진위 확인</h1><span>(주)한국FP센터 · JARVIA</span></div>
+  <div class="card">
+    <div class="row">
+      <input id="no" placeholder="수료증 번호 (예: JARVIA-2026-000001)" autocomplete="off">
+      <button onclick="doCheck()">확인</button>
+    </div>
+    <div class="note">수료증 하단의 번호 또는 QR 코드로 발급 사실을 확인할 수 있습니다.<br>개인정보 보호를 위해 성명은 일부만 표시되며 연락처는 제공하지 않습니다.</div>
+    <div id="out"></div>
+  </div>
+</div>
+<script>
+const API='https://asia-northeast3-jarvia-platform.cloudfunctions.net/lmsCertVerify';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ymT=v=>v?(+v.slice(0,4))+'.'+(+v.slice(4,6)):'';
+const dT=v=>v?(+v.slice(0,4))+'.'+(+v.slice(4,6))+'.'+(+v.slice(6,8)):'';
+
+async function doCheck(){
+  const no=($('no').value||'').trim().toUpperCase();
+  if(!no){$('out').innerHTML='<span class="ng">수료증 번호를 입력해 주세요.</span>';return;}
+  $('out').innerHTML='<div class="note">확인 중...</div>';
+  let r=null;
+  try{ r=await (await fetch(API+'?no='+encodeURIComponent(no))).json(); }
+  catch(e){ $('out').innerHTML='<span class="ng">확인 중 오류가 발생했습니다.</span>'; return; }
+  if(!r||!r.ok){ $('out').innerHTML='<span class="ng">✕ '+esc((r&&r.error)||'확인할 수 없습니다.')+'</span>'; return; }
+  const c=r.cert;
+  let h='<span class="ok">✓ 정상 발급된 수료증입니다</span>'
+   +'<div class="info">'
+   +'<div><span>수료증 번호</span><b>'+esc(c.certNo)+'</b></div>'
+   +'<div><span>성명</span><b>'+esc(c.name)+'</b></div>'
+   +'<div><span>소속</span><b>'+esc(c.company)+'</b></div>'
+   +'<div><span>교육 기간</span><b>'+ymT(c.from)+' ~ '+ymT(c.to)+'</b></div>'
+   +'<div><span>발급일</span><b>'+dT(c.issuedAt)+'</b></div>'
+   +'<div><span>이수 건수</span><b>'+(c.total||0)+'건</b></div></div>';
+  if((c.courses||[]).length){
+    h+='<h3>이수 과정</h3><table class="tbl"><thead><tr><th>과정</th><th style="width:110px">이수일</th></tr></thead><tbody>'
+     +c.courses.map(x=>'<tr><td>'+esc(x.title)+(x.label?'<div class="days">'+esc(x.label)+'</div>':'')+'</td><td>'+dT(x.completedAt)+'</td></tr>').join('')
+     +'</tbody></table>';
+  }
+  if((c.groups||[]).length){
+    h+='<h3>정기 콘텐츠</h3><table class="tbl"><thead><tr><th>구분</th><th style="width:180px">이수</th></tr></thead><tbody>'
+     +c.groups.map(g=>'<tr><td>'+esc(g.label)+'<div class="days">'+esc(g.dayText)+'</div></td><td>'+esc(g.text)+'</td></tr>').join('')
+     +'</tbody></table>';
+  }
+  $('out').innerHTML=h;
+}
+window.doCheck=doCheck;
+$('no').addEventListener('keydown',e=>{if(e.key==='Enter')doCheck();});
+/* QR·링크로 들어오면 바로 확인 */
+(function(){const q=new URLSearchParams(location.search).get('no');if(q){$('no').value=q;doCheck();}})();
+</script>
+</body>
+</html>
