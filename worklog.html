@@ -1098,6 +1098,22 @@ textarea.ag{overflow:hidden;min-height:48px}
         #lmsWrap .hm td{padding:3px 2px;border:0}
         #lmsWrap .lg{font-size:11px;color:#8A97A8;display:flex;align-items:center;gap:5px;margin-top:8px}
         #lmsWrap .lg i{width:14px;height:9px;border-radius:2px;display:inline-block}
+        #lmsWrap .prow{cursor:pointer}
+        #lmsWrap .prow:hover{background:#F7FAFD}
+        #lmsDlg{position:fixed;inset:0;background:rgba(16,28,44,.45);display:none;z-index:9000;align-items:center;justify-content:center;padding:16px}
+        #lmsDlg.show{display:flex}
+        #lmsDlg .box{background:#fff;border-radius:16px;max-width:760px;width:100%;max-height:86vh;overflow:auto;padding:20px 22px}
+        #lmsDlg .top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+        #lmsDlg .top b{font-size:16px}
+        #lmsDlg .x{margin-left:auto;border:1px solid #E3EAF2;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;font-family:inherit;cursor:pointer}
+        #lmsDlg table{width:100%;border-collapse:collapse}
+        #lmsDlg th{font-size:11.5px;color:#7C8CA5;font-weight:600;text-align:left;padding:7px 8px;border-bottom:1px solid #E7EDF4}
+        #lmsDlg td{font-size:12.5px;padding:8px;border-bottom:1px solid #F1F5F9}
+        #lmsDlg .num{text-align:right;font-variant-numeric:tabular-nums}
+        #lmsDlg .bar{height:6px;background:#EDF2F7;border-radius:3px;overflow:hidden;min-width:60px}
+        #lmsDlg .bar i{display:block;height:100%;background:linear-gradient(90deg,#1B3A5C,#4B7CAB)}
+        #lmsDlg .bar i.ok{background:#2ECC71}
+        @media (max-width:760px){ #lmsDlg .mcol{display:none} }
         #lmsWrap .nudge{border:0;background:#14304F;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;font-family:inherit;font-weight:700;margin-left:auto}
         #lmsWrap .hd{display:flex;align-items:center;gap:8px}
         /* 좁은 화면 — 히트맵은 7일, 표는 핵심 열만 */
@@ -1120,6 +1136,7 @@ textarea.ag{overflow:hidden;min-height:48px}
           <button type="button" data-r="all" onclick="wlLmsRange('all')">전체</button>
         </span></div>
       <div id="lmsBody"><div class="tEmpty">불러오는 중…</div></div>
+      <div id="lmsDlg" onclick="if(event.target===this)wlLmsWhoClose()"><div class="box" id="lmsDlgBox"></div></div>
     </div>
   </div>
 
@@ -1715,8 +1732,8 @@ function renderLms(){
 
   const list='<div class="lbox"><h4>인원별 현황</h4><table>'
     +'<tr><th>이름</th><th class="mcol">직책</th><th class="num mcol">수강</th><th class="num">이수</th><th class="num">학습 시간</th><th class="mcol">최근</th><th>상태</th></tr>'
-    +rows.slice().sort((a,b)=>(b.playedSec||0)-(a.playedSec||0)).map(p=>'<tr>'
-      +'<td><b>'+esc(p.name)+'</b>'+(p.self?' <span class="pill">본인</span>':'')+'</td>'
+    +rows.slice().sort((a,b)=>(b.playedSec||0)-(a.playedSec||0)).map(p=>'<tr class="prow" onclick="wlLmsWho(\''+p.uid+'\')">'
+      +'<td><b>'+esc(p.name)+'</b>'+(p.self?' <span class="pill">본인</span>':'')+' <span class="mut" style="font-size:11px">▸ 상세</span></td>'
       +'<td class="mut mcol">'+(KO[p.title]||'')+'</td>'
       +'<td class="num mcol">'+(p.courses||0)+'</td><td class="num">'+(p.done||0)+'</td>'
       +'<td class="num">'+_lmsSec(p.playedSec)+'</td><td class="mut mcol">'+(p.lastAt?_lmsDay(p.lastAt):'-')+'</td>'
@@ -1725,6 +1742,33 @@ function renderLms(){
 
   $('lmsBody').innerHTML=kpi+teamBox+idleBox+hm+list;
 }
+
+/* ★ [2026-09-23] 개인 학습 상세 — 무엇을 얼마나 들었는지 */
+window.wlLmsWhoClose=function(){ $('lmsDlg').classList.remove('show'); };
+window.wlLmsWho=async function(uid){
+  const dlg=$('lmsDlg'), box=$('lmsDlgBox');
+  box.innerHTML='<div class="tEmpty">불러오는 중…</div>'; dlg.classList.add('show');
+  try{
+    const r=(await httpsCallable(fns,'wlOrgView')({mode:'lmsMember',uid})).data;
+    if(!r||!r.success){ box.innerHTML='<div class="tEmpty">'+((r&&r.error)||'불러오지 못했습니다.')+'</div>'; return; }
+    const esc=x=>String(x==null?'':x).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const KO={member:'팀원',leader:'팀장',branch:'지점장'};
+    const T={daily:'데일리리포트',client:'고객데일리',consensus:'모닝 컨센서스',monthly:'월간 영업리포트',
+             master_guide:'마스터가이드',medical_weekly:'메디컬 위클리',tax_weekly:'택스컨설팅 위클리',
+             case_report:'클로징 리포트',report:'특급보고서',audio:'오디오',video:'영상',closing:'클로징PPT'};
+    const t=r.totals||{};
+    box.innerHTML='<div class="top"><b>'+esc(r.who.name)+'</b><span class="mut">'+(KO[r.who.title]||'')+'</span>'
+      +'<button type="button" class="x" onclick="wlLmsWhoClose()">닫기</button></div>'
+      +'<div class="mut" style="font-size:12.5px;margin-bottom:12px">수강 '+(t.courses||0)+'강좌 · 이수 '+(t.done||0)+'건 · 누적 학습 '+_lmsSec(t.playedSec)+'</div>'
+      +(r.courses.length?'<table><tr><th>강좌</th><th class="mcol">종류</th><th>진도</th><th class="num">진도율</th><th class="num mcol">학습</th><th>최근</th></tr>'
+        +r.courses.map(c=>'<tr><td>'+esc(c.title)+(c.completed?' <span class="pill ok" style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:#E9F6EF;color:#1E7B4E">이수</span>':'')+'</td>'
+          +'<td class="mut mcol">'+(T[c.type]||'콘텐츠')+'</td>'
+          +'<td style="width:24%"><div class="bar"><i class="'+(c.completed?'ok':'')+'" style="width:'+Math.min(100,c.ratio)+'%"></i></div></td>'
+          +'<td class="num">'+c.ratio+'%</td><td class="num mcol">'+_lmsSec(c.playedSec)+'</td>'
+          +'<td class="mut">'+(c.completedAt?_lmsDay(c.completedAt):(c.lastAt?_lmsDay(c.lastAt):'-'))+'</td></tr>').join('')
+        +'</table>':'<div class="tEmpty">수강 기록이 없습니다.</div>');
+  }catch(e){ box.innerHTML='<div class="tEmpty">불러오지 못했습니다.</div>'; }
+};
 
 /* ★ [2026-09-23] 미학습 인원에게 코멘트 — 기존 작성 화면을 열고 대상만 미리 지정 */
 window.wlLmsNudge=async function(){
