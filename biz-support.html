@@ -69,6 +69,7 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .row .mt{font-size:12px;color:#8A99A8;margin-top:3px}
 .row .star{color:#C9A05C;font-size:12px;margin-right:3px}
 .newb{font-size:10px;font-weight:800;color:#E14848;margin-right:5px;letter-spacing:.3px}
+.dlim{display:inline-block;font-size:10.5px;font-weight:700;color:#8B6914;background:#FBF1DE;border-radius:6px;padding:1px 6px;margin-left:6px;vertical-align:1px}   /* ★ [2026-09-23] 시·군·구 한정 배지 */
 .oth-tg{margin:14px 0 4px;padding:10px;text-align:center;font-size:13px;font-weight:700;color:#5A6B7B;background:#F1F5F9;border:1px dashed #C9D6E2;border-radius:10px;cursor:pointer}
 .oth-tg:hover{background:#EAF1F8}
 .tchips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-2px 0 12px}
@@ -213,6 +214,7 @@ input:focus,select:focus{outline:none;border-color:#1B3A5C!important;box-shadow:
     </div>
     <div class="cond-grid">
       <div><label>지역</label><select id="f-region"><option value="">전체</option></select></div>
+      <div><label>시·군·구 <span style="color:#A0AEBB">(선택)</span></label><select id="f-dist" disabled><option value="">시·도 먼저 선택</option></select></div>
       <div><label>기업규모</label><select id="f-size"><option value="">무관</option><option value="소상공인">소상공인</option><option value="중소기업">중소기업</option><option value="중견기업">중견기업</option></select></div>
       <div><label>업종 (대분류)</label><select id="f-ind"><option value="">무관</option></select></div>
     </div>
@@ -315,6 +317,33 @@ const db=getFirestore(app,'javia-db');
 const REGIONS=['서울','부산','대구','인천','광주','대전','울산','세종','경기','강원','충북','충남','전북','전남','경북','경남','제주'];
 const REGION_ALIAS={'충북':'충청북도','충남':'충청남도','전북':'전라북도','전남':'전라남도','경북':'경상북도','경남':'경상남도'}; // ★ 정식 명칭 별칭 (includes 불일치 보정)
 const regionOf=s=>REGIONS.find(r=>s.includes(r)||(REGION_ALIAS[r]&&s.includes(REGION_ALIAS[r])))||'';
+/* ★ [2026-09-23] 시·군·구 목록 (2026-09 기준 — 인천 2026-07 개편: 제물포구·영종구·검단구 신설, 대구 군위군 포함, 세종은 단층제) */
+const DISTRICTS={
+  '서울':['종로구','중구','용산구','성동구','광진구','동대문구','중랑구','성북구','강북구','도봉구','노원구','은평구','서대문구','마포구','양천구','강서구','구로구','금천구','영등포구','동작구','관악구','서초구','강남구','송파구','강동구'],
+  '부산':['중구','서구','동구','영도구','부산진구','동래구','남구','북구','해운대구','사하구','금정구','강서구','연제구','수영구','사상구','기장군'],
+  '대구':['중구','동구','서구','남구','북구','수성구','달서구','달성군','군위군'],
+  '인천':['제물포구','영종구','미추홀구','연수구','남동구','부평구','계양구','서구','검단구','강화군','옹진군'],
+  '광주':['동구','서구','남구','북구','광산구'],
+  '대전':['동구','중구','서구','유성구','대덕구'],
+  '울산':['중구','남구','동구','북구','울주군'],
+  '세종':[],
+  '경기':['수원시','성남시','의정부시','안양시','부천시','광명시','평택시','동두천시','안산시','고양시','과천시','구리시','남양주시','오산시','시흥시','군포시','의왕시','하남시','용인시','파주시','이천시','안성시','김포시','화성시','광주시','양주시','포천시','여주시','연천군','가평군','양평군'],
+  '강원':['춘천시','원주시','강릉시','동해시','태백시','속초시','삼척시','홍천군','횡성군','영월군','평창군','정선군','철원군','화천군','양구군','인제군','고성군','양양군'],
+  '충북':['청주시','충주시','제천시','보은군','옥천군','영동군','증평군','진천군','괴산군','음성군','단양군'],
+  '충남':['천안시','공주시','보령시','아산시','서산시','논산시','계룡시','당진시','금산군','부여군','서천군','청양군','홍성군','예산군','태안군'],
+  '전북':['전주시','군산시','익산시','정읍시','남원시','김제시','완주군','진안군','무주군','장수군','임실군','순창군','고창군','부안군'],
+  '전남':['목포시','여수시','순천시','나주시','광양시','담양군','곡성군','구례군','고흥군','보성군','화순군','장흥군','강진군','해남군','영암군','무안군','함평군','영광군','장성군','완도군','진도군','신안군'],
+  '경북':['포항시','경주시','김천시','안동시','구미시','영주시','영천시','상주시','문경시','경산시','의성군','청송군','영양군','영덕군','청도군','고령군','성주군','칠곡군','예천군','봉화군','울진군','울릉군'],
+  '경남':['창원시','진주시','통영시','사천시','김해시','밀양시','거제시','양산시','의령군','함안군','창녕군','고성군','남해군','하동군','산청군','함양군','거창군','합천군'],
+  '제주':['제주시','서귀포시']
+};
+function fillDist(region,val){   // ★ [2026-09-23] 시·도에 맞춰 시·군·구 목록 채움
+  const el=$('f-dist'), list=DISTRICTS[region]||[];
+  if(!region){ el.innerHTML='<option value="">시·도 먼저 선택</option>'; el.disabled=true; el.value=''; return; }
+  if(!list.length){ el.innerHTML='<option value="">해당 없음</option>'; el.disabled=true; el.value=''; return; }
+  el.innerHTML='<option value="">전체 (시·도 전역)</option>'+list.map(d=>`<option>${d}</option>`).join('');
+  el.disabled=false; el.value=list.includes(val)?val:'';
+}
 const IND_GROUPS=[
   {v:'manu', label:'제조업', words:['제조']},
   {v:'const',label:'건설업', words:['건설']},
@@ -346,7 +375,7 @@ const ALL_SIZE_WORDS=['소상공인','중소기업','중견기업','중견'];
 let PROGRAMS=[];          // 전처리된 공고
 let KSIC=null;            // 지연 로드
 let ME=null;              // 로그인 사용자 (Firestore 저장용)
-let state={chip:'',q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[],fNew:'',fDue:''};
+let state={chip:'',q:'',region:'',dist:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[],fNew:'',fDue:''};
 let shown=PAGE_SIZE;
 const todayStr=(()=>{const d=new Date(Date.now()+9*3600*1000);return d.toISOString().slice(0,10).replace(/-/g,'');})();
 const freshCut=(()=>{const d=new Date(Date.now()+9*3600*1000-7*86400000);return d.toISOString().slice(0,10);})(); // 최근 7일 = NEW
@@ -386,10 +415,11 @@ function timePass(p){
    적합 공고만 점수순으로 수신. signal=핵심 일치(지역·업종 정확 일치 근거 보유).
    서버 실패 시 기존 클라이언트 엔진으로 폴백. */
 let SERVER=null, matching=false, matchTimer=null, othOpen=false;
-function condActive(){ return !!(state.region||state.size||state.ind||state.ksic||state.year||state.emp||state.certs.length); }   // ★ [2026-09-22] ind(업종 대분류) 추가
+function condActive(){ return !!(state.region||state.dist||state.size||state.ind||state.ksic||state.year||state.emp||state.certs.length); }   // ★ [2026-09-22] ind(업종 대분류) 추가
 function condQS(){
   const p=new URLSearchParams();
   if(state.region)p.set('region',state.region);
+  if(state.region&&state.dist)p.set('dist',state.dist);   // ★ [2026-09-23] 시·군·구
   if(state.size)p.set('size',state.size);
   if(state.ind)p.set('ind',state.ind);   // ★ [2026-09-22] 업종 대분류 — 기존엔 미전송이라 서버 매칭에서 완전히 누락
   if(state.ksic)p.set('ksic',state.ksic);
@@ -541,7 +571,8 @@ async function init(){
 
   // 입력 바인딩
   $('q').addEventListener('input',e=>{state.q=e.target.value.trim().toLowerCase();shown=PAGE_SIZE;render();});
-  [['f-region','region'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;scheduleMatch();render();}));
+  $('f-region').addEventListener('change',e=>{ state.dist=''; fillDist(e.target.value,''); });   // ★ [2026-09-23] 시·도 변경 시 시·군·구 초기화 (아래 공용 바인딩보다 먼저 실행)
+  [['f-region','region'],['f-dist','dist'],['f-size','size'],['f-ind','ind']].forEach(([id,k])=>$(id).addEventListener('change',e=>{state[k]=e.target.value;shown=PAGE_SIZE;scheduleMatch();render();}));
   // ★ 기간 칩: 같은 그룹 내 택1 토글 (재클릭 해제), 신규·마감 동시 선택 = AND
   document.querySelectorAll('.tc').forEach(b=>b.addEventListener('click',()=>{
     if(b.dataset.n!==undefined){
@@ -574,8 +605,9 @@ async function init(){
   });
   $('k5').addEventListener('change',updateKsicState);
   $('btn-reset').addEventListener('click',()=>{
-    state={chip:state.chip,q:'',region:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[]};
+    state={chip:state.chip,q:'',region:'',dist:'',size:'',ind:'',ksic:'',year:'',emp:'',certs:[]};
     document.querySelectorAll('#certs input').forEach(x=>{x.checked=false;});
+    fillDist('','');   // ★ [2026-09-23]
     $('q').value='';['f-region','f-size','f-ind','f-year','f-emp'].forEach(id=>$(id).value='');
     setKsicCascade('');
     state.fNew=''; state.fDue='';
@@ -727,6 +759,10 @@ function render(){
   else if(state.ksic && KSIC) inf.push(`⚠ KSIC ${state.ksic} — 코드를 찾을 수 없습니다`);
   if(state.emp&&/^\d+$/.test(state.emp)) inf.push(`✓ 직원 ${state.emp}인 — 인원 요건 미달 공고 제외`);
   if(state.ind){ const g=IND_GROUPS.find(x=>x.v===state.ind); if(g) inf.push(`✓ ${g.label} — 타 업종 전용 제외·관련 공고 우선`); }   // ★ [2026-09-22]
+  /* ★ [2026-09-23] 시·군·구 안내 — 판단에 필요한 한계를 함께 표시 */
+  if(state.region&&state.dist) inf.push(`✓ ${state.region} ${state.dist} — 다른 시·군·구 한정 공고 제외`);
+  else if(state.region&&(DISTRICTS[state.region]||[]).length) inf.push(`ⓘ 시·군·구를 넣으면 구청·군청 한정 공고까지 걸러집니다`);
+  if(condActive()) inf.push(`※ 산업단지·읍면동 한정, 첨부 공고문에만 있는 세부 요건은 원문에서 확인하세요`);
   for(const cd of CERT_DEFS){
     if(state.certs.includes(cd.v)) inf.push(cd.exclusive?`✓ ${cd.label} — 전용 공고 포함·우선`:`✓ ${cd.label} — 관련 공고 우선`);
   }
@@ -744,10 +780,13 @@ function render(){
     const indHit = view.mode==='server' ? indMatched(p) : !!p._boost;
     const star=indHit?'<span class="star">★</span>':'';
     const newb=(p.registeredDate||'').slice(0,10)>=freshCut?'<span class="newb">NEW</span>':'';
+    /* ★ [2026-09-23] 시·군·구 한정 공고 — 기업 시·군·구 미입력 시 서버가 '○○ 한정' 사유를 붙여 보냄 */
+    const dr=view.mode==='server'?(p.matchReasons||[]).find(r=>/ 한정$/.test(r)):'';
+    const dlim=dr?`<span class="dlim" title="이 시·군·구 사업장만 신청 가능 — 고객기업 시·군·구를 입력하면 자동으로 걸러집니다">${esc(dr)}</span>`:'';
     return `<div class="row" data-url="${esc(p.url)}">
       <span class="cat">${esc(p.category||'기타')}</span>
       <div class="bd">
-        <div class="nm">${newb}${star}${esc(p.name)}</div>
+        <div class="nm">${newb}${star}${esc(p.name)}${dlim}</div>
         <div class="mt">${esc(p.organization)}${p.executor?' · '+esc(p.executor):''}${p.period?' · '+esc(p.period):''}</div>
       </div>
       <span class="dd ${ddCls}">${ddTxt}</span>
@@ -807,8 +846,8 @@ async function persistSaved(){
   try{ await setDoc(doc(db,'biz_companies',ME.uid),{list:SAVED,updatedAt:Date.now()}); }
   catch(e){ try{localStorage.setItem('biz_saved_companies',JSON.stringify(SAVED));}catch(_){ } }
 }
-function curCond(){ return {region:state.region,size:state.size,ind:state.ind,ksic:state.ksic,year:state.year,emp:state.emp,certs:[...state.certs]}; }
-function condEmpty(){ const c=curCond(); return !(c.region||c.size||c.ind||c.ksic||c.year||c.emp||(c.certs&&c.certs.length)); }
+function curCond(){ return {region:state.region,dist:state.dist||'',size:state.size,ind:state.ind,ksic:state.ksic,year:state.year,emp:state.emp,certs:[...state.certs]}; }
+function condEmpty(){ const c=curCond(); return !(c.region||c.dist||c.size||c.ind||c.ksic||c.year||c.emp||(c.certs&&c.certs.length)); }
 async function saveCompany(){
   if(condEmpty()){ alert('저장할 조건을 먼저 입력해주세요.'); return; }
   if(editIdx>=0 && SAVED[editIdx]){
@@ -849,8 +888,10 @@ function applyCompany(i,edit){
   // ★ 최근 사용순: 불러온 기업을 맨 앞으로 (목록 순서 = 최근 사용 순서)
   if(i>0){ const [mv]=SAVED.splice(i,1); SAVED.unshift(mv); persistSaved(); i=0; }
   const c=SAVED[i];
-  state={...state,region:'',size:'',ind:'',ksic:'',year:'',emp:'',...c.cond};
-  $('f-region').value=c.cond.region||'';$('f-size').value=c.cond.size||'';$('f-ind').value=c.cond.ind||'';
+  state={...state,region:'',dist:'',size:'',ind:'',ksic:'',year:'',emp:'',...c.cond};
+  $('f-region').value=c.cond.region||'';
+  fillDist(c.cond.region||'',c.cond.dist||''); state.dist=$('f-dist').value;   /* ★ [2026-09-23] 시·군·구 복원 */
+  $('f-size').value=c.cond.size||'';$('f-ind').value=c.cond.ind||'';
   $('f-year').value=c.cond.year||'';$('f-emp').value=c.cond.emp||'';
   state.certs=Array.isArray(c.cond.certs)?[...c.cond.certs]:[];
   document.querySelectorAll('#certs input').forEach(x=>{x.checked=state.certs.includes(x.value);});
@@ -862,7 +903,7 @@ function applyCompany(i,edit){
 function renderSaved(){
   $('saved-row').style.display=SAVED.length?'flex':'none';
   const mkChip=(c,i)=>{
-    const parts=[c.cond.region,c.cond.ind?(IND_GROUPS.find(g=>g.v===c.cond.ind)||{}).label:'',c.cond.size].filter(Boolean).join('·');
+    const parts=[c.cond.dist?c.cond.region+' '+c.cond.dist:c.cond.region,c.cond.ind?(IND_GROUPS.find(g=>g.v===c.cond.ind)||{}).label:'',c.cond.size].filter(Boolean).join('·');
     return `<span class="sc" data-i="${i}"><b>${esc(c.name)}</b>${parts?' '+esc(parts):''} <span class="x" data-e="${i}" title="조건 수정">✏️</span><span class="x" data-x="${i}" title="삭제">✕</span></span>`;
   };
   let html='';
