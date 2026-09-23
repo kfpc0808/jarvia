@@ -80,7 +80,7 @@ select,input{font-family:inherit;font-size:14px;padding:9px 12px;border:1px soli
         <select id="f-to"></select>
         <button class="btn-sec" onclick="doPreview()">미리보기</button>
       </div>
-      <div class="msg">기간은 월 단위로 선택하며, 지난달까지 발급할 수 있습니다. 이미 발급한 달은 자동으로 빠집니다.</div>
+      <div class="msg">기간은 월 단위로 선택하며, 이번 달까지 발급할 수 있습니다. 지난달 이전은 한 번만 발급되고, 이번 달 수료증은 이후 이수한 과정이 생기면 같은 번호로 내용이 갱신됩니다.</div>
       <div id="pv" style="display:none;border-top:1px solid #EDF1F5;padding-top:14px;margin-top:6px">
         <div id="pv-body"></div>
         <div class="row" style="margin-top:16px">
@@ -123,6 +123,7 @@ select,input{font-family:inherit;font-size:14px;padding:9px 12px;border:1px soli
     </div>
     <div class="doc-qr"><div id="d-qr"></div><p>학습 내역 확인</p></div>
   </div>
+  <div id="cert-note" class="msg" style="max-width:794px;margin:14px auto 0;text-align:center"></div>
 </div>
 
 <script type="module">
@@ -151,7 +152,7 @@ async function showSetup(){
   try{
     const r=(await callCert({action:'months'})).data;
     if(!r.ok){ $('setup-msg').innerHTML='<span class="err">'+esc(r.error)+'</span>'; return; }
-    const usable=r.months.filter(m=>!m.issued);
+    const usable=r.months.filter(m=>!m.issued||m.current);   /* 이번 달은 이미 발급했어도 다시 고를 수 있다 */
     if(!usable.length){
       $('setup-msg').textContent='발급할 수 있는 이수 내역이 없습니다. 강좌를 80% 이상 들으시면 그 달부터 발급할 수 있습니다.';
     }else{
@@ -170,8 +171,8 @@ async function loadHist(){
     const r=(await callCert({action:'list'})).data;
     if(!r.ok||!r.list.length)return;
     $('hist').style.display='';
-    $('hist-b').innerHTML=r.list.map(c=>'<tr><td>'+esc(c.certNo)+'</td><td>'+ymT(c.from)+' ~ '+ymT(c.to)+'</td><td>'
-      +dT(c.issuedAt)+'</td><td>'+(c.courseCount+c.dailyCount)+'건</td>'
+    $('hist-b').innerHTML=r.list.map(c=>'<tr><td>'+esc(c.certNo)+((c.revision||0)>0?' <span style="color:#7C8CA5;font-size:12px">갱신 '+c.revision+'회</span>':'')+'</td><td>'+ymT(c.from)+' ~ '+ymT(c.to)+'</td><td>'
+      +dT(c.refreshedAt||c.issuedAt)+'</td><td>'+(c.courseCount+c.dailyCount)+'건</td>'
       +'<td><button class="btn-sec" onclick="location.href=\'./cert.html?no='+encodeURIComponent(c.certNo)+'\'">보기</button></td></tr>').join('');
   }catch(_e){}
 }
@@ -185,7 +186,8 @@ window.doPreview=async function(){
   $('pv-body').innerHTML='<div class="msg">확인 중...</div>';
   const r=(await callCert({action:'preview',from,to})).data;
   if(!r.ok){ $('pv-body').innerHTML='<div class="msg err">'+esc(r.error)+'</div>'; return; }
-  let h='<div class="msg">아래 내용으로 발급됩니다. 총 <b>'+r.total+'건</b></div>';
+  let h='<div class="msg">아래 내용으로 '+(r.refresh?'갱신':'발급')+'됩니다. 총 <b>'+r.total+'건</b></div>';
+  if(r.refresh) h+='<div class="msg">이번 달 수료증('+esc(r.refreshNo)+')이 이미 있어 <b>같은 번호로 내용이 갱신</b>됩니다. 이전에 출력한 수료증은 최신 내용으로 다시 출력해 주세요.</div>';
   if(r.skipped.length) h+='<div class="msg">이미 발급된 달은 제외되었습니다 — '+r.skipped.map(ymT).join(', ')+'</div>';
   if(r.courses.length){
     h+='<table class="tbl"><thead><tr><th>과정</th><th style="width:110px">이수일</th></tr></thead><tbody>'
@@ -220,11 +222,15 @@ async function showCert(no){
   $('d-comp').textContent=c.company||'';
   $('d-phone').textContent=c.phone||'';
   $('d-period').textContent='교육 기간  '+ymT(c.from)+' ~ '+ymT(c.to);
-  $('d-date').textContent=dT(c.issuedAt);
+  $('d-date').textContent=dT(c.refreshedAt||c.issuedAt);
+  if((c.revision||0)>0) $('d-no').textContent+='   (최종 갱신 '+dT(c.refreshedAt)+')';
   const items=[];
   (c.courses||[]).forEach(x=>items.push('<div class="li"><i>·</i><span>'+esc(x.title)+'</span><em>'+dT(x.completedAt)+'</em></div>'));
   (c.groups||[]).forEach(g=>items.push('<div class="li"><i>·</i><span>'+esc(g.label)+' — '+esc(g.text)+'<br><span style="color:#7C8CA5;font-size:12px">'+esc(g.dayText)+'</span></span></div>'));
   $('d-items').innerHTML=items.join('');
+  const nowYm=new Date().getFullYear()+String(new Date().getMonth()+1).padStart(2,'0');
+  $('cert-note').textContent=(c.months||[]).includes(nowYm)
+    ? '이번 달 수료증입니다. 이후 이수한 과정이 생기면 같은 번호로 내용이 갱신되니, 제출 전에 다시 출력해 주세요.' : '';
   try{ new QRCode($('d-qr'),{text:VERIFY+encodeURIComponent(c.certNo),width:78,height:78,correctLevel:QRCode.CorrectLevel.M}); }catch(_e){}
   document.title='수료증 '+c.certNo+' · JARVIA';
   window._certNo=c.certNo;
