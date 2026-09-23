@@ -1114,7 +1114,6 @@ textarea.ag{overflow:hidden;min-height:48px}
         #lmsDlg .bar i{display:block;height:100%;background:linear-gradient(90deg,#1B3A5C,#4B7CAB)}
         #lmsDlg .bar i.ok{background:#2ECC71}
         @media (max-width:760px){ #lmsDlg .mcol{display:none} }
-        #lmsWrap .nudge{border:0;background:#14304F;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;font-family:inherit;font-weight:700;margin-left:auto}
         #lmsWrap .hd{display:flex;align-items:center;gap:8px}
         /* 좁은 화면 — 히트맵은 7일, 표는 핵심 열만 */
         @media (max-width:760px){
@@ -1128,14 +1127,16 @@ textarea.ag{overflow:hidden;min-height:48px}
           #lmsWrap th,#lmsWrap td{padding:7px 5px;font-size:12px}
         }
       </style>
-      <div class="lh"><b>📚 학습 현황</b><span class="mut" style="font-size:12px" id="lmsScope"></span>
-        <span class="lrg">
+      <div class="lh"><b style="cursor:pointer" onclick="wlLmsToggle()">📚 학습 현황 <span id="lmsArw" style="font-size:12px;color:#8A97A8">▾</span></b><span class="mut" style="font-size:12px" id="lmsScope"></span>
+        <span class="lrg" id="lmsRg" style="display:none">
           <button type="button" data-r="d7" onclick="wlLmsRange('d7')">최근 7일</button>
           <button type="button" data-r="d30" class="on" onclick="wlLmsRange('d30')">최근 30일</button>
           <button type="button" data-r="cur" onclick="wlLmsRange('cur')">이번 달</button>
           <button type="button" data-r="all" onclick="wlLmsRange('all')">전체</button>
         </span></div>
-      <div id="lmsBody"><div class="tEmpty">불러오는 중…</div></div>
+      <div id="lmsPane" style="display:none">
+        <div id="lmsBody"><div class="tEmpty">불러오는 중…</div></div>
+      </div>
       <div id="lmsDlg" onclick="if(event.target===this)wlLmsWhoClose()"><div class="box" id="lmsDlgBox"></div></div>
     </div>
   </div>
@@ -1439,7 +1440,7 @@ window.wlTab=function(t){
   if(t==='log'){buildFilters();renderList();}
   if(t==='perf'){_pm=_pm||_ym;renderPerf();}
   if(t==='idea')renderIdeas();
-  if(t==='team'){_tym=_tym||_ym;loadTeam();loadLms();}   /* ★ [2026-09-01] · [2026-09-23] 학습 현황 */
+  if(t==='team'){_tym=_tym||_ym;loadTeam();}   /* ★ [2026-09-01] · [2026-09-23] 학습 현황은 펼칠 때 로드 */
 };
 /* ══════ ★ [2026-09-01] 조직관리 1단계 — 조직 카드 (wl_org · wlOrgLink · wlOrgView) ══════ */
 const ORG_KO={member:'팀원',leader:'팀장',branch:'지점장'};
@@ -1666,6 +1667,13 @@ function _lmsFromTo(){
   const n=_lmsRg==='d7'?6:29;
   return{from:_lmsDK(new Date(Date.now()-n*86400000)),to:_lmsDK(t)};
 }
+window.wlLmsToggle=function(){
+  const pane=$('lmsPane'), open=pane.style.display==='none';
+  pane.style.display=open?'':'none';
+  $('lmsRg').style.display=open?'':'none';
+  $('lmsArw').textContent=open?'▴':'▾';
+  if(open&&!_lmsData)loadLms();
+};
 window.wlLmsRange=function(r){
   _lmsRg=r;
   document.querySelectorAll('#lmsWrap .lrg button').forEach(b=>b.classList.toggle('on',b.dataset.r===r));
@@ -1710,7 +1718,7 @@ function renderLms(){
   const rows=(r.members||[]).concat(r.me?[r.me]:[]);
   const idle=rows.filter(p=>!p.active);
   const idleBox=idle.length?'<div class="lbox"><div class="hd"><h4 style="margin:0">학습 기록이 없는 인원 <span class="mut" style="font-weight:400;font-size:11.5px">· '+idle.length+'명</span></h4>'
-      +(idle.filter(p=>!p.self).length?'<button type="button" class="nudge" onclick="wlLmsNudge()">학습 독려 보내기</button>':'')+'</div><table style="margin-top:10px">'
+      +'</div><table style="margin-top:10px">'
       +'<tr><th>이름</th><th class="mcol">직책</th><th class="num mcol">누적 수강</th><th>최근 학습</th></tr>'
       +idle.map(p=>'<tr><td><b>'+esc(p.name)+'</b>'+(p.self?' <span class="pill">본인</span>':'')+'</td>'
         +'<td class="mut mcol">'+(KO[p.title]||'')+'</td><td class="num mcol">'+(p.courses||0)+'</td>'
@@ -1768,25 +1776,6 @@ window.wlLmsWho=async function(uid){
           +'<td class="mut">'+(c.completedAt?_lmsDay(c.completedAt):(c.lastAt?_lmsDay(c.lastAt):'-'))+'</td></tr>').join('')
         +'</table>':'<div class="tEmpty">수강 기록이 없습니다.</div>');
   }catch(e){ box.innerHTML='<div class="tEmpty">불러오지 못했습니다.</div>'; }
-};
-
-/* ★ [2026-09-23] 미학습 인원에게 코멘트 — 기존 작성 화면을 열고 대상만 미리 지정 */
-window.wlLmsNudge=async function(){
-  const r=_lmsData; if(!r)return;
-  const rows=(r.members||[]).filter(p=>!p.active&&!p.self);
-  if(!rows.length){toast('독려할 대상이 없습니다');return;}
-  if(typeof wlMsgCompose!=='function'){toast('메시지 기능을 열 수 없습니다');return;}
-  await wlMsgCompose('comment',{});
-  if(_cmp){
-    _cmp.scope='pick';
-    _cmp.pick=rows.map(p=>p.uid);
-    renderCompose(msgPool());          /* 대상 선택 반영 후 폼을 다시 그린다 */
-    const box=$('cmpText');
-    if(box&&!box.value){
-      box.value='최근 학습 기록이 없습니다. 자비아 콘텐츠로 짧게라도 학습을 이어가 주세요.';
-    }
-    msgPreflight();
-  }
 };
 
 async function loadTeam(){
