@@ -113,6 +113,7 @@ select,input{font-family:inherit;font-size:14px;padding:9px 12px;border:1px soli
       위 사람은 당사가 운영하는 교육과정을<br>아래와 같이 성실히 이수하였기에 이 증서를 수여합니다.
     </div>
     <div class="doc-period" id="d-period"></div>
+    <div class="doc-period" id="d-hours" style="margin-top:-18px"></div>
     <div class="doc-list">
       <h3>이수 내역</h3>
       <div id="d-items"></div>
@@ -178,6 +179,9 @@ async function loadHist(){
 }
 const ymT=v=>v?(+v.slice(0,4))+'.'+(+v.slice(4,6)):'';
 const dT=v=>v?(+v.slice(0,4))+'.'+(+v.slice(4,6))+'.'+(+v.slice(6,8)):'';
+/* 교육시간 표기 — 1시간 28분 / 23분 39초 */
+const hMS=v=>{const s=Math.max(0,v|0),h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+  return h?h+'시간 '+m+'분':(m?m+'분 '+String(x).padStart(2,'0')+'초':x+'초');};
 
 window.doPreview=async function(){
   const from=$('f-from').value,to=$('f-to').value;
@@ -186,16 +190,17 @@ window.doPreview=async function(){
   $('pv-body').innerHTML='<div class="msg">확인 중...</div>';
   const r=(await callCert({action:'preview',from,to})).data;
   if(!r.ok){ $('pv-body').innerHTML='<div class="msg err">'+esc(r.error)+'</div>'; return; }
-  let h='<div class="msg">아래 내용으로 '+(r.refresh?'갱신':'발급')+'됩니다. 총 <b>'+r.total+'건</b></div>';
+  let h='<div class="msg">아래 내용으로 '+(r.refresh?'갱신':'발급')+'됩니다. 총 <b>'+r.total+'건</b>'
+    +(r.secTotal?' · 교육시간 <b>'+hMS(r.secTotal)+'</b>':'')+'</div>';
   if(r.refresh) h+='<div class="msg">이번 달 수료증('+esc(r.refreshNo)+')이 이미 있어 <b>같은 번호로 내용이 갱신</b>됩니다. 이전에 출력한 수료증은 최신 내용으로 다시 출력해 주세요.</div>';
   if(r.skipped.length) h+='<div class="msg">이미 발급된 달은 제외되었습니다 — '+r.skipped.map(ymT).join(', ')+'</div>';
   if(r.courses.length){
-    h+='<table class="tbl"><thead><tr><th>과정</th><th style="width:110px">이수일</th></tr></thead><tbody>'
-     +r.courses.map(c=>'<tr><td>'+esc(c.title)+'</td><td>'+dT(c.completedAt)+'</td></tr>').join('')+'</tbody></table>';
+    h+='<table class="tbl"><thead><tr><th>과정</th><th style="width:110px">교육시간</th><th style="width:110px">이수일</th></tr></thead><tbody>'
+     +r.courses.map(c=>'<tr><td>'+esc(c.title)+'</td><td>'+(c.totalSec?hMS(c.totalSec):'-')+'</td><td>'+dT(c.completedAt)+'</td></tr>').join('')+'</tbody></table>';
   }
   if(r.groups.length){
-    h+='<table class="tbl" style="margin-top:10px"><thead><tr><th>정기 콘텐츠</th><th style="width:150px">이수</th></tr></thead><tbody>'
-     +r.groups.map(g=>'<tr><td>'+esc(g.label)+'</td><td>'+esc(g.text)+'</td></tr>').join('')+'</tbody></table>';
+    h+='<table class="tbl" style="margin-top:10px"><thead><tr><th>정기 콘텐츠</th><th style="width:110px">교육시간</th><th style="width:150px">이수</th></tr></thead><tbody>'
+     +r.groups.map(g=>'<tr><td>'+esc(g.label)+'</td><td>'+(g.totalSec?hMS(g.totalSec):'-')+'</td><td>'+esc(g.text)+'</td></tr>').join('')+'</tbody></table>';
   }
   $('pv-body').innerHTML=h;
 };
@@ -222,11 +227,16 @@ async function showCert(no){
   $('d-comp').textContent=c.company||'';
   $('d-phone').textContent=c.phone||'';
   $('d-period').textContent='교육 기간  '+ymT(c.from)+' ~ '+ymT(c.to);
+  $('d-hours').textContent=c.secTotal?('총 교육시간  '+hMS(c.secTotal)):'';
   $('d-date').textContent=dT(c.refreshedAt||c.issuedAt);
   if((c.revision||0)>0) $('d-no').textContent+='   (최종 갱신 '+dT(c.refreshedAt)+')';
   const items=[];
-  (c.courses||[]).forEach(x=>items.push('<div class="li"><i>·</i><span>'+esc(x.title)+'</span><em>'+dT(x.completedAt)+'</em></div>'));
-  (c.groups||[]).forEach(g=>items.push('<div class="li"><i>·</i><span>'+esc(g.label)+' — '+esc(g.text)+'<br><span style="color:#7C8CA5;font-size:12px">'+esc(g.dayText)+'</span></span></div>'));
+  (c.courses||[]).forEach(x=>items.push('<div class="li"><i>·</i><span>'+esc(x.title)
+    +(x.totalSec?'<span style="color:#7C8CA5;font-size:12px">   '+hMS(x.totalSec)+'</span>':'')
+    +'</span><em>'+dT(x.completedAt)+'</em></div>'));
+  (c.groups||[]).forEach(g=>items.push('<div class="li"><i>·</i><span>'+esc(g.label)+' — '+esc(g.text)
+    +(g.totalSec?'<span style="color:#7C8CA5;font-size:12px">   '+hMS(g.totalSec)+'</span>':'')
+    +'<br><span style="color:#7C8CA5;font-size:12px">'+esc(g.dayText)+'</span></span></div>'));
   $('d-items').innerHTML=items.join('');
   const nowYm=new Date().getFullYear()+String(new Date().getMonth()+1).padStart(2,'0');
   $('cert-note').textContent=(c.months||[]).includes(nowYm)
@@ -239,8 +249,10 @@ window.savePdf=function(){
   const el=$('sheet');
   html2pdf().set({
     margin:0, filename:'수료증_'+($('d-name').textContent||'')+'_'+(window._certNo||'')+'.pdf',
-    image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2,useCORS:true},
-    jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}, pagebreak:{mode:['css','legacy']}
+    image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2,useCORS:true,windowWidth:900},
+    /* 수료증과 같은 크기(794×1123px)로 페이지를 잡아 빈 2페이지가 생기지 않게 한다 */
+    jsPDF:{unit:'px',format:[794,1123],orientation:'portrait',hotfixes:['px_scaling']},
+    pagebreak:{mode:['css','legacy']}
   }).from(el).save();
 };
 </script>
