@@ -69,6 +69,10 @@ body{font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;background:#F7F9F
 .ba-note{font-size:11.5px;color:#6B7B8C;background:#F8FAFC;border-radius:8px;padding:9px 11px;margin-top:10px;line-height:1.75}
 .ba-empty{font-size:12.5px;color:#8A99A8;padding:14px 4px}
 .saved .sc .bell{cursor:pointer;font-size:12px}
+#app.ba-only>*:not(.hd):not(#ba-panel){display:none!important}   /* ★ 비로그인 알림 열람 — 헤더와 알림 패널만 */
+.ba-login{font-size:12px;color:#1B3A5C;background:#EAF1F8;border-radius:8px;padding:9px 11px;margin-bottom:10px;line-height:1.7}
+.ba-login button{font-size:12px;font-weight:700;color:#fff;background:#1B3A5C;border:0;border-radius:8px;padding:5px 12px;margin-left:6px;cursor:pointer}
+.ba-login .sub{font-size:11px;color:#8A6D1E;margin-top:3px}
 .saved .sc{font-size:12px;padding:4px 10px;border-radius:12px;background:#EAF1F8;color:#1B3A5C;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
 .saved .sc b{font-weight:700}
 .saved .sc .x{color:#A0AEBB;cursor:pointer;font-weight:700}
@@ -199,7 +203,7 @@ input:focus,select:focus{outline:none;border-color:#1B3A5C!important;box-shadow:
   <div class="ic">🔒</div>
   <p class="t1" id="lock-t1">로그인이 필요합니다</p>
   <p class="t2" id="lock-t2">JARVIA 회원 전용 기능입니다.</p>
-  <a href="./index.html">JARVIA 로그인</a>
+  <a href="./index.html" id="lock-login">JARVIA 로그인</a>
 </div></div>
 
 <div class="wrap" id="app" style="display:none">
@@ -508,6 +512,10 @@ const _RELOAD_KEY='_bizAuthReloadV3', _RELOAD_MAX_N=2, _RELOAD_WINDOW_MS=5*60*10
 
 onAuthStateChanged(auth, async u=>{
   if(!u){
+    /* ★ [2026-09-23] 알림톡 서명 링크(?digest=날짜.uid.서명)는 로그인 없이 그날 목록만 읽기 전용으로 연다 —
+       카카오톡 내부 브라우저에는 로그인 정보가 없고, 거기서 로그인하면 동시 로그인 차단으로 PC 세션이 끊기기 때문 */
+    const _bt=baTok();
+    if(_bt&&_bt.signed){ baPublicView(_bt,false); return; }
     /* 진짜 로그아웃의 신호는 '진입 성공 여부'가 아니라 로그인 이력 소멸이다.
        doLogout()이 jarvia_hasLogin 을 지우므로, 이력이 남아 있으면 진입 중이든 사용 중이든 오탐 의심. */
     if(!_hadLogin()){ _showLock(); return; }             // 이력 없음 → 진짜 미로그인
@@ -559,6 +567,7 @@ let _inited=false;                                       /* ★ [2026-07-28 v2] 
 async function init(){
   if(_inited) return;
   _inited=true;
+  _baPublic=false; $('app').classList.remove('ba-only');   /* ★ [2026-09-23] 비로그인 열람 중 세션이 복원되면 일반 화면으로 */
   // 셀렉트 채우기
   $('f-region').innerHTML='<option value="">전체</option>'+REGIONS.map(r=>`<option>${r}</option>`).join('');
   $('f-ind').innerHTML='<option value="">무관</option>'+IND_GROUPS.map(g=>`<option value="${g.v}">${g.label}</option>`).join('');
@@ -660,8 +669,8 @@ async function init(){
     const qp=_sp.get('company');
     if(qp){ const i=SAVED.findIndex(x=>x.name===qp); if(i>=0) applyCompany(i); }
     /* ★ [2026-09-23] 알림톡 버튼 진입: ?digest=YYYYMMDD → 신규 공고 알림 화면 */
-    const qd=_sp.get('digest');
-    if(qd&&/^\d{8}$/.test(qd)) baOpen(qd);
+    const bt=baTok();   /* ★ 서명 링크: 본인이면 Firestore 로, 다른 회원 링크면 서명 열람으로 */
+    if(bt){ if(bt.signed&&bt.uid!==ME.uid) baPublicView(bt,true); else baOpen(bt.code); }
   }catch(e){}
   $('ba-open').addEventListener('click',()=>baOpen(''));
 
@@ -998,6 +1007,38 @@ const BA_TEST_IDS=['gildong'];   // ★ 전체 오픈 시 [] 로 (serviceAlimtal
 function baEnabled(){ const id=String((ME_INFO||{}).loginId||''); return !BA_TEST_IDS.length || BA_TEST_IDS.includes(id) || (ME_INFO||{}).role==='admin'; }
 const baYmd=c=>`${c.slice(0,4)}-${c.slice(4,6)}-${c.slice(6,8)}`;
 let _baOpenCo=0;
+let _baPublic=false;   // ★ 비로그인 서명 링크 열람 모드
+/** ?digest= 값 해석 — 'YYYYMMDD' 또는 'YYYYMMDD.uid.서명16' */
+function baTok(){
+  const q=new URLSearchParams(location.search).get('digest')||'';
+  const m=q.match(/^(\d{8})(?:\.([A-Za-z0-9]{10,40})\.([0-9a-f]{16}))?$/);
+  return m?{raw:q,code:m[1],uid:m[2]||'',signed:!!m[2]}:null;
+}
+/** 로그인하러 메인으로 — 로그인 후 index.html 이 이 알림 화면으로 되돌려 보낸다 (30분 유효) */
+function baLoginGo(){
+  const bt=baTok();
+  if(bt){ try{ localStorage.setItem('jv_after_login',JSON.stringify({u:'./biz-support.html?digest='+bt.raw,at:Date.now()})); }catch(_){} }
+  location.href='./index.html';
+}
+(function(){ const a=document.getElementById('lock-login'); if(a) a.addEventListener('click',()=>{ const bt=baTok(); if(bt){ try{ localStorage.setItem('jv_after_login',JSON.stringify({u:'./biz-support.html?digest='+bt.raw,at:Date.now()})); }catch(_){} } }); })();
+/** 서명 링크 열람 — inApp=false: 비로그인(헤더+패널만), true: 로그인 상태에서 다른 회원 링크 */
+async function baPublicView(bt,inApp){
+  _baPublic=!inApp;
+  if(!inApp){ $('loading').style.display='none'; $('lock').style.display='none'; $('app').classList.add('ba-only'); $('app').style.display='block'; }
+  const pn=$('ba-panel'); pn.style.display='block';
+  pn.innerHTML='<div class="ba-empty">🔄 알림 내용을 불러오는 중…</div>';
+  let r=null;
+  try{ r=(await httpsCallable(getFunctions(app,'asia-northeast3'),'bizAlertDigestView')({t:bt.raw})).data||null; }
+  catch(e){ r={found:false,reason:'불러오지 못했습니다 ('+e.message+')'}; }
+  if(!inApp&&_inited) return;   /* 불러오는 사이 로그인 세션이 복원돼 일반 화면이 이미 그려졌으면 덮어쓰지 않는다 */
+  if(!r||!r.found){
+    pn.innerHTML=`<div class="ba-hd"><b>🔔 고객기업 신규 지원사업</b></div><div class="ba-empty">${esc((r&&r.reason)||'알림 기록이 없습니다')} — 알림 기록은 최근 30일만 보관됩니다.</div>`
+      +(_baPublic?'<div class="ba-login">JARVIA에 로그인하면 최근 알림을 날짜별로 다시 볼 수 있습니다.<button id="ba-login-btn">로그인</button></div>':'');
+    const lb=document.getElementById('ba-login-btn'); if(lb) lb.addEventListener('click',baLoginGo);
+    return;
+  }
+  _baOpenCo=0; baRender(bt.code,[{d:r.date,c:r.companyCount,n:r.programCount,s:r.preview?'preview':'sent'}],r);
+}
 async function baOpen(dateCode){
   const pn=$('ba-panel'); if(!ME) return;
   pn.style.display='block';
@@ -1017,7 +1058,7 @@ function baCondTxt(c){
 function baRender(code,dates,dg){
   const pn=$('ba-panel');
   const opts=dates.map(x=>{const c=String(x.d).replace(/-/g,''); const lab={sent:'',preview:' · 미리보기',failed:' · 발송 실패'}[x.s]||''; return `<option value="${c}"${c===code?' selected':''}>${esc(x.d)} (${x.c||0}곳 ${x.n||0}건${lab})</option>`;}).join('');
-  const sel=dates.length?`<select id="ba-date">${(!code||dates.some(x=>String(x.d).replace(/-/g,'')===code))?'':`<option value="${code}" selected>${esc(baYmd(code))}</option>`}${opts}</select>`:'';
+  const sel=(dates.length&&!_baPublic)?`<select id="ba-date">${(!code||dates.some(x=>String(x.d).replace(/-/g,'')===code))?'':`<option value="${code}" selected>${esc(baYmd(code))}</option>`}${opts}</select>`:'';
   let body='';
   if(!dg){
     body=`<div class="ba-empty">${code?esc(baYmd(code))+' 알림 기록이 없습니다. 기록은 최근 30일만 보관됩니다.':'아직 받은 신규 공고 알림이 없습니다. 저장한 고객기업에 맞는 새 공고가 나오면 화·금 오전 9시에 카카오톡으로 알려드립니다.'}</div>`;
@@ -1029,10 +1070,11 @@ function baRender(code,dates,dg){
         <div class="ba-co-sub">${esc(baCondTxt(co.cond||{}))} · <a data-co="${esc(co.key)}">이 조건으로 전체 검색</a></div>${pgs}</div>`;
     }).join('')||'<div class="ba-empty">이 날짜에 새로 매칭된 공고가 없습니다.</div>';
   }
-  const canPrev=(ME_INFO||{}).role==='admin'||BA_TEST_IDS.includes(String((ME_INFO||{}).loginId||''));
+  const canPrev=!_baPublic&&((ME_INFO||{}).role==='admin'||BA_TEST_IDS.includes(String((ME_INFO||{}).loginId||'')));
+  const loginBar=_baPublic?'<div class="ba-login">로그인 없이 보는 화면입니다. 「이 조건으로 전체 검색」과 알림 설정은 JARVIA 로그인 후 이용할 수 있습니다.<button id="ba-login-btn">로그인</button><div class="sub">※ 휴대폰에서 로그인하면 PC 등 다른 기기에서 쓰던 자비아는 자동 로그아웃됩니다.</div></div>':'';
   pn.innerHTML=`<div class="ba-hd"><b>🔔 고객기업 신규 지원사업</b>${sel}${dg?`<span class="ba-sum">고객기업 ${dg.companyCount||0}곳 · 새 공고 ${dg.programCount||0}건${dg.preview?' · 미리보기(발송 안 함)':''}</span>`:''}
-    ${canPrev?'<button class="ba-open" id="ba-prev" style="margin-left:auto">지금 매칭해 보기</button>':''}<button class="ba-open" id="ba-close" style="${canPrev?'margin-left:0':''};background:#EEF2F6;color:#5A6B7B">닫기</button></div>
-    ${body}
+    ${canPrev?'<button class="ba-open" id="ba-prev" style="margin-left:auto">지금 매칭해 보기</button>':''}${_baPublic?'':`<button class="ba-open" id="ba-close" style="${canPrev?'margin-left:0':''};background:#EEF2F6;color:#5A6B7B">닫기</button>`}</div>
+    ${loginBar}${body}
     <div class="ba-note">
       · 저장한 고객기업 조건으로 <b>새로 등록된 공고 중 핵심 일치</b>만 모았습니다. 이미 알려드린 공고는 다시 보내지 않습니다.<br>
       · 공고 자격요건은 AI가 원문을 읽어 정리한 결과라 <b>일부 오차</b>가 있을 수 있습니다. 신청 전 반드시 원문(제목 클릭)을 확인하세요.<br>
@@ -1042,9 +1084,11 @@ function baRender(code,dates,dg){
       · 기업별 알림은 저장된 고객기업의 🔔 를 눌러 끌 수 있고, 수신 주기(기본 화·금)는 JARVIA 마이페이지에서 바꿀 수 있습니다.
     </div>`;
   const ds=document.getElementById('ba-date'); if(ds) ds.addEventListener('change',e=>baOpen(e.target.value));
-  document.getElementById('ba-close').addEventListener('click',()=>{ pn.style.display='none'; });
+  const cb=document.getElementById('ba-close'); if(cb) cb.addEventListener('click',()=>{ pn.style.display='none'; });
+  const lb=document.getElementById('ba-login-btn'); if(lb) lb.addEventListener('click',baLoginGo);
   pn.querySelectorAll('.ba-co-hd').forEach(h=>h.addEventListener('click',()=>{ const ci=parseInt(h.dataset.ci,10); _baOpenCo=(_baOpenCo===ci?-1:ci); baRender(code,dates,dg); }));
   pn.querySelectorAll('a[data-co]').forEach(a=>a.addEventListener('click',()=>{
+    if(_baPublic){ if(confirm('이 조건으로 전체 검색하려면 JARVIA 로그인이 필요합니다.\n로그인 후 이 알림 화면으로 돌아옵니다.\n\n※ 휴대폰에서 로그인하면 다른 기기의 자비아는 로그아웃됩니다.\n\n로그인하시겠습니까?')) baLoginGo(); return; }
     const i=SAVED.findIndex(x=>String(x.name).slice(0,40)===a.dataset.co);
     if(i<0){ alert('저장된 고객기업에서 찾을 수 없습니다. 이름을 바꾸셨거나 삭제하신 경우입니다.'); return; }
     applyCompany(i); const L=document.getElementById('list'); if(L) L.scrollIntoView({behavior:'smooth',block:'start'});
