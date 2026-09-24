@@ -3693,7 +3693,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           <span id="it-auto-msg" style="font-size:12px;color:#888"></span>
           <span id="it-gen-msg" style="font-size:13px;color:#666;margin-left:8px"></span>
         </div>
-        <div style="font-size:12px;color:#888;line-height:1.6">화요일 10:00 택스위클리 생성 → <b>화요일 11:30</b> Tax Master 자동 생성(같은 주제·같은 예규) → step1~4 약 30~50분 → <b>ready</b> → 담당자 <b>승인</b> → 수요일 09:00 택스위클리와 함께 게시. 승인 없으면 게시되지 않습니다.</div>
+        <div style="font-size:12px;color:#888;line-height:1.6">택스위클리 생성일(수요일 직전 영업일) 10:00 → <b>같은 날 12:00</b> Tax Master 자동 생성(같은 주제·같은 예규) → step1~4 약 30~50분 → <b>ready</b> → 담당자 <b>승인</b> → 수요일 09:00 택스위클리와 함께 게시. 승인 없으면 게시되지 않습니다.</div>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>발송일</th><th>주제 (택스위클리)</th><th>상태</th><th>진행</th><th>승인</th><th>확인항목</th><th>산출물</th><th>관리</th></tr></thead><tbody id="it-tb"><tr><td colspan="8" class="tc" style="color:#999">[🔄 새로고침] 시 표시됩니다</td></tr></tbody></table></div>
       <div style="font-size:12px;color:#888;margin-top:8px;line-height:1.6">상태: queued→step1(집필)→step2(3중검증)→step3(마무리·재검증)→step4(HTML)→ready→published · needs_calc_input = 계산 입력 미확보([강제 재생성]) · needs_review / needs_final_review = 검증 치명 잔존(상세에서 확인 후 [재시도] 또는 [승인]) · error = [재시도]</div>
@@ -22389,9 +22389,42 @@ window.icedOpen = icedOpen; window.icedTab = icedTab;
 // ═══════════════════════════════════════════════════════════════════
 // 📘 이너서클 법인Master 브리핑 [2026-09-05 신규] — innerMaster.js 연동
 //    목록·상세: Firestore 직접 읽기(upcoming_inner_issues, 관리자 규칙)
-//    조작: imAdmin(HTTP) — key = functions INTERNAL_API_KEY (MG_API_KEY 와 동일 값)
+//    조작: imAdmin(HTTP) — ★ [2026-09-25] 관리자 로그인 토큰(Authorization: Bearer). 내부 키는 더 이상 보내지 않는다.
 // ═══════════════════════════════════════════════════════════════════
-const IM_API_KEY='tcw-jarvia-2026-kfpc';
+/* ★ [2026-09-25] 이너 관리 HTTP 공용 — 인증 헤더 · 알림톡 결과 표시 · 대표본 미리보기 */
+async function innerAuthHeaders(){const u=auth.currentUser;if(!u)throw new Error('로그인이 필요합니다');return{Authorization:'Bearer '+await u.getIdToken()};}
+async function innerGet(fn,params){
+  const u=new URL(IM_BASE+'/'+fn);
+  Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')u.searchParams.set(k,v);});
+  const r=await fetch(u.toString(),{headers:await innerAuthHeaders()});const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
+  if(!j.ok)throw new Error(j.error||j.reason||('HTTP '+r.status));return j;
+}
+function innerAlimNorm(a){if(!a)return null;return{sent:a.sent||0,failed:a.failed||0,blocked:a.blocked||0,total:a.total||0,skipped:!!a.skipped,reason:a.reason||a.error||'',resent:(a.resends||[]).length||a.resent||0,results:a.results||null};}
+function innerAlimHtml(a){
+  a=innerAlimNorm(a);if(!a)return '';
+  if(a.skipped||(!a.total&&a.reason))return `<span style="font-size:11px;color:#C62828" title="${esc(a.reason)}">알림톡 미발송(${esc(a.reason||'사유 없음')})</span>`;
+  const why=a.results?Object.entries(a.results.filter(r=>!r.sent).reduce((m,r)=>{const k=r.reason||'unknown';m[k]=(m[k]||0)+1;return m;},{})).map(([k,v])=>({no_phone:'번호 없음',opt_out:'수신 거부',pref_off:'알림 꺼짐'}[k]||k)+' '+v).join(', '):'';
+  return `<span style="font-size:11px;color:${a.failed?'#C62828':'#1a7a4a'}" title="${esc(why)}">알림톡 ${a.sent}/${a.total}${a.failed?` · 실패 ${a.failed}`:''}${a.blocked?` · 차단 ${a.blocked}`:''}${a.resent?` · 재발송 ${a.resent}회`:''}</span>`;
+}
+function innerAlimCanResend(a){a=innerAlimNorm(a);return !!(a&&a.failed>0&&!a.skipped);}
+async function innerResend(fn,id,label,reload){
+  if(!confirm(`${label}\n\n게시 알림톡 실패분만 다시 보냅니다.\n(번호 없음·수신 거부·알림 꺼짐은 제외)\n계속할까요?`))return;
+  try{const r=await innerGet(fn,{action:'resendAlimtalk',id});toast(r.tried?`재발송 ${r.tried}건 → 성공 ${r.sent}`:(r.note||'재발송 대상 없음'),'success');await reload();}
+  catch(e){toast('재발송 실패: '+e.message,'error');}
+}
+let _pvWin=null,_pvPayload=null;
+window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||e.data.type!=='ceoPreviewReady'||!_pvWin||e.source!==_pvWin||!_pvPayload)return;_pvWin.postMessage({type:'ceoPreview',payload:_pvPayload},location.origin);});
+/* 대표본 미리보기 — 원본 CEO JSON 을 inner-ceo.html(같은 출처)에 넘겨 대표가 보는 화면 그대로 렌더 */
+function innerCeoPreview(ceo,meta){
+  if(!ceo||typeof ceo!=='object')return toast('CEO 전달본이 아직 없습니다','error');
+  const consultant={name:(admData&&admData.name)||'회원 이름',title:'',company:'',photoUrl:''};
+  const weekly=ceo.kind==='weekly';
+  _pvPayload=weekly?{kind:'weekly',ceo:{...ceo,kind:'weekly'},consultant,trust:null,issue:{title:meta.title||'',sendDate:meta.sendDate||'',weekLabel:meta.weekLabel||'',range:meta.range||''}}
+    :{ceo:{...ceo,message:''},consultant,trust:null,issue:{title:meta.title||'',sendDate:meta.sendDate||''}};
+  _pvWin=window.open('inner-ceo.html?preview=admin','_blank');
+  if(!_pvWin)toast('팝업이 차단되었습니다 — 팝업 허용 후 다시 누르세요','error');
+}
+window.innerCeoPreview=innerCeoPreview;
 const IM_BASE='https://asia-northeast3-jarvia-platform.cloudfunctions.net';
 let _imRows=[],_imAuto=null,_imAutoMs=0,_imCur=null,_imSchedLoaded=false,_imDetailOpen=false,_imDetailTimer=null;
 const IM_SEC_TITLES={summary:'전체 요약',s1:'§1 지금 왜 이 얘기인가',s2:'§2 구조',s3:'§3 시뮬레이션',s4:'§4 설계 대안',s5:'§5 함정 5개',s6:'§6 예규·판례',s7:'§7 반론 3개',s8:'§8 첫 질문'};
@@ -22403,12 +22436,7 @@ const IM_PREVIEW_CSS='body{font-family:"Noto Sans KR",sans-serif;max-width:760px
 //    조작: itAdmin(HTTP) — key 는 법인Master 와 동일(INTERNAL_API_KEY)
 // ═══════════════════════════════════════════════════════════════════
 let _itRows=[],_itAuto=null,_itCur=null;
-async function itApi(params){
-  const u=new URL(IM_BASE+'/itAdmin');u.searchParams.set('key',IM_API_KEY);
-  Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')u.searchParams.set(k,v);});
-  const r=await fetch(u.toString());const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
-  if(!j.ok)throw new Error(j.error||j.reason||('HTTP '+r.status));return j;
-}
+async function itApi(params){return innerGet('itAdmin',params);}   /* ★ [2026-09-25] 관리자 토큰 인증 */
 function itStatusHtml(d){
   const st=String(d.status||'');
   if(st==='ready')return `<span style="color:#1a7a4a;font-weight:700">ready</span><div style="font-size:11px;color:#1a7a4a">검수 대기</div>`;
@@ -22426,10 +22454,12 @@ function itRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="8" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const approved=d.approval==='approved';const prog=Number(d.progress||0);
-    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">Tax Master HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':''].filter(Boolean).join(' · ')||'-';
+    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">Tax Master HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':'',innerAlimHtml(d.alim)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="itOpen('${d.id}')">상세</button>`,
       st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="itAct('approve','${d.id}')">승인</button>`:'',
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="itAct('publish','${d.id}')">즉시 게시</button>`:'',
+      st==='ready'&&d.approval!=='rejected'?`<button class="btn btn-sm" style="background:#C62828" onclick="itAct('reject','${d.id}')">반려</button>`:'',
+      st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="itResend('${d.id}')">알림톡 재발송</button>`:'',
       st==='needs_calc_input'?`<button class="btn btn-sm" style="background:#E65100" onclick="itRegen('${d.id}')">강제 재생성</button>`:'',
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="itRetry('${d.id}')">재시도</button>`:'',
       st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="itDelete('${d.id}')">삭제</button>`:''].filter(Boolean).join(' ');
@@ -22447,7 +22477,7 @@ async function itLoad(){
 async function itGenerate(){
   const date=document.getElementById('it-gen-date').value;if(!date)return toast('날짜를 선택하세요','error');
   if(new Date(date+'T00:00:00').getDay()!==3)return toast('수요일만 생성할 수 있습니다','error');
-  if(!confirm(`${date}(수) Tax Tax Master 를 생성합니다.\n· 같은 날 택스위클리(contents)가 이미 생성되어 있어야 합니다\n· 페르소나·계산 → step1~4 약 30~50분\n계속할까요?`))return;
+  if(!confirm(`${date}(수) Tax Master 를 생성합니다.\n· 같은 날 택스위클리(contents)가 이미 생성되어 있어야 합니다\n· 페르소나·계산 → step1~4 약 30~50분\n계속할까요?`))return;
   const m=document.getElementById('it-gen-msg');m.textContent='생성 중 — 페르소나 1~3분…';
   try{const r=await itApi({action:'generate',date});
     if(r.blocked){m.textContent='';toast('생성했으나 집필 전 정지: '+String(r.reason||'').slice(0,80),'error');}
@@ -22470,7 +22500,8 @@ async function itAct(action,id){
   const d=_itRows.find(x=>x.id===id)||{};const label={approve:'승인',publish:'즉시 게시',reject:'반려'}[action]||action;
   if(action==='approve'&&!confirm(`${d.sendDate} ${d.title}\n\n승인하면 수요일 09:00 에 게시됩니다. 계속할까요?`))return;
   if(action==='publish'&&!confirm(`${d.sendDate} ${d.title}\n\n지금 즉시 게시합니다. 계속할까요?`))return;
-  try{await itApi({action,id,by:'admin'});toast(label+' 완료','success');await itLoad();if(_itCur===id)itOpen(id);}catch(e){toast(label+' 실패: '+e.message,'error');}
+  let note='';if(action==='reject'){note=prompt(`${d.sendDate} ${d.title}\n\n반려하면 수요일 09:00 에 게시되지 않습니다. 승인을 취소할 때도 씁니다.\n반려 사유:`,'');if(!note)return;}   /* ★ [2026-09-25] 반려 */
+  try{await itApi({action,id,note});toast(label+' 완료','success');await itLoad();if(_itCur===id)itOpen(id);}catch(e){toast(label+' 실패: '+e.message,'error');}
 }
 async function itRetry(id){
   const d=_itRows.find(x=>x.id===id)||{};
@@ -22511,12 +22542,13 @@ async function itOpen(id){
         <div><b style="font-size:13px">재검증 잔존 치명</b>${list(d.step3&&d.step3.recheckCriticals,'#C62828')}</div>
       </div>
       <div style="margin-top:12px"><b style="font-size:13px">진행 로그</b>${log||'<div style="font-size:12px;color:#999">없음</div>'}</div>
-      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">Tax Master HTML 열기</a>`:''}${d.twUrl?`<a class="btn btn-sm" href="${esc(d.twUrl)}" target="_blank">택스위클리 열기</a>`:''}${ceo?`<button class="btn btn-sm" onclick="itCeoPreview()">CEO본 JSON</button>`:''}</div>`;
-    box._ceo=ceo;
+      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">Tax Master HTML 열기</a>`:''}${d.twUrl?`<a class="btn btn-sm" href="${esc(d.twUrl)}" target="_blank">택스위클리 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('it-detail')._ceo,document.getElementById('it-detail')._meta)">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="itCeoPreview()">CEO본 JSON</button>`:''}</div>`;
+    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate};
   }catch(e){box.innerHTML=`<div style="color:#C62828">상세 로드 실패: ${esc(e.message)}</div>`;}
 }
+function itResend(id){const d=_itRows.find(x=>x.id===id)||{};return innerResend('itAdmin',id,`${d.sendDate} ${d.title||''}`,itLoad);}
 function itCeoPreview(){const box=document.getElementById('it-detail');const w=window.open('','_blank');w.document.write('<pre style="white-space:pre-wrap;font-family:monospace;padding:20px">'+esc(JSON.stringify(box._ceo||{},null,2))+'</pre>');}
-window.itLoad=itLoad;window.itGenerate=itGenerate;window.itBackfill=itBackfill;window.itAct=itAct;window.itRetry=itRetry;window.itRegen=itRegen;window.itDelete=itDelete;window.itOpen=itOpen;window.itCeoPreview=itCeoPreview;
+window.itLoad=itLoad;window.itGenerate=itGenerate;window.itBackfill=itBackfill;window.itAct=itAct;window.itRetry=itRetry;window.itRegen=itRegen;window.itDelete=itDelete;window.itOpen=itOpen;window.itCeoPreview=itCeoPreview;window.itResend=itResend;
 
 // ═══════════════════════════════════════════════════════════════════
 // 📙 이너서클 위클리 컨센서스 (월요일) [2026-09-10 신규] — innerWeekly.js 연동
@@ -22524,12 +22556,7 @@ window.itLoad=itLoad;window.itGenerate=itGenerate;window.itBackfill=itBackfill;w
 //    게시: ready 면 월 11:30 자동. [보류]로만 막고 [보류 해제]로 되돌림. 승인 단계 없음.
 // ═══════════════════════════════════════════════════════════════════
 let _iwRows=[],_iwAuto=null,_iwCur=null;
-async function iwApi(params){
-  const u=new URL(IM_BASE+'/iwAdmin');u.searchParams.set('key',IM_API_KEY);
-  Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')u.searchParams.set(k,v);});
-  const r=await fetch(u.toString());const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
-  if(!j.ok)throw new Error(j.error||j.reason||('HTTP '+r.status));return j;
-}
+async function iwApi(params){return innerGet('iwAdmin',params);}   /* ★ [2026-09-25] 관리자 토큰 인증 */
 function iwThermoHtml(t){const c={'행동':'#0B6B52','유지':'#8A91A0','관망':'#B4560F'}[t]||'#999';return t?`<span style="display:inline-block;padding:2px 8px;border-radius:3px;background:${c};color:#fff;font-weight:700;font-size:12px">${esc(t)}</span>`:'-';}
 function iwApprovalHtml(a){
   if(a==='hold')return '<span style="color:#B4560F;font-weight:700">⏸ 보류</span>';
@@ -22548,14 +22575,15 @@ function iwRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="9" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const ap=String(d.approval||'auto');const prog=Number(d.progress||0);
-    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">회원용 HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',d.audio==='ready'?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':''].filter(Boolean).join(' · ')||'-';
+    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">회원용 HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',d.audio==='ready'?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':'',innerAlimHtml(d.alim)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="iwOpen('${d.id}')">상세</button>`,
       st!=='published'&&ap!=='hold'?`<button class="btn btn-sm" style="background:#B4560F" onclick="iwAct('hold','${d.id}')">보류</button>`:'',
       st!=='published'&&ap==='hold'?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="iwAct('release','${d.id}')">보류 해제</button>`:'',
       st==='ready'&&ap!=='hold'&&ap!=='rejected'?`<button class="btn btn-sm" style="background:#1565C0" onclick="iwAct('publish','${d.id}')">즉시 게시</button>`:'',
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="iwRetry('${d.id}')">재시도</button>`:'',
       st==='ready'?`<button class="btn btn-sm" style="background:#888" onclick="iwRetry('${d.id}','step4')" title="문장은 그대로, HTML·음성만 다시">재렌더</button>`:'',
-      st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="iwDelete('${d.id}')">삭제</button>`:''].filter(Boolean).join(' ');
+      st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="iwDelete('${d.id}')">삭제</button>`:'',
+      st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="iwResend('${d.id}')">알림톡 재발송</button>`:''].filter(Boolean).join(' ');
     return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td style="max-width:220px;white-space:normal"><b>${esc(d.weekLabel||d.weekKey||'')}</b><div style="font-size:11px;color:#888">${esc(d.weekKey||'')} · ${esc(d.range||'')}${d.missingDays&&d.missingDays.length?` · 미수집 ${esc(d.missingDays.join(','))}`:''}${d.weeklyFirms?` · 주간전망 ${d.weeklyFirms}개사`:''}</div></td><td class="tc">${iwThermoHtml(d.thermo)}</td><td>${iwStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#8C6A16;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">${prog}%</div></td><td>${st==='published'?'<span style="color:#1565C0">게시됨</span>':iwApprovalHtml(ap)}</td><td class="tc">${d.warnings?`<span style="color:#E65100;font-weight:700">${d.warnings}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
   }).join('');
 }
@@ -22624,19 +22652,15 @@ async function iwOpen(id){
         <div style="grid-column:1/-1"><b style="font-size:13px">검증 지적 (코드 게이트 + Gemini)</b>${list(issues,'#7a1f2b')}</div>
       </div>
       <div style="margin-top:12px"><b style="font-size:13px">진행 로그</b>${log||'<div style="font-size:12px;color:#999">없음</div>'}</div>
-      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">회원용 HTML 열기</a>`:''}${ceo?`<button class="btn btn-sm" onclick="iwCeoPreview()">CEO본 JSON</button>`:''}${Object.keys(tts).length?`<span style="font-size:12px;color:#555;margin-left:6px">음성 ${Object.keys(tts).length}개: ${Object.keys(tts).map(k=>`<a href="${esc(tts[k])}" target="_blank">${esc(k)}</a>`).join(' · ')}</span>`:''}</div>`;
-    box._ceo=ceo;
+      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">회원용 HTML 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('iw-detail')._ceo,document.getElementById('iw-detail')._meta)">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="iwCeoPreview()">CEO본 JSON</button>`:''}${Object.keys(tts).length?`<span style="font-size:12px;color:#555;margin-left:6px">음성 ${Object.keys(tts).length}개: ${Object.keys(tts).map(k=>`<a href="${esc(tts[k])}" target="_blank">${esc(k)}</a>`).join(' · ')}</span>`:''}</div>`;
+    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate,weekLabel:d.weekLabel,range:d.range};
   }catch(e){box.innerHTML=`<div style="color:#C62828">상세 로드 실패: ${esc(e.message)}</div>`;}
 }
+function iwResend(id){const d=_iwRows.find(x=>x.id===id)||{};return innerResend('iwAdmin',id,`${d.weekLabel||d.weekKey||''} ${d.range||''}`,iwLoad);}
 function iwCeoPreview(){const box=document.getElementById('iw-detail');const w=window.open('','_blank');w.document.write('<pre style="white-space:pre-wrap;font-family:monospace;padding:20px">'+esc(JSON.stringify(box._ceo||{},null,2))+'</pre>');}
-window.iwLoad=iwLoad;window.iwStopAuto=iwStopAuto;window.iwGenerate=iwGenerate;window.iwBackfill=iwBackfill;window.iwAct=iwAct;window.iwRetry=iwRetry;window.iwDelete=iwDelete;window.iwOpen=iwOpen;window.iwCeoPreview=iwCeoPreview;
+window.iwLoad=iwLoad;window.iwStopAuto=iwStopAuto;window.iwGenerate=iwGenerate;window.iwBackfill=iwBackfill;window.iwAct=iwAct;window.iwRetry=iwRetry;window.iwDelete=iwDelete;window.iwOpen=iwOpen;window.iwCeoPreview=iwCeoPreview;window.iwResend=iwResend;
 
-async function imApi(params){
-  const u=new URL(IM_BASE+'/imAdmin');u.searchParams.set('key',IM_API_KEY);
-  Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')u.searchParams.set(k,v);});
-  const r=await fetch(u.toString());const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
-  if(!j.ok)throw new Error(j.error||j.reason||('HTTP '+r.status));return j;
-}
+async function imApi(params){return innerGet('imAdmin',params);}   /* ★ [2026-09-25] 관리자 토큰 인증 */
 function imStatusHtml(d){
   const st=String(d.status||'');
   if(st==='error')return `<span style="color:#C62828;font-weight:700">error</span><div style="font-size:11px;color:#C62828;max-width:220px;white-space:normal">${esc(d.error||'')}</div>`;
@@ -22720,7 +22744,7 @@ async function imLoad(){
     const tb=$('im-tb');
     tb.innerHTML=_imRows.length?_imRows.map(d=>{
       const st=String(d.status||'');const attn=(d.step7&&d.step7.needsAttention)||[];const prog=d.progress||0;
-      const outs=[d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">HTML</a>`:'',imAudioHtml(d)].filter(Boolean).join(' · ')||'-';
+      const outs=[d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">HTML</a>`:'',imAudioHtml(d),innerAlimHtml(d.alimtalk)].filter(Boolean).join(' · ')||'-';
       const approved=!!(d.approval&&d.approval.status==='approved');
       const ctl=[`<button class="btn btn-sm" onclick="imOpen('${d._id}')">상세</button>`,
         st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${d._id}')">승인</button>`:'',
@@ -22730,7 +22754,8 @@ async function imLoad(){
         st==='needs_calc_input'?`<button class="btn btn-sm" style="background:#E65100" onclick="imRegen('${d._id}')">강제 재생성</button>`:'',
         (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:'',
         // ★ [2026-09-06] 삭제 — 문서·Storage(HTML·음성)·음성잡을 함께 지운다. 게시본은 노출하지 않는다.
-        st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="imDelete('${d._id}')">삭제</button>`:''].filter(Boolean).join(' ');
+        st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="imDelete('${d._id}')">삭제</button>`:'',
+        st==='published'&&innerAlimCanResend(d.alimtalk)?`<button class="btn btn-sm" style="background:#E65100" onclick="imResend('${d._id}')">알림톡 재발송</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">본문 ${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
     // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
@@ -22791,7 +22816,7 @@ async function imUploadFile(input){
   const html=await f.text();
   toast('업로드 중…');
   try{
-    const r=await fetch(IM_BASE+'/imAdmin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:IM_API_KEY,action:'uploadHtml',id:_imUploadId,html,by:'admin'})});
+    const r=await fetch(IM_BASE+'/imAdmin',{method:'POST',headers:{'Content-Type':'application/json',...(await innerAuthHeaders())},body:JSON.stringify({action:'uploadHtml',id:_imUploadId,html})});
     const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));
     if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
     toast(`수정본 반영 완료 — 음성 재생성 시작${(j.warnings||[]).length?` (경고 ${j.warnings.length})`:''}`,'success');
@@ -22851,7 +22876,8 @@ async function imOpen(id){
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="imAct('publish','${id}')">🚀 즉시 게시</button>`:'',
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${id}')">↻ 재시도${(st.endsWith('_running'))?' (정지 시)':''}</button>`:'',
       d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a class="btn btn-sm" href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">🔗 회원 화면으로 열기</a>`:'',
-      d.step5&&d.step5.html?`<a class="btn btn-sm" style="background:#455A64" href="${IM_BASE}/imAdmin?key=${IM_API_KEY}&action=download&id=${id}">⬇ HTML 다운로드</a> <button class="btn btn-sm" style="background:#455A64" onclick="imUploadPick('${id}')">⬆ 수정본 업로드</button>`:'',
+      d.step4&&d.step4.ceoJson?`<button class="btn btn-sm" style="background:#0F2440" onclick="imCeoPreview('${id}')">👔 대표본 미리보기</button>`:'',
+      d.step5&&d.step5.html?`<button class="btn btn-sm" style="background:#455A64" onclick="imDownload('${id}')">⬇ HTML 다운로드</button> <button class="btn btn-sm" style="background:#455A64" onclick="imUploadPick('${id}')">⬆ 수정본 업로드</button>`:'',
       d.step4&&d.step4.finalBody&&(!(d.audio&&(d.audio.status==='running'||d.audio.status==='queued'))||(d.audio?.engine!=='section-queue-v2'&&d.updatedAt&&d.updatedAt.toMillis&&(Date.now()-d.updatedAt.toMillis())>15*60*1000))?`<button class="btn btn-sm" style="background:#888" onclick="imAudio('${id}')">🔊 음성 재생성</button> <button class="btn btn-sm" style="background:#aaa" onclick="imAudio('${id}',true)">원고부터 재생성</button>`:'',
       d.audio&&(d.audio.status==='running'||d.audio.status==='queued')?`<span style="font-size:12px;color:#1565C0">🔊 음성 생성 중 — ${esc(d.substatus||'')}</span>`:''].filter(Boolean).join(' ')||'<span style="color:#888;font-size:12px">진행 중 — 조작 가능 상태 아님</span>';
     const attn=(d.step7&&d.step7.needsAttention)||[];const err=d.error?[`오류: ${d.error}`]:[];const w1=(d.step1b&&d.step1b.warnings)||[];
@@ -22891,6 +22917,19 @@ async function imOpen(id){
     if(busy)_imDetailTimer=setInterval(()=>{if(document.getElementById('mdl-im-detail').classList.contains('hidden')){clearInterval(_imDetailTimer);_imDetailTimer=null;_imDetailOpen=false;return;}imOpen(id);},15000);
   }catch(e){toast('상세 로드 실패: '+e.message,'error');console.error(e);}
 }
+/* ★ [2026-09-25] HTML 다운로드 — 링크에 키를 싣지 않고 토큰으로 받아 저장 */
+async function imDownload(id){
+  const d=_imRows.find(x=>x._id===id)||{};
+  try{const u=new URL(IM_BASE+'/imAdmin');u.searchParams.set('action','download');u.searchParams.set('id',id);
+    const r=await fetch(u.toString(),{headers:await innerAuthHeaders()});if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||('HTTP '+r.status));}
+    const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`법인Master_${d.sendDate||''}_#${d.week||''}.html`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+  }catch(e){toast('다운로드 실패: '+e.message,'error');}
+}
+async function imCeoPreview(id){
+  try{const snap=await getDoc(doc(db,'upcoming_inner_issues',id));const d=snap.exists()?snap.data():{};let ceo=null;try{ceo=d.step4&&d.step4.ceoJson?JSON.parse(d.step4.ceoJson):null;}catch(_){}
+    innerCeoPreview(ceo,{title:d.title,sendDate:d.sendDate});}catch(e){toast('대표본 로드 실패: '+e.message,'error');}
+}
+function imResend(id){const d=_imRows.find(x=>x._id===id)||{};return innerResend('imAdmin',id,`${d.sendDate} #${d.week||''} ${d.title||''}`,imLoad);}
 function imDetailTab(t){document.querySelectorAll('.im-dtab').forEach(el=>el.classList.add('hidden'));const el=$('im-d-'+t);if(el)el.classList.remove('hidden');}
 function imDetailClose(){if(_imDetailTimer){clearInterval(_imDetailTimer);_imDetailTimer=null;}_imDetailOpen=false;closeM('mdl-im-detail');}
 async function imSchedLoad(silent){
@@ -22911,7 +22950,7 @@ async function imSchedRegen(){
   try{await imApi({action:'schedule',ym});toast('편성표 생성 완료','success');imSchedLoad();}catch(e){toast('편성표 생성 실패: '+e.message,'error');}
 }
 function imCopyAnnounce(){const el=$('im-sch-announce');if(!el.value)return toast('먼저 [조회]하세요','error');el.select();try{document.execCommand('copy');toast('복사했습니다','success');}catch(_){toast('복사 실패 — 직접 선택해 복사하세요','error');}}
-window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imRegen=imRegen;window.imDelete=imDelete;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
+window.imDownload=imDownload;window.imCeoPreview=imCeoPreview;window.imResend=imResend;window.imLoad=imLoad;window.imStopAuto=imStopAuto;window.imAudio=imAudio;window.imUploadPick=imUploadPick;window.imUploadFile=imUploadFile;window.imDetailClose=imDetailClose;window.imGenerate=imGenerate;window.imAct=imAct;window.imRetry=imRetry;window.imRegen=imRegen;window.imDelete=imDelete;window.imOpen=imOpen;window.imDetailTab=imDetailTab;window.imSchedLoad=imSchedLoad;window.imSchedRegen=imSchedRegen;window.imCopyAnnounce=imCopyAnnounce;
 
 /* ═══ ★ [2026-09-23] LMS 학습 관리 ═══════════════════════════
    집계 함수(lmsStats)가 만든 lms_stats 문서를 읽어 보여준다.
