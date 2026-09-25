@@ -4154,7 +4154,7 @@
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:0">
             <h3 style="font-size:16px;font-weight:700;color:#A68B4B;margin:0 0 6px">📋 진단 신청 관리 <button type="button" onclick="atGuideOpen('request')" style="font-size:11.5px;font-weight:700;color:#8A6410;background:#FBF7EE;border:1px solid #C9A05C;border-radius:14px;padding:3px 10px;cursor:pointer;vertical-align:2px;margin-left:6px">📮 알림톡 안내</button></h3><!-- ★ [2026-09-10] 고객 요청 알림톡 안내 -->
-            <p style="font-size:13px;color:#5A6484;line-height:1.6;margin:0">재무상담·자가진단·생활변화·보험공유·미팅예약·보안채팅 등 고객이 보낸 모든 요청을 관리합니다.<br>신청자 연락처·상태 변경·메모 저장 가능 · 24시간 내 응대 권장</p>
+            <p style="font-size:13px;color:#5A6484;line-height:1.6;margin:0">재무상담·자가진단·생활변화·보험공유·미팅예약·보안채팅·브로슈어상담 등 고객이 보낸 모든 요청을 관리합니다.<br>신청자 연락처·상태 변경·메모 저장 가능 · 24시간 내 응대 권장</p>
           </div>
           <div id="fcr-new-badge" style="display:none;align-items:center;gap:6px;padding:5px 11px;background:#FEF2F2;border-radius:11px;border:0.5px solid rgba(220,38,38,.2);flex-shrink:0">
             <span style="width:6px;height:6px;border-radius:50%;background:#DC2626;display:inline-block"></span>
@@ -4163,6 +4163,9 @@
         </div>
         <div style="margin-top:10px;padding:8px 12px;background:rgba(255,255,255,.5);border-radius:7px;font-size:11px;color:#8B6914;font-family:ui-monospace,Menlo,monospace">🔗 <span id="fcr-channel-url">https://jarvia.co.kr/@—</span></div>
       </div>
+
+      <!-- ★ [2026-09-26] 조회 범위 안내 — 최근 1년 -->
+      <div style="display:flex;align-items:center;gap:7px;padding:9px 13px;margin-bottom:10px;background:#EEF4FF;border:1px solid #C9D8F0;border-radius:8px;font-size:12px;color:#1B3A6B;font-weight:600">🗓 최근 1년 동안 들어온 요청을 표시합니다 <span style="font-weight:500;color:#5A6484">· 1년이 지난 요청은 목록에서 빠집니다</span></div>
 
       <!-- 통계 카드 4분할 -->
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
@@ -6394,7 +6397,7 @@ function logSvc(service){if(!window.me)return;try{const _svId=gid();setDoc(doc(d
 window.logSvc=logSvc;
 /* ★ [2026-09-03] 이너서클 전문가 지원 플랫폼 — inner.html 진입
    전문가 찾기·상담 신청·내 상담 현황을 별도 페이지에서 처리한다(같은 도메인이라 로그인 세션 공유). */
-const _icTestIds=[];   /* ★ [2026-09-28] 전체 오픈 — 이너서클 회원 전원 진입 (테스트 단계에는 ['gildong']) */
+const _icTestIds=['gildong'];   /* 테스트 단계 — 전체 오픈 시 [] 로 변경 */
 function goInnerPlatform(){
   if(!me){openM('mdl-login-prompt');return;}
   const _icRoles=['admin','inner_circle'];
@@ -19332,8 +19335,9 @@ function _fcrSubscribe(){
     const q = query(
       collection(db, 'fc_consultation_requests'),
       where('fcAuthUid', '==', me.uid),
+      where('createdAt', '>=', Timestamp.fromMillis(Date.now() - 365 * 86400000)),   /* ★ [2026-09-26] 최근 50건 → 최근 1년 */
       orderBy('createdAt', 'desc'),
-      limit(50)
+      limit(3000)   /* 안전 상한 */
     );
     _fcrUnsub = onSnapshot(q, snap => {
       _fcrAllRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -19426,10 +19430,11 @@ const FCR_TYPES=[
   {k:'my_dates', t:'생활변화'},
   {k:'insurance_portfolio', t:'보험공유'},
   {k:'meeting',  t:'미팅예약'},
+  {k:'brochure', t:'브로슈어상담'},   /* ★ [2026-09-26] e북 브로슈어 상담 신청 */
 ];
 function _fcrTypeOf(r){
   const src=String((r&&r.source)||'');
-  if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates') return src;
+  if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates'||src==='brochure') return src;
   if(r&&(r.quizType||r.quizAnswers||r.quizResult)) return 'quiz';
   return 'consult';
 }
@@ -19450,7 +19455,10 @@ function _fcrRenderTypeChips(){
   html+=chip('maturity','📅 만기 등록',matN,true);
   box.innerHTML=html;
 }
-window.fcrTypeFilter=function(btn){ _fcrTypeFilter=btn.dataset.type||'all'; _fcrRenderList(_fcrCurFilter); };
+window.fcrTypeFilter=function(btn){ _fcrTypeFilter=btn.dataset.type||'all'; _fcrShowN=30; _fcrRenderList(_fcrCurFilter); };
+/* ★ [2026-09-26] 목록 30건씩 — 아래 더보기 */
+var _fcrShowN = 30;
+window.fcrMore = function(){ _fcrShowN += 30; _fcrRenderList(_fcrCurFilter); };
 
 /* 만기 등록 요청 행 — 대기 건은 항상, 처리 건은 '만기 등록' 필터에서만 */
 function _fcrMatHtml(statusFilter){
@@ -19589,6 +19597,11 @@ function _fcrRenderList(filter){
     return;
   }
   if(!arr.length){ list.innerHTML = matHtml + knockHtml; return; }
+  const _total = arr.length;   /* ★ [2026-09-26] 30건씩 표시 */
+  arr = arr.slice(0, _fcrShowN);
+  const moreHtml = (_total > arr.length)
+    ? '<button onclick="fcrMore()" style="margin-top:4px;padding:11px;border:0.5px solid #DFE2EA;border-radius:8px;background:#fff;color:#1B3A6B;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">더보기 (' + (_total - arr.length) + '건 더)</button>'
+    : '';
   const colorMap = { new:'#DC2626', contacting:'#F59E0B', done:'#10B981', interest:'#6366F1' };
   const textColor = { new:'#DC2626', contacting:'#B45309', done:'#059669', interest:'#4338CA' };
   list.innerHTML = matHtml + knockHtml + arr.map(r => {   /* ★ [2026-08-18] 노크 행을 목록 최상단에 결합 · [2026-09-12] 만기 등록 행이 그 위 */
@@ -19597,6 +19610,11 @@ function _fcrRenderList(filter){
     const quizBadge = _fcrQuizBadge(r);   // ⏱ 진단 신청 배지 (Phase 4)
     const dateBadge = _fcrDateBadge(r);   // ★ 내 날짜 자료 요청 배지 (2026-08-01)
     const insBadge = (r.source==='insurance_portfolio') ? '<span style="font-size:10px;padding:2px 8px;background:#15294A;color:#C9A96E;border-radius:8px;font-weight:800">🛡️ 보험공유 '+(Number(r.policyCount)||((r.policies||[]).length))+'건</span>' : '';   /* ★ [2026-08-09] 내 보험 정리 공유 배지 */
+    /* ★ [2026-09-26] 브로슈어 상담 배지 — 분야 · 회사명 */
+    const brBadge = (r.source==='brochure')
+      ? '<span style="font-size:10px;padding:2px 8px;background:#3A332C;color:#D9BE87;border-radius:8px;font-weight:800">📘 브로슈어 · ' + _fcrEsc(r.area||'상담') + '</span>'
+        + (r.company ? '<span style="font-size:10px;padding:2px 7px;background:#F5F2ED;color:#5A5148;border-radius:8px;font-weight:600">' + _fcrEsc(r.company) + '</span>' : '')
+      : '';
     /* ★ [2026-08-15] 미팅예약 배지 — 확정 전이면 강조해 처리 필요를 알린다 */
     const bkBadge = (r.source==='meeting')
       ? ((r.bookingStatus==='confirmed')
@@ -19618,9 +19636,9 @@ function _fcrRenderList(filter){
       + '<div class="fcrPhone" style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">'
         + ((!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인' : _fcrEsc(_fcrFmtPhone(r.phone)))
         + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + bkBadge + insBadge + dateBadge + quizBadge + tags + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + brBadge + bkBadge + insBadge + dateBadge + quizBadge + (r.source==='brochure' ? '' : tags) + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
-  }).join('');
+  }).join('') + moreHtml;
   _fcrFillPhones(arr);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
 }
 
@@ -19643,6 +19661,7 @@ window.fcrFilter = function(btn){
   btn.style.color = '#fff';
   btn.style.border = '1px solid #1B3A6B';
   btn.style.fontWeight = '700';
+  _fcrShowN = 30;   /* ★ [2026-09-26] 필터 바꾸면 처음 30건부터 */
   _fcrRenderList(btn.dataset.filter);
 };
 
@@ -19973,7 +19992,12 @@ window.openFcRequestDetail = async function(reqId){
     + emailLink
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
-    + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">관심 분야' + otherTxt + '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' + (tags || '<span style="color:#B4B2A9;font-size:11px">-</span>') + '</div></div>'
+    + ((r.source==='brochure')   /* ★ [2026-09-26] 브로슈어 상담 — 상담 분야·회사명 */
+        ? '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">브로슈어 상담</div><div style="display:flex;gap:4px;flex-wrap:wrap">'
+          + '<span style="padding:4px 9px;background:#3A332C;color:#D9BE87;border-radius:8px;font-size:10px;font-weight:700">📘 ' + _fcrEsc(r.area||'-') + '</span>'
+          + (r.company ? '<span style="padding:4px 9px;background:#F5F2ED;color:#5A5148;border-radius:8px;font-size:10px;font-weight:600">🏢 ' + _fcrEsc(r.company) + '</span>' : '')
+          + '</div></div>'
+        : '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">관심 분야' + otherTxt + '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' + (tags || '<span style="color:#B4B2A9;font-size:11px">-</span>') + '</div></div>')
     + _fcrBookingSection(r)   /* ★ [2026-08-15] 미팅예약 — 희망일시 선택·확정 */
     + _fcrInsSection(r)   /* ★ [2026-08-09] 보험 공유 상세 */
     + _fcrQuizSection(r)
