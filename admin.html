@@ -22705,12 +22705,33 @@ async function innerGet(fn,params){
   if(!j.ok)throw new Error(j.error||j.reason||('HTTP '+r.status));return j;
 }
 function innerAlimNorm(a){if(!a)return null;return{sent:a.sent||0,failed:a.failed||0,blocked:a.blocked||0,total:a.total||0,skipped:!!a.skipped,reason:a.reason||a.error||'',resent:(a.resends||[]).length||a.resent||0,results:a.results||null};}
-function innerAlimHtml(a){
+/* ★ [2026-09-26] 알림톡 예약 표시 — 게시와 분리. 예약·중지·발송 중·오류, 게시 전 지정값(plan) */
+function innerAlimWhen(ms){if(!ms)return '';const k=new Date(ms+9*3600e3);return `${String(k.getUTCMonth()+1).padStart(2,'0')}/${String(k.getUTCDate()).padStart(2,'0')} ${String(k.getUTCHours()).padStart(2,'0')}:${String(k.getUTCMinutes()).padStart(2,'0')}`;}
+function innerAlimEditable(a){return !a||['scheduled','off','error'].includes(a.status)||(!a.status&&!a.total);}
+function innerAlimHtml(a,plan){
+  if(a&&a.status&&a.status!=='sent'){const m={scheduled:['#1565C0',`🔔 알림톡 예약 ${innerAlimWhen(a.sendAtMs)}`],off:['#888','🔕 알림톡 중지'],sending:['#E65100','알림톡 발송 중'],error:['#C62828','알림톡 오류 — [🔔] 지금 발송']}[a.status]||['#888',a.status];return `<span style="font-size:11px;color:${m[0]}" title="${esc(a.error||a.note||'')}">${m[1]}</span>`;}
+  if(!a&&plan&&(plan.mode||plan.time))return `<span style="font-size:11px;color:#888">${plan.mode==='off'?'🔕 알림톡 중지(게시 시)':`🔔 알림톡 ${esc(plan.time||'기본 시각')}(게시 시)`}</span>`;
   a=innerAlimNorm(a);if(!a)return '';
   if(a.skipped||(!a.total&&a.reason))return `<span style="font-size:11px;color:#C62828" title="${esc(a.reason)}">알림톡 미발송(${esc(a.reason||'사유 없음')})</span>`;
   const why=a.results?Object.entries(a.results.filter(r=>!r.sent).reduce((m,r)=>{const k=r.reason||'unknown';m[k]=(m[k]||0)+1;return m;},{})).map(([k,v])=>({no_phone:'번호 없음',opt_out:'수신 거부',pref_off:'알림 꺼짐'}[k]||k)+' '+v).join(', '):'';
   return `<span style="font-size:11px;color:${a.failed?'#C62828':'#1a7a4a'}" title="${esc(why)}">알림톡 ${a.sent}/${a.total}${a.failed?` · 실패 ${a.failed}`:''}${a.blocked?` · 차단 ${a.blocked}`:''}${a.resent?` · 재발송 ${a.resent}회`:''}</span>`;
 }
+/* 🔔 알림톡 설정 — 중지·재개·시각 변경·지금 발송·요일 기본 시각 */
+async function innerAlimMenu(fn,id,label,reload){
+  const pick=prompt(`${label}\n\n알림톡 설정 — 번호를 입력하세요\n1 = 중지 (이 회차는 보내지 않음)\n2 = 재개 (예약 시각에 자동 발송)\n3 = 이 회차 발송 시각 변경\n4 = 지금 발송 (게시된 회차)\n5 = 이 요일 기본 발송 시각 변경`,'');
+  if(!pick)return;
+  try{
+    let r;
+    if(pick==='1')r=await innerGet(fn,{action:'alimPlan',id,mode:'off'});
+    else if(pick==='2')r=await innerGet(fn,{action:'alimPlan',id,mode:'auto'});
+    else if(pick==='3'){const t=prompt('발송 시각 (HH:MM, 24시간) — 발송일 기준','09:00');if(!t)return;r=await innerGet(fn,{action:'alimPlan',id,time:t.trim()});}
+    else if(pick==='4'){if(!confirm(`${label}\n\n지금 이너서클 회원 전원에게 알림톡을 보냅니다. 계속할까요?`))return;r=await innerGet(fn,{action:'alimSendNow',id});}
+    else if(pick==='5'){const cur=await innerGet(fn,{action:'alimDefaults'});const t=prompt(`이 요일 기본 발송 시각 (현재 월 ${cur.times.weekly} · 수 ${cur.times.tax} · 금 ${cur.times.master})\n\n새 시각 (HH:MM)`,'');if(!t)return;r=await innerGet(fn,{action:'alimDefaults',set:'1',time:t.trim()});toast(`기본 시각 저장 — 월 ${r.times.weekly} · 수 ${r.times.tax} · 금 ${r.times.master}`,'success');return;}
+    else return toast('1~5 중에서 입력하세요','error');
+    toast(pick==='4'?(r.sent?`발송 완료 ${r.result&&r.result.sent!=null?r.result.sent+'명':''}`:(r.error?'발송 실패: '+r.error:'발송 대상 아님')):'알림톡 설정을 저장했습니다','success');await reload();
+  }catch(e){toast('알림톡 설정 실패: '+e.message,'error');}
+}
+window.innerAlimMenu=innerAlimMenu;
 function innerAlimCanResend(a){a=innerAlimNorm(a);return !!(a&&a.failed>0&&!a.skipped);}
 async function innerResend(fn,id,label,reload){
   if(!confirm(`${label}\n\n게시 알림톡 실패분만 다시 보냅니다.\n(번호 없음·수신 거부·알림 꺼짐은 제외)\n계속할까요?`))return;
@@ -22759,12 +22780,13 @@ function itRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="8" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const approved=d.approval==='approved';const prog=Number(d.progress||0);
-    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">Tax Master HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':'',itAudioHtml(d.audio),innerAlimHtml(d.alim)].filter(Boolean).join(' · ')||'-';
+    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">Tax Master HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':'',itAudioHtml(d.audio),innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="itOpen('${d.id}')">상세</button>`,
       st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="itAct('approve','${d.id}')">승인</button>`:'',
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="itAct('publish','${d.id}')">즉시 게시</button>`:'',
       st==='ready'&&d.approval!=='rejected'?`<button class="btn btn-sm" style="background:#C62828" onclick="itAct('reject','${d.id}')">반려</button>`:'',
       st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="itResend('${d.id}')">알림톡 재발송</button>`:'',
+      ['ready','published'].includes(st)&&innerAlimEditable(d.alim)?`<button class="btn btn-sm" style="background:#37474F" onclick="innerAlimMenu('itAdmin','${d.id}','${esc(d.sendDate)} Tax Master',itLoad)">🔔 알림톡</button>`:'',
       ['step5','ready','published','error'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#455A64" onclick="itAudio('${d.id}')">🔊 음성 재생성</button>`:'',
       st==='needs_final_review'?`<button class="btn btn-sm" style="background:#6A1B9A" onclick="itOverride('${d.id}')" title="숫자 대조·재검증 지적을 확인했으면 사유를 남기고 HTML 단계로 진행">확인 후 진행</button>`:'',
       st==='step5'?`<button class="btn btn-sm" style="background:#B4560F" onclick="itForceReady('${d.id}')" title="음성이 끝나지 않아도 검수로 넘김 — 음성은 계속 생성돼 완료되면 게시본에 자동 반영">음성 없이 검수(비상)</button>`:'',
@@ -22895,7 +22917,7 @@ function iwRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="9" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const ap=String(d.approval||'auto');const prog=Number(d.progress||0);
-    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">회원용 HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',d.audio==='ready'?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':'',innerAlimHtml(d.alim)].filter(Boolean).join(' · ')||'-';
+    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">회원용 HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',d.audio==='ready'?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':'',innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="iwOpen('${d.id}')">상세</button>`,
       st!=='published'&&ap!=='hold'?`<button class="btn btn-sm" style="background:#B4560F" onclick="iwAct('hold','${d.id}')">보류</button>`:'',
       st!=='published'&&ap==='hold'?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="iwAct('release','${d.id}')">보류 해제</button>`:'',
@@ -22903,7 +22925,8 @@ function iwRowsHtml(rows){
       (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="iwRetry('${d.id}')">재시도</button>`:'',
       st==='ready'?`<button class="btn btn-sm" style="background:#888" onclick="iwRetry('${d.id}','step4')" title="문장은 그대로, HTML·음성만 다시">재렌더</button>`:'',
       st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="iwDelete('${d.id}')">삭제</button>`:'',
-      st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="iwResend('${d.id}')">알림톡 재발송</button>`:''].filter(Boolean).join(' ');
+      st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="iwResend('${d.id}')">알림톡 재발송</button>`:'',
+      ['ready','published'].includes(st)&&innerAlimEditable(d.alim)?`<button class="btn btn-sm" style="background:#37474F" onclick="innerAlimMenu('iwAdmin','${d.id}','${esc(d.sendDate)} 위클리',iwLoad)">🔔 알림톡</button>`:''].filter(Boolean).join(' ');
     return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td style="max-width:220px;white-space:normal"><b>${esc(d.weekLabel||d.weekKey||'')}</b><div style="font-size:11px;color:#888">${esc(d.weekKey||'')} · ${esc(d.range||'')}${d.missingDays&&d.missingDays.length?` · 미수집 ${esc(d.missingDays.join(','))}`:''}${d.weeklyFirms?` · 주간전망 ${d.weeklyFirms}개사`:''}</div></td><td class="tc">${iwThermoHtml(d.thermo)}</td><td>${iwStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#8C6A16;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">${prog}%</div></td><td>${st==='published'?'<span style="color:#1565C0">게시됨</span>':iwApprovalHtml(ap)}</td><td class="tc">${d.warnings?`<span style="color:#E65100;font-weight:700">${d.warnings}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
   }).join('');
 }
@@ -23064,7 +23087,7 @@ async function imLoad(){
     const tb=$('im-tb');
     tb.innerHTML=_imRows.length?_imRows.map(d=>{
       const st=String(d.status||'');const attn=(d.step7&&d.step7.needsAttention)||[];const prog=d.progress||0;
-      const outs=[d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">HTML</a>`:'',imAudioHtml(d),innerAlimHtml(d.alimtalk)].filter(Boolean).join(' · ')||'-';
+      const outs=[d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<a href="${d.step5.standaloneUrl||d.step5.htmlUrl}" target="_blank">HTML</a>`:'',imAudioHtml(d),innerAlimHtml(d.alimtalk,d.alimPlan)].filter(Boolean).join(' · ')||'-';
       const approved=!!(d.approval&&d.approval.status==='approved');
       const ctl=[`<button class="btn btn-sm" onclick="imOpen('${d._id}')">상세</button>`,
         st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="imAct('approve','${d._id}')">승인</button>`:'',
@@ -23075,7 +23098,8 @@ async function imLoad(){
         (st!=='ready'&&st!=='published')?`<button class="btn btn-sm" style="background:${(st==='error'||st.startsWith('needs_'))?'#E65100':'#888'}" onclick="imRetry('${d._id}')">재시도</button>`:'',
         // ★ [2026-09-06] 삭제 — 문서·Storage(HTML·음성)·음성잡을 함께 지운다. 게시본은 노출하지 않는다.
         st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="imDelete('${d._id}')">삭제</button>`:'',
-        st==='published'&&innerAlimCanResend(d.alimtalk)?`<button class="btn btn-sm" style="background:#E65100" onclick="imResend('${d._id}')">알림톡 재발송</button>`:''].filter(Boolean).join(' ');
+        st==='published'&&innerAlimCanResend(d.alimtalk)?`<button class="btn btn-sm" style="background:#E65100" onclick="imResend('${d._id}')">알림톡 재발송</button>`:'',
+        ['ready','published'].includes(st)&&innerAlimEditable(d.alimtalk)?`<button class="btn btn-sm" style="background:#37474F" onclick="innerAlimMenu('imAdmin','${d._id}','${esc(d.sendDate||'')} 법인Master',imLoad)">🔔 알림톡</button>`:''].filter(Boolean).join(' ');
       return `<tr><td style="white-space:nowrap">${esc(d.sendDate||'')}</td><td>#${d.week||''}</td><td style="max-width:320px;white-space:normal">${esc(d.title||'')}</td><td>${imStatusHtml(d)}</td><td><div style="background:#eee;border-radius:4px;height:8px;width:90px;overflow:hidden"><div style="background:#7a1f2b;height:100%;width:${prog}%"></div></div><div style="font-size:11px;color:#888">본문 ${prog}%</div></td><td>${imApprovalHtml(d)}</td><td class="tc">${attn.length?`<span style="color:#E65100;font-weight:700">${attn.length}</span>`:'0'}</td><td style="white-space:nowrap">${outs}</td><td style="white-space:nowrap">${ctl}</td></tr>`;
     }).join(''):'<tr><td colspan="9" class="tc">생성된 회차가 없습니다.</td></tr>';
     // 패널이 열려 있는 동안 항상 자동 갱신 — 진행 중이면 15초, 아니면 60초 (화면을 다시 열 필요 없이 늘 최신)
