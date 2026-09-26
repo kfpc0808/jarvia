@@ -3612,6 +3612,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           <option value="busy">상담 지연</option>
           <option value="off">상담 중지</option>
           <option value="review">🔔 검토 대기</option><!-- ★ [2026-09-26] 전문가가 작성·수정한 프로필 -->
+          <option value="nophoto">📷 사진 없음</option><!-- ★ [2026-09-26] -->
         </select>
         <button class="btn" onclick="icNewExpert()" style="margin-left:8px">＋ 전문가 등록</button>
         <button class="btn btn-sec" onclick="icLoadExperts()">🔄 새로고침</button><button class="btn btn-sec" onclick="icExport('experts')" title="지금 필터 결과를 엑셀로">⬇ 엑셀</button>
@@ -3947,6 +3948,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
       </div>
 
       <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+        <button class="btn btn-danger" id="ice-del-btn" style="margin-right:auto;display:none" onclick="icDelExpert($('ice-id').value)">전문가 삭제</button><!-- ★ [2026-09-26] 목록에서 옮김 — 기존 전문가 편집 때만 보임 -->
         <button class="btn btn-sec" onclick="icCloseExpert()">취소</button>
         <button class="btn" id="ice-save-btn" onclick="icSaveExpert()">저장</button>
       </div>
@@ -21656,6 +21658,8 @@ async function icLoadExperts() {
   }
 }
 
+/* ★ [2026-09-26] 휴대폰 번호 표시용 (저장값은 그대로) */
+function icTel(v) { const d = String(v || '').replace(/\D/g, ''); if (/^01\d{8,9}$/.test(d)) return d.replace(/^(\d{3})(\d{3,4})(\d{4})$/, '$1-$2-$3'); if (/^02\d{7,8}$/.test(d)) return d.replace(/^(02)(\d{3,4})(\d{4})$/, '$1-$2-$3'); if (/^0\d{9,10}$/.test(d)) return d.replace(/^(\d{3})(\d{3,4})(\d{4})$/, '$1-$2-$3'); return v || ''; }
 function icRenderExperts() {
   const tb = $('tb-ic-experts'); if (!tb) return;
   const kw = ($('ice-search').value || '').trim().toLowerCase();
@@ -21666,6 +21670,7 @@ function icRenderExperts() {
   const list = _icExperts.filter(e => {
     if (ff && e.field !== ff) return false;
     if (sf === 'review') { if (!e.profileReviewPending) return false; }   /* ★ [2026-09-26] 검토 대기 */
+    else if (sf === 'nophoto') { if (e.photoUrl) return false; }   /* ★ [2026-09-26] 사진 없음 */
     else if (sf && (e.status || 'available') !== sf) return false;
     if (!kw) return true;
     const hay = [e.name, e.title, e.org, e.region, (e.subTopics || []).join(' '), (e.tags || []).join(' ')].join(' ').toLowerCase();
@@ -21694,14 +21699,13 @@ function icRenderExperts() {
       + '<td>' + icEsc(fname(e.field)) + '</td>'
       + '<td style="font-size:12px;color:#5A6484;white-space:normal;line-height:1.7">' + ((e.subTopics || []).map(icEsc).join(' · ') || '<span style="color:#C3C9D6">미지정</span>') + '</td>'
       + '<td style="font-size:12px">' + icEsc(e.region || '-') + '</td>'
-      + '<td style="font-size:12px">' + icEsc(p.phone || '-') + '</td>'
+      + '<td style="font-size:12px;white-space:nowrap">' + icEsc(icTel(p.phone) || '-') + '</td>'   /* ★ [2026-09-26] 010-0000-0000 표시 */
       + '<td style="font-size:12px">' + rate + '</td>'
       + '<td>' + icStBadge(e.status) + '</td>'
       + '<td title="' + (e.profileReviewPending ? '전문가가 작성·수정함 — 내용 확인 후 [편집]에서 저장하면 해제' : e.profileCompletedAt ? '전문가 작성 완료' : '미작성') + '">' + (e.profileReviewPending ? '<span style="color:#C0392B;font-weight:700">🔔 검토</span>' : e.profileCompletedAt ? '<span style="color:#138A5E;font-weight:700">완료</span>' : '<span style="color:#C87A0A">대기</span>') + '</td>'   /* ★ [2026-09-26] */
       + '<td>' + (e.active === false ? '❌' : '✅') + '</td>'
-      + '<td><button class="btn btn-sm btn-sec" onclick="icOpenExpert(\'' + e.id + '\')">편집</button> '
-      + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\')" title="전문가가 직접 프로필을 작성하는 링크">링크</button> '
-      + '<button class="btn btn-sm btn-danger" onclick="icDelExpert(\'' + e.id + '\')">삭제</button></td>'
+      + '<td style="white-space:nowrap"><button class="btn btn-sm btn-sec" onclick="icOpenExpert(\'' + e.id + '\')">편집</button> '
+      + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\')" title="전문가가 직접 프로필을 작성하는 링크">링크</button></td>'   /* ★ [2026-09-26] 삭제는 편집 창 안으로 (실수 방지) */
       + '</tr>';
   }).join('');
 
@@ -21712,6 +21716,7 @@ function icRenderExperts() {
 
 function icNewExpert() {
   $('ice-mdl-title').textContent = '👤 전문가 등록';
+  if ($('ice-del-btn')) $('ice-del-btn').style.display = 'none';   /* ★ [2026-09-26] 새 등록에는 삭제 없음 */
   $('ice-id').value = ''; _icPhotoUrl = ''; _icTopicSel = [];
   _icPhotoPath = ''; _icPhotoSaved = '';
   ['ice-name', 'ice-title', 'ice-org', 'ice-phone', 'ice-alim', 'ice-region', 'ice-method',
@@ -21731,6 +21736,7 @@ function icOpenExpert(id) {
   const e = _icExperts.find(x => x.id === id); if (!e) return;
   const p = e._priv || {}; const r = p.shareRate || {};
   $('ice-mdl-title').textContent = '👤 ' + e.name + ' 수정';
+  if ($('ice-del-btn')) $('ice-del-btn').style.display = '';   /* ★ [2026-09-26] */
   $('ice-id').value = e.id;
   $('ice-name').value = e.name || ''; $('ice-title').value = e.title || ''; $('ice-org').value = e.org || '';
   $('ice-phone').value = p.phone || ''; $('ice-alim').value = p.alimtalkPhone || '';
@@ -21909,6 +21915,7 @@ async function icDelExpert(id) {
     try { await deleteDoc(doc(db, 'innerExperts', id, 'private', 'meta')); } catch (_) {}
     await deleteDoc(doc(db, 'innerExperts', id));
     toast('전문가 삭제 완료', 'success');
+    try { closeM('mdl-ic-expert'); } catch (_) {}   /* ★ [2026-09-26] 편집 창에서 삭제한 경우 창 닫기 */
     icLoadExperts();
   } catch (e2) { toast('삭제 실패: ' + e2.message, 'error'); }
 }

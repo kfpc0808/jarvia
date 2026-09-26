@@ -491,6 +491,45 @@ function renderProfile(){
   const cnt=()=>{const n=(gr.value||'').length;gc.textContent=n+' / 1,500자';gc.style.color=n>1500?'var(--danger,#C0392B)':'';};
   if(gr&&gc){gr.addEventListener('input',cnt);cnt();}
 }
+/* ★ [2026-09-26] 사진 위치 조정 — 원형 미리보기 안에서 끌어서 상하좌우 이동, 막대로 확대·축소 → 정사각 800px JPEG
+   (프로필은 원형으로 보이므로 얼굴을 가운데로 맞출 수 있게 한다. 마우스·손가락 모두 지원) */
+function cropPhoto(file){
+  return new Promise((ok,no)=>{
+    const url=URL.createObjectURL(file);const img=new Image();
+    img.onload=()=>{
+      const W=img.naturalWidth,H=img.naturalHeight;
+      if(!W||!H){URL.revokeObjectURL(url);no(new Error('size'));return;}
+      const V=Math.min(260,window.innerWidth-80);const base=Math.max(V/W,V/H);let s=base,x=(V-W*s)/2,y=(V-H*s)/2;
+      const ov=document.createElement('div');
+      ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+      ov.innerHTML='<div style="background:#fff;border-radius:14px;padding:18px 18px 16px;max-width:340px;width:100%;text-align:center">'
+        +'<div style="font-weight:700;font-size:15px;margin-bottom:4px">사진 위치 조정</div>'
+        +'<div style="font-size:12px;color:#6B7280;margin-bottom:12px;line-height:1.6">사진을 끌어서 얼굴을 원 가운데에 맞추고<br>아래 막대로 크기를 조절하세요</div>'
+        +'<div id="cp-vp" style="width:'+V+'px;height:'+V+'px;margin:0 auto;border-radius:50%;overflow:hidden;position:relative;background:#EDF0F4;touch-action:none;cursor:grab;box-shadow:0 0 0 3px #E5E7EB"><img id="cp-img" alt="" draggable="false" style="position:absolute;left:0;top:0;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none"></div>'
+        +'<div style="display:flex;align-items:center;gap:8px;width:'+V+'px;margin:14px auto 0"><span style="font-size:12px;color:#6B7280">작게</span><input id="cp-z" type="range" min="1" max="3" step="0.01" value="1" style="flex:1"><span style="font-size:12px;color:#6B7280">크게</span></div>'
+        +'<div style="display:flex;gap:8px;justify-content:center;margin-top:14px"><button type="button" class="btn sec" id="cp-no">취소</button><button type="button" class="btn" id="cp-ok">적용</button></div></div>';
+      document.body.appendChild(ov);
+      const vp=ov.querySelector('#cp-vp'),im=ov.querySelector('#cp-img'),zr=ov.querySelector('#cp-z');im.src=url;
+      const draw=()=>{const w=W*s,h=H*s;x=Math.min(0,Math.max(V-w,x));y=Math.min(0,Math.max(V-h,y));
+        im.style.width=w+'px';im.style.height=h+'px';im.style.transform='translate('+x+'px,'+y+'px)';};
+      draw();
+      let dr=null;
+      vp.addEventListener('pointerdown',e=>{dr={px:e.clientX,py:e.clientY,x,y};try{vp.setPointerCapture(e.pointerId);}catch(_){}vp.style.cursor='grabbing';});
+      vp.addEventListener('pointermove',e=>{if(!dr)return;x=dr.x+(e.clientX-dr.px);y=dr.y+(e.clientY-dr.py);draw();});
+      const end=()=>{dr=null;vp.style.cursor='grab';};vp.addEventListener('pointerup',end);vp.addEventListener('pointercancel',end);
+      zr.addEventListener('input',()=>{const cx=(V/2-x)/s,cy=(V/2-y)/s;s=base*(+zr.value);x=V/2-cx*s;y=V/2-cy*s;draw();});   /* 가운데 기준 확대 */
+      const close=()=>{ov.remove();URL.revokeObjectURL(url);};
+      ov.querySelector('#cp-no').onclick=()=>{close();no(new Error('cancel'));};
+      ov.querySelector('#cp-ok').onclick=()=>{
+        const O=800,c=document.createElement('canvas');c.width=O;c.height=O;const g=c.getContext('2d');
+        g.fillStyle='#fff';g.fillRect(0,0,O,O);const sw=V/s;g.drawImage(img,-x/s,-y/s,sw,sw,0,0,O,O);
+        close();c.toBlob(b=>b?ok(b):no(new Error('blob')),'image/jpeg',0.86);
+      };
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);no(new Error('decode'));};
+    img.src=url;
+  });
+}
 /* ★ [2026-09-26] 사진 자동 축소 — 긴 변 800px JPEG. 회원 화면 전문가 목록이 사진 때문에 느려지지 않게 */
 function shrinkPhoto(file){
   return new Promise((ok,no)=>{
@@ -512,10 +551,13 @@ async function uploadProfilePhoto(){
   const fi=$('pf-photo'),f=fi.files&&fi.files[0];if(!f)return;
   const msg=$('pf-photo-msg');
   if(f.size>10*1024*1024){toast('10MB 이하 이미지만 올릴 수 있습니다');fi.value='';return;}
+  /* ★ [2026-09-26] 위치 조정 창 → 확정한 정사각 사진을 올린다. 취소하면 아무것도 올리지 않는다.
+     조정 창을 열 수 없는 형식이면 자동 축소, 그것도 안 되면 원본 */
+  let up=f;
+  try{up=await cropPhoto(f);}
+  catch(e){if(e&&e.message==='cancel'){fi.value='';return;}try{up=await shrinkPhoto(f);}catch(_){up=f;}}
   msg.textContent='업로드 중';
   try{
-    /* ★ [2026-09-26] 올리기 전 축소 — 축소에 실패하면(드문 형식) 원본으로 올린다 */
-    let up=f;try{up=await shrinkPhoto(f);}catch(_){up=f;}
     const r=await call('icProfilePhoto',{p:PK,mime:up.type||f.type||'image/jpeg',size:up.size});
     if(!r.success){toast(r.error||'업로드 준비 실패');msg.textContent='';return;}
     const put=await fetch(r.uploadUrl,{method:'PUT',headers:{'Content-Type':r.contentType},body:up});
