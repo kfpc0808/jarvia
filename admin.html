@@ -3773,7 +3773,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <div style="font-size:12px;color:#888;line-height:1.6"><b>월요일 09:45</b>(월요일이 공휴일이면 그 주 첫 영업일 같은 시각) 지난주 회차 자동 생성(모닝컨센서스 미완이면 10:15 재시도) → 집계(코드) → step1 집필 → step2 검증 → step3 보완 → step4 HTML·음성 → <b>ready</b> → <b>월 11:30 자동 게시</b>. 막으려면 ready 뒤 <b>[보류]</b>. 승인 절차 없음 — 보류·반려만 게시를 막습니다.</div>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>발행일</th><th>주차 · 기간</th><th>온도계</th><th>상태</th><th>진행</th><th>게시</th><th>확인</th><th>산출물</th><th>관리</th></tr></thead><tbody id="iw-tb"><tr><td colspan="9" class="tc" style="color:#999">불러오는 중…</td></tr></tbody></table></div>
-      <div style="font-size:12px;color:#888;margin-top:8px;line-height:1.6">상태: queued→step1(집필)→step2(코드 게이트+Gemini)→step3(보완)→step4(HTML·음성)→ready→published · needs_skeleton_review / needs_final_review = 게이트 치명(상세 확인 후 [재시도]) · error = [재시도] · 게시: <b>auto</b>=11:30 자동 · <b>hold</b>=보류 · <b>rejected</b>=반려</div>
+      <div style="font-size:12px;color:#888;margin-top:8px;line-height:1.6">상태: queued→step1(집필)→step2(코드 게이트+1차 교차검증 GPT·Gemini)→step3(보완+2차 교차검증)→step4(HTML·음성)→ready→published · needs_review = 1차 검증자 모두 실패([재시도 step2]) · 한쪽만 실패하면 「단일 검증」 경고와 함께 진행 · needs_skeleton_review / needs_final_review = 게이트 치명(상세 확인 후 [재시도]) · error = [재시도] · 게시: <b>auto</b>=11:30 자동 · <b>hold</b>=보류 · <b>rejected</b>=반려</div>
       <div id="iw-detail" class="form-box" style="margin-top:16px;display:none"></div>
     </div>
 
@@ -22971,7 +22971,7 @@ async function iwAct(action,id){
   try{await iwApi({action,id,by:'admin',note});toast(label+' 완료','success');await iwLoad();if(_iwCur===id)iwOpen(id);}catch(e){toast(label+' 실패: '+e.message,'error');}
 }
 async function iwRetry(id,fromFixed){
-  const from=fromFixed||prompt('어느 단계부터 재시도할까요?\nstep1 = 집필부터 (Opus 재호출)\nstep2 = 검증부터\nstep3 = 보완부터\nstep4 = HTML·음성만 다시','step1');if(!from)return;
+  const from=fromFixed||prompt('어느 단계부터 재시도할까요?\nstep1 = 집필부터 (Opus 재호출)\nstep2 = 1차 교차검증부터\nstep3 = 보완 + 2차 교차검증부터\nstep4 = HTML·음성만 다시','step1');if(!from)return;
   try{await iwApi({action:'retry',id,from,by:'admin'});toast('재시도 시작 — '+from,'success');setTimeout(iwLoad,1500);}catch(e){toast('재시도 실패: '+e.message,'error');}
 }
 async function iwDelete(id){
@@ -22994,7 +22994,8 @@ async function iwOpen(id){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
         <div><b style="font-size:13px">코드 게이트 치명</b>${list(gate.criticals,'#C62828')}</div>
         <div><b style="font-size:13px">확인항목(경고)</b>${list(gate.warnings,'#E65100')}</div>
-        <div style="grid-column:1/-1"><b style="font-size:13px">검증 지적 (코드 게이트 + Gemini)</b>${list(issues,'#7a1f2b')}</div>
+        <div style="grid-column:1/-1"><b style="font-size:13px">1차 교차검증 지적 (코드 게이트 + GPT·Gemini)</b>${(d.step2&&(d.step2.failed||[]).length)?`<div style="font-size:12.5px;color:#C62828">검증자 실패: ${esc(d.step2.failed.join(', '))}${d.step2.single?' — 단일 검증으로 진행':''}</div>`:''}${list(issues,'#7a1f2b')}</div>
+        <div style="grid-column:1/-1"><b style="font-size:13px">2차 교차검증 지적</b>${(()=>{const r=d.step3&&d.step3.round2;if(!r)return '<span style="font-size:12px;color:#999"> 2차 전</span>';return ((r.failed||[]).length?`<div style="font-size:12.5px;color:#C62828">검증자 실패: ${esc(r.failed.join(', '))}${r.single?' — 단일 검증으로 진행':''}</div>`:'')+list(r.serious,'#C62828')+(r.fixedByOpus?'<div style="font-size:12px;color:#1a7a4a;margin-top:4px">→ Opus 가 반영해 재보완함</div>':'');})()}</div>
       </div>
       <div style="margin-top:12px"><b style="font-size:13px">진행 로그</b>${log||'<div style="font-size:12px;color:#999">없음</div>'}</div>
       <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">회원용 HTML 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('iw-detail')._ceo,document.getElementById('iw-detail')._meta)">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="iwCeoPreview()">CEO본 JSON</button>`:''}${Object.keys(tts).length?`<span style="font-size:12px;color:#555;margin-left:6px">음성 ${Object.keys(tts).length}개: ${Object.keys(tts).map(k=>`<a href="${esc(tts[k])}" target="_blank">${esc(k)}</a>`).join(' · ')}</span>`:''}</div>`;
@@ -23245,7 +23246,8 @@ async function imOpen(id){
     $('im-d-verify').innerHTML=`
       <div class="form-box"><b>계산 게이트</b>: ${esc(c.calcGate||'-')} · 주 계산기 ${esc(c.primary||'-')} ${c.primaryOk?'✅':'⚠'}<br>성공: ${esc((c.successful||[]).join(', ')||'-')} / 미완: ${esc((c.incomplete||[]).join(', ')||'-')}${(c.warnings||[]).length?`<br>경고: ${esc(c.warnings.slice(0,4).join(' / '))}`:''}</div>
       <div class="form-box"><b>골격 QA</b>: 초안 ${esc(q2.decision||'-')} → 최종 ${esc(q4.decision||'-')}${q4.metrics?` · ${q4.metrics.chars}자 · 함정 ${q4.metrics.traps} · 반론 ${q4.metrics.objections} · 체크 ${q4.metrics.checklist} · FACT ${q4.metrics.factMarkers} · 확인필요 ${q4.metrics.needCheck} · 계산필요 ${q4.metrics.needCalc}`:''}${(q4.warnings||[]).length?`<ul style="margin:4px 0 0 18px">${q4.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}</div>
-      <div class="form-box"><b>3중 검증</b>: 실패 ${esc((g.failedVerifiers||[]).join(', ')||'없음')} · 치명/중대 ${(g.criticalLines||[]).length}건 · 4b 재검증 ${r4.skipped?'생략':(r4.resolved?'반영 확인':(r4.indeterminate?'판정 불명':'미반영'))}${(g.criticalLines||[]).length?`<ul style="margin:4px 0 0 18px">${g.criticalLines.slice(0,12).map(x=>`<li>(${esc(x.verifier)}) ${esc(x.line)}</li>`).join('')}</ul>`:''}</div>
+      <div class="form-box"><b>1차 교차검증 (GPT·Gemini)</b>: 실패 ${esc((g.failedVerifiers||[]).join(', ')||'없음')} · 치명/주요 ${(g.criticalLines||[]).length}건${(g.criticalLines||[]).length?`<ul style="margin:4px 0 0 18px">${g.criticalLines.slice(0,12).map(x=>`<li>(${esc(x.verifier)}) ${esc(x.line)}</li>`).join('')}</ul>`:''}
+        <br><b>2차 교차검증</b>: ${(()=>{const r=d.step4&&d.step4.round2;if(!r)return r4.skipped?'생략':(r4.attempted?(r4.resolved?'반영 확인(구 방식)':'확인 필요(구 방식)'):'-');return `${(r.failed||[]).length?`<span style="color:#C62828">검증자 실패: ${esc(r.failed.join(', '))}</span>`:`지적 ${(r.serious||[]).length}건${r.fixedByOpus?' → Opus 최종 정리':''}`}${(r.serious||[]).length?`<ul style="margin:4px 0 0 18px">${r.serious.slice(0,12).map(x=>`<li>(${esc(x.verifier)}) ${esc(x.line)}</li>`).join('')}</ul>`:''}${r4.message?`<div style="color:#C62828">${esc(r4.message)}</div>`:''}`;})()}</div>
       <div class="form-box"><b>숫자 대조(최종 본문)</b>: ${(d.step4&&d.step4.numberGate)?((d.step4.numberGate.unexplained||[]).length?`<span style="color:#C62828">근거 없는 숫자 ${esc(d.step4.numberGate.unexplained.join(', '))}</span>`:`<span style="color:#1a7a4a">이상 없음 (${d.step4.numberGate.checked}개 확인)</span>`):'-'}
         <br><b>CEO본 검증</b>: ${(d.step4&&d.step4.ceoVerify)?`${esc(d.step4.ceoVerify.verifier||'')} · ${(d.step4.ceoVerify.issues||[]).length?`<span style="color:#C62828">치명 ${d.step4.ceoVerify.issues.length}건</span><ul style="margin:4px 0 0 18px">${d.step4.ceoVerify.issues.slice(0,8).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'<span style="color:#1a7a4a">통과</span>'}`:'-'}${d.step4&&d.step4.ceoError?`<br><span style="color:#C62828">CEO본 미생성: ${esc(d.step4.ceoError)}</span>`:''}</div>
       ${['gemini','gpt','perplexity'].map(v=>d.step3&&d.step3[v]?`<details style="margin-top:6px"><summary style="cursor:pointer">${v} 검증 전문</summary><pre style="white-space:pre-wrap;font-size:12px;max-height:40vh;overflow:auto;background:#fafafa;padding:10px">${esc(d.step3[v])}</pre></details>`:'').join('')}`;
