@@ -3611,6 +3611,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           <option value="available">상담 가능</option>
           <option value="busy">상담 지연</option>
           <option value="off">상담 중지</option>
+          <option value="review">🔔 검토 대기</option><!-- ★ [2026-09-26] 전문가가 작성·수정한 프로필 -->
         </select>
         <button class="btn" onclick="icNewExpert()" style="margin-left:8px">＋ 전문가 등록</button>
         <button class="btn btn-sec" onclick="icLoadExperts()">🔄 새로고침</button><button class="btn btn-sec" onclick="icExport('experts')" title="지금 필터 결과를 엑셀로">⬇ 엑셀</button>
@@ -21664,7 +21665,8 @@ function icRenderExperts() {
 
   const list = _icExperts.filter(e => {
     if (ff && e.field !== ff) return false;
-    if (sf && (e.status || 'available') !== sf) return false;
+    if (sf === 'review') { if (!e.profileReviewPending) return false; }   /* ★ [2026-09-26] 검토 대기 */
+    else if (sf && (e.status || 'available') !== sf) return false;
     if (!kw) return true;
     const hay = [e.name, e.title, e.org, e.region, (e.subTopics || []).join(' '), (e.tags || []).join(' ')].join(' ').toLowerCase();
     return hay.includes(kw);
@@ -21695,7 +21697,7 @@ function icRenderExperts() {
       + '<td style="font-size:12px">' + icEsc(p.phone || '-') + '</td>'
       + '<td style="font-size:12px">' + rate + '</td>'
       + '<td>' + icStBadge(e.status) + '</td>'
-      + '<td title="' + (e.profileCompletedAt ? '전문가 작성 완료' : '미작성') + '">' + (e.profileCompletedAt ? '<span style="color:#138A5E;font-weight:700">완료</span>' : '<span style="color:#C87A0A">대기</span>') + '</td>'
+      + '<td title="' + (e.profileReviewPending ? '전문가가 작성·수정함 — 내용 확인 후 [편집]에서 저장하면 해제' : e.profileCompletedAt ? '전문가 작성 완료' : '미작성') + '">' + (e.profileReviewPending ? '<span style="color:#C0392B;font-weight:700">🔔 검토</span>' : e.profileCompletedAt ? '<span style="color:#138A5E;font-weight:700">완료</span>' : '<span style="color:#C87A0A">대기</span>') + '</td>'   /* ★ [2026-09-26] */
       + '<td>' + (e.active === false ? '❌' : '✅') + '</td>'
       + '<td><button class="btn btn-sm btn-sec" onclick="icOpenExpert(\'' + e.id + '\')">편집</button> '
       + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\')" title="전문가가 직접 프로필을 작성하는 링크">링크</button> '
@@ -21704,7 +21706,8 @@ function icRenderExperts() {
   }).join('');
 
   const avail = _icExperts.filter(e => (e.status || 'available') === 'available').length;
-  $('ice-summary').textContent = '표시 ' + list.length + '명 / 전체 ' + _icExperts.length + '명 · 상담 가능 ' + avail + '명';
+  const rv = _icExperts.filter(e => e.profileReviewPending).length;   /* ★ [2026-09-26] */
+  $('ice-summary').textContent = '표시 ' + list.length + '명 / 전체 ' + _icExperts.length + '명 · 상담 가능 ' + avail + '명' + (rv ? ' · 🔔 검토 대기 ' + rv + '명' : '');
 }
 
 function icNewExpert() {
@@ -21856,6 +21859,7 @@ async function icSaveExpert() {
       maxConcurrent: parseInt($('ice-max').value) || 5,
       order: parseInt($('ice-order').value) || 99,
       active: $('ice-active').value === '1',
+      profileReviewPending: false,   /* ★ [2026-09-26] 관리자가 확인·저장하면 「검토 대기」 해제 */
       updatedAt: serverTimestamp()
     };
     if (isNew) pub.createdAt = serverTimestamp();
@@ -21894,6 +21898,12 @@ async function icCloseExpert() {
 
 async function icDelExpert(id) {
   const e = _icExperts.find(x => x.id === id); if (!e) return;
+  /* ★ [2026-09-26] 진행 중 상담이 있으면 삭제 차단 — 삭제하면 그 상담은 담당자 없이 남고 전문가 링크도 끊긴다 */
+  try {
+    const cs = await getDocs(query(collection(db, 'innerConsults'), where('expertId', '==', id)));
+    const open = cs.docs.map(d => d.data() || {}).filter(c => !['done_confirmed', 'closed'].includes(c.status));
+    if (open.length) return alert('「' + e.name + '」 전문가에게 진행 중인 상담이 ' + open.length + '건 있어 삭제할 수 없습니다.\n\n' + open.slice(0, 5).map(c => '· ' + (c.no || '') + ' ' + (c.company || c.clientName || '') + ' (' + ((_iccST[c.status] || [c.status])[0]) + ')').join('\n') + '\n\n상담 관리에서 [전문가 재배정] 또는 종료 처리 후 다시 시도하세요.\n잠시 감추려면 편집에서 노출을 「숨김」으로 바꾸세요.');
+  } catch (err) { if (!confirm('진행 중 상담 확인에 실패했습니다 (' + err.message + ').\n그래도 삭제하시겠습니까?')) return; }
   if (!confirm('「' + e.name + '」 전문가를 삭제하시겠습니까?\n\n이 전문가에게 접수된 상담 이력은 남습니다.\n일시적으로 감추려면 편집에서 노출 여부를 「숨김」으로 바꾸세요.')) return;
   try {
     try { await deleteDoc(doc(db, 'innerExperts', id, 'private', 'meta')); } catch (_) {}
