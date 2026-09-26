@@ -3621,6 +3621,11 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
          ═══════════════════════════════════════════════════════════ -->
     <div id="p-ic-brochure" class="panel hidden"><h2>📘 브로슈어 상담 신청</h2>
       <p style="color:#666;margin:-8px 0 16px;font-size:13px">이너회원 e북 브로슈어에서 고객이 보낸 상담 신청입니다. 상태는 각 전문위원이 자비아 고객요청에서 바꾸면 여기에도 반영됩니다. 본사 접수는 주소의 아이디를 찾지 못했거나 탈퇴한 회원 건입니다.</p>
+      <div style="display:flex;gap:4px;border-bottom:2px solid var(--border-lt);margin-bottom:16px">
+        <button id="ibr-tab-list" class="btn btn-sec" onclick="ibrTab('list')" style="border-radius:8px 8px 0 0;border-bottom:3px solid var(--primary);font-weight:700">신청 목록</button>
+        <button id="ibr-tab-mem" class="btn btn-sec" onclick="ibrTab('mem')" style="border-radius:8px 8px 0 0;border-bottom:3px solid transparent">회원별 현황</button>
+      </div>
+      <div id="ibr-v-list">
       <div id="ibr-kpi" style="display:flex;gap:11px;flex-wrap:wrap;margin-bottom:14px"></div>
       <div id="ibr-sum" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:11px;margin-bottom:16px"></div>
       <div class="toolbar">
@@ -3640,6 +3645,29 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <th style="width:118px">연락처</th><th style="width:120px">회사명</th><th style="width:96px">분야</th>
         <th>문의 내용</th><th style="width:76px">상태</th>
       </tr></thead><tbody id="tb-ic-brochure"></tbody></table></div>
+      </div>
+      <!-- 회원별 현황 — 확인 시각(전문위원이 자비아 고객요청에서 카드를 처음 연 시각) 기준 -->
+      <div id="ibr-v-mem" style="display:none">
+        <div id="ibm-kpi" style="display:flex;gap:11px;flex-wrap:wrap;margin-bottom:14px"></div>
+        <div class="toolbar">
+          <input id="ibm-search" placeholder="회원 이름·아이디·소속사 검색..." oninput="ibmRender()">
+          <select id="ibm-period" onchange="ibmRender()"><option value="30">최근 30일</option><option value="90">최근 90일</option><option value="365" selected>최근 1년</option><option value="0">전체</option></select>
+          <select id="ibm-sort" onchange="ibmRender()"><option value="unseen">미확인 많은 순</option><option value="total">신청 많은 순</option><option value="slow">확인 느린 순</option><option value="recent">최근 신청 순</option></select>
+          <select id="ibm-comp" onchange="ibmRender()"><option value="">소속사 전체</option></select>
+          <label style="font-size:13px;margin-left:8px;display:inline-flex;align-items:center;gap:5px"><input type="checkbox" id="ibm-zero" onchange="ibmRender()"> 신청 없는 이너회원도 표시</label>
+          <label style="font-size:13px;margin-left:8px;display:inline-flex;align-items:center;gap:5px"><input type="checkbox" id="ibm-late" onchange="ibmRender()"> 확인 지연 회원만</label>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th>전문위원</th><th>소속사</th><th style="text-align:right">전체</th><th style="text-align:right">미확인</th>
+          <th style="text-align:right">평균 확인</th><th>가장 오래된 미확인</th><th>처리 (신규·연락중·완료·장기)</th>
+          <th>주요 분야</th><th>최근 신청</th><th style="text-align:right">알림톡</th>
+        </tr></thead><tbody id="tb-ibm"></tbody></table></div>
+        <div style="font-size:12px;color:var(--text-lt);margin-top:10px;line-height:1.8">
+          · 확인 = 전문위원이 자비아 고객요청에서 그 카드를 처음 눌러 연 시각 (브로슈어 카드는 목록에서 연락처가 가려져 있어 눌러야 번호가 보입니다)<br>
+          · 평균 확인 = 접수부터 확인까지 걸린 시간 · 가장 오래된 미확인이 24시간을 넘으면 붉게 표시<br>
+          · 처리 상태는 전문위원이 직접 바꿀 때만 반영되어 참고용입니다 · 행을 누르면 상세가 펼쳐집니다
+        </div>
+      </div>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════
@@ -22219,9 +22247,20 @@ async function ibrLoad() {
   try {
     const snap = await getDocs(query(collection(db, 'fc_consultation_requests'), where('source', '==', 'brochure')));
     _ibrList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => _ibrMs(b.createdAt) - _ibrMs(a.createdAt));
+    /* 이너회원 목록(이름·아이디·소속사·전용 HomePage) — 신청 없는 회원 표시에도 쓴다 */
+    try {
+      const us = await getDocs(query(collection(db, 'users'), where('role', 'in', ['inner_circle', 'jarvia_inner'])));
+      _ibmUsers = {};
+      us.docs.forEach(d => { const u = d.data() || {}; if (u.status === 'withdrawn') return; _ibmUsers[d.id] = u; _ibrNames[d.id] = u.name || ''; });
+    } catch (_) {}
+    /* 브로슈어 알림톡 발송 이력 — 건수·차감액 */
+    try {
+      const hs = await getDocs(query(collection(db, 'send_history'), where('tplKey', '==', 'BROCHURE_REQUEST')));
+      _ibmSend = hs.docs.map(d => d.data() || {});
+    } catch (_) { _ibmSend = null; }
     const uids = [...new Set(_ibrList.map(r => r.fcAuthUid).filter(u => u && !(u in _ibrNames)))];
     await Promise.all(uids.map(async u => {
-      try { const s = await getDoc(doc(db, 'users', u)); _ibrNames[u] = s.exists() ? (s.data().name || '') : ''; } catch (_) { _ibrNames[u] = ''; }
+      try { const s = await getDoc(doc(db, 'users', u)); _ibrNames[u] = s.exists() ? (s.data().name || '') : ''; if (s.exists() && !_ibmUsers[u]) _ibmUsers[u] = s.data(); } catch (_) { _ibrNames[u] = ''; }
     }));
     const sel = $('ibr-area');
     if (sel) {
@@ -22230,6 +22269,13 @@ async function ibrLoad() {
       sel.innerHTML = '<option value="">분야 전체</option>' + areas.map(a => '<option' + (a === cur ? ' selected' : '') + '>' + esc(a) + '</option>').join('');
     }
     ibrRender();
+    const cs = $('ibm-comp');
+    if (cs) {
+      const cur = cs.value;
+      const comps = [...new Set(Object.values(_ibmUsers).map(u => (u.company || '').trim()).filter(Boolean))].sort();
+      cs.innerHTML = '<option value="">소속사 전체</option>' + comps.map(c => '<option' + (c === cur ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
+    }
+    ibmRender();
   } catch (e) {
     if (tb) tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--danger)">불러오기 실패: ' + esc(e.message) + '</td></tr>';
   }
@@ -22288,6 +22334,154 @@ function ibrRender() {
   }).join('');
 }
 window.ibrLoad = ibrLoad; window.ibrRender = ibrRender;
+
+/* ─── 회원별 현황 ─── */
+let _ibmUsers = {}, _ibmSend = null, _ibmOpen = '';
+function ibrTab(t) {
+  $('ibr-v-list').style.display = t === 'list' ? '' : 'none';
+  $('ibr-v-mem').style.display  = t === 'mem'  ? '' : 'none';
+  $('ibr-tab-list').style.borderBottomColor = t === 'list' ? 'var(--primary)' : 'transparent';
+  $('ibr-tab-mem').style.borderBottomColor  = t === 'mem'  ? 'var(--primary)' : 'transparent';
+  if (t === 'mem') ibmRender();
+}
+function _ibmDur(ms) {
+  if (!(ms >= 0)) return '-';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + '분';
+  if (m < 1440) return (Math.round(m / 6) / 10) + '시간';
+  return Math.floor(m / 1440) + '일 ' + Math.floor((m % 1440) / 60) + '시간';
+}
+function _ibmHome(u) {
+  const cbs = (u && u.channelData && Array.isArray(u.channelData.customButtons)) ? u.channelData.customButtons : [];
+  for (const b of cbs) { const url = String((b && b.url) || ''); if (/^https?:\/\/(www\.)?consultant\.re\.kr\//i.test(url)) return url; }
+  return '';
+}
+function _ibmFmt(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms);
+  return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+function ibmRender() {
+  const tb = $('tb-ibm'); if (!tb) return;
+  const now = Date.now();
+  const days = +($('ibm-period').value || 0), cut = days ? now - days * 86400000 : 0;
+  const kw = ($('ibm-search').value || '').trim().toLowerCase(), comp = $('ibm-comp').value;
+  const onlyLate = $('ibm-late').checked, showZero = $('ibm-zero').checked, sort = $('ibm-sort').value;
+  const DAY = 86400000;
+
+  /* 회원별 묶기 — 본사 접수는 'HQ' 한 줄 */
+  const G = {};
+  const add = key => (G[key] = G[key] || { key, reqs: [] });
+  _ibrList.filter(r => !cut || _ibrMs(r.createdAt) >= cut).forEach(r => add(r.hq || !r.fcAuthUid ? 'HQ' : r.fcAuthUid).reqs.push(r));
+  if (showZero) Object.keys(_ibmUsers).forEach(uid => add(uid));
+
+  const sendBy = {};
+  (_ibmSend || []).forEach(h => {
+    const t = _ibrMs(h.createdAt); if (cut && t < cut) return;
+    if (!(h.status === 'sent' || h.status === 'fallback')) return;
+    const k = h.consultantUid || ''; (sendBy[k] = sendBy[k] || { n: 0, cost: 0 }); sendBy[k].n++; sendBy[k].cost += Number(h.cost) || 0;
+  });
+
+  let rows = Object.values(G).map(g => {
+    const u = _ibmUsers[g.key] || {};
+    const R = g.reqs, t = R.length;
+    const isHQ = g.key === 'HQ';   /* 본사 접수는 확인할 전문위원이 없어 확인 지표에서 뺀다 */
+    const seen = R.filter(r => _ibrMs(r.firstViewedAt));
+    const unseen = isHQ ? [] : R.filter(r => !_ibrMs(r.firstViewedAt));
+    const avg = seen.length ? seen.reduce((a, r) => a + (_ibrMs(r.firstViewedAt) - _ibrMs(r.createdAt)), 0) / seen.length : NaN;
+    const oldest = unseen.length ? Math.max(...unseen.map(r => now - _ibrMs(r.createdAt))) : NaN;
+    const cnt = st => R.filter(r => r.status === st).length;
+    const areas = {}; R.forEach(r => { if (r.area) areas[r.area] = (areas[r.area] || 0) + 1; });
+    const last = t ? Math.max(...R.map(r => _ibrMs(r.createdAt))) : 0;
+    return {
+      key: g.key, hq: g.key === 'HQ', R, t, seen: seen.length, unseen: unseen.length, avg, oldest,
+      late: oldest > DAY, nw: cnt('new'), ct: cnt('contacting'), dn: cnt('done'), it: cnt('interest'),
+      areas: Object.entries(areas).sort((a, b) => b[1] - a[1]), last,
+      name: g.key === 'HQ' ? '본사 접수' : (u.name || _ibrNames[g.key] || '-'),
+      loginId: u.loginId || ((R[0] || {}).fcLoginId) || '', company: (u.company || '').trim(),
+      home: _ibmHome(u), send: sendBy[g.key] || { n: 0, cost: 0 },
+    };
+  });
+  rows = rows.filter(m => {
+    if (comp && m.company !== comp) return false;
+    if (onlyLate && !m.late) return false;
+    if (!kw) return true;
+    return [m.name, m.loginId, m.company].join(' ').toLowerCase().includes(kw);
+  });
+  const S = { unseen: (a, b) => b.unseen - a.unseen || (b.oldest || 0) - (a.oldest || 0) || b.t - a.t,
+              total: (a, b) => b.t - a.t, slow: (a, b) => (isNaN(b.avg) ? -1 : b.avg) - (isNaN(a.avg) ? -1 : a.avg),
+              recent: (a, b) => b.last - a.last };
+  rows.sort(S[sort] || S.unseen);
+
+  /* 요약 */
+  const all = rows.filter(m => !m.hq);
+  const reqAll = rows.reduce((a, m) => a + m.t, 0);
+  const unseenAll = rows.reduce((a, m) => a + m.unseen, 0);
+  const avgAll = (() => { const L = rows.flatMap(m => m.R.filter(r => _ibrMs(r.firstViewedAt)).map(r => _ibrMs(r.firstViewedAt) - _ibrMs(r.createdAt))); return L.length ? L.reduce((a, b) => a + b, 0) / L.length : NaN; })();
+  const lateCnt = rows.filter(m => !m.hq).reduce((a, m) => a + m.R.filter(r => !_ibrMs(r.firstViewedAt) && now - _ibrMs(r.createdAt) > DAY).length, 0);
+  const K = [
+    ['신청이 있는 회원', all.filter(m => m.t).length + '<span style="font-size:12px;color:#5A6484;font-weight:500"> / ' + Object.keys(_ibmUsers).length + '명</span>', ''],
+    ['전체 신청', reqAll, ''],
+    ['미확인', unseenAll + (lateCnt ? '<span style="font-size:12px;color:#C0392B;font-weight:600"> · 24시간↑ ' + lateCnt + '</span>' : ''), unseenAll ? '#C0392B' : ''],
+    ['평균 확인', _ibmDur(avgAll), ''],
+    ['알림톡', _ibmSend ? (rows.reduce((a, m) => a + m.send.n, 0) + '건 · ' + rows.reduce((a, m) => a + m.send.cost, 0).toLocaleString() + '원') : '-', ''],
+  ];
+  $('ibm-kpi').innerHTML = K.map(k => '<div style="flex:1;min-width:140px;background:#F7F9FC;border:1px solid var(--border-lt);border-radius:9px;padding:12px 14px">'
+    + '<div style="font-size:11px;color:#5A6484">' + k[0] + '</div><div style="font-size:20px;font-weight:800;margin-top:3px' + (k[2] ? ';color:' + k[2] : '') + '">' + k[1] + '</div></div>').join('');
+
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-lt);padding:24px">표시할 회원이 없습니다.</td></tr>'; return; }
+  const chip = t => '<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:9px;background:#EEF4FF;color:#1B3A6B;font-weight:600;margin:1px 3px 1px 0">' + t + '</span>';
+  tb.innerHTML = rows.map(m => {
+    const tr = '<tr style="cursor:pointer' + (m.t ? '' : ';color:var(--text-lt)') + '" onclick="ibmToggle(\'' + m.key + '\')">'
+      + '<td>' + (m.late ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#C0392B;margin-right:5px"></span>' : '')
+        + '<b' + (m.hq ? ' style="color:#1B3A6B"' : '') + '>' + esc(m.name) + '</b>' + (m.loginId && !m.hq ? '<div style="font-size:11px;color:var(--text-lt)">' + esc(m.loginId) + '</div>' : '') + '</td>'
+      + '<td>' + esc(m.hq ? '-' : (m.company || '-')) + '</td>'
+      + '<td style="text-align:right;font-weight:700">' + m.t + '</td>'
+      + '<td style="text-align:right;font-weight:800;color:' + (m.unseen ? '#C0392B' : 'inherit') + '">' + (m.hq ? '-' : m.unseen) + '</td>'
+      + '<td style="text-align:right' + (m.avg > 12 * 3600000 ? ';color:#C87A0A;font-weight:700' : '') + '">' + _ibmDur(m.avg) + '</td>'
+      + '<td>' + (isNaN(m.oldest) ? '-' : (m.late ? '<span style="font-size:11px;font-weight:800;color:#fff;background:#C0392B;border-radius:9px;padding:2px 8px">' + _ibmDur(m.oldest) + '</span>' : _ibmDur(m.oldest))) + '</td>'
+      + '<td style="font-size:12px">' + (m.t ? '<span style="color:#C0392B">' + m.nw + '</span> · <span style="color:#C87A0A">' + m.ct + '</span> · <span style="color:#177A56">' + m.dn + '</span> · <span style="color:#4338CA">' + m.it + '</span>' : '-') + '</td>'
+      + '<td>' + (m.areas.slice(0, 3).map(a => chip(esc(a[0]) + ' ' + a[1])).join('') || '-') + '</td>'
+      + '<td>' + _ibmFmt(m.last) + '</td>'
+      + '<td style="text-align:right;font-size:12px">' + (_ibmSend ? (m.send.n + '건<div style="color:var(--text-lt)">' + m.send.cost.toLocaleString() + '원</div>') : '-') + '</td>'
+      + '</tr>';
+    return tr + (_ibmOpen === m.key && m.t ? _ibmDetail(m) : '');
+  }).join('');
+}
+function _ibmDetail(m) {
+  const bar = (label, v, max, color) => '<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin:5px 0"><span style="width:96px;flex-shrink:0">' + label + '</span>'
+    + '<i style="flex:1;height:10px;background:#E3E8EF;border-radius:5px;overflow:hidden"><s style="display:block;height:100%;width:' + (max ? v / max * 100 : 0) + '%;background:' + color + '"></s></i><b style="width:26px;text-align:right">' + v + '</b></div>';
+  const mx = Math.max(1, ...m.areas.map(a => a[1]));
+  const now = new Date(); const mons = [];
+  for (let k = 5; k >= 0; k--) { const d = new Date(now.getFullYear(), now.getMonth() - k, 1); mons.push({ y: d.getFullYear(), m: d.getMonth(), n: 0 }); }
+  m.R.forEach(r => { const d = new Date(_ibrMs(r.createdAt)); const x = mons.find(o => o.y === d.getFullYear() && o.m === d.getMonth()); if (x) x.n++; });
+  const mm = Math.max(1, ...mons.map(o => o.n));
+  const box = (t, h) => '<div style="background:#fff;border:1px solid var(--border-lt);border-radius:9px;padding:12px 14px"><div style="font-size:12.5px;font-weight:700;color:#1B3A6B;margin-bottom:8px">' + t + '</div>' + h + '</div>';
+  const S = { new: ['신규', '#C0392B'], contacting: ['연락중', '#C87A0A'], done: ['완료', '#177A56'], interest: ['장기관심', '#4338CA'] };
+  const list = m.R.slice().sort((a, b) => _ibrMs(b.createdAt) - _ibrMs(a.createdAt)).map(r => {
+    const v = _ibrMs(r.firstViewedAt), s = S[r.status] || [r.status || '-', ''];
+    return '<tr><td>' + _ibmFmt(_ibrMs(r.createdAt)) + '</td><td>' + esc(r.name || '-') + '</td><td>' + esc(r.phone || '-') + '</td><td>' + esc(r.company || '-') + '</td><td>' + esc(r.area || '-') + '</td>'
+      + '<td style="white-space:pre-wrap">' + esc(r.message || '') + '</td>'
+      + '<td>' + (v ? _ibmDur(v - _ibrMs(r.createdAt)) : '<span style="color:#C0392B;font-weight:700">미확인</span>') + '</td>'
+      + '<td style="font-weight:700;color:' + s[1] + '">' + s[0] + '</td></tr>';
+  }).join('');
+  const links = m.hq ? '<span style="font-size:12px;color:var(--text-lt)">주소의 아이디를 찾지 못했거나 탈퇴한 회원 건입니다.</span>'
+    : ('<a href="https://ebook.icm.re.kr/' + encodeURIComponent(m.loginId) + '/" target="_blank" rel="noopener" style="font-size:12px;font-weight:600;margin-right:14px">📘 브로슈어 열기 ›</a>'
+      + (m.home ? '<a href="' + esc(m.home) + '" target="_blank" rel="noopener" style="font-size:12px;font-weight:600">🏠 전용 HomePage ›</a>' : '<span style="font-size:12px;color:var(--text-lt)">전용 HomePage 없음</span>'));
+  return '<tr><td colspan="10" style="background:#F7F9FC;padding:16px 18px">'
+    + '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px"><div><div style="font-size:15px;font-weight:800">' + esc(m.name)
+      + ' <span style="font-size:12px;font-weight:500;color:var(--text-lt)">' + esc(m.hq ? '' : (m.loginId + (m.company ? ' · ' + m.company : ''))) + '</span></div><div style="margin-top:6px">' + links + '</div></div>'
+      + '<div style="font-size:12.5px;color:var(--text-lt)">확인 ' + m.seen + ' / ' + m.t + '건 · 평균 확인 ' + _ibmDur(m.avg) + (_ibmSend ? ' · 알림톡 ' + m.send.n + '건 · 차감 ' + m.send.cost.toLocaleString() + '원' : '') + '</div></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:11px;margin-bottom:12px">'
+      + box('분야 분포', m.areas.map(a => bar(esc(a[0]), a[1], mx, '#8A7550')).join('') || '<div style="font-size:12px;color:var(--text-lt)">없음</div>')
+      + box('월별 신청 (최근 6개월)', '<div style="display:flex;align-items:flex-end;gap:8px;height:104px">' + mons.map(o => '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;font-size:11px;color:var(--text-lt)"><b style="color:inherit;font-size:11.5px">' + o.n + '</b><s style="display:block;width:70%;height:' + (o.n / mm * 70) + 'px;background:#1B3A6B;border-radius:4px 4px 0 0;margin:3px 0"></s>' + (o.m + 1) + '월</div>').join('') + '</div>')
+      + box('처리 현황 (참고)', bar('신규', m.nw, m.t, '#C0392B') + bar('연락중', m.ct, m.t, '#C87A0A') + bar('완료', m.dn, m.t, '#177A56') + bar('장기관심', m.it, m.t, '#4338CA'))
+    + '</div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:96px">접수</th><th style="width:80px">신청자</th><th style="width:116px">연락처</th><th style="width:110px">회사명</th><th style="width:96px">분야</th><th>문의 내용</th><th style="width:90px">확인까지</th><th style="width:70px">상태</th></tr></thead><tbody>' + list + '</tbody></table></div>'
+    + '</td></tr>';
+}
+function ibmToggle(k) { _ibmOpen = _ibmOpen === k ? '' : k; ibmRender(); }
+window.ibrTab = ibrTab; window.ibmRender = ibmRender; window.ibmToggle = ibmToggle;
 
 async function ichqLoad() {
   const tb = $('tb-ic-hq');
