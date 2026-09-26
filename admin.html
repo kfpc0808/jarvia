@@ -22253,9 +22253,9 @@ async function ibrLoad() {
       _ibmUsers = {};
       us.docs.forEach(d => { const u = d.data() || {}; if (u.status === 'withdrawn') return; _ibmUsers[d.id] = u; _ibrNames[d.id] = u.name || ''; });
     } catch (_) {}
-    /* 브로슈어 알림톡 발송 이력 — 건수·차감액 */
+    /* 브로슈어 알림톡 발송 이력 — 건수·차감액 (★ [2026-09-27] 상담신청 + 열람 알림) */
     try {
-      const hs = await getDocs(query(collection(db, 'send_history'), where('tplKey', '==', 'BROCHURE_REQUEST')));
+      const hs = await getDocs(query(collection(db, 'send_history'), where('tplKey', 'in', ['BROCHURE_REQUEST', 'BROCHURE_VIEW'])));
       _ibmSend = hs.docs.map(d => d.data() || {});
     } catch (_) { _ibmSend = null; }
     const uids = [...new Set(_ibrList.map(r => r.fcAuthUid).filter(u => u && !(u in _ibrNames)))];
@@ -22379,7 +22379,8 @@ function ibmRender() {
   (_ibmSend || []).forEach(h => {
     const t = _ibrMs(h.createdAt); if (cut && t < cut) return;
     if (!(h.status === 'sent' || h.status === 'fallback')) return;
-    const k = h.consultantUid || ''; (sendBy[k] = sendBy[k] || { n: 0, cost: 0 }); sendBy[k].n++; sendBy[k].cost += Number(h.cost) || 0;
+    const k = h.consultantUid || ''; (sendBy[k] = sendBy[k] || { n: 0, cost: 0, req: 0, view: 0 }); sendBy[k].n++; sendBy[k].cost += Number(h.cost) || 0;
+    if (h.tplKey === 'BROCHURE_VIEW') sendBy[k].view++; else sendBy[k].req++;
   });
 
   let rows = Object.values(G).map(g => {
@@ -22399,7 +22400,7 @@ function ibmRender() {
       areas: Object.entries(areas).sort((a, b) => b[1] - a[1]), last,
       name: g.key === 'HQ' ? '본사 접수' : (u.name || _ibrNames[g.key] || '-'),
       loginId: u.loginId || ((R[0] || {}).fcLoginId) || '', company: (u.company || '').trim(),
-      home: _ibmHome(u), send: sendBy[g.key] || { n: 0, cost: 0 },
+      home: _ibmHome(u), send: sendBy[g.key] || { n: 0, cost: 0, req: 0, view: 0 },
     };
   });
   rows = rows.filter(m => {
@@ -22424,7 +22425,8 @@ function ibmRender() {
     ['전체 신청', reqAll, ''],
     ['미확인', unseenAll + (lateCnt ? '<span style="font-size:12px;color:#C0392B;font-weight:600"> · 24시간↑ ' + lateCnt + '</span>' : ''), unseenAll ? '#C0392B' : ''],
     ['평균 확인', _ibmDur(avgAll), ''],
-    ['알림톡', _ibmSend ? (rows.reduce((a, m) => a + m.send.n, 0) + '건 · ' + rows.reduce((a, m) => a + m.send.cost, 0).toLocaleString() + '원') : '-', ''],
+    ['알림톡 (상담·열람)', _ibmSend ? (rows.reduce((a, m) => a + m.send.n, 0) + '건 · ' + rows.reduce((a, m) => a + m.send.cost, 0).toLocaleString() + '원'
+        + '<span style="font-size:11px;color:#5A6484;font-weight:500"> · 상담 ' + rows.reduce((a, m) => a + m.send.req, 0) + ' · 열람 ' + rows.reduce((a, m) => a + m.send.view, 0) + '</span>') : '-', ''],
   ];
   $('ibm-kpi').innerHTML = K.map(k => '<div style="flex:1;min-width:140px;background:#F7F9FC;border:1px solid var(--border-lt);border-radius:9px;padding:12px 14px">'
     + '<div style="font-size:11px;color:#5A6484">' + k[0] + '</div><div style="font-size:20px;font-weight:800;margin-top:3px' + (k[2] ? ';color:' + k[2] : '') + '">' + k[1] + '</div></div>').join('');
@@ -22443,7 +22445,7 @@ function ibmRender() {
       + '<td style="font-size:12px">' + (m.t ? '<span style="color:#C0392B">' + m.nw + '</span> · <span style="color:#C87A0A">' + m.ct + '</span> · <span style="color:#177A56">' + m.dn + '</span> · <span style="color:#4338CA">' + m.it + '</span>' : '-') + '</td>'
       + '<td>' + (m.areas.slice(0, 3).map(a => chip(esc(a[0]) + ' ' + a[1])).join('') || '-') + '</td>'
       + '<td>' + _ibmFmt(m.last) + '</td>'
-      + '<td style="text-align:right;font-size:12px">' + (_ibmSend ? (m.send.n + '건<div style="color:var(--text-lt)">' + m.send.cost.toLocaleString() + '원</div>') : '-') + '</td>'
+      + '<td style="text-align:right;font-size:12px">' + (_ibmSend ? (m.send.n + '건<div style="color:var(--text-lt)">' + m.send.cost.toLocaleString() + '원</div>' + (m.send.n ? '<div style="font-size:10.5px;color:var(--text-lt)">상담 ' + m.send.req + ' · 열람 ' + m.send.view + '</div>' : '')) : '-') + '</td>'
       + '</tr>';
     return tr + (_ibmOpen === m.key && m.t ? _ibmDetail(m) : '');
   }).join('');
@@ -22471,7 +22473,7 @@ function _ibmDetail(m) {
   return '<tr><td colspan="10" style="background:#F7F9FC;padding:16px 18px">'
     + '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px"><div><div style="font-size:15px;font-weight:800">' + esc(m.name)
       + ' <span style="font-size:12px;font-weight:500;color:var(--text-lt)">' + esc(m.hq ? '' : (m.loginId + (m.company ? ' · ' + m.company : ''))) + '</span></div><div style="margin-top:6px">' + links + '</div></div>'
-      + '<div style="font-size:12.5px;color:var(--text-lt)">확인 ' + m.seen + ' / ' + m.t + '건 · 평균 확인 ' + _ibmDur(m.avg) + (_ibmSend ? ' · 알림톡 ' + m.send.n + '건 · 차감 ' + m.send.cost.toLocaleString() + '원' : '') + '</div></div>'
+      + '<div style="font-size:12.5px;color:var(--text-lt)">확인 ' + m.seen + ' / ' + m.t + '건 · 평균 확인 ' + _ibmDur(m.avg) + (_ibmSend ? ' · 알림톡 ' + m.send.n + '건(상담 ' + m.send.req + ' · 열람 ' + m.send.view + ') · 차감 ' + m.send.cost.toLocaleString() + '원' : '') + '</div></div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:11px;margin-bottom:12px">'
       + box('분야 분포', m.areas.map(a => bar(esc(a[0]), a[1], mx, '#8A7550')).join('') || '<div style="font-size:12px;color:var(--text-lt)">없음</div>')
       + box('월별 신청 (최근 6개월)', '<div style="display:flex;align-items:flex-end;gap:8px;height:104px">' + mons.map(o => '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;font-size:11px;color:var(--text-lt)"><b style="color:inherit;font-size:11.5px">' + o.n + '</b><s style="display:block;width:70%;height:' + (o.n / mm * 70) + 'px;background:#1B3A6B;border-radius:4px 4px 0 0;margin:3px 0"></s>' + (o.m + 1) + '월</div>').join('') + '</div>')
