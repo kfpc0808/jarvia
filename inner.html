@@ -420,6 +420,8 @@ setPersistence(auth,browserLocalPersistence).catch(()=>{});
 const db=getFirestore(app,'javia-db');
 const functions=getFunctions(app,'asia-northeast3');
 const call=(name,data)=>httpsCallable(functions,name)(data||{}).then(r=>r.data||{});
+/* ★ [2026-09-26] 활동 기록 — 이너회원만, 같은 항목은 브라우저 세션당 1회. 실패해도 화면에 영향 없음 */
+const icAct=(data,key)=>{try{if(!meData||meData.role==='admin')return;if(key){if(sessionStorage.getItem(key))return;sessionStorage.setItem(key,'1');}call('icLogActivity',data).catch(()=>{});}catch(_){}};
 
 /* ═══ 자료 첨부 — 서명 URL 로만 오간다 (Storage 직접 접근 차단) ═══ */
 const FILE_ACCEPT='.pdf,.jpg,.jpeg,.png,.gif,.webp,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.zip';
@@ -530,6 +532,7 @@ onAuthStateChanged(auth,async u=>{
     alert('이너서클 회원 전용 서비스입니다.');location.href='./index.html';return;
   }
   $('hd-me').textContent=(meData.name||'')+' 님';
+  try{if(meData.role!=='admin'&&!sessionStorage.getItem('ic_visit')){sessionStorage.setItem('ic_visit','1');call('icLogActivity',{type:'visit'}).catch(()=>{});}}catch(_){}   /* ★ [2026-09-26] 접속 기록 (세션당 1회) */
   setEbook();   /* ★ [2026-09-26] 브로슈어 링크 */
   await loadFields();
   await loadExperts();
@@ -603,6 +606,7 @@ function renderSide(){
   w.querySelectorAll('a').forEach(el=>el.onclick=()=>{
     if(el.dataset.hq){go('hq');renderHq();return;}
     curField=el.dataset.f;curTopic='';renderSide();renderTps();renderExperts();
+    if(curField)icAct({type:'field',fieldId:curField},'ic_f_'+curField);   /* ★ [2026-09-26] 분야 조회 기록 */
   });
   renderTps();
 }
@@ -613,6 +617,7 @@ function renderTps(){
   w.innerHTML=tp.map(t=>'<span class="'+(curTopic===t.name?'on':'')+'" data-t="'+esc(t.name)+'">'+esc(t.name)+'</span>').join('');
   w.querySelectorAll('span').forEach(el=>el.onclick=()=>{
     curTopic=(curTopic===el.dataset.t)?'':el.dataset.t;renderTps();renderExperts();
+    if(curField&&curTopic)icAct({type:'field',fieldId:curField,topic:curTopic},'ic_t_'+curField+'_'+curTopic);   /* ★ [2026-09-26] 주제 조회 기록 */
   });
 }
 
@@ -683,6 +688,7 @@ function renderExpert(){
     $('ex-main').innerHTML='<div class="empty"><b>전문가를 찾을 수 없습니다</b>목록에서 다시 선택해 주세요.</div>';
     $('ex-side').innerHTML='';return;
   }
+  icAct({type:'expert',expertId:e.id,fieldId:e.field||''},'ic_e_'+e.id);   /* ★ [2026-09-26] 전문가 프로필 열람 기록 */
   const st=ST[e.status||'available']||ST.available;
   const cases=(e.cases||[]).filter(Boolean);
   const off=e.status==='off';
