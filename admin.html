@@ -23194,10 +23194,23 @@ async function innerResend(fn,id,label,reload){
   try{const r=await innerGet(fn,{action:'resendAlimtalk',id});toast(r.tried?`재발송 ${r.tried}건 → 성공 ${r.sent}`:(r.note||'재발송 대상 없음'),'success');await reload();}
   catch(e){toast('재발송 실패: '+e.message,'error');}
 }
-let _pvWin=null,_pvPayload=null;
-window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||e.data.type!=='ceoPreviewReady'||!_pvWin||e.source!==_pvWin||!_pvPayload)return;_pvWin.postMessage({type:'ceoPreview',payload:_pvPayload},location.origin);});
+let _pvWin=null,_pvPayload=null,_pvReady=false;
+window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||e.data.type!=='ceoPreviewReady'||!_pvWin||e.source!==_pvWin)return;_pvReady=true;if(_pvPayload)_pvWin.postMessage({type:'ceoPreview',payload:_pvPayload},location.origin);});
 /* 대표본 미리보기 — 원본 CEO JSON 을 inner-ceo.html(같은 출처)에 넘겨 대표가 보는 화면 그대로 렌더 */
-function innerCeoPreview(ceo,meta){
+/* ★ [2026-09-27] meta.kind·meta.id 가 있으면 서버(itCeoAdminEdit preview)가 대표 링크(itCeoView)와 같은 함수로 조립한 데이터를 쓴다
+   — 샘플 회원 프로필·신뢰 요소·대표본 음성까지 대표가 보는 것과 동일. 게시 전 회차 포함, edits = 편집 창의 저장 전 문장 */
+function innerCeoPreview(ceo,meta,edits){
+  meta=meta||{};
+  if(meta.kind&&meta.id){
+    _pvPayload=null;_pvReady=false;_pvWin=window.open('inner-ceo.html?preview=admin','_blank');   // 팝업 차단 방지 — 클릭 즉시 연다
+    if(!_pvWin)return toast('팝업이 차단되었습니다 — 팝업 허용 후 다시 누르세요','error');
+    (async()=>{try{
+      const r=await fetch(IM_BASE+'/itCeoAdminEdit',{method:'POST',headers:{'Content-Type':'application/json',...(await innerAuthHeaders())},body:JSON.stringify({action:'preview',kind:meta.kind,id:meta.id,edits:edits||{}})});
+      const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
+      _pvPayload=j.payload;if(_pvReady)_pvWin.postMessage({type:'ceoPreview',payload:_pvPayload},location.origin);
+    }catch(e){toast('대표본 미리보기 실패: '+e.message,'error');try{_pvWin.close();}catch(_){}}})();
+    return;
+  }
   if(!ceo||typeof ceo!=='object')return toast('CEO 전달본이 아직 없습니다','error');
   const consultant={name:(admData&&admData.name)||'회원 이름',title:'',company:'',photoUrl:''};
   const weekly=ceo.kind==='weekly';
@@ -23243,13 +23256,13 @@ async function innerMemberPreview(kind,id){
   _mpPayload=null;_mpReady=false;_mpWin=window.open('inner-brief.html?preview=admin','_blank');   // 팝업 차단 방지 — 클릭 즉시 연다
   if(!_mpWin)return toast('팝업이 차단되었습니다 — 팝업 허용 후 다시 누르세요','error');
   try{const x=await innerReviewData(kind,id);if(!x.html&&!x.standaloneUrl)throw new Error('본문이 아직 없습니다');
-    _mpPayload={kind,title:x.title,sendDate:x.sendDate,html:x.html,htmlUrl:x.htmlUrl,standaloneUrl:x.standaloneUrl||'',twUrl:x.twUrl||'',ttsUrls:x.ttsUrls};
+    let consultant={name:'샘플 회원'};
+    if(x.ceo){try{const r=await fetch(IM_BASE+'/itCeoAdminEdit',{method:'POST',headers:{'Content-Type':'application/json',...(await innerAuthHeaders())},body:JSON.stringify({action:'preview',kind,id,edits:{}})});const j=await r.json();if(j.ok&&j.payload&&j.payload.consultant)consultant=j.payload.consultant;}catch(_){}}
+    _mpPayload={id,kind:kind==='weekly'?'weekly':kind==='tax'?'tax_deep':'',title:x.title,sendDate:x.sendDate,html:x.html,htmlUrl:x.htmlUrl,standaloneUrl:x.standaloneUrl||'',twUrl:x.twUrl||'',ttsUrls:x.ttsUrls,ceoJson:x.ceo?JSON.stringify(x.ceo):'',consultant};   // ★ 게시본과 같은 형태 — 회원 화면 show() 가 그대로 그린다
     if(_mpReady)_mpWin.postMessage({type:'memberPreview',payload:_mpPayload},location.origin);
   }catch(e){toast('회원 화면 로드 실패: '+e.message,'error');try{_mpWin.close();}catch(_){}}
 }
-async function innerCeoRow(kind,id){
-  try{const x=await innerReviewData(kind,id);innerCeoPreview(x.ceo,x.meta);}catch(e){toast('대표본 로드 실패: '+e.message,'error');}
-}
+function innerCeoRow(kind,id){innerCeoPreview(null,{kind,id});}   // 서버가 대표 링크와 같은 방식으로 조립
 function _dlFile(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
 async function innerReviewDownload(kind,id){
   try{
@@ -23265,7 +23278,7 @@ async function innerReviewDownload(kind,id){
       const js=`(function(){var U=${tts};for(var i=1;i<=8;i++){var s=document.getElementById('it-s'+i);if(!s||!U['s'+i])continue;var h=s.querySelector('h2,h3')||s;if(h.querySelector('.tts-mini'))continue;h.insertAdjacentHTML('beforeend',' <button type="button" class="play tts-mini" data-tts="s'+i+'"><i></i>듣기</button>');}
 var cur=null,btn=null;document.querySelectorAll('button[data-tts]').forEach(function(b){var u=U[b.getAttribute('data-tts')];if(!u){b.disabled=true;b.title='음성 없음';b.style.opacity='.45';return;}
 b.onclick=function(){if(cur&&btn===b){if(cur.paused)cur.play();else cur.pause();return;}if(cur){cur.pause();if(btn)btn.classList.remove('playing');}cur=new Audio(u);btn=b;b.classList.add('playing');cur.onended=function(){b.classList.remove('playing');cur=null;btn=null;};cur.play();};});})();`;
-      page=`<!DOCTYPE html>\n<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(x.sendDate)} ${esc(x.label)} 회원용</title><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&family=Noto+Serif+KR:wght@600;700;900&display=swap" rel="stylesheet"><style>${css}</style></head><body><main class="wrap"><div id="view">${head}${x.html}</div></main><script>${js}<\/script></body></html>\n`;
+      page=`<!DOCTYPE html>\n<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(x.sendDate)} ${esc(x.label)} 회원용</title><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&family=Noto+Serif+KR:wght@600;700;900&display=swap" rel="stylesheet"><style>${css}</style></head><body><main class="wrap"><div id="view">${head}<!--IC-BODY-START-->${x.html}<!--IC-BODY-END--></div></main><script>${js}<\/script></body></html>\n`;
     }
     if(page)_dlFile(`${base}_회원용.html`,page,'text/html;charset=utf-8');
     if(x.ceo)setTimeout(()=>_dlFile(`${base}_대표본.json`,JSON.stringify({meta:x.meta,ceo:x.ceo},null,2),'application/json'),400);
@@ -23273,6 +23286,57 @@ b.onclick=function(){if(cur&&btn===b){if(cur.paused)cur.play();else cur.pause();
   }catch(e){toast('받기 실패: '+e.message,'error');}
 }
 window.innerMemberPreview=innerMemberPreview;window.innerCeoRow=innerCeoRow;window.innerReviewDownload=innerReviewDownload;
+/* ★ [2026-09-27] 수정본 올리기(월·수) — [⬇ 받기] 파일을 고쳐 올리면 회원용·게시본 교체 + 낭독 내용이 바뀐 구간만 음성 재생성
+   금요일은 기존 상세의 업로드 경로(imAdmin uploadHtml)를 쓴다. 올린 뒤 대표본 점검을 바로 열 수 있게 묻는다 */
+function innerUploadPick(kind,id){const inp=document.createElement('input');inp.type='file';inp.accept='.html,.htm,text/html';inp.onchange=()=>innerUploadFile(kind,id,inp.files&&inp.files[0]);inp.click();}
+async function innerUploadFile(kind,id,f){
+  if(!f)return;const lab=kind==='weekly'?'위클리 컨센서스':'Tax Master';
+  if(!confirm(`${lab} 수정본을 반영할까요?\n\n파일: ${f.name} (${Math.round(f.size/1024)}KB)\n· 회원용 본문이 교체됩니다 (게시된 회차면 회원 화면도 즉시)\n· 음성은 낭독 내용이 바뀐 구간만 새로 만듭니다 (수 분)\n· 섹션 제목·듣기 버튼 구조는 유지해야 합니다\n· 대표본은 따로 고쳐야 합니다${kind==='weekly'?'\n· 이후 [재렌더]를 누르면 수정본이 원래 원고로 되돌아갑니다':''}`))return;
+  toast('업로드 중…');
+  try{
+    const r=await fetch(IM_BASE+'/'+(kind==='weekly'?'iwAdmin':'itAdmin'),{method:'POST',headers:{'Content-Type':'application/json',...(await innerAuthHeaders())},body:JSON.stringify({action:'uploadHtml',id,html:await f.text()})});
+    const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
+    toast(`수정본 반영 완료 — 음성 ${j.changed&&j.changed.length?`변경 ${j.changed.length}구간 재생성 중`:'변경 없음'}${j.note||''}`,'success');
+    if(kind==='weekly')await iwLoad();else await itLoad();
+    if(confirm('회원용 수정본을 반영했습니다.\n\n대표본은 자동으로 바뀌지 않습니다 — 같은 내용(숫자·사실)을 고쳐야 하면 지금 대표본 편집을 열까요?'))innerCeoEditOpen(kind,id);
+  }catch(e){toast('업로드 실패: '+e.message,'error');}
+}
+/* ★ [2026-09-27] 대표본 편집(월·수·금) — 대표본의 문장 칸만 고친다(구조·도표 불변). 저장하면 원문서·게시본 갱신 + 대표본 음성 바뀐 섹션만 재생성 */
+const CEO_EDIT_SKIP=/(^|\.)(svg|chart|bars|kind|regime|id|weekKey|asof)$/;
+const CEO_EDIT_LAB={title:'제목',subtitle:'부제',cardLine:'카드 문장',ctaLine:'하단 카드 문구','b1.h':'1 소제목','b1.p':'1 본문','b2.h':'2 소제목','b2.p':'2 본문','b3.h':'3 소제목','b3.p':'3 본문','basis.doc':'근거 문서번호','basis.quote':'근거 인용','basis.plain':'근거 풀이',memo:'개인 메시지 초안',verdict:'한 문장',lede:'리드',daysNote:'요일 설명',closing:'마무리',foot:'하단 고지','thermo.label':'온도계 판정','thermo.sub':'온도계 부제','thermo.note':'온도계 이유','principle.title':'원칙 제목','principle.body':'원칙 본문','principle.example':'원칙 사례','temp2.read':'돈의 온도 해설'};
+function _ceoLeaves(o,pre,out){for(const k of Object.keys(o||{})){const p=pre?pre+'.'+k:k;const v=o[k];if(typeof v==='string'){if(!CEO_EDIT_SKIP.test(p)&&!/<svg\b/i.test(v))out.push([p,v]);}else if(v&&typeof v==='object')_ceoLeaves(v,p,out);}return out;}
+const CEO_EDIT_W={flows:'돈의 흐름',events:'일정',reads2:'분야별',days:'요일',trend2:'추세',temp2:'돈의 온도',d3:'3개월',w5:'5년',head:'제목',value:'수치',sub:'부제',what:'설명',do:'할 것',dont:'하지 말 것',name:'이름',text:'내용',date:'날짜',title:'제목',fig:'수치',def:'뜻',move:'움직임',pos:'위치',note:'설명',icon:'아이콘',label:'라벨',dow:'요일',read:'해설'};
+function _ceoLab(p){if(CEO_EDIT_LAB[p])return CEO_EDIT_LAB[p];let m=p.match(/^b2\.table\.(\d+)\.(\d+)$/);if(m)return `2 비교표 ${+m[1]+1}행 ${+m[2]+1}열`;m=p.match(/^b3\.checks\.(\d+)$/);if(m)return `3 체크 ${+m[1]+1}`;
+  return p.split('.').map(k=>/^\d+$/.test(k)?`${+k+1}번`:(CEO_EDIT_W[k]||k)).join(' ');}
+let _ceoEd=null;
+async function innerCeoEditOpen(kind,id){
+  let x;try{x=await innerReviewData(kind,id);}catch(e){return toast('대표본 로드 실패: '+e.message,'error');}
+  if(!x.ceo)return toast('대표본이 아직 없습니다','error');
+  const leaves=_ceoLeaves(x.ceo,'',[]);_ceoEd={kind,id,x,leaves};
+  document.getElementById('ceoEdOv')?.remove();
+  const rows=leaves.map(([p,v],i)=>`<label style="display:block;margin:0 0 12px"><span style="display:block;font-size:12.5px;font-weight:700;color:#283593;margin-bottom:3px">${esc(_ceoLab(p))} <small style="color:#999;font-weight:400">${esc(p)}</small></span><textarea data-i="${i}" rows="${Math.min(12,Math.max(1,Math.ceil(v.length/70)))}" style="width:100%;font:inherit;font-size:13.5px;line-height:1.6;padding:8px;border:1px solid #ccd;border-radius:6px;box-sizing:border-box">${esc(v)}</textarea></label>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div id="ceoEdOv" style="position:fixed;inset:0;z-index:9999;background:rgba(10,18,32,.6);display:flex;align-items:center;justify-content:center;padding:20px"><div style="background:#fff;border-radius:12px;width:min(860px,100%);max-height:92vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid #eee"><b style="font-size:15px;color:#283593">✏ 대표본 편집 — ${esc(x.sendDate)} ${esc(x.label)}</b><div style="font-size:12px;color:#777;margin-top:4px">문장만 고칩니다 (도표·구조 불변). 저장하면 게시본·이미 보낸 링크에 반영되고 대표본 음성은 바뀐 섹션만 새로 만들어집니다. 회원이 직접 고친 칸은 그 회원 것이 우선합니다. 홍보 샘플은 다시 지정해야 바뀝니다.</div></div>
+    <div id="ceoEdBody" style="padding:16px 18px;overflow:auto">${rows||'<div style="color:#999">편집할 문장 칸이 없습니다</div>'}</div>
+    <div style="padding:12px 18px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoEditPreview()">👔 미리보기</button><button class="btn btn-sm" style="background:#283593" onclick="innerCeoEditSave()">저장</button><button class="btn btn-sm" style="background:#888" onclick="document.getElementById('ceoEdOv').remove()">닫기</button></div></div></div>`);
+}
+function _ceoEdCollect(){const edits={};let n=0;document.querySelectorAll('#ceoEdBody textarea').forEach(t=>{const [p,v]=_ceoEd.leaves[+t.dataset.i];if(t.value.trim()!==v.trim()){edits[p]=t.value;n++;}});return{edits,n};}
+function innerCeoEditPreview(){
+  const{edits}=_ceoEdCollect();const o=JSON.parse(JSON.stringify(_ceoEd.x.ceo));
+  for(const[p,v]of Object.entries(edits)){const ks=p.split('.');const last=ks.pop();const par=ks.reduce((a,k)=>a&&a[k],o);if(par)par[last]=v.trim();}
+  innerCeoPreview(o,{..._ceoEd.x.meta,kind:_ceoEd.kind,id:_ceoEd.id},edits);   // 저장 전 문장도 서버가 같은 규칙으로 적용해 보여 준다
+}
+async function innerCeoEditSave(){
+  const{edits,n}=_ceoEdCollect();if(!n)return toast('바뀐 칸이 없습니다','error');
+  if(!confirm(`대표본 ${n}칸을 저장합니다.\n· 게시된 회차면 대표 화면·이미 보낸 링크에 바로 반영됩니다\n· 대표본 음성은 바뀐 섹션만 새로 만듭니다 (수 분)\n\n계속할까요?`))return;
+  try{
+    const r=await fetch(IM_BASE+'/itCeoAdminEdit',{method:'POST',headers:{'Content-Type':'application/json',...(await innerAuthHeaders())},body:JSON.stringify({kind:_ceoEd.kind,id:_ceoEd.id,edits})});
+    const j=await r.json().catch(()=>({ok:false,error:'응답 파싱 실패'}));if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
+    document.getElementById('ceoEdOv')?.remove();
+    toast(`대표본 ${j.changed}칸 저장${j.published?' · 게시본 반영':''} · 음성 ${j.audioJobs?j.audioJobs+'섹션 재생성 중':'변경 없음'}${j.note?' · '+j.note:''}`,'success');
+  }catch(e){toast('대표본 저장 실패: '+e.message,'error');}
+}
+window.innerUploadPick=innerUploadPick;window.innerCeoEditOpen=innerCeoEditOpen;window.innerCeoEditPreview=innerCeoEditPreview;window.innerCeoEditSave=innerCeoEditSave;
 const IM_BASE='https://asia-northeast3-jarvia-platform.cloudfunctions.net';
 let _imRows=[],_imAuto=null,_imAutoMs=0,_imCur=null,_imSchedLoaded=false,_imDetailOpen=false,_imDetailTimer=null;
 const IM_SEC_TITLES={summary:'전체 요약',s1:'§1 지금 왜 이 얘기인가',s2:'§2 구조',s3:'§3 시뮬레이션',s4:'§4 설계 대안',s5:'§5 함정 5개',s6:'§6 예규·판례',s7:'§7 반론 3개',s8:'§8 첫 질문'};
@@ -23302,7 +23366,7 @@ function itRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="8" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const approved=d.approval==='approved';const prog=Number(d.progress||0);
-    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">Tax Master HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':'',itAudioHtml(d.audio),innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
+    const outs=[d.twUrl?`<a href="${esc(d.twUrl)}" target="_blank" style="font-size:12px">택스위클리</a>`:'',d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px" title="본문 원파일 — 회원 화면 틀·음성 없음. 회원이 보는 화면은 [👤 회원 화면]">본문 원파일(음성 없음)</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#0F6B4F">CEO본 ✓</span>':'',itAudioHtml(d.audio),innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="itOpen('${d.id}')">상세</button>`,
       st==='ready'&&!approved?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="itAct('approve','${d.id}')">승인</button>`:'',
       st==='ready'&&approved?`<button class="btn btn-sm" style="background:#1565C0" onclick="itAct('publish','${d.id}')">즉시 게시</button>`:'',
@@ -23310,7 +23374,7 @@ function itRowsHtml(rows){
       st==='published'&&innerAlimCanResend(d.alim)?`<button class="btn btn-sm" style="background:#E65100" onclick="itResend('${d.id}')">알림톡 재발송</button>`:'',
       ['ready','published'].includes(st)&&innerAlimEditable(d.alim)?`<button class="btn btn-sm" style="background:#37474F" onclick="innerAlimMenu('itAdmin','${d.id}','${esc(d.sendDate)} Tax Master',itLoad)">🔔 알림톡</button>`:'',
       ['step5','ready','published','error'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#455A64" onclick="itAudio('${d.id}')">🔊 음성 재생성</button>`:'',
-      ['ready','published'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('tax','${d.id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('tax','${d.id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('tax','${d.id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button>`:'',   /* ★ [2026-09-27] 검수용 */
+      ['ready','published'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('tax','${d.id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('tax','${d.id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('tax','${d.id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button> <button class="btn btn-sm" style="background:#6D4C41" onclick="innerUploadPick('tax','${d.id}')" title="[⬇ 받기]로 받은 파일을 고쳐서 올리기 — 회원용·게시본 교체, 바뀐 구간만 음성 재생성">⬆ 수정본</button> <button class="btn btn-sm" style="background:#283593" onclick="innerCeoEditOpen('tax','${d.id}')" title="대표본 문장 직접 수정 — 게시본·보낸 링크 반영, 대표본 음성 자동 재생성">✏ 대표본 편집</button>`:'',   /* ★ [2026-09-27] 검수용 */
       ['ready','published'].includes(st)?`<button class="btn btn-sm" style="background:#546E7A" onclick="innerTestSend('itAdmin','${d.id}','${esc(d.sendDate)} Tax Master')">📱 테스트 알림톡</button>`:'',
       st==='published'?`<button class="btn btn-sm" style="background:#8D6E63" onclick="innerUnpublish('itAdmin','${d.id}','${esc(d.sendDate)} Tax Master',itLoad,false)">⏏ 게시 취소</button>`:'',
       st==='published'?`<button class="btn btn-sm" style="background:#B71C1C" onclick="innerPubDelete('itAdmin','${d.id}','${esc(d.sendDate)} Tax Master','${esc(d.sendDate)}',itLoad)">🗑 게시본 삭제</button>`:'',
@@ -23403,8 +23467,8 @@ async function itOpen(id){
         <div style="grid-column:1/-1"><b style="font-size:13px">HTML 충실도</b> ${(()=>{const f=d.step4&&d.step4.qa&&d.step4.qa.fidelity;if(!f)return '<span style="font-size:12px;color:#999">HTML 전</span>';return `<span style="font-size:12.5px;color:${(f.missingNums.length||f.extraNums.length)?'#C62828':'#1a7a4a'}">숫자 ${f.missingNums.length||f.extraNums.length?`불일치 (빠짐 ${esc(f.missingNums.join(', '))} · 생김 ${esc(f.extraNums.join(', '))})`:'일치'} · 문장 보존 ${Math.round((f.coverage||0)*100)}% (${f.sentences}문장)</span>`;})()}</div>
       </div>
       <div style="margin-top:12px"><b style="font-size:13px">진행 로그</b>${log||'<div style="font-size:12px;color:#999">없음</div>'}</div>
-      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">Tax Master HTML 열기</a>`:''}${d.twUrl?`<a class="btn btn-sm" href="${esc(d.twUrl)}" target="_blank">택스위클리 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('it-detail')._ceo,{...(document.getElementById('it-detail')._meta||{}),ceoKind:'tax'})">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="itCeoPreview()">CEO본 JSON</button>`:''}</div>`;
-    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate};
+      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank" title="본문 원파일 — 회원 화면 틀·음성 없음. 회원이 보는 화면은 [👤 회원 화면]">본문 원파일 열기(음성 없음)</a>`:''}${d.twUrl?`<a class="btn btn-sm" href="${esc(d.twUrl)}" target="_blank">택스위클리 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('it-detail')._ceo,{...(document.getElementById('it-detail')._meta||{}),ceoKind:'tax'})">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="itCeoPreview()">CEO본 JSON</button>`:''}</div>`;
+    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate,kind:'tax',id};   /* ★ [2026-09-27] kind·id — 서버 조립 미리보기 */
   }catch(e){box.innerHTML=`<div style="color:#C62828">상세 로드 실패: ${esc(e.message)}</div>`;}
 }
 /* ★ [2026-09-25] Tax Master 섹션 음성 */
@@ -23445,7 +23509,7 @@ function iwRowsHtml(rows){
   if(!rows.length)return '<tr><td colspan="9" class="tc" style="color:#999">생성된 회차가 없습니다.</td></tr>';
   return rows.map(d=>{
     const st=String(d.status||'');const ap=String(d.approval||'auto');const prog=Number(d.progress||0);
-    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px">회원용 HTML</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',d.audio==='ready'?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':'',innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
+    const outs=[d.htmlUrl?`<a href="${esc(d.htmlUrl)}" target="_blank" style="font-size:12px" title="본문 원파일 — 회원 화면 틀·음성 없음. 회원이 보는 화면은 [👤 회원 화면]">본문 원파일(음성 없음)</a>`:'',d.hasCeo?'<span style="font-size:11px;color:#8C6A16">CEO본 ✓</span>':'',(d.audio==='ready'||d.audio==='done')?'<span style="font-size:11px;color:#1a7a4a">음성 ✓</span>':(d.audio==='running'||d.audio==='queued')?'<span style="font-size:11px;color:#1565C0">음성 생성 중</span>':d.audio==='partial'?'<span style="font-size:11px;color:#E65100">음성 일부</span>':d.audio==='error'?'<span style="font-size:11px;color:#C62828">음성 ✕</span>':'',innerAlimHtml(d.alim,d.alimPlan)].filter(Boolean).join(' · ')||'-';
     const ctl=[`<button class="btn btn-sm" onclick="iwOpen('${d.id}')">상세</button>`,
       st!=='published'&&ap!=='hold'?`<button class="btn btn-sm" style="background:#B4560F" onclick="iwAct('hold','${d.id}')">보류</button>`:'',
       st!=='published'&&ap==='hold'?`<button class="btn btn-sm" style="background:#1a7a4a" onclick="iwAct('release','${d.id}')">보류 해제</button>`:'',
@@ -23454,7 +23518,7 @@ function iwRowsHtml(rows){
       st==='ready'?`<button class="btn btn-sm" style="background:#888" onclick="iwRetry('${d.id}','step4')" title="문장은 그대로, HTML·음성만 다시">재렌더</button>`:'',
       st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="iwDelete('${d.id}')">삭제</button>`:'',
       st!=='published'&&ap!=='rejected'?`<button class="btn btn-sm" style="background:#7B1F1F" onclick="iwAct('reject','${d.id}')" title="이번 주는 발행하지 않음 — 기록이 남습니다">반려</button>`:'',
-      ['ready','published'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('weekly','${d.id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('weekly','${d.id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('weekly','${d.id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button>`:'',   /* ★ [2026-09-27] 검수용 */
+      ['ready','published'].includes(st)&&d.htmlUrl?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('weekly','${d.id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('weekly','${d.id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('weekly','${d.id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button> <button class="btn btn-sm" style="background:#6D4C41" onclick="innerUploadPick('weekly','${d.id}')" title="[⬇ 받기]로 받은 파일을 고쳐서 올리기 — 회원용·게시본 교체, 바뀐 구간만 음성 재생성">⬆ 수정본</button> <button class="btn btn-sm" style="background:#283593" onclick="innerCeoEditOpen('weekly','${d.id}')" title="대표본 문장 직접 수정 — 게시본·보낸 링크 반영, 대표본 음성 자동 재생성">✏ 대표본 편집</button>`:'',   /* ★ [2026-09-27] 검수용 */
       ['ready','published'].includes(st)?`<button class="btn btn-sm" style="background:#546E7A" onclick="innerTestSend('iwAdmin','${d.id}','${esc(d.sendDate)} 위클리')">📱 테스트 알림톡</button>`:'',
       st==='published'?`<button class="btn btn-sm" style="background:#8D6E63" onclick="innerUnpublish('iwAdmin','${d.id}','${esc(d.sendDate)} 위클리',iwLoad,true)">⏏ 게시 취소</button>`:'',
       st==='published'?`<button class="btn btn-sm" style="background:#B71C1C" onclick="innerPubDelete('iwAdmin','${d.id}','${esc(d.sendDate)} 위클리','${esc(d.sendDate)}',iwLoad)">🗑 게시본 삭제</button>`:'',
@@ -23532,8 +23596,8 @@ async function iwOpen(id){
         <div style="grid-column:1/-1"><b style="font-size:13px">2차 교차검증 지적</b>${(()=>{const r=d.step3&&d.step3.round2;if(!r)return '<span style="font-size:12px;color:#999"> 2차 전</span>';return ((r.failed||[]).length?`<div style="font-size:12.5px;color:#C62828">검증자 실패: ${esc(r.failed.join(', '))}${r.single?' — 단일 검증으로 진행':''}</div>`:'')+list(r.serious,'#C62828')+(r.fixedByOpus?'<div style="font-size:12px;color:#1a7a4a;margin-top:4px">→ Opus 가 반영해 재보완함</div>':'');})()}</div>
       </div>
       <div style="margin-top:12px"><b style="font-size:13px">진행 로그</b>${log||'<div style="font-size:12px;color:#999">없음</div>'}</div>
-      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank">회원용 HTML 열기</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('iw-detail')._ceo,document.getElementById('iw-detail')._meta)">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="iwCeoPreview()">CEO본 JSON</button>`:''}${Object.keys(tts).length?`<span style="font-size:12px;color:#555;margin-left:6px">음성 ${Object.keys(tts).length}개: ${Object.keys(tts).map(k=>`<a href="${esc(tts[k])}" target="_blank">${esc(k)}</a>`).join(' · ')}</span>`:''}</div>`;
-    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate,weekLabel:d.weekLabel,range:d.range};
+      <div class="toolbar" style="margin-top:12px">${d.step4&&d.step4.htmlUrl?`<a class="btn btn-sm" href="${esc(d.step4.htmlUrl)}" target="_blank" title="본문 원파일 — 회원 화면 틀·음성 없음. 회원이 보는 화면은 [👤 회원 화면]">본문 원파일 열기(음성 없음)</a>`:''}${ceo?`<button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoPreview(document.getElementById('iw-detail')._ceo,document.getElementById('iw-detail')._meta)">👔 대표본 미리보기</button> <button class="btn btn-sm" onclick="iwCeoPreview()">CEO본 JSON</button>`:''}${Object.keys(tts).length?`<span style="font-size:12px;color:#555;margin-left:6px">음성 ${Object.keys(tts).length}개: ${Object.keys(tts).map(k=>`<a href="${esc(tts[k])}" target="_blank">${esc(k)}</a>`).join(' · ')}</span>`:''}</div>`;
+    box._ceo=ceo;box._meta={title:d.title,sendDate:d.sendDate,weekLabel:d.weekLabel,range:d.range,kind:'weekly',id};   /* ★ [2026-09-27] kind·id — 서버 조립 미리보기 */
   }catch(e){box.innerHTML=`<div style="color:#C62828">상세 로드 실패: ${esc(e.message)}</div>`;}
 }
 function iwResend(id){const d=_iwRows.find(x=>x.id===id)||{};return innerResend('iwAdmin',id,`${d.weekLabel||d.weekKey||''} ${d.range||''}`,iwLoad);}
@@ -23636,7 +23700,7 @@ async function imLoad(){innerPromoStatus();   /* ★ [2026-09-27] 홍보 샘플 
         // ★ [2026-09-06] 삭제 — 문서·Storage(HTML·음성)·음성잡을 함께 지운다. 게시본은 노출하지 않는다.
         st!=='published'?`<button class="btn btn-sm" style="background:#C62828" onclick="imDelete('${d._id}')">삭제</button>`:'',
         st==='published'&&innerAlimCanResend(d.alimtalk)?`<button class="btn btn-sm" style="background:#E65100" onclick="imResend('${d._id}')">알림톡 재발송</button>`:'',
-        ['ready','published'].includes(st)&&d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('master','${d._id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('master','${d._id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('master','${d._id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button>`:'',   /* ★ [2026-09-27] 검수용 */
+        ['ready','published'].includes(st)&&d.step5&&(d.step5.standaloneUrl||d.step5.htmlUrl)?`<button class="btn btn-sm" style="background:#1B3A5C" onclick="innerMemberPreview('master','${d._id}')" title="게시 전 회차도 회원이 보는 화면 그대로 (음성 포함)">👤 회원 화면</button> <button class="btn btn-sm" style="background:#0F2440" onclick="innerCeoRow('master','${d._id}')">👔 대표본</button> <button class="btn btn-sm" style="background:#5D4037" onclick="innerReviewDownload('master','${d._id}')" title="회원용(음성 포함 HTML)·대표본(JSON) 파일로 받기">⬇ 받기</button> <button class="btn btn-sm" style="background:#283593" onclick="innerCeoEditOpen('master','${d._id}')" title="대표본 문장 직접 수정 — 게시본·보낸 링크 반영, 대표본 음성 자동 재생성">✏ 대표본 편집</button>`:'',   /* ★ [2026-09-27] 검수용 */
         ['ready','published'].includes(st)?`<button class="btn btn-sm" style="background:#546E7A" onclick="innerTestSend('imAdmin','${d._id}','${esc(d.sendDate||'')} 법인Master')">📱 테스트 알림톡</button>`:'',
         st==='published'?`<button class="btn btn-sm" style="background:#8D6E63" onclick="innerUnpublish('imAdmin','${d._id}','${esc(d.sendDate||'')} 법인Master',imLoad,false)">⏏ 게시 취소</button>`:'',
         st==='published'?`<button class="btn btn-sm" style="background:#B71C1C" onclick="innerPubDelete('imAdmin','${d._id}','${esc(d.sendDate||'')} 법인Master','${esc(d.sendDate||'')}',imLoad)">🗑 게시본 삭제</button>`:'',
@@ -23707,6 +23771,7 @@ async function imUploadFile(input){
     if(!j.ok)throw new Error(j.error||('HTTP '+r.status));
     toast(`수정본 반영 완료 — 음성 재생성 시작${(j.warnings||[]).length?` (경고 ${j.warnings.length})`:''}`,'success');
     await imLoad();imOpen(_imUploadId);
+    if(confirm('회원용 수정본을 반영했습니다.\n\n대표본은 자동으로 바뀌지 않습니다 — 같은 내용(숫자·사실)을 고쳐야 하면 지금 대표본 편집을 열까요?'))innerCeoEditOpen('master',_imUploadId);   /* ★ [2026-09-27] */
   }catch(e){toast('업로드 실패: '+e.message,'error');}
 }
 async function imDelete(id){
@@ -23818,7 +23883,7 @@ async function imDownload(id){
 }
 async function imCeoPreview(id){
   try{const snap=await getDoc(doc(db,'upcoming_inner_issues',id));const d=snap.exists()?snap.data():{};let ceo=null;try{ceo=d.step4&&d.step4.ceoJson?JSON.parse(d.step4.ceoJson):null;}catch(_){}
-    innerCeoPreview(ceo,{title:d.title,sendDate:d.sendDate,ceoKind:'master'});}catch(e){toast('대표본 로드 실패: '+e.message,'error');}
+    innerCeoPreview(ceo,{title:d.title,sendDate:d.sendDate,ceoKind:'master',kind:'master',id});}catch(e){toast('대표본 로드 실패: '+e.message,'error');}   /* ★ [2026-09-27] kind·id */
 }
 async function imOverride(id){const d=_imRows.find(x=>x._id===id)||{};const note=prompt(`${d.sendDate} #${d.week||''} ${d.title||''}\n\n최종 QA·숫자 대조 지적을 확인했고 진행해도 된다고 판단한 사유를 적어 주세요.\n(상세 → 검증·계산 탭에서 목록 확인)`,'');if(!note)return;
   try{await imApi({action:'overrideGate',id,note});toast('확인 후 진행 — CEO본·HTML 단계로 넘어갑니다','success');await imLoad();if(_imCur===id)imOpen(id);}catch(e){toast('실패: '+e.message,'error');}}

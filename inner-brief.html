@@ -83,6 +83,7 @@ table.log th{cursor:pointer;user-select:none;white-space:nowrap;color:var(--ink)
 .smp{background:var(--gold-bg);border:1px solid var(--gold);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px;color:var(--ink);display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between}
 .smp b{color:var(--gold-dk)}
 .smp a{display:inline-block;background:var(--primary);color:#fff;text-decoration:none;font-weight:700;border-radius:8px;padding:8px 14px;font-size:14px;white-space:nowrap}
+.pv .ceo .btns button,.pv .ceo button{pointer-events:none;opacity:.5}   /* 관리자 미리보기 — 대표님께 보내기 버튼 비활성 */
 .smp-frame{display:block;width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);border-radius:12px;background:#fff}
 @media(min-width:900px){body{font-size:17px}.wrap{max-width:860px;padding:24px 24px 0}.head,.sec,.ceo{padding:32px 40px;margin-bottom:20px}.head h1{font-size:28px}.sec h2{font-size:22px}.cards{grid-template-columns:1fr 1fr}.branch{grid-template-columns:1fr 1fr 1fr}.big .n{font-size:36px}.ask{font-size:25px}table{font-size:15.5px}.one{font-size:17px;padding:18px 24px}}
 </style>
@@ -195,14 +196,19 @@ function showDoc(kind,doc,bannerHtml){
   const src=CUR.standaloneUrl||CUR.htmlUrl;   // 법인Master — 회원이 [브리핑 열기]로 보는 본문을 바로 보여 준다
   $('view').innerHTML=h+`</div>`+(src?`<iframe class="smp-frame" src="${esc(src)}" title="법인Master 본문"></iframe>`:'<div class="empty">본문 없음</div>');
 }
-/* ★ [2026-09-27] 관리자 검수 — admin.html 이 같은 출처에서 postMessage 로 본문·음성 주소를 넘긴다 (inner-ceo 대표본 미리보기와 같은 방식) */
+/* ★ [2026-09-27] 관리자 검수 — admin.html 이 같은 출처에서 postMessage 로 게시본과 같은 형태의 회차를 넘긴다.
+   회원 화면과 같은 show() 로 그린다 (본문·음성·「대표님께 보내기」 영역까지). 대표님께 보내기는 샘플 회원 프로필, 버튼은 동작하지 않음.
+   열람 기록·NEW 배지·주소 변경·발송 기록 조회 없음 */
 function pvAdmin(){
-  document.body.classList.add('sample');
+  document.body.classList.add('sample','pv');
   if(!window.opener){$('view').innerHTML='<div class="empty">관리자 화면에서 [👤 회원 화면]으로 열어 주세요</div>';return;}
-  window.addEventListener('message',e=>{
+  window.addEventListener('message',async e=>{
     if(e.origin!==location.origin||!e.data||e.data.type!=='memberPreview'||!e.data.payload)return;
-    const p=e.data.payload;if(!['weekly','tax','master'].includes(p.kind))return;
-    try{showDoc(p.kind,p,`<span><b>관리자 미리보기</b> · 회원에게 보이는 화면과 같습니다 (게시 전 회차 포함)</span>`);}catch(err){$('view').innerHTML=`<div class="empty">미리보기 렌더 실패: ${esc(err.message)}</div>`;}
+    const p=e.data.payload;
+    prof=p.consultant||{};meData={name:prof.name||'',role:'admin'};
+    ISSUES=[p];
+    if(!$('smpBar'))$('view').insertAdjacentHTML('beforebegin',`<div class="smp" id="smpBar"><span><b>관리자 미리보기</b> · 회원에게 보이는 화면과 같습니다 (게시 전 회차 포함 · 대표님께 보내기는 샘플 회원 기준, 버튼 비활성)</span></div>`);
+    try{await show(p.id);document.title='미리보기 · '+$('kind').textContent.split(' · ')[0];}catch(err){$('view').innerHTML=`<div class="empty">미리보기 렌더 실패: ${esc(err.message)}</div>`;}
   });
   window.opener.postMessage({type:'memberPreviewReady'},location.origin);
 }
@@ -227,8 +233,8 @@ $('pick').onchange=e=>show(e.target.value);
 async function show(id){
   CUR=ISSUES.find(i=>i.id===id);if(!CUR)return;
   try{const k='ic_brief_'+id;if(meData&&meData.role!=='admin'&&!sessionStorage.getItem(k)){sessionStorage.setItem(k,'1');httpsCallable(fns,'icLogActivity')({type:'brief',issueId:id,kind:CUR.kind||'',sendDate:CUR.sendDate||''}).catch(()=>{});}}catch(_){}   /* ★ [2026-09-26] 브리핑 열람 기록 (세션·회차당 1회) */
-  try{if(ISSUES[0]&&ISSUES[0].id===id)localStorage.setItem('ic_brief_seen',id);}catch(_){}   /* ★ [2026-09-10] 최신 회차를 열면 이너 Platform 의 NEW 배지 해제 */
-  history.replaceState(null,'',`?id=${encodeURIComponent(id)}`);
+  if(!PV_ADMIN)try{if(ISSUES[0]&&ISSUES[0].id===id)localStorage.setItem('ic_brief_seen',id);}catch(_){}   /* ★ [2026-09-10] 최신 회차를 열면 이너 Platform 의 NEW 배지 해제 */
+  if(!PV_ADMIN)history.replaceState(null,'',`?id=${encodeURIComponent(id)}`);   /* ★ [2026-09-27] 관리자 미리보기는 주소 유지 */
   const isTax=CUR.kind==='tax_deep';const isWeekly=CUR.kind==='weekly';
   $('kind').hidden=false;$('kind').textContent=isTax?'Tax Master · 수요일':isWeekly?'위클리 컨센서스 · 월요일':'법인Master · 금요일';$('kind').className='chip'+(isTax?' tax':isWeekly?' weekly':'');
   let h=`<div class="head"><h1>${esc(CUR.title||CUR.entry?.title||'')}</h1><div class="meta">${esc(CUR.sendDate)} 발송 · 이너서클 회원 전용</div>`;
@@ -241,7 +247,7 @@ async function show(id){
     if(CUR.twUrl)h+=`<div class="pre">📎 먼저 읽을 것 · <a href="${esc(CUR.twUrl)}" target="_blank">택스위클리 같은 주제 편</a> — 제도·용어·FAQ는 그쪽에 있고 여기서 반복하지 않습니다.</div>`;
     h+=`</div>`+(CUR.html||'<div class="empty">본문 없음</div>');
   }else{
-    h+=`<a class="open" href="${esc(CUR.htmlUrl||'#')}" target="_blank">브리핑 열기 ↗</a></div>`;
+    h+=`<a class="open" href="${esc(CUR.standaloneUrl||CUR.htmlUrl||'#')}" target="_blank">브리핑 열기 ↗</a></div>`;   /* ★ [2026-09-27] 디자인·음성이 들어간 독립 파일 우선 (없는 회차는 조각) */
   }
   $('view').innerHTML=h;
   if(isTax){addTaxTts();wireTts();}   /* ★ [2026-09-25] Tax Master 섹션 듣기 (§1~§8, 음성 있는 섹션만) */
@@ -300,8 +306,9 @@ async function ceoSaveWeekly(){
 async function renderCeo(){
   BASE=null;try{BASE=CUR.ceoJson?JSON.parse(CUR.ceoJson):null;}catch(_){}
   if(!BASE)return;
-  MEMO=null;try{const m=await getDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`));if(m.exists())MEMO=m.data();}catch(_){}
-  await logLoad();
+  MEMO=null;
+  if(!PV_ADMIN){try{const m=await getDoc(doc(db,'innerCeoMemo',`${CUR.id}_${me.uid}`));if(m.exists())MEMO=m.data();}catch(_){}
+  await logLoad();}   /* ★ [2026-09-27] 관리자 미리보기 — 샘플 회원 기준, 편집본·발송 기록 없음 */
   if(BASE.kind==='weekly')return renderCeoWeekly();   // ★ [2026-09-10]
   const card=(MEMO?.cardLine)||BASE.cardLine||'';
   const av=prof.photoUrl?`<img src="${esc(prof.photoUrl)}" alt="">`:esc((prof.name||meData.name||'?')[0]);
