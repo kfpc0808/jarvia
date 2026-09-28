@@ -819,11 +819,12 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           </div>
           <div class="toolbar mt">
             <select id="sub-f-kind" onchange="subRender()" style="padding:6px 10px;font-size:13px"><option value="">전체</option><option value="zoom">활용교육 구독</option><option value="expert">전문분야 구독</option><option value="off">취소</option></select>
+            <select id="sub-f-src" onchange="subRender()" style="padding:6px 10px;font-size:13px"><option value="">전체 경로</option><option value="signup">가입 화면</option><option value="page">신청 페이지</option></select>
             <input id="sub-f-kw" placeholder="🔍 성명·연락처 검색" oninput="subRender()" style="min-width:0;flex:1">
             <button class="btn" onclick="subLoad()">🔄 조회</button>
             <button class="btn btn-sec" onclick="subExcel()">📥 엑셀</button>
           </div>
-          <div class="tbl-wrap mt"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:70px">회원</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="7" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
+          <div class="tbl-wrap mt"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:70px">회원</th><th style="width:90px">신청 경로</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="8" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
         </div>
       </div>
     </div>
@@ -10260,8 +10261,11 @@ async function subLoad(){
   catch(e){toast('구독자 불러오기 실패: '+e.message,'error');_subs=[];}
   subRender();
 }
-function subFiltered(){const k=$('sub-f-kind')?.value||'',kw=($('sub-f-kw')?.value||'').trim().toLowerCase();
+/* ★ 신청 경로 — signup=회원가입 화면, 그 외(zoom_seminar)=교육 신청 페이지 */
+const _subSrc=s=>s.source==='signup'?'가입 화면':'신청 페이지';
+function subFiltered(){const src=$('sub-f-src')?.value||'',k=$('sub-f-kind')?.value||'',kw=($('sub-f-kw')?.value||'').trim().toLowerCase();
   return _subs.filter(s=>k==='zoom'?s.zoom===true:k==='expert'?s.expert===true:k==='off'?(!s.zoom&&!s.expert):true)
+    .filter(s=>!src||(src==='signup'?s.source==='signup':s.source!=='signup'))
     .filter(s=>!kw||[s.name,s.phone,_esTel(s.phone)].join(' ').toLowerCase().includes(kw))
     .sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));}
 function subRender(){
@@ -10270,11 +10274,11 @@ function subRender(){
   $('sub-sum').innerHTML=[['구독 중',on.length],['활용교육',_subs.filter(s=>s.zoom).length],['전문분야 세션',_subs.filter(s=>s.expert).length],['이번 달 취소',canc]]
     .map(x=>'<div class="dash-card"><div class="dc-num">'+x[1]+'</div><div class="dc-label">'+x[0]+'</div></div>').join('');
   const rows=subFiltered(),tb=$('sub-tb');
-  if(!rows.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:#999">구독자가 없습니다.</td></tr>';return;}
+  if(!rows.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:#999">구독자가 없습니다.</td></tr>';return;}
   tb.innerHTML=rows.map(s=>{const act=s.zoom||s.expert;
     return '<tr'+(act?'':' style="opacity:.55"')+'><td>'+esc(zsWhen(s.createdAt))+'</td><td>'+esc(s.name||'')+'</td><td>'+esc(_esTel(s.phone||s.id))+'</td>'
       +'<td>'+[s.zoom?'활용교육':'',s.expert?'전문분야 세션':''].filter(Boolean).join(' · ')+'</td>'
-      +'<td>'+(act?'<span style="color:#1D8A5B;font-weight:700">구독</span>':'취소 '+esc(zsWhen(s.canceledAt)))+'</td><td>'+(s.isMember?'회원':'비회원')+'</td>'
+      +'<td>'+(act?'<span style="color:#1D8A5B;font-weight:700">구독</span>':'취소 '+esc(zsWhen(s.canceledAt)))+'</td><td>'+(s.isMember?'회원':'비회원')+'</td><td>'+_subSrc(s)+'</td>'
       +'<td>'+(act?'<button class="btn btn-sm btn-danger" onclick="subAdminCancel(\''+s.id+'\')">해제</button>':'')+'</td></tr>';}).join('');
 }
 async function subAdminCancel(id){const s=_subs.find(x=>x.id===id);if(!s)return;
@@ -10284,7 +10288,7 @@ async function subAdminCancel(id){const s=_subs.find(x=>x.id===id);if(!s)return;
 function subExcel(){const rows=subFiltered();if(!rows.length)return toast('내려받을 구독자가 없습니다.','warning');
   zsLoadXLSX(ok=>{if(!ok)return toast('엑셀 모듈을 불러오지 못했습니다.','error');
     const out=rows.map((s,i)=>({'No':i+1,'신청일시':zsWhen(s.createdAt),'성명':s.name||'','연락처':_esTel(s.phone||s.id),'활용교육':s.zoom?'O':'','전문분야':s.expert?'O':'',
-      '상태':(s.zoom||s.expert)?'구독':'취소','취소일시':s.canceledAt?zsWhen(s.canceledAt):'','회원':s.isMember?'회원':'비회원','아이디':s.loginId||''}));
+      '상태':(s.zoom||s.expert)?'구독':'취소','취소일시':s.canceledAt?zsWhen(s.canceledAt):'','회원':s.isMember?'회원':'비회원','신청경로':_subSrc(s),'아이디':s.loginId||''}));
     const ws=XLSX.utils.json_to_sheet(out);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'일정안내구독자');
     XLSX.writeFile(wb,'일정안내_구독자_'+rows.length+'명.xlsx');toast('엑셀 다운로드 완료','success');});}
 function subNoticeReset(){_subConfirm='';$('sub-preview').style.display='none';$('sub-send-msg').textContent='';}
