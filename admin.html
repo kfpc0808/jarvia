@@ -21772,7 +21772,7 @@ function icRenderExperts() {
       + '<td title="' + (e.profileReviewPending ? '전문가가 작성·수정함 — 내용 확인 후 [편집]에서 저장하면 해제' : e.profileCompletedAt ? '전문가 작성 완료' : '미작성') + '">' + (e.profileReviewPending ? '<span style="color:#C0392B;font-weight:700">🔔 검토</span>' : e.profileCompletedAt ? '<span style="color:#138A5E;font-weight:700">완료</span>' : '<span style="color:#C87A0A">대기</span>') + '</td>'   /* ★ [2026-09-26] */
       + '<td>' + (e.active === false ? '❌' : '✅') + '</td>'
       + '<td style="white-space:nowrap"><button class="btn btn-sm btn-sec" onclick="icOpenExpert(\'' + e.id + '\')">편집</button> '
-      + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\')" title="전문가가 직접 프로필을 작성하는 링크">링크</button></td>'   /* ★ [2026-09-26] 삭제는 편집 창 안으로 (실수 방지) */
+      + '<button class="btn btn-sm btn-sec" onclick="icProfileLink(\'' + e.id + '\', event.shiftKey)" title="클릭: 프로필 작성 링크 복사 · Shift+클릭: 새 링크 발급(이전 링크 무효)">링크</button></td>'   /* ★ [2026-09-26] 삭제는 편집 창 안으로 (실수 방지) */
       + '</tr>';
   }).join('');
 
@@ -22125,22 +22125,32 @@ window.icFmtTel = icFmtTel; window.icExFill = icExFill; window.icGreetCnt = icGr
 window.icCloseExpert = icCloseExpert;
 
 /* ★ [2026-09-06] 전문가 프로필 자가 작성 링크 — 본사는 이름·연락처·분야·배분율만 넣고 링크를 보낸다 */
-async function icProfileLink(id) {
+/* ★ [2026-09-28] 클릭하면 바로 복사(묻지 않음). 새 링크 발급은 Shift+클릭 → 확인 후 발급 */
+async function icProfileLink(id, reissueAsk) {
   const e = _icExperts.find(x => x.id === id); if (!e) return;
-  const hasLink = !!(e._priv && e._priv.profileSalt);
   let reissue = false;
-  if (hasLink) {
-    const a = prompt('「' + e.name + '」 프로필 링크\n\n1 = 기존 링크 다시 보기\n2 = 새 링크 발급 (이전 링크는 무효화됩니다)\n\n번호를 입력하세요', '1');
-    if (a === null) return;
-    reissue = (a.trim() === '2');
+  if (reissueAsk) {
+    if (!confirm('「' + e.name + '」 새 프로필 링크를 발급합니다.\n이전 링크는 더 이상 열리지 않습니다. 계속할까요?')) return;
+    reissue = true;
   }
   try {
     const r = await icCall('icIssueProfileToken', { expertId: id, reissue });
     if (!r.success) return toast(r.error || '발급에 실패했습니다.', 'error');
-    const ok = await navigator.clipboard.writeText(r.url).then(() => true).catch(() => false);
-    prompt((ok ? '클립보드에 복사했습니다. ' : '') + '전문가에게 카카오톡·문자로 전달하세요.\n(만료 없음 · 재발급 시 이전 링크 무효)', r.url);
+    const ok = await icCopyText(r.url);
+    if (ok) toast((reissue ? '새 링크를 발급해 ' : '') + '「' + e.name + '」 프로필 링크를 복사했습니다.', 'success');
+    else prompt('복사하지 못했습니다. 아래 링크를 직접 복사해 전문가에게 전달하세요.', r.url);
     if (r.reissued) icLoadExperts();
   } catch (err) { toast('발급 중 오류: ' + err.message, 'error'); }
+}
+/* 클립보드 복사 — 기본 방식이 막히면 예전 방식(execCommand)으로 한 번 더 */
+function icCopyText(t) {
+  return navigator.clipboard.writeText(t).then(() => true).catch(() => {
+    try {
+      const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0'; document.body.appendChild(ta); ta.select();
+      const k = document.execCommand('copy'); ta.remove(); return k;
+    } catch (_) { return false; }
+  });
 }
 window.icProfileLink = icProfileLink;
 
