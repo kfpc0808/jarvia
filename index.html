@@ -7393,6 +7393,63 @@ function rgEduPick(on){
   if(bx){bx.style.background=on?'#E6F5ED':'#F7F9FB';bx.style.borderColor=on?'#BFE3D0':'#E4E8EE';}
 }
 window.rgEduOpen=rgEduOpen;window.rgEduPick=rgEduPick;
+/* ★ [2026-09-28] 문자 링크 원클릭 교육알림 신청 — https://jarvia.co.kr/?edu=1
+   로그인 회원이면 곧바로 팝업 → 「신청하기」 한 번으로 회원 정보로 등록(source:member_link).
+   로그인 전이면 로그인 화면으로 보내고, 로그인하면 이어서 팝업. 「괜찮습니다」면 아무것도 등록하지 않는다. */
+(function(){try{if(new URLSearchParams(location.search).get('edu')==='1')sessionStorage.setItem('jv_edu_pend','1');}catch(_){}})();
+function _eduLinkClear(){try{sessionStorage.removeItem('jv_edu_pend');}catch(_){}
+  try{const u=new URL(location.href);if(u.searchParams.has('edu')){u.searchParams.delete('edu');history.replaceState(null,'',u.pathname+(u.search||'')+u.hash);}}catch(_){}}
+function _eduLinkModal(){
+  let m=$('edu-link-mdl');if(m)return m;
+  m=document.createElement('div');m.id='edu-link-mdl';
+  m.style.cssText='display:none;position:fixed;inset:0;z-index:400;background:rgba(15,23,42,.55);align-items:center;justify-content:center;padding:16px';
+  m.innerHTML='<div style="background:#fff;border-radius:14px;padding:22px 20px 16px;width:100%;max-width:340px;text-align:center" role="dialog" aria-labelledby="edu-link-t">'
+    +'<div style="font-size:26px" aria-hidden="true">🎓</div>'
+    +'<h3 id="edu-link-t" style="font-size:17px;margin:6px 0 4px">회원 무료교육 알림</h3>'
+    +'<p id="edu-link-msg" style="font-size:13px;color:#5F6E78;margin:0 0 12px;line-height:1.6">매월 열리는 무료 교육 일정을<br>카카오톡으로 알려드립니다.</p>'
+    +'<div id="edu-link-body"><div style="text-align:left;background:#F7F9FB;border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.85;margin-bottom:14px">'
+    +'<div>✓ 자비아 활용교육 · 매월 4주 줌</div><div>✓ 전문분야 지원 세션 · 주제별 줌</div>'
+    +'<div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.6">회원 정보(성명·연락처)로 일정만 안내합니다. 교육 신청 페이지에서 언제든 취소할 수 있습니다.</div></div>'
+    +'<button type="button" class="btn btn-full" id="edu-link-ok" style="min-height:46px">신청하기</button>'
+    +'<button type="button" id="edu-link-no" style="margin-top:10px;background:none;border:none;font-size:12px;color:#9AA4B2;text-decoration:underline;cursor:pointer;padding:6px">괜찮습니다</button></div>'
+    +'<button type="button" id="edu-link-close" class="btn btn-full" style="display:none;min-height:44px">확인</button></div>';
+  document.body.appendChild(m);
+  const close=()=>{m.style.display='none';};
+  m.querySelector('#edu-link-no').onclick=()=>{_eduLinkClear();close();};
+  m.querySelector('#edu-link-close').onclick=close;
+  m.querySelector('#edu-link-ok').onclick=eduLinkApply;
+  return m;
+}
+function _eduLinkDone(msg){const m=_eduLinkModal();$('edu-link-msg').innerHTML=msg;$('edu-link-body').style.display='none';$('edu-link-close').style.display='';m.style.display='flex';}
+async function eduLinkApply(){
+  const b=$('edu-link-ok');if(b){b.disabled=true;b.textContent='신청 중…';}
+  const phone=String((meData&&meData.phone)||'').replace(/[^0-9]/g,''),name=String((meData&&meData.name)||'').trim().slice(0,20);
+  try{
+    if(!me||!/^010[0-9]{8}$/.test(phone)||!name){_eduLinkDone('회원 정보의 연락처를 확인할 수 없습니다.<br>교육 신청 페이지에서 신청해 주세요.');return;}
+    const ref=doc(db,'seminar_subscribers',phone);
+    try{
+      await setDoc(ref,{name,phone,zoom:true,expert:true,isMember:true,loginId:String(meData.loginId||''),uid:me.uid,
+        consentPersonal:true,consentAt:serverTimestamp(),createdAt:serverTimestamp(),updatedAt:serverTimestamp(),source:'member_link'});
+    }catch(e){
+      /* 이미 신청돼 있으면(가입 화면·신청 페이지 등) 성명이 같을 때 항목만 켠다 */
+      await updateDoc(ref,{name,zoom:true,expert:true,updatedAt:serverTimestamp(),consentAt:serverTimestamp(),canceledAt:null});
+    }
+    _eduLinkClear();
+    _eduLinkDone('<b style="color:#1D8A5B">✓ 신청이 완료되었습니다</b><br>매월 교육 일정이 확정되면 카카오톡으로 안내해 드립니다.');
+  }catch(e){
+    console.warn('[교육알림 링크] 신청 실패:',e);
+    _eduLinkDone('신청을 처리하지 못했습니다.<br>교육 신청 페이지에서 성명·연락처로 신청해 주세요.');
+  }finally{if(b){b.disabled=false;b.textContent='신청하기';}}
+}
+(function(){
+  let n=0;
+  const t=setInterval(()=>{
+    let pend=false;try{pend=sessionStorage.getItem('jv_edu_pend')==='1';}catch(_){}
+    if(!pend||++n>600){clearInterval(t);return;}            /* 최대 10분 대기 */
+    if(me&&meData){clearInterval(t);const m=_eduLinkModal();m.style.display='flex';return;}
+    if(n===8&&!me){toast('로그인하시면 무료교육 알림 신청 창이 열립니다.','info');try{nav('login');}catch(_){}}
+  },1000);
+})();
 let _rgSubmitting=false;   /* ★ [2026-09-10] 가입 중복 제출 방지 — 진행 중 재클릭 차단 (Auth 이중 생성 사고 재발 방지) */
 async function doRegister(e){
   e.preventDefault();
