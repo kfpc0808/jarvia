@@ -5624,8 +5624,8 @@ async function showMember(uid){
         <p style="margin:0 0 10px;font-size:12px;color:#7F8C8D">관리자 페이지에서만 관리합니다 (마이페이지 입력 제거됨). 고객용 소개카드에 녹색 N 배지로 표시됩니다.</p>
         <div class="fr"><div class="fg" style="flex:1"><label>URL</label><input id="naver-url-${uid}" maxlength="500" type="url" placeholder="https://..."></div><button class="btn btn-sm" style="align-self:end" onclick="saveNaverUrl('${uid}','${esc(m.loginId||'')}')">저장</button></div>
         <h4 style="margin:14px 0 4px;font-size:14px;color:#1B3A5C">📘 e북브로슈어 <span style="font-size:11px;background:#E8F5E9;color:#2E7D32;padding:2px 8px;border-radius:10px;margin-left:4px">이너서클 전용</span></h4>
-        <p style="margin:0 0 10px;font-size:12px;color:#7F8C8D">연구소 브로슈어 온라인 링크입니다. 고객리포트·컨설턴트 소개카드·모닝컨센서스 등 노출 위치는 추후 연결합니다.</p>
-        <div class="fr"><div class="fg" style="flex:1"><label>URL</label><input id="ebook-url-${uid}" maxlength="500" type="url" placeholder="https://..."></div><button class="btn btn-sm" style="align-self:end" onclick="saveEbookUrl('${uid}','${esc(m.loginId||'')}')">저장</button></div>
+        <p style="margin:0 0 10px;font-size:12px;color:#7F8C8D">주소는 아이디로 자동 입력됩니다. 저장을 누르면 브로슈어 파일을 확인한 뒤 게시되며, 게시된 경우에만 모든 화면에 노출됩니다.</p>
+        <div class="fr"><div class="fg" style="flex:1"><label>URL</label><input id="ebook-url-${uid}" maxlength="500" type="url" readonly placeholder="https://ebook.icm.re.kr/아이디/" style="color:#9CA3AF"></div><button class="btn btn-sm" style="align-self:end" onclick="saveEbookUrl('${uid}','${esc(m.loginId||'')}')">저장</button><button id="ebook-off-${uid}" class="btn btn-sm" style="align-self:end;display:none;background:#fff;color:#B91C1C;border:1px solid #FCA5A5" onclick="clearEbookUrl('${uid}','${esc(m.loginId||'')}')">해제</button><span id="ebook-st-${uid}" style="align-self:end;padding-bottom:8px;font-size:12px;font-weight:700;color:#9CA3AF;white-space:nowrap">미게시</span></div>
         `:''}
         <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #E5E7EB">
           <button class="btn btn-sm" style="background:#8B2635;color:#fff" onclick="hqAbsorbAll('${esc(m.loginId||'')}')">🏢 산하 고객 전체 본사 귀속</button>
@@ -7617,7 +7617,7 @@ async function _loadMemberPlatform(uid,loginId){
     const urlEl=document.getElementById('mr-url-'+uid);if(urlEl)urlEl.value=cd.morningBookzipUrl||'';
     const baseEl=document.getElementById('mr-base-'+uid);if(baseEl)baseEl.textContent=cd.bookzipBaseDate||_mrThisMonday();
     const nvEl=document.getElementById('naver-url-'+uid);if(nvEl)nvEl.value=cd.naverUrl||'';   /* ★ [2026-08-08] 네이버 경영컨설턴트 URL — 관리자 전용 이관 */
-    const ebEl=document.getElementById('ebook-url-'+uid);if(ebEl)ebEl.value=cd.ebookUrl||'';   /* ★ [2026-09-24] e북브로슈어 URL — 이너서클 전용 */
+    _ebUi(uid,loginId,String(cd.ebookUrl||'').trim());   /* ★ [2026-09-28] e북브로슈어 — 저장값 있으면 진하게+게시중, 없으면 규칙 주소를 흐리게 */
   }catch(e){console.warn('[platform] 아침독서 로드 실패:',e);}
 }
 async function saveMorningReading(uid,loginId){
@@ -7643,14 +7643,41 @@ async function saveNaverUrl(uid,loginId){
   }catch(e){toast('저장 실패: '+e.message,'error');}
 }
 /* ★ [2026-09-24] e북브로슈어(연구소 브로슈어 온라인 링크) — 이너서클 전용, consultants/{loginId}.ebookUrl */
+/* ★ [2026-09-28] 주소 규칙(ebook.icm.re.kr/아이디/) 자동 입력 · 저장 시 실제 게시 확인(회원 폴더의 2페이지 이미지) · 해제
+   저장값이 곧 노출 스위치 — 앱(소개카드·채널·컨센서스·고객리포트·이너 Platform)과 서버(_brochureEbookBase)가 같은 기준 */
+const _EB_RE=/^https:\/\/ebook\.icm\.re\.kr\/[A-Za-z0-9._-]+\/?$/i;
+function _ebDefault(loginId){return 'https://ebook.icm.re.kr/'+encodeURIComponent(loginId)+'/';}
+function _ebUi(uid,loginId,saved){
+  const el=document.getElementById('ebook-url-'+uid),st=document.getElementById('ebook-st-'+uid),off=document.getElementById('ebook-off-'+uid);
+  if(el){el.value=saved||_ebDefault(loginId);el.style.color=saved?'#111827':'#9CA3AF';el.style.fontWeight=saved?'600':'400';}
+  if(st){st.textContent=saved?'✅ 게시중':'미게시';st.style.color=saved?'#059669':'#9CA3AF';}
+  if(off)off.style.display=saved?'':'none';
+}
+/* 회원 폴더에만 있는 2페이지 이미지로 확인 — _common에는 2.jpg가 없어 폴더가 없으면 실패한다 */
+function _ebProbe(base){return new Promise(res=>{const img=new Image();const t=setTimeout(()=>{img.onload=img.onerror=null;res(false);},8000);
+  img.onload=()=>{clearTimeout(t);res(true);};img.onerror=()=>{clearTimeout(t);res(false);};
+  img.src=base.replace(/\/?$/,'/')+'files/page/2.jpg?t='+Date.now();});}
 async function saveEbookUrl(uid,loginId){
   if(!loginId)return toast('loginId가 없어 저장할 수 없습니다.','error');
-  const url=((document.getElementById('ebook-url-'+uid)||{}).value||'').trim().slice(0,500);
-  if(url&&!/^https?:\/\//i.test(url)){toast('URL은 http:// 또는 https://로 시작해야 합니다','warning');return;}
+  const url=((document.getElementById('ebook-url-'+uid)||{}).value||'').trim().split(/[?#]/)[0];
+  if(!_EB_RE.test(url)){toast('주소 형식이 올바르지 않습니다 (https://ebook.icm.re.kr/아이디/)','warning');return;}
+  toast('브로슈어 파일 확인 중...','info');
+  if(!(await _ebProbe(url))){toast('⚠️ 브로슈어 파일이 없습니다 — 회원 폴더를 업로드한 뒤 저장해 주세요.','warning');return;}
+  const u=url.replace(/\/?$/,'/');
   try{
-    await setDoc(doc(db,'consultants',loginId),{ebookUrl:url},{merge:true});
-    toast(url?'e북브로슈어 URL 저장 완료':'e북브로슈어 URL을 비웠습니다.','success');
+    await setDoc(doc(db,'consultants',loginId),{ebookUrl:u},{merge:true});
+    _ebUi(uid,loginId,u);
+    toast('e북브로슈어 게시 완료','success');
   }catch(e){toast('저장 실패: '+e.message,'error');}
+}
+async function clearEbookUrl(uid,loginId){
+  if(!loginId)return toast('loginId가 없어 저장할 수 없습니다.','error');
+  if(!confirm('e북브로슈어 게시를 해제할까요?\n모든 화면에서 브로슈어가 사라지고, 고객별 링크 발급도 중단됩니다.'))return;
+  try{
+    await setDoc(doc(db,'consultants',loginId),{ebookUrl:''},{merge:true});
+    _ebUi(uid,loginId,'');
+    toast('e북브로슈어 게시를 해제했습니다.','success');
+  }catch(e){toast('해제 실패: '+e.message,'error');}
 }
 async function saveCustomBtn1(uid){
   const label=((document.getElementById('cb1-label-'+uid)||{}).value||'').trim().slice(0,20);
@@ -7690,6 +7717,7 @@ async function saveCustomBtn2(uid){
   }catch(e){toast('저장 실패: '+e.message,'error');}
 }
 window.saveMorningReading=saveMorningReading;window.saveCustomBtn1=saveCustomBtn1;window.saveCustomBtn2=saveCustomBtn2;window.saveNaverUrl=saveNaverUrl;window.saveEbookUrl=saveEbookUrl;   /* ★ [2026-09-24] 네이버 URL 저장 버튼 무반응 수정 · e북브로슈어 */
+window.clearEbookUrl=clearEbookUrl;   /* ★ [2026-09-28] e북브로슈어 게시 해제 */
 
 /* ═══ 🏢 본사 귀속 고객 관리 (channelV2) — 2026-07 ═══ */
 async function loadHqClients(){
