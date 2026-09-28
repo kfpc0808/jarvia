@@ -3700,7 +3700,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           <option value="nophoto">📷 사진 없음</option><!-- ★ [2026-09-26] -->
         </select>
         <button class="btn" onclick="icNewExpert()" style="margin-left:8px">＋ 전문가 등록</button>
-        <button class="btn btn-sec" onclick="icLoadExperts()">🔄 새로고침</button><button class="btn btn-sec" onclick="icExport('experts')" title="지금 필터 결과를 엑셀로">⬇ 엑셀</button>
+        <button class="btn btn-sec" onclick="icLoadExperts()">🔄 새로고침</button><button class="btn btn-sec" onclick="icExport('experts')" title="지금 필터 결과를 엑셀로">⬇ 엑셀</button><button class="btn btn-sec" onclick="icCustomTopicsView()" title="전문가가 직접 입력한 주제 모아보기">✎ 직접 입력 주제</button><!-- ★ [2026-09-28] -->
       </div>
       <div id="ice-summary" style="margin:8px 0 12px;font-size:13px;color:var(--primary);font-weight:600"></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr>
@@ -4003,6 +4003,11 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <div id="ice-topics" style="display:flex;flex-wrap:wrap;gap:6px;padding:10px;border:1px solid var(--border-lt);
           border-radius:8px;min-height:44px;background:#FAFBFD"><span style="font-size:12px;color:var(--text-lt)">분야를 선택하면 주제가 표시됩니다</span></div>
         <div style="display:flex;gap:6px;margin-top:8px"><input id="ice-topic-new" maxlength="30" placeholder="목록에 없는 주제 — 선택한 분야의 주제 목록에 바로 추가됩니다" style="flex:1" onkeydown="if(event.key==='Enter'&&!event.isComposing){event.preventDefault();icAddTopic();}"><button type="button" class="btn btn-sec btn-sm" onclick="icAddTopic()">＋ 주제 추가</button></div></div>
+
+      <!-- ★ [2026-09-28] 전문가 직접 입력 주제 — 이 전문가에게만 적용(분야 주제 목록에는 추가되지 않음) -->
+      <div class="fg"><label>직접 입력 주제 <span style="font-weight:400;color:var(--text-lt);font-size:12px">(이 전문가에게만 적용 · 회원 검색에 포함 · 칸당 20자 · 최대 10개)</span></label>
+        <div id="ice-ctp"></div>
+        <button type="button" id="ice-ctp-add" class="btn btn-sec btn-sm" onclick="icCtpAdd()" style="margin-top:2px">＋ 입력칸 추가</button></div>
 
       <div class="fg"><label>검색 태그 <span style="font-weight:400;color:var(--text-lt);font-size:12px">(쉼표 구분 · 회원이 실제로 칠 법한 표현)</span></label>
         <input id="ice-tags" placeholder="대여금, 대표 가지급, 회사돈, 인출금"></div>
@@ -22050,7 +22055,7 @@ function icRenderExperts() {
     else if (sf === 'nophoto') { if (e.photoUrl) return false; }   /* ★ [2026-09-26] 사진 없음 */
     else if (sf && (e.status || 'available') !== sf) return false;
     if (!kw) return true;
-    const hay = [e.name, e.title, e.org, e.region, (e.subTopics || []).join(' '), (e.tags || []).join(' ')].join(' ').toLowerCase();
+    const hay = [e.name, e.title, e.org, e.region, (e.subTopics || []).join(' '), (e.customTopics || []).join(' '), (e.tags || []).join(' ')].join(' ').toLowerCase();   /* ★ [2026-09-28] 직접 입력 주제 포함 */
     return hay.includes(kw);
   });
   window._iceView = list;   /* ★ [2026-09-26] 엑셀 내보내기용 */
@@ -22074,7 +22079,7 @@ function icRenderExperts() {
       + '<td>' + photo + '</td>'
       + '<td><b style="cursor:pointer;color:var(--primary);text-decoration:underline" onclick="icedOpen(\'' + e.id + '\')">' + icEsc(e.name) + '</b><div style="font-size:11.5px;color:var(--text-lt)">' + icEsc(e.title || '') + '</div></td>'
       + '<td>' + icEsc(fname(e.field)) + '</td>'
-      + '<td style="font-size:12px;color:#5A6484;white-space:normal;line-height:1.7">' + ((e.subTopics || []).map(icEsc).join(' · ') || '<span style="color:#C3C9D6">미지정</span>') + '</td>'
+      + '<td style="font-size:12px;color:#5A6484;white-space:normal;line-height:1.7">' + (icTopicsHtml(e, ' · ') || '<span style="color:#C3C9D6">미지정</span>') + '</td>'   /* ★ [2026-09-28] 직접 입력 주제는 ✎ 표시 */
       + '<td style="font-size:12px">' + icEsc(e.region || '-') + '</td>'
       + '<td style="font-size:12px;white-space:nowrap">' + icEsc(icTel(p.phone) || '-') + '</td>'   /* ★ [2026-09-26] 010-0000-0000 표시 */
       + '<td style="font-size:12px">' + rate + '</td>'
@@ -22149,6 +22154,94 @@ async function icAddTopic() {
   inp.value = ''; icFieldChange(true);
   toast('주제 「' + name + '」을(를) 추가하고 선택했습니다.', 'success');
 }
+/* ═══ ★ [2026-09-28] 전문가 직접 입력 주제(customTopics) — 전문가 화면(ic-case.html)과 같은 규칙
+   · 칸당 20자 · 최대 10개 · 빈칸 제외 · 띄어쓰기만 다른 중복 제외
+   · 선택한 분야의 정식 주제와 같은 이름이면 입력칸이 아니라 칩 선택(subTopics)으로 옮긴다
+   · 분야 주제 정리(icSaveField)는 subTopics 만 건드리므로 이 필드는 영향 없음 ═══ */
+const IC_CTP_MAX = 10, IC_CTP_LEN = 20;
+function icCtpKey(v) { return String(v || '').replace(/\s+/g, '').toLowerCase(); }
+function icCtpRow(v) {
+  const r = document.createElement('div');
+  r.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
+  r.innerHTML = '<input maxlength="' + IC_CTP_LEN + '" placeholder="분야 목록에 없는 주제" style="flex:1;min-width:0">'
+    + '<button type="button" class="btn btn-sec btn-sm" title="삭제" style="flex-shrink:0">×</button>';
+  const inp = r.querySelector('input'); inp.value = v || '';
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); icCtpAdd(); } });
+  r.querySelector('button').onclick = () => {
+    const box = $('ice-ctp');
+    if (box.children.length > 1) r.remove(); else inp.value = '';   // 마지막 한 칸은 비우기만
+    icCtpSync();
+  };
+  return r;
+}
+function icCtpRender(list) {
+  const box = $('ice-ctp'); if (!box) return; box.innerHTML = '';
+  (list && list.length ? list : ['']).slice(0, IC_CTP_MAX).forEach(v => box.appendChild(icCtpRow(v)));
+  icCtpSync();
+}
+function icCtpSync() { const b = $('ice-ctp-add'), box = $('ice-ctp'); if (b && box) b.disabled = box.children.length >= IC_CTP_MAX; }
+function icCtpAdd() {
+  const box = $('ice-ctp'); if (!box) return;
+  if (box.children.length >= IC_CTP_MAX) return toast('직접 입력 주제는 최대 ' + IC_CTP_MAX + '개까지입니다.', 'error');
+  const empty = Array.from(box.querySelectorAll('input')).find(i => !i.value.trim());
+  if (empty) { empty.focus(); return; }   // 빈칸이 남아 있으면 그 칸으로
+  const r = icCtpRow(''); box.appendChild(r); icCtpSync(); r.querySelector('input').focus();
+}
+/* 저장용 — { list: 직접 입력 주제, toPreset: 정식 주제와 같은 이름이라 칩 선택으로 옮길 주제 } */
+function icCtpCollect(fid) {
+  const box = $('ice-ctp'), list = [], toPreset = [], seen = new Set();
+  if (!box) return { list, toPreset };
+  const pre = ((_icFields.find(f => f.id === fid) || {}).topics || []).map(t => t.name);
+  box.querySelectorAll('input').forEach(i => {
+    const v = String(i.value || '').replace(/\s+/g, ' ').trim().slice(0, IC_CTP_LEN); if (!v) return;
+    const k = icCtpKey(v); if (seen.has(k)) return; seen.add(k);
+    const m = pre.find(n => icCtpKey(n) === k);
+    if (m) toPreset.push(m); else list.push(v);
+  });
+  return { list: list.slice(0, IC_CTP_MAX), toPreset };
+}
+/* 목록·상세 표시용 — 정식 주제 뒤에 직접 입력 주제를 ✎ 표시와 함께 */
+function icTopicsHtml(e, sep) {
+  const a = (e.subTopics || []).map(icEsc);
+  const b = (e.customTopics || []).map(t => '<span style="color:#A0781E" title="전문가 직접 입력 주제">✎' + icEsc(t) + '</span>');
+  return a.concat(b).join(sep);
+}
+/* 직접 입력 주제 모아보기 — 여러 전문가가 공통으로 쓰는 주제를 찾아 정식 주제로 올릴 때 참고 */
+async function icCustomTopicsView() {
+  if (!_icExperts.length) { try { await icLoadExperts(); } catch (_) {} }
+  const fname = id => (_icFields.find(f => f.id === id) || {}).name || id || '-';
+  const map = new Map();
+  _icExperts.forEach(e => (e.customTopics || []).forEach(t => {
+    const k = icCtpKey(t);
+    if (!map.has(k)) map.set(k, { name: t, ex: [] });
+    map.get(k).ex.push(e);
+  }));
+  const rows = Array.from(map.values()).sort((a, b) => b.ex.length - a.ex.length || a.name.localeCompare(b.name, 'ko'));
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:84vh;display:flex;flex-direction:column">'
+    + '<div style="padding:16px 20px;border-bottom:1px solid var(--border-lt);display:flex;align-items:center;justify-content:space-between">'
+    + '<b style="font-size:15px">✎ 직접 입력 주제 모아보기 <span style="font-weight:400;color:var(--text-lt);font-size:12.5px">' + rows.length + '개</span></b>'
+    + '<button type="button" class="btn btn-sec btn-sm" data-x>닫기</button></div>'
+    + '<div style="padding:10px 20px;font-size:12px;color:#5A6484;line-height:1.7;background:#FAFBFD;border-bottom:1px solid var(--border-lt)">여러 전문가가 쓰는 주제는 [분야·주제 관리]에서 정식 주제로 등록하세요. 같은 이름(띄어쓰기 무시)으로 등록하면, 해당 전문가의 편집 창을 열어 저장하거나 전문가가 프로필을 다시 저장할 때 칩 선택으로 자동으로 옮겨집니다.</div>'
+    + '<div style="overflow:auto;padding:6px 20px 16px">'
+    + (rows.length
+      ? '<table class="tbl" style="width:100%"><thead><tr><th>주제</th><th style="width:60px">인원</th><th>전문가 (분야)</th></tr></thead><tbody>'
+        + rows.map(r => '<tr><td style="font-weight:600">' + icEsc(r.name) + '</td><td>' + r.ex.length + '명</td><td style="white-space:normal;line-height:1.8">'
+          + r.ex.map(e => '<a href="#" data-e="' + icEsc(e.id) + '" style="color:var(--primary);text-decoration:underline">' + icEsc(e.name) + '</a> <span style="color:var(--text-lt);font-size:11.5px">(' + icEsc(fname(e.field)) + ')</span>').join(', ')
+          + '</td></tr>').join('')
+        + '</tbody></table>'
+      : '<div style="text-align:center;padding:30px;color:var(--text-lt)">직접 입력된 주제가 없습니다.</div>')
+    + '</div></div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.addEventListener('click', ev => {
+    if (ev.target === ov || ev.target.closest('[data-x]')) return close();
+    const a = ev.target.closest('[data-e]');
+    if (a) { ev.preventDefault(); close(); icOpenExpert(a.dataset.e); }
+  });
+}
+window.icCtpAdd = icCtpAdd; window.icCustomTopicsView = icCustomTopicsView;
 /* 사진 위치 조정 — 원형 미리보기 안에서 끌어서 이동, 막대로 확대·축소 → 정사각 800px JPEG (ic-case.html cropPhoto와 같은 동작) */
 function icCropPhoto(file) {
   return new Promise((ok, no) => {
@@ -22220,6 +22313,7 @@ function icNewExpert() {
   $('ice-photo-box').style.backgroundImage = ''; $('ice-photo-box').textContent = '사진';
   $('ice-photo-msg').textContent = '';
   $('ice-topics').innerHTML = '<span style="font-size:12px;color:var(--text-lt)">분야를 선택하면 주제가 표시됩니다</span>';
+  icCtpRender([]);   /* ★ [2026-09-28] */
   icRateSum();
   openM('mdl-ic-expert');
 }
@@ -22250,6 +22344,10 @@ function icOpenExpert(id) {
   $('ice-photo-msg').textContent = '';
   $('ice-field').value = e.field || '';
   _icTopicSel = (e.subTopics || []).slice();
+  /* ★ [2026-09-28] 직접 입력 주제 — 정식 주제로 올라간 이름은 칩 선택으로 옮기고 나머지만 입력칸에 */
+  { const pre = ((_icFields.find(f => f.id === e.field) || {}).topics || []).map(t => t.name); const cs = [];
+    (e.customTopics || []).forEach(t => { const m = pre.find(n => icCtpKey(n) === icCtpKey(t)); if (m) { if (!_icTopicSel.includes(m)) _icTopicSel.push(m); } else cs.push(t); });
+    icCtpRender(cs); }
   icFieldChange(true);
   icRateSum();
   openM('mdl-ic-expert');
@@ -22349,6 +22447,8 @@ async function icSaveExpert() {
   if (!eid) { eid = doc(collection(db, 'innerExperts')).id; $('ice-id').value = eid; }
 
   const phone = ($('ice-phone').value || '').trim();
+  const _ct = icCtpCollect(field);   /* ★ [2026-09-28] 직접 입력 주제 — 정식 주제와 같은 이름은 칩 선택으로 */
+  _ct.toPreset.forEach(n => { if (!_icTopicSel.includes(n)) _icTopicSel.push(n); });
   const btn = $('ice-save-btn'); btn.disabled = true; btn.textContent = '저장 중...';
   try {
     // ① 공개 문서 — 회원에게 노출되는 정보만
@@ -22358,6 +22458,7 @@ async function icSaveExpert() {
       photoUrl: _icPhotoUrl || '',
       field,
       subTopics: _icTopicSel.slice(),
+      customTopics: _ct.list,   /* ★ [2026-09-28] 분야 주제 정리(icSaveField)와 무관한 별도 필드 */
       tags: icSplit($('ice-tags').value),
       career: ($('ice-career').value || '').trim(),
       certs: icSplit($('ice-certs').value),
@@ -23089,7 +23190,7 @@ function icExport(kind) {
   if (kind === 'cases') { name = '이너상담'; rows = (window._iccView || _iccList).map(c => ({ 번호: c.no || '', 경로: c.route === 'hq' ? '본사 문의' : '전문가 지목', 분야: fname(c.field), 주제: c.topic || '', 고객: c.company || c.clientName || '', 업종: c.industry || '', 컨설턴트: c.fcName || '', 컨설턴트연락처: c.fcPhone || '', 전문가: c.expertName || '', 상태: (_iccST[c.status] || [c.status])[0], 계약금액: c.amount || '', 접수: dt(c.createdAt), 최근갱신: dt(c.updatedAt), 알림실패: c.notifyFailed ? 'Y' : '' })); }
   else if (kind === 'hq') { name = '본사접수'; rows = (window._ichqView || _ichqList).map(c => ({ 번호: c.no || '', 구분: (c.clientType || 'corp') === 'person' ? '개인' : '법인', 고객: c.company || c.clientName || '', 내용: c.problem || '', 회원: c.fcName || '', 회원연락처: c.fcPhone || '', 긴급도: c.urgency || '', 배정전문가: c.expertName || '', 상태: c.status === 'closed' ? '종결' : ({ unreviewed: '미검토', negotiating: '협의중', assigned: '배정완료' }[c.hqStatus || (c.expertId ? 'assigned' : 'unreviewed')] || ''), 접수: dt(c.createdAt) })); }
   else if (kind === 'brochure') { name = '브로슈어상담'; rows = (window._ibrView || _ibrList).map(r => ({ 접수: dt(_ibrMs(r.createdAt)), 전문위원: r.hq ? '본사 접수' : (_ibrNames[r.fcAuthUid] || ''), 아이디: r.fcLoginId || r.brochureId || '', 신청자: r.name || '', 연락처: r.phone || '', 회사명: r.company || '', 분야: r.area || '', 문의내용: r.message || '', 상태: (_IBR_ST[r.status] || [r.status])[0], 확인시각: dt(_ibrMs(r.firstViewedAt)), 본사메모: r.hqMemo || '' })); }
-  else if (kind === 'experts') { name = '전문가'; rows = (window._iceView || _icExperts).map(e => { const p = e._priv || {}; const sr = p.shareRate || {}; return { 성명: e.name || '', 직함: e.title || '', 소속: e.org || '', 분야: fname(e.field), 주제: (e.subTopics || []).join(', '), 지역: e.region || '', 연락처: p.phone || p.alimtalkPhone || '', 배분율: sr.expert != null ? sr.expert + ':' + sr.fc + ':' + sr.hq : '', 상태: e.status || 'available', 노출: e.active === false ? 'N' : 'Y' }; }); }
+  else if (kind === 'experts') { name = '전문가'; rows = (window._iceView || _icExperts).map(e => { const p = e._priv || {}; const sr = p.shareRate || {}; return { 성명: e.name || '', 직함: e.title || '', 소속: e.org || '', 분야: fname(e.field), 주제: (e.subTopics || []).concat(e.customTopics || []).join(', '), 지역: e.region || '', 연락처: p.phone || p.alimtalkPhone || '', 배분율: sr.expert != null ? sr.expert + ':' + sr.fc + ':' + sr.hq : '', 상태: e.status || 'available', 노출: e.active === false ? 'N' : 'Y' }; }); }
   else if (kind === 'links') { name = '브로슈어_맞춤링크'; rows = (window._iblView || []).map(x => ({ 전문위원: x.name || '', 아이디: x.loginId || '', 소속사: x.company || '', 링크: x.links, 열람: x.viewed, 열람률: x.links ? Math.round(x.viewed / x.links * 100) + '%' : '', 동의예: x.consentYes, 동의아니오: x.consentNo, 총열람초: x.totalSec, 공유열람자: x.sharedViewers, 열람알림발송: x.notifySent, 알림실패: x.notifyFailed, 회원부담원: x.cost })); }
   if (!rows.length) return toast('내보낼 행이 없습니다', 'error');
   zsLoadXLSX(ok => {
@@ -23520,7 +23621,7 @@ async function icedOpen(id) {
     + '<span style="font-size:19px;font-weight:800">' + icEsc(e.name) + '</span>'
     + '<span style="font-size:13px;color:#5A6484">' + icEsc(e.title || '') + (e.org ? ' · ' + icEsc(e.org) : '') + '</span>'
     + icStBadge(e.status) + (e.active === false ? ' <span style="font-size:11px;color:#C0392B;font-weight:700">숨김</span>' : '') + '</div>'
-    + '<div style="font-size:12.5px;color:#5A6484;margin-top:5px">' + icEsc(fname(e.field)) + ' · ' + ((e.subTopics || []).map(icEsc).join(', ') || '주제 미지정') + ' · ' + icEsc(e.region || '-') + ' · ' + icEsc(p.phone || '연락처 없음') + '</div>'
+    + '<div style="font-size:12.5px;color:#5A6484;margin-top:5px">' + icEsc(fname(e.field)) + ' · ' + (icTopicsHtml(e, ', ') || '주제 미지정') + ' · ' + icEsc(e.region || '-') + ' · ' + icEsc(p.phone || '연락처 없음') + '</div>'
     + '<div style="font-size:11.5px;color:var(--text-lt);margin-top:3px">배분율 ' + (r.expert != null ? r.expert + ' : ' + r.fc + ' : ' + r.hq : '미설정') + ' · 동시 진행 상한 ' + (e.maxConcurrent || 5) + '건</div></div>'
     + '<div style="display:flex;gap:7px;flex-shrink:0">'
     + '<a class="btn btn-sec btn-sm" href="inner.html?v=expert&e=' + encodeURIComponent(e.id) + '" target="_blank">회원 화면 미리보기</a>'
@@ -23599,7 +23700,7 @@ function icedTab(t) {
   }
   else if (t === 'profile') {
     w.innerHTML = '<div style="background:#fff;border:1px solid var(--border-lt);border-radius:10px;padding:18px;font-size:13.5px;line-height:2">'
-      + '<div style="display:flex"><b style="width:100px;color:#5A6484;font-weight:600">분야 · 주제</b><span>' + icEsc(fname(e.field)) + ' · ' + ((e.subTopics || []).map(icEsc).join(', ') || '미지정') + '</span></div>'
+      + '<div style="display:flex"><b style="width:100px;color:#5A6484;font-weight:600">분야 · 주제</b><span>' + icEsc(fname(e.field)) + ' · ' + (icTopicsHtml(e, ', ') || '미지정') + '</span></div>'
       + '<div style="display:flex"><b style="width:100px;color:#5A6484;font-weight:600">검색 태그</b><span>' + ((e.tags || []).map(icEsc).join(', ') || '없음') + '</span></div>'
       + '<div style="display:flex"><b style="width:100px;color:#5A6484;font-weight:600">경력</b><span style="white-space:pre-line">' + icEsc(e.career || '-') + '</span></div>'
       + '<div style="display:flex"><b style="width:100px;color:#5A6484;font-weight:600">자격</b><span>' + ((e.certs || []).map(icEsc).join(', ') || '-') + '</span></div>'
