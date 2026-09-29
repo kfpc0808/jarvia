@@ -17967,6 +17967,33 @@ window.mrBuildAudio=async function(m){
   toast(`${m}호 음성 생성을 시작했습니다 — 진행 상태가 아래에 표시됩니다`);
   mrPollAudio(m,0,Date.now());
 };
+/* ★ [2026-09-29] 회원 알림톡 — 미리보기 → 테스트 번호 입력 또는 SEND 입력 후 전체 발송.
+   자동 발송은 매월 1일 10:00(서버). 이 버튼은 1일까지 게시가 안 됐던 호를 나중에 보낼 때 쓴다. */
+window.mrNotice=async function(m){
+  if(!m)return;
+  let p;
+  try{p=(await httpsCallable(functions,'monthlyNoticeAdmin',{timeout:120000})({ym:m,mode:'preview'})).data||{};}
+  catch(e){return toast('미리보기 실패: '+e.message,'error');}
+  if(!p.templateReady)return toast('구독 콘텐츠 발행 안내 템플릿 ID가 등록되지 않았습니다','error');
+  const why={not_published:'⚠️ 아직 게시되지 않은 호 — 게시 후 발송할 수 있습니다',already_sent:'✅ 이미 안내를 보낸 호입니다 (재발송 불가)',link_broken:'⚠️ 리포트 링크가 열리지 않습니다',no_issue:'⚠️ 해당 호가 없습니다'};
+  if(!p.preview)return toast(why[p.reason]||'발송할 내용이 없습니다','error');
+  const done=p.reason==='already_sent';   /* ★ 이미 안내한 호는 테스트만 */
+  const ans=prompt(`[${m}호 회원 알림톡 미리보기]\n\n${p.preview}\n\n· 대상 ${p.targetCount}명 (수신거부 제외 전)\n${p.reason?'· '+(why[p.reason]||p.reason)+'\n':''}\n테스트 발송: 휴대폰 번호 입력${done?'':'\n전체 발송: SEND 입력'}`,'');
+  if(ans==null||!ans.trim())return;
+  const v=ans.trim();
+  try{
+    if(v.toUpperCase()==='SEND'){
+      if(done)return toast('이미 안내를 보낸 호입니다 — 재발송할 수 없습니다','error');
+      if(!confirm(`${m}호 알림톡을 회원 ${p.targetCount}명에게 지금 발송할까요?\n\n· 한 호당 한 번만 보낼 수 있습니다`))return;
+      toast('발송 중입니다 — 인원에 따라 몇 분 걸립니다');
+      const r=(await httpsCallable(functions,'monthlyNoticeAdmin',{timeout:560000})({ym:m,mode:'send'})).data||{};
+      toast(`발송 완료 — 성공 ${r.successCount||0} / 실패 ${r.failCount||0} / 제외 ${r.skippedCount||0}`,'success');mrLoad();
+    }else{
+      const r=(await httpsCallable(functions,'monthlyNoticeAdmin',{timeout:120000})({ym:m,mode:'test',testTo:v})).data||{};
+      toast(r.successCount?'테스트 발송 완료 — 휴대폰을 확인하세요':'테스트 발송 실패 — 발송 로그를 확인하세요',r.successCount?'success':'error');
+    }
+  }catch(e){toast(e.message,'error');}
+};
 /* 음성 진행 폴링 — 15초 간격, 최대 60분. since(요청 시각) 이전의 기록은 지난 실행으로 보고 대기한다 */
 window.mrPollAudio=async function(m,n,since){
   if(n>240)return;
@@ -18107,7 +18134,11 @@ window.mrLoad=async function(){
       else if(ajFail.length)acb+=`<br><small style="font-size:10px;color:#C0392B;white-space:nowrap;cursor:help" title="${esc(ajFail.map(k=>k+': '+((ajT[k]&&ajT[k].msg)||'')).join(' / '))}">🔴 실패 ${ajFail.map(k=>k.slice(5)).join('·')}</small>`;
       else if(aj.status==='error'&&aj.error)acb+=`<br><small style="font-size:10px;color:#C0392B;white-space:nowrap;cursor:help" title="${esc(aj.error)}">🔴 음성 실패</small>`;
       if(!ajLive&&audioN>=9&&!(x.audio||{}).track00)acb+=`<br><small style="font-size:10px;color:#888;white-space:nowrap">track00 대기</small>`;
-      return `<tr><td><b>${d.id}</b>${rdy}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${scb}</td><td>${acb}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> <button class="btn btn-sm" onclick="mrBuildAudio('${d.id}')" title="대본 기준으로 음성 track01~09 생성 (실패 트랙이 있으면 그 트랙만)">🎧 음성생성</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      /* ★ [2026-09-29] 회원 알림톡(매월 1일 10:00) 상태 */
+      const nsMap={sent:'📣 알림 발송완료',not_published:'⚠️ 알림 미발송(미게시)',failed:'🔴 알림 발송 실패',link_broken:'⚠️ 알림 보류(링크 확인 실패)',no_recipient:'⚠️ 알림 대상 없음'};
+      const nsAt=x.noticeSentAt&&x.noticeSentAt.toDate?x.noticeSentAt.toDate():null;
+      const ntc=x.noticeStatus&&nsMap[x.noticeStatus]?`<br><small style="font-size:10.5px;color:${x.noticeStatus==='sent'?'#1E8449':(x.noticeStatus==='failed'?'#C0392B':'#B7791F')};white-space:nowrap">${nsMap[x.noticeStatus]}${x.noticeStatus==='sent'&&nsAt?` ${nsAt.getMonth()+1}/${nsAt.getDate()} (${x.noticeSuccess||0}명)`:''}</small>`:'';
+      return `<tr><td><b>${d.id}</b>${rdy}${ntc}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${scb}</td><td>${acb}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> <button class="btn btn-sm" onclick="mrBuildAudio('${d.id}')" title="대본 기준으로 음성 track01~09 생성 (실패 트랙이 있으면 그 트랙만)">🎧 음성생성</button> <button class="btn btn-sm" onclick="mrNotice('${d.id}')" title="회원 알림톡 미리보기·테스트·수동 발송 (자동: 매월 1일 10:00)">📣 알림</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
   }catch(e){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
