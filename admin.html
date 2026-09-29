@@ -17943,13 +17943,20 @@ window.mrBuildAudio=async function(m){
   if(!m)m=mrMonth();if(!m)return;
   let x={};try{const s=await getDoc(doc(db,'monthly_reports',m));x=s.exists()?s.data():{};}catch(_){}
   if(!x.scriptUrls||!Object.keys(x.scriptUrls).length)return toast('대본이 없습니다 — [대본생성]을 먼저 실행하세요','error');
-  const t=(x.audioJob&&x.audioJob.tracks)||{};
+  const aj=x.audioJob||{},t=aj.tracks||{};
+  /* ★ [2026-09-29] 이미 생성 중이면 새로 요청하지 않고 진행 표시만 이어 붙인다 */
+  const ajUp=aj.updatedAt&&aj.updatedAt.toMillis?aj.updatedAt.toMillis():0;
+  if(aj.status==='running'&&ajUp&&(Date.now()-ajUp)<600000){toast('음성이 이미 생성 중입니다 — 진행 상태를 아래에 표시합니다');mrPollAudio(m,0,0);return;}
   const fail=Object.keys(t).filter(k=>t[k]&&t[k].status==='error').map(k=>k.slice(5)).sort();
+  /* ★ [2026-09-29] 이어서 만들기 — 배포·일시 오류로 중단된 작업은 대기(queued)·진행(running) 상태로 남는다.
+     완료(done)·수동 업로드(manual) 트랙은 건너뛰고 실패·미완료 트랙만 다시 만든다. */
+  const left=Object.keys(t).filter(k=>t[k]&&(t[k].status==='queued'||t[k].status==='running')).map(k=>k.slice(5));
+  const redo=[...new Set([...fail,...left])].filter(n=>/^0[1-9]$/.test(n)).sort();
   const pub=x.status==='published'?'\n\n⚠️ 게시중인 호입니다 — 회원이 듣는 음성이 교체됩니다':'';
   let q='';
-  if(fail.length){
-    if(!confirm(`${m}호 실패한 음성 ${fail.length}개(track${fail.join(', track')})만 다시 만들까요?\n\n· 소요 트랙당 약 3분 (창을 닫아도 서버에서 계속 진행됩니다)${pub}`))return;
-    q='&tracks='+fail.join(',');
+  if(redo.length){
+    if(!confirm(`${m}호 실패·중단된 음성 ${redo.length}개(track${redo.join(', track')})만 이어서 만들까요?\n\n· 완료된 트랙은 그대로 유지됩니다\n· 소요 트랙당 약 3분 (창을 닫아도 서버에서 계속 진행됩니다)${pub}`))return;
+    q='&tracks='+redo.join(',');
   }else if(!confirm(`${m}호 음성 track01~09 를 새로 만들까요?\n\n· 소요 약 25분 (창을 닫아도 서버에서 계속 진행됩니다)\n· 기존 track01~09 는 교체되고 track00 은 유지됩니다${pub}`))return;
   const st=$('mr-build-stat');
   if(st){st.classList.add('mr-live');st.textContent='⏳ 음성 생성 요청 중...';}
