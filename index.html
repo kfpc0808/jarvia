@@ -6654,6 +6654,8 @@ window.mpActivityLoad=async function(){
   }catch(e){body.textContent='불러오지 못했습니다 — 잠시 후 다시 시도해주세요. ('+(e.message||'')+')';}
 };
 let me=null,meData=null,allContents=[],allCats=[],myFavSet=new Set(),thumbSettings=null;let sessionUnsub=null;
+/* ★ [2026-09-30] 동시 로그인: PC 1대 + 휴대폰 1대 — 기기 종류별 세션 칸(activeSessions.pc / .mo). 태블릿은 휴대폰 칸 */
+function jvDevSlot(){try{const ua=navigator.userAgent||'';if(/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua))return 'mo';if(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1)return 'mo';}catch(_e){}return 'pc';}
 const _origHeaderNav=$('header-nav').innerHTML;
 const _origMobMenu=$('mob-menu')?$('mob-menu').innerHTML:'';
 
@@ -8090,7 +8092,7 @@ async function doWithdraw(){
 async function doLogout(manual){
   /* ★ 2026-08-04: 수동 로그아웃 시 미백업(mpc_dirty) 수정분 확인 — 자동 로그아웃(정지·세션교체)은 확인 없이 진행 */
   if(manual===true){try{if(localStorage.getItem('mpc_dirty')==='1'&&!confirm('아직 드라이브에 백업되지 않은 고객 수정분이 있습니다.\n지금 로그아웃하면 이 수정분이 사라질 수 있습니다.\n\n그래도 로그아웃할까요?'))return;}catch(_e){}}
-  if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()&&_cur.data().activeSessionId===_mySid){await updateDoc(doc(db,'users',me.uid),{activeSessionId:deleteField()});}}}catch(_e){}try{localStorage.removeItem('jarvia_hasLogin');}catch(_e){}
+  if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}try{const _mySid=localStorage.getItem('jarvia_session');if(me&&me.uid&&_mySid){const _cur=await getDoc(doc(db,'users',me.uid));if(_cur.exists()){const _sl=jvDevSlot();const _cd=_cur.data();const _up={};if((_cd.activeSessions||{})[_sl]===_mySid)_up['activeSessions.'+_sl]=deleteField();if(_cd.activeSessionId===_mySid)_up.activeSessionId=deleteField();if(Object.keys(_up).length)await updateDoc(doc(db,'users',me.uid),_up);}}}catch(_e){}try{localStorage.removeItem('jarvia_hasLogin');}catch(_e){}
   /* ★ 2026-08-04: 이 기기의 고객·장소 로컬 데이터 완전 삭제 (공용 PC 잔류 방지 — 다음 로그인 때 드라이브 자동 복원) */
   try{indexedDB.deleteDatabase('mycustomers_db');}catch(_e){}
   try{indexedDB.deleteDatabase('myplaces_db');}catch(_e){}
@@ -8428,28 +8430,31 @@ onAuthStateChanged(auth,async u=>{
       if(jvIsFreeUser(meData)) setTimeout(function(){try{showFreeNotice(false);}catch(_e){}},900);
       try{localStorage.setItem('jarvia_hasLogin','1');}catch(_e){}   /* ★ [2026-07-21] 로그아웃 오탐 방어용 로그인 이력 */
       try{sessionStorage.removeItem('_authAutoReload');}catch(_e){}  /* ★ [2026-07-27] 오탐 자동복구 가드 해제 — 재발 시 다시 1회 복구 가능 */
-      // ── 단일 세션(중복 로그인 차단): 로그인 확인 + 같은 브라우저 탭 허용 ──
+      // ── 중복 로그인 차단: PC 1대 + 휴대폰 1대 동시 허용, 같은 종류끼리는 1대 (같은 브라우저 탭 허용) ──
+      /* ★ [2026-09-30] 단일 칸(activeSessionId) → 기기 종류별 칸(activeSessions.pc/.mo). 옛 칸은 로그인 시 정리 */
       try{
         let _sid=localStorage.getItem('jarvia_session');
         if(!_sid){_sid=gid();localStorage.setItem('jarvia_session',_sid);}
-        if(meData.activeSessionId && meData.activeSessionId!==_sid){
-          if(!confirm('다른 기기에서 로그인되어 사용 중입니다.\n\n계속 로그인하면 그 기기는 자동으로 로그아웃됩니다.\n로그인하시겠습니까?')){
+        const _slot=jvDevSlot(),_slotNm=_slot==='mo'?'휴대폰':'PC';
+        const _cur0=(meData.activeSessions||{})[_slot];
+        if(_cur0 && _cur0!==_sid){
+          if(!confirm('다른 '+_slotNm+'에서 로그인되어 사용 중입니다.\n\n계속 로그인하면 그 기기는 자동으로 로그아웃됩니다.\n(PC 1대와 휴대폰 1대는 동시에 사용할 수 있습니다)\n로그인하시겠습니까?')){
             await doLogout();nav('login');return;
           }
         }
-        await setDoc(doc(db,'users',u.uid),{activeSessionId:_sid,sessionUpdatedAt:serverTimestamp()},{merge:true});
+        await setDoc(doc(db,'users',u.uid),{activeSessions:{[_slot]:_sid},activeSessionId:deleteField(),sessionUpdatedAt:serverTimestamp()},{merge:true});
         if(sessionUnsub){try{sessionUnsub();}catch(_e){}}
         sessionUnsub=onSnapshot(doc(db,'users',u.uid),s=>{
           if(!s.exists())return;
-          const cur=s.data().activeSessionId;
+          const cur=(s.data().activeSessions||{})[_slot];
           let _my=localStorage.getItem('jarvia_session');
           if(!_my){/* ★★ [2026-07-21] 저장된 세션값 소실(브라우저 정리 등) → 오탐 로그아웃 대신 내 세션 재등록 */
             _my=gid();localStorage.setItem('jarvia_session',_my);
-            setDoc(doc(db,'users',u.uid),{activeSessionId:_my,sessionUpdatedAt:serverTimestamp()},{merge:true}).catch(()=>{});
+            setDoc(doc(db,'users',u.uid),{activeSessions:{[_slot]:_my},sessionUpdatedAt:serverTimestamp()},{merge:true}).catch(()=>{});
             return;}
           if(cur&&cur!==_my){
             if(sessionUnsub){try{sessionUnsub();}catch(_e){}sessionUnsub=null;}
-            alert('다른 기기에서 로그인되어 자동 로그아웃됩니다.');
+            alert('다른 '+_slotNm+'에서 로그인되어 자동 로그아웃됩니다.\n(PC 1대와 휴대폰 1대는 동시에 사용할 수 있습니다)');
             doLogout().then(()=>nav('login'));
           }
         });
