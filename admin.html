@@ -17925,12 +17925,60 @@ window.mrPollScripts=async function(m,n,since){
       const d=p.data();
       const up=d.updatedAt&&d.updatedAt.toMillis?d.updatedAt.toMillis():0;
       const stale=since&&up&&up<since-120000;
-      if(!stale&&d.status==='done'){if(st){st.classList.remove('mr-live');st.style.color='#1E8449';st.style.fontWeight='700';st.textContent='✅ '+(d.label||'완료');}toast('대본 생성 완료 — 산출물에서 내려받아 음성을 만드십시오');mrLoad();return;}
+      if(!stale&&d.status==='done'){if(st){st.classList.remove('mr-live');st.style.color='#1E8449';st.style.fontWeight='700';st.textContent='✅ '+(d.label||'완료');}
+        /* ★ [2026-09-29] 대본 완료 후 서버가 음성(track01~09)을 자동 생성 — 이어서 음성 진행을 표시한다 */
+        const _au=String(d.label||'').includes('음성 자동 생성 시작');
+        toast(_au?'대본 생성 완료 — 음성 track01~09 자동 생성이 이어집니다 (약 25분)':'대본 생성 완료');mrLoad();
+        if(_au)mrPollAudio(m,0,Date.now());
+        return;}
       if(!stale&&d.status==='error'){if(st){st.classList.remove('mr-live');st.style.color='#C0392B';st.style.fontWeight='700';st.textContent='🔴 '+(d.label||'실패');}toast('대본 생성 실패: '+(d.label||''),'error');mrLoad();return;}
       if(st){st.classList.add('mr-live');st.textContent=stale?'⏳ 서버 시작 대기 중...':`⏳ ${d.step||0}/${d.total||3} ${d.label||''}`;}
     }
   }catch(e){console.warn('[MR] 폴링 경고:',e.message);}
   setTimeout(()=>mrPollScripts(m,n+1,since),10000);
+};
+/* ★ [2026-09-29] 음성 자동 생성(track01~09) — 실패 트랙이 있으면 그 트랙만, 없으면 전체 재생성.
+   요청은 fire-and-forget, 진행은 monthly_reports.audioJob 을 폴링해 표시한다. track00 은 대상 아님. */
+window.mrBuildAudio=async function(m){
+  if(!m)m=mrMonth();if(!m)return;
+  let x={};try{const s=await getDoc(doc(db,'monthly_reports',m));x=s.exists()?s.data():{};}catch(_){}
+  if(!x.scriptUrls||!Object.keys(x.scriptUrls).length)return toast('대본이 없습니다 — [대본생성]을 먼저 실행하세요','error');
+  const t=(x.audioJob&&x.audioJob.tracks)||{};
+  const fail=Object.keys(t).filter(k=>t[k]&&t[k].status==='error').map(k=>k.slice(5)).sort();
+  const pub=x.status==='published'?'\n\n⚠️ 게시중인 호입니다 — 회원이 듣는 음성이 교체됩니다':'';
+  let q='';
+  if(fail.length){
+    if(!confirm(`${m}호 실패한 음성 ${fail.length}개(track${fail.join(', track')})만 다시 만들까요?\n\n· 소요 트랙당 약 3분 (창을 닫아도 서버에서 계속 진행됩니다)${pub}`))return;
+    q='&tracks='+fail.join(',');
+  }else if(!confirm(`${m}호 음성 track01~09 를 새로 만들까요?\n\n· 소요 약 25분 (창을 닫아도 서버에서 계속 진행됩니다)\n· 기존 track01~09 는 교체되고 track00 은 유지됩니다${pub}`))return;
+  const st=$('mr-build-stat');
+  if(st){st.classList.add('mr-live');st.textContent='⏳ 음성 생성 요청 중...';}
+  fetch(`https://asia-northeast3-jarvia-platform.cloudfunctions.net/buildMonthlyAudio?month=${m}${q}`,
+    {method:'POST',headers:{'x-internal-key':'tcw-jarvia-2026-kfpc'}})
+    .then(r=>{if(!r.ok)r.text().then(tx=>toast('음성 생성 응답('+r.status+'): '+tx.slice(0,120),'error'));})
+    .catch(e=>console.warn('[MR] 음성 요청 전송 경고(서버는 진행 중일 수 있음):',e.message));
+  toast(`${m}호 음성 생성을 시작했습니다 — 진행 상태가 아래에 표시됩니다`);
+  mrPollAudio(m,0,Date.now());
+};
+/* 음성 진행 폴링 — 15초 간격, 최대 60분. since(요청 시각) 이전의 기록은 지난 실행으로 보고 대기한다 */
+window.mrPollAudio=async function(m,n,since){
+  if(n>240)return;
+  const st=$('mr-build-stat');
+  try{
+    const s=await getDoc(doc(db,'monthly_reports',m));
+    const aj=(s.exists()&&s.data().audioJob)||{};
+    const up=aj.updatedAt&&aj.updatedAt.toMillis?aj.updatedAt.toMillis():0;
+    const stale=since&&(!up||up<since-120000);
+    const tg=Array.isArray(aj.targets)?aj.targets:[],tr=aj.tracks||{};
+    const dn=tg.filter(k=>tr['track'+k]&&tr['track'+k].status==='done').length;
+    if(!stale&&aj.status==='done'){if(st){st.classList.remove('mr-live');st.style.color='#1E8449';st.style.fontWeight='700';st.textContent=`✅ 음성 ${dn}/${tg.length} 생성 완료 — track00 은 직접 업로드`;}toast('음성 생성 완료');mrLoad();return;}
+    if(!stale&&aj.status==='error'){const f=(aj.failed||[]).join('·');if(st){st.classList.remove('mr-live');st.style.color='#C0392B';st.style.fontWeight='700';st.textContent=f?`🔴 음성 실패 track ${f} — [음성생성]으로 다시 시도`:`🔴 음성 실패 — ${aj.error||''}`;}toast('음성 생성 중 실패가 있습니다','error');mrLoad();return;}
+    if(st){st.classList.add('mr-live');
+      const cur=tg.find(k=>tr['track'+k]&&tr['track'+k].status==='running');
+      st.textContent=stale?'⏳ 음성 서버 시작 대기 중...':`⏳ 음성 ${dn}/${tg.length} 생성중${cur?' — track'+cur:''}`;}
+    if(n%4===3)mrLoad();
+  }catch(e){console.warn('[MR] 음성 폴링 경고:',e.message);}
+  setTimeout(()=>mrPollAudio(m,n+1,since),15000);
 };
 window.mrUploadSlides=async function(){
   const m=mrMonth();if(!m)return;
@@ -17962,7 +18010,10 @@ window.mrUploadAudio=async function(){
   }
   if(Object.keys(ok).length){
     const prev=await getDoc(doc(db,'monthly_reports',m));const audio=Object.assign({},(prev.exists()&&prev.data().audio)||{},ok);
-    await setDoc(doc(db,'monthly_reports',m),{month:m,audio,audioUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp()},{merge:true});
+    /* ★ [2026-09-29] 수동 업로드한 track01~09 는 자동 생성 상태를 '수동'으로 기록 —
+       실패 표시가 남거나 [음성생성]이 수동본을 실패 트랙으로 보고 덮어쓰는 것을 막는다 */
+    const man={};Object.keys(ok).filter(k=>k!=='track00').forEach(k=>{man[k]={status:'manual'};});
+    await setDoc(doc(db,'monthly_reports',m),{month:m,audio,audioUpdatedAt:serverTimestamp(),updatedAt:serverTimestamp(),...(Object.keys(man).length?{audioJob:{tracks:man}}:{})},{merge:true});
   }
   st.textContent=`✅ ${Object.keys(ok).length}개 완료`+(skip.length?` · 제외 ${skip.length}개(파일명 규칙 불일치)`:'');
   if(skip.length)toast('허용 파일명: track01~09.mp3, track00.m4a — 제외됨: '+skip.join(', '),'warning');
@@ -18037,7 +18088,19 @@ window.mrLoad=async function(){
       const ready=!!x.docConfirmed&&audioN>=10&&!!x.publishApproved;
       const chk=`<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap" title="말일(주말·공휴일이면 직전 영업일) 07:00 자동 게시 대상으로 지정합니다"><input type="checkbox" ${x.publishApproved?'checked':''} onchange="mrApprove('${d.id}',this.checked)"> 게시승인</label>`;
       const rdy=x.status==='published'?'':`<br><small style="font-size:10px;color:${ready?'#1E8449':'#B7791F'}">${ready?'✅ 자동게시 준비완료':'⏳ '+[!x.docConfirmed?'문서확정':'',audioN<10?`오디오${audioN}/10`:'',!x.publishApproved?'승인':''].filter(Boolean).join('·')+' 필요'}</small>`;
-      return `<tr><td><b>${d.id}</b>${rdy}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${scb}</td><td>${audioN?audioN+' / 10':'—'}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
+      /* ★ [2026-09-29] 오디오 셀 — 자동 생성 진행(audioJob)·실패 트랙·track00 대기 표시 */
+      const aj=x.audioJob||{},ajT=aj.tracks||{},ajTg=Array.isArray(aj.targets)?aj.targets:[];
+      const ajUp=aj.updatedAt&&aj.updatedAt.toMillis?aj.updatedAt.toMillis():0;
+      const ajLive=aj.status==='running'&&ajUp&&(Date.now()-ajUp)<600000;
+      const ajFail=Object.keys(ajT).filter(k=>ajT[k]&&ajT[k].status==='error').sort();
+      let acb=audioN?audioN+' / 10':'—';
+      if(ajLive){const dn=ajTg.filter(k=>ajT['track'+k]&&ajT['track'+k].status==='done').length;
+        acb=`<span class="mr-live" style="font-size:11px;white-space:nowrap">⏳ 음성 ${dn}/${ajTg.length} 생성중</span>`+(audioN?`<br><small style="font-size:10px;color:#888">${audioN} / 10</small>`:'');}
+      else if(aj.status==='running')acb+=`<br><small style="font-size:10px;color:#B7791F;white-space:nowrap">⚠️ 음성 작업 중단</small>`;
+      else if(ajFail.length)acb+=`<br><small style="font-size:10px;color:#C0392B;white-space:nowrap;cursor:help" title="${esc(ajFail.map(k=>k+': '+((ajT[k]&&ajT[k].msg)||'')).join(' / '))}">🔴 실패 ${ajFail.map(k=>k.slice(5)).join('·')}</small>`;
+      else if(aj.status==='error'&&aj.error)acb+=`<br><small style="font-size:10px;color:#C0392B;white-space:nowrap;cursor:help" title="${esc(aj.error)}">🔴 음성 실패</small>`;
+      if(!ajLive&&audioN>=9&&!(x.audio||{}).track00)acb+=`<br><small style="font-size:10px;color:#888;white-space:nowrap">track00 대기</small>`;
+      return `<tr><td><b>${d.id}</b>${rdy}</td><td>${sb}</td><td>${x.reportUrl?`<a href="${x.reportUrl}" target="_blank">보기 ↗</a>${x.reportFile?`<br><small style="font-size:10px;color:#888">${esc(x.reportFile)}</small>`:''}`:'—'}</td><td>${x.slidesUrl?`<a href="${x.slidesUrl}" target="_blank">보기 ↗</a>${x.slidesFile?`<br><small style="font-size:10px;color:#888">${esc(x.slidesFile)}${x.slidesManual?' · 수동본':''}</small>`:''}`:'—'}</td><td>${scb}</td><td>${acb}</td><td>${x.updatedAt?fdatetime(x.updatedAt):'—'}</td><td><button class="btn btn-sm" onclick="mrAssets('${d.id}')">📥 산출물</button> <button class="btn btn-sm" onclick="mrBuildScripts('${d.id}',1)" title="확정 문서 기준으로 요약본·대본 재생성">📝 대본생성</button> <button class="btn btn-sm" onclick="mrBuildAudio('${d.id}')" title="대본 기준으로 음성 track01~09 생성 (실패 트랙이 있으면 그 트랙만)">🎧 음성생성</button> ${chk} ${tgl} <button class="btn btn-sm" onclick="mrDelete('${d.id}')" style="color:#C0392B">삭제</button></td></tr>`;
     }).join('');
   }catch(e){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:#C0392B">로드 실패: '+e.message+'<br><span style="font-size:11px">Firestore 규칙에 monthly_reports 권한 추가가 필요할 수 있습니다.</span></td></tr>';}
 };
