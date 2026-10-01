@@ -17016,6 +17016,7 @@ function rptKindBar(){
 window.rptSetKind=async function(k){
   if(!_rpt||_rpt.kind===k)return;
   _rpt.kind=k;_rpt.openSend='';
+  if(k==='mr'&&_rpt.sel&&_rpt.sel.size){let _d=0;[..._rpt.sel].forEach(cid=>{if(rptMrNo(_rpt.matched[cid])){_rpt.sel.delete(cid);_d++;}});if(_d)toast('아침독서 미신청 고객 '+_d+'명은 선택에서 뺐습니다','warning');}   /* ★ [2026-10-01] */
   rptRender();
   try{await rptLoadPreview();}catch(_e){}
   rptRender();
@@ -17051,15 +17052,20 @@ window.atAutoGo=function(){
 window.rptAutoOpen=async function(){
   try{
     if(window._rptAutoDone)return;
-    const k=new URLSearchParams(location.search).get('rpt');
+    const _kq=new URLSearchParams(location.search).get('rpt');
+    let k=_kq;
+    if(!k){try{k=sessionStorage.getItem('jv_rpt_return')||'';sessionStorage.removeItem('jv_rpt_return');}catch(_e){}}   /* ★ [2026-10-01] 고객 화면 보기에서 돌아온 경우 */
     if(k!=='mc'&&k!=='daily'&&k!=='mr')return;
     window._rptAutoDone=true;
-    try{const u=new URL(location.href);u.searchParams.delete('rpt');history.replaceState({},'',u.pathname+u.search+u.hash);}catch(_e){}
+    if(_kq){try{const u=new URL(location.href);u.searchParams.delete('rpt');history.replaceState({},'',u.pathname+u.search+u.hash);}catch(_e){}}
     if(!window.rptAllowed()){try{window.rptOpen();}catch(_e){}return;}   /* ★ [2026-09-10] 오픈 전에는 rptOpen 이 「곧 오픈」 안내를 띄운다 */
     await window.rptOpen();
     if(_rpt&&_rpt.kind!==k)await window.rptSetKind(k);
   }catch(_e){}
 };
+
+/* ★ [2026-10-01] 뒤로가기 캐시로 화면이 그대로 복원된 경우 — 알림톡 창이 이미 열려 있으므로 복귀 표시만 지운다 */
+window.addEventListener('pageshow',function(e){if(e.persisted){try{sessionStorage.removeItem('jv_rpt_return');}catch(_e){}}});
 
 /* ── 진입 ── */
 /* ★ [2026-09-10] 오픈 준비 중 안내 — 테스트 대상이 아닌 회원이 리포트 알림톡을 누르면 기능 소개 + 곧 오픈 안내를 띄운다 */
@@ -17131,6 +17137,7 @@ window.rptOpen=async function(){
   /* ★ [2026-09-12] 인라인 on* 핸들러는 전역 스코프에서 실행되므로 module 변수 _rpt 에 접근할 수 없다.
      (예약 이름·시간·시작일·간격·종료일·횟수·회당 최대 인원, 조건 그룹 「다음 연락일」·「취소」가 저장되지 않던 원인) */
   window._rpt=_rpt;
+  rptCacheUse();   /* ★ [2026-10-01] 직전 결과가 있으면 바로 표시 */
   rptRender();
   try{await rptLoadAll();}catch(e){console.warn('[rpt] load',e);toast('불러오기 실패: '+(e&&e.message||''),'error');}
   _rpt.loading=false;rptRender();rptBadgeCheck();
@@ -17157,11 +17164,17 @@ async function rptLocalPhones(){
   return map;
 }
 async function rptLoadAll(){
+  /* ★ [2026-10-01] 속도 개선 — 고객·연락처와 무관한 조회(그룹·미리보기·예약·이력·열람)는 먼저 동시에 시작하고,
+     서버 고객 목록과 드라이브 연락처 확인도 서로 기다리지 않고 함께 진행한다. 순서가 필요한 것은 「연락처 → 신청 대조」뿐이다. */
+  const _side=Promise.all([
+    (async()=>{try{const gs=await getDoc(doc(db,'report_groups',me.uid));_rpt.groups=(gs.exists()&&Array.isArray(gs.data().groups))?gs.data().groups:[];}catch(_e){_rpt.groups=[];}})(),
+    rptLoadPreview(),rptLoadSchedules(),rptLoadSends(),rptLoadViews()]);
+  const _drive=(async()=>{try{if(typeof jvMcDriveSync==='function')await jvMcDriveSync(false,true);}catch(_e){}})();
   const list=await fccFetch();
   /* ★ [2026-09-12] 연락처는 회사 서버가 아니라 회원 개인 드라이브에서 읽어온다. jvMcRead 는
      _jvMcLast==='ok'(드라이브와 같음이 확인된 상태)일 때만 기기 상세를 읽으므로, 마이페이지를 거치지 않고
      이 화면을 바로 열면 번호가 전부 비어 보였다. 여기서 직접 확인을 수행한다. (17941행과 같은 짝) */
-  try{if(typeof jvMcDriveSync==='function')await jvMcDriveSync(false,true);}catch(_e){}   /* silent — 뒤쪽 화면의 안내 상자를 건드리지 않는다 */
+  await _drive;   /* 위에서 미리 시작한 드라이브 확인 — 끝날 때까지 기다린다 */   /* silent — 뒤쪽 화면의 안내 상자를 건드리지 않는다 */
   const ph=await rptLocalPhones();
   _rpt.phoneState=(_jvMcLast==='ok')?'ok':(_jvMcLast==='nofile'?'nofile':(_jvMcLast==='fail'?'fail':'idle'));   /* ★ [2026-09-12] 번호를 못 읽은 사유를 화면에 알리기 위해 보관 */
   _rpt.clients=(list||[]).filter(c=>c&&c.id).map(c=>({cid:c.id,name:c.name||'',phone:ph[c.id]||'',status:c.status||'',rels:Array.isArray(c.rels)?c.rels:[],needs:Array.isArray(c.needs)?c.needs:[],nextContact:c.nextContact||'',keyman:!!c.keyman}));   /* ★ [2026-09-10] 조건 그룹용 서버 속성 · [2026-09-19] keyman — 키맨 필터용 */
@@ -17171,8 +17184,22 @@ async function rptLoadAll(){
   _rpt.matched={};(d.matched||[]).forEach(m=>{_rpt.matched[m.cid]=m;});
   _rpt.unmatched=d.unmatched||[];
   _rpt.optInCount=d.optInCount||0;
-  try{const gs=await getDoc(doc(db,'report_groups',me.uid));_rpt.groups=(gs.exists()&&Array.isArray(gs.data().groups))?gs.data().groups:[];}catch(_e){_rpt.groups=[];}
-  await Promise.all([rptLoadPreview(),rptLoadSchedules(),rptLoadSends(),rptLoadViews()]);
+  await _side;
+  rptCacheSave();
+}
+/* ★ [2026-10-01] 속도 개선 — 같은 접속 중 다시 열면 직전 결과를 바로 보여주고 최신 정보는 뒤에서 다시 불러온다.
+   연락처가 들어 있으므로 메모리에만 두고(새로고침·로그아웃 시 사라짐) 저장소에는 쓰지 않는다. 발송 시 서버가 신청 여부를 다시 확인한다. */
+let _rptCache=null;
+function rptCacheSave(){
+  try{_rptCache={uid:me&&me.uid,at:Date.now(),clients:_rpt.clients,matched:_rpt.matched,unmatched:_rpt.unmatched,optInCount:_rpt.optInCount,phoneState:_rpt.phoneState,groups:_rpt.groups,schedules:_rpt.schedules,sends:_rpt.sends,views:_rpt.views,
+    preview:(_rpt.kind==='daily'&&_rpt.fileDate===rptToday())?_rpt.preview:null,pvDate:rptToday()};}catch(_e){_rptCache=null;}
+}
+function rptCacheUse(){
+  const c=_rptCache;
+  if(!c||!me||c.uid!==me.uid||(Date.now()-c.at)>30*60000)return false;
+  Object.assign(_rpt,{clients:c.clients,matched:c.matched,unmatched:c.unmatched,optInCount:c.optInCount,phoneState:c.phoneState,groups:c.groups,schedules:c.schedules,sends:c.sends,views:c.views,loading:false});
+  if(c.preview&&c.pvDate===rptToday())_rpt.preview=c.preview;
+  return true;
 }
 /* ★ [2026-09-12] 연락처 출처·상태 안내 — 연락처는 회사 서버가 아니라 회원 개인 드라이브에서 읽어온다.
    정상이면 사실을 또렷하게 알리고, 못 읽었으면 사유와 재시도 버튼을 준다 (조용한 실패 방지). */
@@ -17353,7 +17380,18 @@ function rptSubCopyFb(u,done){
   try{document.execCommand('copy');done();}catch(_e){toast('복사하지 못했습니다','warning');}
   t.remove();
 }
-function rptSubOpen(){ const u=rptSubUrl(); if(u)window.open(u,'_blank','noopener'); }
+/* ★ [2026-10-01] 새 탭으로 연다 — 이 탭의 알림톡 화면과 고른 고객이 그대로 남는다.
+   고객 화면의 「← 알림톡으로 돌아가기」는 그 탭을 닫아 이 화면으로 돌려보낸다(스크립트로 연 탭이라 닫을 수 있다).
+   팝업 차단 등으로 새 탭이 안 열릴 때만 같은 탭으로 열고, 알림톡 창이 열려 있었으면 복귀 표시(jv_rpt_return=보던 종류)를 남겨
+   뒤로가기·돌아가기 시 rptAutoOpen 이 다시 연다. */
+function rptSubOpen(){
+  const u=rptSubUrl(); if(!u)return;
+  let w=null;
+  try{w=window.open(u,'_blank');}catch(_e){w=null;}
+  if(w){try{w.opener=null;}catch(_e){}return;}
+  try{const md=$('mdl-rpt');if(md&&!md.classList.contains('hidden')&&_rpt&&!_rpt.guideOnly)sessionStorage.setItem('jv_rpt_return',_rpt.kind||'daily');}catch(_e){}
+  location.href=u;
+}
 /* compact=true 는 안내·가이드 안에 들어가는 축약형 */
 function rptSubBox(compact){
   const u=rptSubUrl();
@@ -17421,11 +17459,13 @@ function rptRenderSend(body,foot){
     +(_rpt.tab==='off'?'<div style="background:#FFF8E1;border:1px solid #F5D76E;border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.5;margin-bottom:6px">아직 카카오톡 받기를 신청하지 않은 고객입니다. 알림톡은 보낼 수 없고, <b>「신청 링크 문자」</b>를 누르면 내 휴대폰 문자로 신청 링크가 나갑니다. 연락처가 없는 고객은 목록에 표시되지만 링크를 보낼 수 없습니다.</div>':'')
     /* ★ [2026-09-12] 연락처 출처를 또렷하게 알리고, 못 읽었을 때는 사유와 재시도를 함께 준다 */
     +rptPhoneNote()
+    +rptMrNote()
     +'<div id="rpt-slist">'+(list.length?list.map(c=>{
         const m=_rpt.matched[c.cid];const gs=rptGroupsOf(c.cid).map(id=>{const g=_rpt.groups.find(x=>x.id===id);return g?'<span class="rpt-pill">'+rptE(g.name)+'</span>':'';}).join('');
         if(_rpt.tab==='on'){
           if(m&&m.phoneMismatch)return '<div class="rpt-row" style="opacity:.8"><div class="rpt-chk" style="border-style:dashed;cursor:not-allowed" title="연락처를 맞춘 뒤 발송할 수 있습니다"></div><div style="flex:1"><span class="rpt-nm">'+rptE(c.name)+'</span>'+gs+'<span class="rpt-pill y">연락처 확인</span><div class="rpt-ph">저장된 번호가 신청 번호(뒷자리 <b>'+rptE((m.mask||'').slice(-4))+'</b>)와 '+(c.phone?'다릅니다':'없습니다')+' — 갱신 후 발송 가능</div></div>'+(m.canHandoff?'<span class="btn btn-sm btn-sec" onclick="rptHandoff(\''+rptE(m.subId)+'\',\'update\',\''+rptE(c.cid)+'\')">🔄 연락처 갱신</span>':'<span class="btn btn-sm btn-sec" onclick="rptFixPhone(\''+rptE(c.cid)+'\')">✏️ 직접 수정</span>')+'</div>';
-          return '<div class="rpt-row"><div class="rpt-chk'+(_rpt.sel.has(c.cid)?' on':'')+'" onclick="rptSel(\''+rptE(c.cid)+'\')"></div><div style="flex:1"><span class="rpt-nm">'+rptE(c.name)+'</span>'+rptSubName(c,m)+gs+(m&&m.newFlag?'<span class="rpt-pill g">신규</span>':'')+'<div class="rpt-ph">'+rptMask(c.phone)+(m&&m.since?' · '+rptFmtTs(m.since)+' 신청':'')+(m&&m.lastSentAt?' · 최근 보냄 '+rptFmtTs(m.lastSentAt):'')+rptLastViewText(c.cid)+'</div></div></div>';
+          const _mrN=rptMrNo(m);   /* ★ [2026-10-01] 아침독서 미신청 — 체크 불가 + 배지 */
+          return '<div class="rpt-row"'+(_mrN?' style="opacity:.62"':'')+'><div class="rpt-chk'+(_rpt.sel.has(c.cid)?' on':'')+'"'+(_mrN?' style="border-style:dashed;cursor:not-allowed" title="아침독서 미신청 고객입니다"':'')+' onclick="rptSel(\''+rptE(c.cid)+'\')"></div><div style="flex:1"><span class="rpt-nm">'+rptE(c.name)+'</span>'+(_mrN?'<span class="rpt-pill k">📖 아침독서 미신청</span>':'')+rptSubName(c,m)+gs+(m&&m.newFlag?'<span class="rpt-pill g">신규</span>':'')+'<div class="rpt-ph">'+rptMask(c.phone)+(m&&m.since?' · '+rptFmtTs(m.since)+' 신청':'')+(m&&m.lastSentAt?' · 최근 보냄 '+rptFmtTs(m.lastSentAt):'')+rptLastViewText(c.cid)+'</div></div></div>';
         }
         const optOut=m&&m.reportOptIn===false;
         return '<div class="rpt-row"><div style="flex:1"><span class="rpt-nm">'+rptE(c.name)+'</span>'+gs+'<div class="rpt-ph">'+(c.phone?rptMask(c.phone):'연락처 없음')+(optOut?' · 수신 해제':'')+'</div></div>'+(optOut?'<span class="rpt-pill r">해제</span>':(c.phone?'<span class="btn btn-sm btn-sec" onclick="rptSendInvite(\''+rptE(c.cid)+'\')">신청 링크 문자</span>':'<span class="rpt-pill k">번호 없음</span>'))+'</div>';
@@ -17436,7 +17476,7 @@ function rptRenderSend(body,foot){
       +(selN?'<div class="rpt-tosch"><span class="btn btn-sm btn-sec" onclick="rptSendToSch()">📅 이 '+selN+'명으로 예약하기</span></div>':'')
       +(selN?'<div class="nms">'+_selC.slice(0,30).map(c=>'<span onclick="rptSel(\''+rptE(c.cid)+'\')" title="빼기">'+rptE(c.name)+' ✕</span>').join('')+(_selC.length>30?'<span style="cursor:default">외 '+(_selC.length-30)+'명</span>':'')+'</div>':'<div class="rpt-hint" style="margin-top:4px">② 목록에서 받을 고객을 체크하세요</div>')
     +'</div>'
-    +'<div class="rpt-subh">고객이 받는 화면 <small>이름과 링크만 고객마다 다릅니다 · 문구는 승인 템플릿이라 바꿀 수 없습니다</small></div><div class="rpt-pv"><div class="rpt-ch">KFPC 마이파트너</div><div class="rpt-bub"><div class="hd">알림톡 도착</div><div class="bd">'+rptE(pv.preview||'')+'</div><div class="bt">리포트 보기</div></div></div>'
+    +'<div class="rpt-subh">고객이 받는 화면 <small>이름과 링크만 고객마다 다릅니다 · 문구는 승인 템플릿이라 바꿀 수 없습니다</small></div><div class="rpt-pv"><div class="rpt-ch">KFPC 마이파트너</div><div class="rpt-bub"><div class="hd">알림톡 도착</div><div class="bd">'+rptE(pv.preview||'')+'</div><div class="bt">'+(_rpt.kind==='mr'?'아침독서 보기':'리포트 보기')+'</div></div></div>'
       +'<div class="rpt-hint">카카오 정책상 발신 채널명은 <b>KFPC 마이파트너</b>(한국FP센터 이니셜 KFPC + 채널명 마이파트너)로 고정됩니다. 회원님 이름은 본문 첫 줄에 담당 컨설턴트로 표시됩니다.</div>'
     +'<div class="rpt-cost"><span>'+selN+'명 × '+RPT_PRICE+'원</span><b>'+_won(selN)+'</b><span style="color:var(--text-lt)">남은 금액 '+(((Number(meData&&meData.point)||0)+(Number(meData&&meData.balance)||0)).toLocaleString())+'원</span></div>'
     +'<div class="rpt-hint" style="margin-top:6px">포인트가 먼저 빠집니다 · 문자 대체 발송은 하지 않으며, 못 받은 건은 차감되지 않습니다</div>'   /* ★ [2026-09-10] 대체발송 폐지 */
@@ -17531,8 +17571,16 @@ function rptKCPop(title,html,onOk){
   ov.querySelector('#rpt-kcx').onclick=close;
   ov.querySelector('#rpt-kcok').onclick=function(){close();onOk();};
 }
-function rptSendable(c){const m=_rpt.matched[c.cid];return !!(m&&m.reportOptIn&&!m.phoneMismatch&&c.phone);}
-window.rptSel=function(cid){const c=_rpt.clients.find(x=>x.cid===cid);if(!c||!rptSendable(c)){toast('연락처를 신청 번호로 맞춘 뒤 선택할 수 있습니다','warning');return;}if(_rpt.sel.has(cid))_rpt.sel.delete(cid);else _rpt.sel.add(cid);rptRender();};
+function rptSendable(c){const m=_rpt.matched[c.cid];return !!(m&&m.reportOptIn&&!m.phoneMismatch&&c.phone&&!rptMrNo(m));}
+/* ★ [2026-10-01] 아침독서 미신청 — 아침독서를 고른 상태에서 오늘 이전 신청(동의 2.0 이하)·재확인 전 고객. 서버 reportMatch 의 mrOk 기준 */
+function rptMrNo(m){return !!(_rpt&&_rpt.kind==='mr'&&m&&m.mrOk===false);}
+function rptMrNote(){
+  if(_rpt.kind!=='mr'||_rpt.tab!=='on')return '';
+  const n=rptOnList().filter(c=>rptMrNo(_rpt.matched[c.cid])).length;
+  if(!n)return '';
+  return '<div style="background:#F4F5F7;border:1px solid #D8DCE5;border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.55;margin-bottom:6px">📖 <b>아침독서 미신청 '+n+'명</b> — 오늘 이전에 리포트 수신을 신청해 아침독서는 아직 신청하지 않은 고객입니다. 고객이 데일리 리포트 화면에서 「받아볼게요」를 누르거나 신청 링크로 다시 신청하면 받을 수 있습니다. 미신청 고객은 선택되지 않습니다.</div>';
+}
+window.rptSel=function(cid){const c=_rpt.clients.find(x=>x.cid===cid);if(!c||!rptSendable(c)){toast(c&&rptMrNo(_rpt.matched[c.cid])?'아침독서 미신청 고객입니다 — 아침독서를 신청한 뒤 보낼 수 있습니다':'연락처를 신청 번호로 맞춘 뒤 선택할 수 있습니다','warning');return;}if(_rpt.sel.has(cid))_rpt.sel.delete(cid);else _rpt.sel.add(cid);rptRender();};
 window.rptSelAll=function(on){rptFiltered(rptOnList()).forEach(c=>{if(!rptSendable(c))return;if(on)_rpt.sel.add(c.cid);else _rpt.sel.delete(c.cid);});rptRender();};
 /* ★ [2026-09-12] 지금 목록에 보이는 고객만 선택으로 남긴다 */
 window.rptSelKeepVisible=function(){const keep=new Set(rptFiltered(rptOnList()).filter(rptSendable).map(c=>c.cid));[..._rpt.sel].forEach(cid=>{if(!keep.has(cid))_rpt.sel.delete(cid);});rptRender();};
