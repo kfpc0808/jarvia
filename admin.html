@@ -5732,17 +5732,24 @@ async function loadMembers(){
   if($('m-chk-all'))$('m-chk-all').checked=false;
   syncMScroll();
 }
+// ★ [2026-10-01] 위·아래 가로 스크롤바 연동 — 흔들림 수정
+//   종전: 두 스크롤바가 서로의 scroll 이벤트로 값을 되써 무한 되돌림(부드러운 스크롤 중단·소수점 배율 진동) 발생.
+//   _spSet: 상대에 넣은 실제 값을 기억 → _spEcho: 그 값으로 생긴 scroll 이벤트(되돌림)는 무시.
+//   _spFit: 보조바 내부 폭을 맞춰 두 스크롤바의 최대 이동거리를 동일하게(표 쪽 세로 스크롤바 폭 차이 보정).
+function _spSet(el,v){el.scrollLeft=v;el._spExp=el.scrollLeft;}
+function _spEcho(el){const e=el._spExp;el._spExp=null;return e!=null&&Math.abs(el.scrollLeft-e)<1;}
+function _spFit(wrap,bar,inner){inner.style.width=Math.max(0,wrap.scrollWidth-wrap.clientWidth+bar.clientWidth)+'px';}
 function syncMScroll(){
   const wrap=$('m-tbl-wrap'),top=$('m-scroll-top'),inner=$('m-scroll-top-inner');
   if(!wrap||!top||!inner)return;
-  const tbl=wrap.querySelector('table');
-  if(tbl)inner.style.width=tbl.scrollWidth+'px';
+  _spFit(wrap,top,inner);
   if(!top.dataset.bound){
-    top.addEventListener('scroll',function(){wrap.scrollLeft=top.scrollLeft;});
-    wrap.addEventListener('scroll',function(){top.scrollLeft=wrap.scrollLeft;});
-    window.addEventListener('resize',function(){const t=wrap.querySelector('table');if(t)inner.style.width=t.scrollWidth+'px';});
+    top.addEventListener('scroll',function(){if(_spEcho(top))return;_spSet(wrap,top.scrollLeft);});
+    wrap.addEventListener('scroll',function(){if(_spEcho(wrap))return;_spSet(top,wrap.scrollLeft);});
+    window.addEventListener('resize',function(){_spFit(wrap,top,inner);});
     top.dataset.bound='1';
   }
+  _spSet(top,wrap.scrollLeft);
 }
 
 async function showMember(uid){
@@ -12930,11 +12937,11 @@ function twUpdateScrollProxy(){
   const need=wrap.scrollWidth>wrap.clientWidth+2;               // 가로 넘침이 있을 때만
   const onScreen=rect.width>0&&rect.bottom>0&&rect.top<vh;      // 표가 화면에 걸쳐 있는 동안 항상 표시
   if(need&&onScreen){
-    inner.style.width=wrap.scrollWidth+'px';
     proxy.style.left=rect.left+'px';
     proxy.style.width=rect.width+'px';
     proxy.style.display='block';
-    proxy.scrollLeft=wrap.scrollLeft;
+    _spFit(wrap,proxy,inner);                                    // ★ [2026-10-01] 이동거리 동일화(표시 후 폭 측정)
+    if(Math.abs(proxy.scrollLeft-wrap.scrollLeft)>=1)_spSet(proxy,wrap.scrollLeft);
   }else{
     proxy.style.display='none';
   }
@@ -12943,7 +12950,8 @@ let _twSyncing=false;
 function twSyncScroll(src){
   if(_twSyncing)return;_twSyncing=true;
   const wrap=$('tw-scroll-wrap'),proxy=$('tw-scroll-proxy');
-  if(wrap&&proxy){if(src==='wrap')proxy.scrollLeft=wrap.scrollLeft;else wrap.scrollLeft=proxy.scrollLeft;}
+  // ★ [2026-10-01] 되돌림 차단 — 종전 _twSyncing 가드는 scroll 이벤트가 다음 프레임에 와서 실효 없었음
+  if(wrap&&proxy){if(src==='wrap'){if(!_spEcho(wrap))_spSet(proxy,wrap.scrollLeft);}else{if(!_spEcho(proxy))_spSet(wrap,proxy.scrollLeft);}}
   _twSyncing=false;
 }
 window.addEventListener('resize',()=>{try{twUpdateScrollProxy();}catch(e){}});
@@ -21467,8 +21475,8 @@ function exportAccessCSV(){
 function asSyncTopScroll(){
   const w=$('as-wrap'),t=$('as-topscroll'),inner=$('as-topscroll-inner');
   if(!w||!t||!inner)return;
-  inner.style.width=w.scrollWidth+'px';
-  if(!t._asBound){t._asBound=true;t.addEventListener('scroll',()=>{w.scrollLeft=t.scrollLeft;});w.addEventListener('scroll',()=>{t.scrollLeft=w.scrollLeft;});}
+  _spFit(w,t,inner);   // ★ [2026-10-01] 이동거리 동일화 + 되돌림 차단
+  if(!t._asBound){t._asBound=true;t.addEventListener('scroll',()=>{if(_spEcho(t))return;_spSet(w,t.scrollLeft);});w.addEventListener('scroll',()=>{if(_spEcho(w))return;_spSet(t,w.scrollLeft);});}
 }
 // ═══ 📈 제안서 현황 (제안서AI 이용·병목 모니터링) ═══
 async function loadAiProposalStats(){
