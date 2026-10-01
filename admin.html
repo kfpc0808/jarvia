@@ -260,6 +260,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <a class="sn" data-p="p-tax-weekly" onclick="goPanel(this)">📋 택스컨설팅위클리</a>
         <a class="sn" data-p="p-weekly-lecture" onclick="goPanel(this)">📚 토요특강관리</a>
         <a class="sn" data-p="p-upcoming" onclick="goPanel(this)">📅 게시예정콘텐츠</a>
+<a class="sn" data-p="p-thumb" onclick="goPanel(this);thLoad()">🖼 썸네일 시범</a><!-- ★ [2026-10-02] 콘텐츠 썸네일 자동생성 시범 -->
       </div>
     </div>
     <div class="sn-g" data-g="g-medical">
@@ -876,6 +877,14 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
       <h3 class="mt">📅 월별 수수료 합계 (확정 정산 기준)</h3>
       <div class="toolbar"><label>기간</label><input type="month" id="dist-tot-from"> ~ <input type="month" id="dist-tot-to"> <button class="btn btn-sm" onclick="loadDistMonthlyTotals()">조회</button></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>정산월</th><th style="text-align:right">확정 총판</th><th style="text-align:right">대상 회원</th><th style="text-align:right">결제완료</th><th style="text-align:right">수수료 합계</th><th style="text-align:right">원천징수</th><th style="text-align:right">실지급액</th><th>지급일</th></tr></thead><tbody id="tb-dist-monthly"><tr><td colspan="8" class="tc">기간을 선택하고 [조회]를 누르세요.</td></tr></tbody></table></div>
+    </div>
+    <div id="p-thumb" class="panel hidden"><h2>🖼 썸네일 시범</h2><!-- ★ [2026-10-02] 클로징·택스·마스터·메디컬 썸네일 자동생성 시범 (thumbnail.js) -->
+      <div style="font-size:12.5px;color:#5A6484;line-height:1.7;margin:4px 0 12px">기존 썸네일과 새 썸네일을 비교합니다. 줄나눔은 한 줄에 한 줄씩, 강조할 단어는 <b>[[단어]]</b>로 감쌉니다.<br>
+      <b>재합성</b>: 제목·줄나눔·부제만 반영(배경 그대로, 이미지 비용 없음) · <b>배경 재생성</b>: 새 배경으로 다시 생성 · <b>적용</b>: 회원 화면의 제목·썸네일과 본문 HTML 제목을 새 것으로 교체(원본 백업) · <b>되돌리기</b>: 적용 전으로 복구</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><button class="btn" onclick="thLoad()">🔄 새로고침</button>
+        <select id="th-filter" onchange="thRender()" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px"><option value="">전체 트랙</option><option value="closing">클로징</option><option value="tax">택스</option><option value="master">마스터</option><option value="medical">메디컬</option></select>
+        <span id="th-sum" style="font-size:12px;color:#5A6484"></span></div>
+      <div id="th-list"></div>
     </div>
     <div id="p-upcoming" class="panel hidden"><h2>게시예정 콘텐츠 관리</h2><button class="btn" onclick="showUF()">게시예정 등록</button> <button class="btn" onclick="syncMonthlyUpcoming()" style="margin-left:8px;background:#6c3483">🔄 익월 편성 취합</button> <button class="btn" onclick="publishMonthlyAllUpcoming()" style="margin-left:8px;background:#2e7d32">🚀 익월 전체 게시</button> <button class="btn" onclick="publishSelectedUpcoming()" style="margin-left:8px;background:#1976d2">✅ 선택 게시</button> <button class="btn btn-danger" onclick="deleteSelectedUpcoming()" style="margin-left:8px">선택 삭제</button>
 <!-- ★ 특급보고서 진행 배너 (active report 감지 시 표시) -->
@@ -25751,6 +25760,84 @@ async function sjDismiss(uid){
   }catch(e){toast('해제 실패: '+e.message,'error');}
 }
 window.sjLoad=sjLoad;window.sjRender=sjRender;window.sjConfirm=sjConfirm;window.sjDismiss=sjDismiss;
+
+/* ═══ ★ [2026-10-02] 썸네일 시범 (thumbnail.js — thumbList·thumbRerun·thumbApply·thumbRevert) ═══
+   · 인증: 관리자 로그인 토큰(Authorization: Bearer) — 서버에서 admins 활성 관리자만 통과 (내부키 미사용) */
+let _thJobs=[],_thTimer=null;
+const TH_TRACK={closing:'클로징',tax:'택스',master:'마스터',medical:'메디컬'};
+const TH_ST={queued:['대기','#8a8f98'],running:['생성 중','#1565C0'],done:['완료','#2e7d32'],applied:['적용됨','#6A1B9A'],error:['오류','#c62828']};
+async function thApi(fn,body){
+  const u=auth.currentUser;if(!u)throw new Error('로그인이 필요합니다');
+  const r=await fetch(MG_BASE+'/'+fn,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+await u.getIdToken()},body:JSON.stringify(body||{})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+async function thLoad(){
+  try{
+    const j=await thApi('thumbList',{});_thJobs=j.jobs||[];thRender();
+    clearTimeout(_thTimer);
+    if(_thJobs.some(x=>x.status==='queued'||x.status==='running'))_thTimer=setTimeout(()=>{if(!$('p-thumb').classList.contains('hidden'))thLoad();},10000);
+  }catch(e){$('th-list').innerHTML=`<div style="color:#c62828">불러오기 실패: ${esc(e.message)}</div>`;}
+}
+function thRender(){
+  const f=$('th-filter').value;const list=_thJobs.filter(x=>!f||x.track===f);
+  const cnt={};_thJobs.forEach(x=>cnt[x.status]=(cnt[x.status]||0)+1);
+  $('th-sum').textContent=`전체 ${_thJobs.length}건 · 완료 ${cnt.done||0} · 적용 ${cnt.applied||0} · 진행 ${(cnt.queued||0)+(cnt.running||0)} · 오류 ${cnt.error||0}`;
+  if(!list.length){$('th-list').innerHTML='<div style="color:#888;padding:20px">시범 작업이 없습니다.</div>';return;}
+  $('th-list').innerHTML=list.map(x=>{
+    const st=TH_ST[x.status]||[x.status,'#555'];const busy=x.status==='queued'||x.status==='running';const ap=!!x.applied;
+    const img=(u,cap)=>u?`<div style="flex:1;min-width:240px"><div style="font-size:11px;color:#888;margin-bottom:4px">${cap}</div><a href="${u}" target="_blank"><img src="${u}" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;border:1px solid #e3e6ee;background:#f4f5f8"></a></div>`:`<div style="flex:1;min-width:240px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;background:#f4f5f8;border-radius:8px;color:#999;font-size:12px">${busy?'생성 중…':'없음'}</div>`;
+    const dis=(c)=>c?' disabled style="opacity:.45;cursor:not-allowed"':'';
+    return `<div style="border:1px solid #e3e6ee;border-radius:10px;padding:14px;margin-bottom:14px;background:#fff">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <span style="font-weight:700;font-size:12px;padding:3px 8px;border-radius:6px;background:#EEF1F8">${TH_TRACK[x.track]||x.track}</span>
+        <span style="font-size:12px;color:#fff;background:${st[1]};padding:3px 8px;border-radius:6px">${st[0]}</span>
+        <span style="font-size:11.5px;color:#888">${esc((x.target&&x.target.id)||'')}</span>
+        ${x.bgFallback?'<span style="font-size:11.5px;color:#e65100">사진 없는 디자인</span>':''}${x.overflow?'<span style="font-size:11.5px;color:#e65100">제목 넘침</span>':''}
+        ${ap&&x.applied.html?`<span style="font-size:11.5px;color:#6A1B9A">HTML 제목 ${x.applied.html.count||0}곳 교체</span>`:''}
+      </div>
+      <div style="font-size:12.5px;color:#666;margin-bottom:8px">기존 제목: ${esc(x.origTitle||'')}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px">${img(x.fixedThumb,'기존 썸네일')}${img(x.thumbUrl,'새 썸네일')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="font-size:12px">새 제목<input id="th-t-${x.id}" value="${esc(x.title||'')}" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:6px"${ap?' disabled':''}></label>
+        <label style="font-size:12px">부제<input id="th-c-${x.id}" value="${esc(x.caption||'')}" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:6px"${ap?' disabled':''}></label>
+        <label style="font-size:12px;grid-column:1/-1">줄나눔 (한 줄씩, 강조는 [[ ]])<textarea id="th-l-${x.id}" rows="3" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:6px;font-family:inherit"${ap?' disabled':''}>${esc((x.lines||[]).join('\n'))}</textarea></label>
+      </div>
+      ${x.error?`<div style="color:#c62828;font-size:12px;margin-top:6px">오류: ${esc(x.error)}</div>`:''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-sec" onclick="thRerun('${x.id}',false)"${dis(busy||ap)}>✏️ 재합성</button>
+        <button class="btn btn-sec" onclick="thRerun('${x.id}',true)"${dis(busy||ap)}>🎨 배경 재생성</button>
+        <button class="btn" onclick="thApply('${x.id}')" style="background:#2e7d32"${dis(busy||ap||x.status!=='done')}>✅ 적용</button>
+        <button class="btn" onclick="thRevert('${x.id}')" style="background:#6A1B9A"${dis(!ap)}>↩ 되돌리기</button>
+      </div></div>`;}).join('');
+}
+async function thRerun(id,regenBg){
+  const x=_thJobs.find(j=>j.id===id)||{};
+  const title=$('th-t-'+id).value.trim(),caption=$('th-c-'+id).value.trim();
+  const lines=$('th-l-'+id).value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const plain=s=>s.replace(/\[\[|\]\]/g,'').replace(/\s+/g,'');
+  const body={jobId:id,regenBg:!!regenBg,caption};
+  if(title&&title!==x.title)body.title=title;
+  if(lines.length){
+    if(plain(lines.join(''))!==plain(title||x.title||'')){if(!confirm('줄나눔 글자가 제목과 다릅니다.\n줄나눔은 무시하고 제목으로 자동 줄나눔할까요?'))return;}
+    else body.lines=lines;
+  }
+  if(regenBg&&!confirm('새 배경 이미지를 생성합니다(이미지 비용 발생). 진행할까요?'))return;
+  try{await thApi('thumbRerun',body);toast(regenBg?'배경 재생성 요청 — 1~2분 소요':'재합성 요청 — 잠시 후 자동 갱신','info');thLoad();}
+  catch(e){toast('요청 실패: '+e.message,'error');}
+}
+async function thApply(id){
+  if(!confirm('회원 화면의 제목·썸네일과 본문 HTML 제목을 새 것으로 교체합니다.\n(원본은 백업되어 되돌리기 가능) 진행할까요?'))return;
+  try{const j=await thApi('thumbApply',{jobId:id});toast(`적용 완료 — 문서 ${j.docs}건, HTML 제목 ${j.htmlCount}곳${j.htmlSkipped?' ('+j.htmlSkipped+')':''}`,'success');thLoad();}
+  catch(e){toast('적용 실패: '+e.message,'error');}
+}
+async function thRevert(id){
+  if(!confirm('적용 전 제목·썸네일·HTML로 되돌립니다. 진행할까요?'))return;
+  try{await thApi('thumbRevert',{jobId:id});toast('되돌리기 완료','success');thLoad();}
+  catch(e){toast('되돌리기 실패: '+e.message,'error');}
+}
+window.thLoad=thLoad;window.thRender=thRender;window.thRerun=thRerun;window.thApply=thApply;window.thRevert=thRevert;
 
 
 
