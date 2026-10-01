@@ -29,6 +29,7 @@
   var SAVE_MS = 120000;     // 재생 중 주기 저장 (2분)
   var MIN_SAVE_GAP = 8000;  // 연속 저장 최소 간격 — 과도한 쓰기 방지
   var DONE_RATIO = 0.8;     // 이수 기준
+  var CARRY_MONTHS = 24;    /* ★ [2026-10-01] 이전 달 기록을 이어받을 범위(개월) */
 
   var S = {
     ready: false,
@@ -43,10 +44,20 @@
     bound: false,
     playedBase: null,        /* ★ [2026-09-23] 일자별 학습시간 계산 기준값 */
     baseByCourse: null,      /* ★ [2026-09-23] 강좌별 기준값 — 일자·강좌별 학습시간용 */
+    ensuring: {},            /* ★ [2026-10-01] 강좌 준비(생성·이어받기) 중복 실행 방지 */
+    prevDocs: {},            /* ★ [2026-10-01] 이전 달 진도 문서 사본 */
+    carryPending: {},        /* ★ [2026-10-01] 이어받았지만 아직 저장 안 된 몫(초) — 오늘 학습분에서 뺀다 */
+    touched: {},             /* ★ [2026-10-01] 이 기기에서 재생한 트랙 — 이어 듣기 위치는 이 기기 값으로 */
+    syncers: [],             /* ★ [2026-10-01] 저장 직전 모든 플레이어의 들은 칸을 반영 */
   };
 
   function ymNow() {
     var d = new Date();
+    return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0");
+  }
+  /* ★ [2026-10-01] YYYYMM 에서 n달 앞뒤 */
+  function ymShift(ym, n) {
+    var d = new Date(+String(ym).slice(0, 4), +String(ym).slice(4, 6) - 1 + n, 1);
     return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0");
   }
   function hourKey() { return String(new Date().getHours()); }
@@ -74,7 +85,9 @@
     var played = 0;
     Object.keys(c.tracks).forEach(function (k) {
       var t = c.tracks[k];
-      played += slotsToSet(t.slots).size * SLOT;
+      var n = slotsToSet(t.slots).size * SLOT;
+      if (t.dur > 0) n = Math.min(n, t.dur);   /* ★ [2026-10-01] 트랙 길이를 넘지 않게 */
+      played += n;
     });
     var total = c.totalSec || 0;
     if (!total) {
@@ -115,76 +128,207 @@
 
   /* ── 강좌 전체 길이 조회 (lms_courses) ─────────────────── */
   var courseMetaCache = {};
+  var courseMetaAt = {};    /* ★ [2026-10-01] 길이를 못 찾은 강좌는 10분 뒤 다시 조회 (등록 전에 들은 경우) */
   async function courseTotal(courseId) {
-    if (courseMetaCache[courseId] !== undefined) return courseMetaCache[courseId];
+    if (courseMetaCache[courseId] > 0) return courseMetaCache[courseId];
+    if (courseMetaCache[courseId] !== undefined && Date.now() - (courseMetaAt[courseId] || 0) < 600000) return courseMetaCache[courseId];
     try {
       var snap = await S.fs.getDoc(S.fs.doc(S.db, "lms_courses", courseId));
       courseMetaCache[courseId] = snap.exists() ? (snap.data().totalSec || 0) : 0;
     } catch (e) {
       courseMetaCache[courseId] = 0;
     }
+    courseMetaAt[courseId] = Date.now();
     return courseMetaCache[courseId];
   }
 
+  /* ★ [2026-10-01] 강좌 합치기 — 들은 칸은 합집합, 이수는 먼저 이수한 날 */
+  function mergeCourseInto(dst, src) {
+    if (!src) return dst;
+    if (!dst.title && src.title) dst.title = src.title;
+    if (!dst.type && src.type) dst.type = src.type;
+    dst.totalSec = Math.max(dst.totalSec || 0, src.totalSec || 0);
+    dst.tracks = dst.tracks || {};
+    Object.keys(src.tracks || {}).forEach(function (k) {
+      var s = src.tracks[k] || {}, d = dst.tracks[k];
+      if (!d) { dst.tracks[k] = { title: s.title || "", slots: s.slots || "", pos: s.pos || 0, dur: s.dur || 0 }; return; }
+      var u = slotsToSet(d.slots);
+      slotsToSet(s.slots).forEach(function (v) { u.add(v); });
+      d.slots = setToSlots(u);
+      if (!d.dur && s.dur) d.dur = s.dur;
+      if (!d.title && s.title) d.title = s.title;
+    });
+    if (src.completed) {
+      if (!dst.completed) { dst.completed = true; dst.completedAt = src.completedAt || dst.completedAt || ""; }
+      else if (src.completedAt && (!dst.completedAt || String(src.completedAt) < String(dst.completedAt))) dst.completedAt = src.completedAt;
+    }
+    if (src.carried) dst.carried = true;
+    if (src.lastAt && String(src.lastAt) > String(dst.lastAt || "")) dst.lastAt = src.lastAt;
+    return dst;
+  }
+
+  /* ★ [2026-10-01] 이전 달 문서 — 읽기 실패는 저장하지 않고 다음에 다시 읽는다 */
+  async function prevDoc(ym) {
+    if (S.prevDocs[ym] !== undefined) return S.prevDocs[ym];
+    try {
+      var snap = await S.fs.getDoc(S.fs.doc(S.db, "lms_progress", S.uid + "_" + ym));
+      S.prevDocs[ym] = snap.exists() ? (snap.data() || {}) : null;
+      return S.prevDocs[ym];
+    } catch (e) {
+      return { __err: true };
+    }
+  }
+
+  /* ★ [2026-10-01] 이전 달에 들은 칸·이수를 이어받는다 — 달이 바뀌어도 같은 구간을 두 번 세지 않는다.
+     이어받은 몫은 오늘 학습분이 아니므로 carryPending 에 적어 두고 저장 때 뺀다. */
+  async function carryPrev(cid, c) {
+    var before = calcCourse(c).playedSec;
+    var yms = [];
+    for (var i = 1; i <= CARRY_MONTHS; i++) yms.push(ymShift(S.ym, -i));
+    var docs = await Promise.all(yms.map(prevDoc));
+    var failed = false;
+    docs.forEach(function (d) {
+      if (d && d.__err) { failed = true; return; }
+      var p = d && d.courses && d.courses[cid];
+      if (p) mergeCourseInto(c, p);
+    });
+    if (!failed) c.carried = true;
+    var gained = calcCourse(c).playedSec - before;
+    if (gained > 0) {
+      var k = S.ym + "|" + cid;
+      S.carryPending[k] = (S.carryPending[k] || 0) + gained;
+      S.dirty = true;
+    }
+  }
+
+  /* ★ [2026-10-01] 강좌 준비 — 이번 달 문서에 강좌를 만들고 이전 달 기록을 한 번 이어받는다 */
+  function ensureCourse(cid, info) {
+    var key = S.ym + "|" + cid;
+    if (S.ensuring[key]) return S.ensuring[key];
+    S.ensuring[key] = (async function () {
+      var doc = await load();
+      if (!doc.courses[cid]) {
+        doc.courses[cid] = {
+          courseId: cid,
+          type: info.courseType || "",
+          title: info.courseTitle || "",
+          totalSec: info.courseTotalSec || await courseTotal(cid),
+          tracks: {},
+          completed: false,
+        };
+      }
+      var c = doc.courses[cid];
+      if (!c.title && info.courseTitle) c.title = info.courseTitle;
+      if (!c.carried) await carryPrev(cid, c);
+    })();
+    S.ensuring[key].catch(function () { delete S.ensuring[key]; });
+    return S.ensuring[key];
+  }
+
   /* ── 저장 ──────────────────────────────────────────────── */
+  /* ★ [2026-10-01] 저장 직전에 최신 문서를 다시 읽어 합친다.
+     PC·폰·여러 탭이 동시에 써도 서로 덮어쓰지 않고, 들은 칸은 합집합으로 남는다.
+     오늘 학습분(days·dayC)은 "합친 결과에서 실제로 늘어난 만큼"만 더한다. */
+  async function writeMerged() {
+    var ym = S.ym, mine = S.cache;
+    if (!mine) return;
+    /* 진행 중인 강좌 준비(이어받기)를 먼저 끝낸다 */
+    var pend = Object.keys(S.ensuring).map(function (k) { return S.ensuring[k].catch(function () {}); });
+    await Promise.all(pend);
+    var carrySnap = Object.assign({}, S.carryPending);
+
+    var ref = S.fs.doc(S.db, "lms_progress", S.uid + "_" + ym);
+    var snap = await S.fs.getDoc(ref);          /* 못 읽으면 저장하지 않는다 — 덮어쓰기 방지 */
+    var fresh = snap.exists() ? (snap.data() || {}) : {};
+    var day = todayKey();
+    var copy2 = function (m) { var o = {}; Object.keys(m || {}).forEach(function (k) { o[k] = Object.assign({}, m[k]); }); return o; };
+    var out = {
+      uid: S.uid, ym: ym, courses: {},
+      days: Object.assign({}, fresh.days), dones: Object.assign({}, fresh.dones),
+      dayC: copy2(fresh.dayC), doneC: copy2(fresh.doneC),
+      hours: Object.assign({}, fresh.hours), wdays: Object.assign({}, fresh.wdays),
+    };
+    var bId = S.meta.branchId || fresh.branchId, tId = S.meta.teamId || fresh.teamId;
+    if (bId) out.branchId = bId;
+    if (tId) out.teamId = tId;
+
+    var fc = fresh.courses || {}, mc = mine.courses || {};
+    var ids = Object.keys(fc);
+    Object.keys(mc).forEach(function (k) { if (ids.indexOf(k) < 0) ids.push(k); });
+    var gainAll = 0, newDone = 0;
+    ids.forEach(function (cid) {
+      var f = fc[cid], m = mc[cid];
+      var c = { courseId: cid, type: "", title: "", totalSec: 0, tracks: {}, completed: false };
+      mergeCourseInto(c, f);
+      mergeCourseInto(c, m);
+      /* 이어 듣기 위치 — 이 기기에서 재생한 트랙만 이 기기 값으로 */
+      if (m) Object.keys(m.tracks || {}).forEach(function (tid) {
+        if (S.touched[cid + "|" + tid] && c.tracks[tid]) c.tracks[tid].pos = m.tracks[tid].pos || 0;
+      });
+      var r = calcCourse(c);
+      c.playedSec = r.playedSec;
+      c.ratio = Math.round(r.ratio * 1000) / 1000;
+      /* 늘어난 만큼 = 합친 결과 − (이미 저장된 값 + 이어받은 몫) */
+      var base = f ? (f.playedSec || 0) : 0;
+      if (!(f && f.carried)) base += (carrySnap[ym + "|" + cid] || 0);
+      var gain = r.playedSec - base;
+      if (gain > 0) {
+        out.dayC[day] = out.dayC[day] || {};
+        out.dayC[day][cid] = (out.dayC[day][cid] || 0) + gain;
+        gainAll += gain;
+      }
+      if (!c.completed && r.ratio >= DONE_RATIO) {
+        c.completed = true;
+        c.completedAt = day;
+        newDone++;
+        out.doneC[day] = out.doneC[day] || {};
+        out.doneC[day][cid] = 1;
+      }
+      out.courses[cid] = c;
+    });
+    if (gainAll > 0) out.days[day] = (out.days[day] || 0) + gainAll;
+    if (newDone > 0) out.dones[day] = (out.dones[day] || 0) + newDone;
+    /* 학습 시각 분포 — 저장 시점의 시간대·요일을 센다 (관리자 통계용) */
+    out.hours[hourKey()] = (out.hours[hourKey()] || 0) + 1;
+    out.wdays[wdayKey()] = (out.wdays[wdayKey()] || 0) + 1;
+    out.lastAt = String(fresh.lastAt || "") > day ? String(fresh.lastAt) : day;
+    out.updatedAt = S.fs.serverTimestamp();
+
+    await S.fs.setDoc(ref, out, { merge: true });
+
+    /* 저장 성공 — 메모리 사본을 합친 결과로 맞춘다 (저장 중에 새로 생긴 강좌는 그대로 둔다) */
+    ids.forEach(function (cid) {
+      mine.courses[cid] = out.courses[cid];
+      var k = ym + "|" + cid;
+      if (carrySnap[k]) {
+        S.carryPending[k] = (S.carryPending[k] || 0) - carrySnap[k];
+        if (S.carryPending[k] <= 0) delete S.carryPending[k];
+      }
+    });
+    ["days", "dones", "dayC", "doneC", "hours", "wdays", "lastAt"].forEach(function (k) { mine[k] = out[k]; });
+  }
+
   async function save(force) {
     if (!S.ready || !S.dirty || S.saving) return;
     var now = Date.now();
     if (!force && now - S.lastSave < MIN_SAVE_GAP) return;
 
     S.saving = true;
-    var payload = S.cache;
     try {
-      /* 이수 여부를 저장 직전에 갱신한다 */
-      var totalPlayed = 0, newDone = 0;
-      var day = todayKey();
-      if (!S.baseByCourse) S.baseByCourse = {};
-      payload.dayC = payload.dayC || {};     /* 일자·강좌별 학습시간 */
-      payload.doneC = payload.doneC || {};   /* 일자·강좌별 이수 */
-      Object.keys(payload.courses).forEach(function (cid) {
-        var c = payload.courses[cid];
-        var r = calcCourse(c);
-        c.playedSec = r.playedSec;
-        c.ratio = Math.round(r.ratio * 1000) / 1000;
-        totalPlayed += r.playedSec;
-        /* 이 강좌에서 늘어난 만큼을 오늘 몫으로 기록한다 */
-        var was = S.baseByCourse[cid] || 0;
-        if (r.playedSec > was) {
-          payload.dayC[day] = payload.dayC[day] || {};
-          payload.dayC[day][cid] = (payload.dayC[day][cid] || 0) + (r.playedSec - was);
-          S.baseByCourse[cid] = r.playedSec;
-        }
-        if (!c.completed && r.ratio >= DONE_RATIO) {
-          c.completed = true;
-          c.completedAt = day;
-          newDone++;
-          payload.doneC[day] = payload.doneC[day] || {};
-          payload.doneC[day][cid] = 1;
-        }
-      });
-      /* ★ [2026-09-23] 일자별 학습시간·이수 건수 — 관리자 기간 통계용 */
-      if (S.playedBase === null) S.playedBase = totalPlayed;
-      var gain = totalPlayed - S.playedBase;
-      if (gain > 0) {
-        payload.days = payload.days || {};
-        payload.days[todayKey()] = (payload.days[todayKey()] || 0) + gain;
-        S.playedBase = totalPlayed;
-      }
-      if (newDone > 0) {
-        payload.dones = payload.dones || {};
-        payload.dones[todayKey()] = (payload.dones[todayKey()] || 0) + newDone;
-      }
-      /* ★ [2026-09-23] 학습 시각 분포 — 저장 시점의 시간대·요일을 센다 (관리자 통계용) */
-      payload.hours = payload.hours || {};
-      payload.wdays = payload.wdays || {};
-      payload.hours[hourKey()] = (payload.hours[hourKey()] || 0) + 1;
-      payload.wdays[wdayKey()] = (payload.wdays[wdayKey()] || 0) + 1;
-      payload.updatedAt = S.fs.serverTimestamp();
-      payload.lastAt = todayKey();
-      await S.fs.setDoc(S.fs.doc(S.db, "lms_progress", S.uid + "_" + S.ym), payload, { merge: true });
+      /* 모든 플레이어의 들은 칸을 먼저 반영한다 (탭 이동·창 닫기 때도) */
+      await Promise.all(S.syncers.map(function (f) { return f().catch(function () {}); }));
       S.dirty = false;
+      await writeMerged();
       S.lastSave = Date.now();
+      /* 달이 바뀌었으면 다음 저장부터 새 달 문서에 쓴다 (지난달 기록은 이어받기로 연결) */
+      if (ymNow() !== S.ym) {
+        S.ym = ymNow();
+        S.cache = null;
+        S.playedBase = null;
+        S.baseByCourse = null;
+      }
     } catch (e) {
+      S.dirty = true;
       console.warn("[LMS] 진도 저장 실패", e);
     } finally {
       S.saving = false;
@@ -227,43 +371,63 @@
       var cid = info.courseId, tid = info.trackId;
       var slots = null;                  // Set — 이 트랙에서 들은 칸
 
+      /* ★ [2026-10-01] 강좌·트랙 준비 — 메모리의 들은 칸은 버리지 않고 합친다 */
       async function ensure() {
+        await ensureCourse(cid, info);
         var doc = await load();
-        if (!doc.courses[cid]) {
-          doc.courses[cid] = {
-            courseId: cid,
-            type: info.courseType || "",
-            title: info.courseTitle || "",
-            totalSec: await courseTotal(cid),
-            tracks: {},
-            completed: false,
-          };
-        }
         var c = doc.courses[cid];
+        if (!c) return null;
         if (!c.title && info.courseTitle) c.title = info.courseTitle;
         if (!c.tracks[tid]) c.tracks[tid] = { title: info.trackTitle || "", slots: "", pos: 0, dur: 0 };
-        slots = slotsToSet(c.tracks[tid].slots);
+        var u = slotsToSet(c.tracks[tid].slots);
+        if (slots) slots.forEach(function (v) { u.add(v); });
+        slots = u;
         return c;
       }
 
-      function mark(sec) {
-        if (!slots) return;
-        var k = Math.floor(sec / SLOT);
-        if (k < 0 || slots.has(k)) return;
-        slots.add(k);
-        S.dirty = true;
+      /* ★ [2026-10-01] 실제로 재생된 구간만 칸으로 인정한다.
+         · 재생 중이고, 직전 위치에서 흐른 시간만큼 이어진 구간만 센다 — 건너뛰기·탐색바 이동은 제외
+         · 휴대폰 잠금 화면처럼 코드가 멈췄다 깨어나도, 그동안 실제 시간이 흘렀으면 인정한다
+         · 한 칸의 절반 이상을 실제로 들어야 그 칸을 인정한다 (오차 ±5초) */
+      var playing = false, prevT = null, prevW = 0, acc = {}, chg = false;
+      function credit(a, b) {
+        var dur = (el.duration && isFinite(el.duration)) ? el.duration : 0;
+        var t = a;
+        while (t < b - 1e-6) {
+          var k = Math.floor(t / SLOT);
+          var end = Math.min(b, (k + 1) * SLOT);
+          acc[k] = (acc[k] || 0) + (end - t);
+          t = end;
+          if (slots && !slots.has(k)) {
+            var len = dur ? Math.min(SLOT, dur - k * SLOT) : SLOT;
+            if (!(len > 0)) len = SLOT;
+            if (acc[k] >= len / 2) { slots.add(k); chg = true; S.dirty = true; }
+          }
+        }
+      }
+      function tick() {
+        var cur = el.currentTime || 0, w = Date.now();
+        if (!slots) { ensure(); prevT = cur; prevW = w; return; }
+        if (playing && prevT !== null) {
+          var d = cur - prevT, wall = (w - prevW) / 1000, rate = el.playbackRate || 1;
+          if (d > 0 && d <= wall * rate * 1.25 + 1.5) credit(prevT, cur);
+        }
+        prevT = cur; prevW = w;
       }
 
       async function sync() {
-        var doc = await load();
-        var c = doc.courses[cid];
+        var c = await ensure();
         if (!c) return;
         var t = c.tracks[tid];
-        if (!t) return;
+        chg = false;
         t.slots = setToSlots(slots || new Set());
         c.lastAt = todayKey();            /* ★ [2026-09-23] 강좌별 마지막 학습일 */
         t.pos = Math.floor(el.currentTime || 0);
+        S.touched[cid + "|" + tid] = true;
         if (el.duration && isFinite(el.duration)) t.dur = Math.round(el.duration);
+        /* ★ [2026-10-01] 강좌 전체 길이 — 등록(lms_courses)되면 그 값으로 보강 */
+        var tt = await courseTotal(cid);
+        if (tt > (c.totalSec || 0)) c.totalSec = tt;
         /* 강좌 전체 길이를 아직 모르면 트랙 길이 합으로 채워둔다 */
         if (!c.totalSec) {
           var sum = 0;
@@ -271,22 +435,23 @@
           c.totalSec = sum;
         }
       }
+      S.syncers.push(function () { return (slots && chg) ? sync() : Promise.resolve(); });   /* 새로 들은 칸이 있는 플레이어만 */
 
       el.addEventListener("loadedmetadata", function () { ensure(); });
 
-      el.addEventListener("timeupdate", function () {
-        if (!slots) { ensure(); return; }
-        mark(el.currentTime || 0);
-      });
+      el.addEventListener("timeupdate", tick);
 
       el.addEventListener("play", function () {
         ensure();
+        playing = true; prevT = el.currentTime || 0; prevW = Date.now();
         if (S.timer) clearInterval(S.timer);
         S.timer = setInterval(function () { sync().then(function () { save(false); }); }, SAVE_MS);
       });
 
       ["pause", "ended", "emptied"].forEach(function (ev) {
         el.addEventListener(ev, function () {
+          tick();                          /* 멈춘 지점까지 반영 */
+          playing = false; prevT = null;
           if (S.timer) { clearInterval(S.timer); S.timer = null; }
           sync().then(function () { save(true); });
         });
@@ -299,6 +464,8 @@
     resumeAt: async function (courseId, trackId) {
       if (!S.ready) return 0;
       try {
+        var ek = S.ym + "|" + courseId;              /* ★ [2026-10-01] 이어받기 끝난 뒤 위치 조회 */
+        if (S.ensuring[ek]) await S.ensuring[ek].catch(function () {});
         var doc = await load();
         var c = doc.courses[courseId];
         if (!c || !c.tracks || !c.tracks[trackId]) return 0;
@@ -332,19 +499,12 @@
     /* 외부 도메인 중계용 — lms-bridge.js 가 보낸 진도를 그대로 반영 */
     applyRemote: async function (payload) {
       if (!S.ready || !payload || !payload.courseId || !payload.trackId) return;
-      var doc = await load();
       var cid = payload.courseId, tid = payload.trackId;
-      if (!doc.courses[cid]) {
-        doc.courses[cid] = {
-          courseId: cid,
-          type: payload.courseType || "",
-          title: payload.courseTitle || "",
-          totalSec: payload.courseTotalSec || await courseTotal(cid),
-          tracks: {},
-          completed: false,
-        };
-      }
+      /* ★ [2026-10-01] 강좌 준비를 공통 함수로 — 이전 달 기록 이어받기 포함 */
+      await ensureCourse(cid, { courseType: payload.courseType, courseTitle: payload.courseTitle, courseTotalSec: payload.courseTotalSec });
+      var doc = await load();
       var c = doc.courses[cid];
+      if (!c) return;
       if (!c.tracks[tid]) c.tracks[tid] = { title: payload.trackTitle || "", slots: "", pos: 0, dur: 0 };
       var t = c.tracks[tid];
       /* 들은 칸은 합집합으로 — 다른 기기에서 들은 것을 덮어쓰지 않는다 */
@@ -352,7 +512,7 @@
       slotsToSet(payload.slots).forEach(function (v) { merged.add(v); });
       t.slots = setToSlots(merged);
       c.lastAt = todayKey();              /* ★ [2026-09-23] 강좌별 마지막 학습일 */
-      if (payload.pos !== undefined) t.pos = payload.pos | 0;
+      if (payload.pos !== undefined) { t.pos = payload.pos | 0; S.touched[cid + "|" + tid] = true; }
       if (payload.dur) t.dur = payload.dur | 0;
       if (!c.totalSec) {
         var sum = 0;
