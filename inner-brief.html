@@ -127,6 +127,28 @@ mark.cm-check{background:#FFF3C4;padding:0 4px;border-radius:3px}
   #view .ask{font-size:19px}
   #view .dlg p{max-width:100%}
 }
+/* ══ ★ [2026-10-02] 안 비교 카드·계산 근거 정리 — 지난 회차에도 즉시 적용(본문 HTML 불변)
+   · 카드 칸 안에 들어온 계산 근거·기타 요소는 한 줄 전체 폭 → 카드 옆에 끼어 카드가 기둥처럼 좁아지던 문제 해소
+   · 칸 폭은 minmax(0,1fr) — 계산 근거의 긴 줄이 칸을 밀어 화면 밖으로 넘치지 않게
+   · 대표 부담(.v)이 문장이면 작은 글씨(.long, 화면 코드가 붙임) · PC 2열 / 모바일 1열(짝이 없는 카드는 전체 폭 .solo) ══ */
+#view .cards{grid-template-columns:minmax(0,1fr)}
+#view .cards>*{min-width:0}
+#view .cards>:not(.card){grid-column:1/-1}
+#view .card .t{flex-wrap:wrap;line-height:1.45}
+#view .card .t i{flex-shrink:0}
+#view .card .v.long{font-size:17px;font-weight:700;line-height:1.6;letter-spacing:-.01em;color:var(--primary-dk);margin:4px 0 8px}
+#view .card .d{line-height:1.7}
+#view details{max-width:100%;min-width:0}
+#view details .in{min-width:0}
+#view .calc{max-width:100%;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere}   /* 긴 줄은 화면 안에서 줄바꿈(앞 들여쓰기 유지) */
+@media(min-width:900px){#view .cards{grid-template-columns:repeat(2,minmax(0,1fr))}#view .cards>.card.solo{grid-column:1/-1}}
+@media(max-width:600px){
+  #view .card{padding:16px}
+  #view .card .v{font-size:22px}
+  #view .card .v.long{font-size:16px}
+  #view details .in{padding:0 10px 12px}
+  #view .calc{font-size:12.5px;padding:12px}
+}
 /* ── CEO 전달본 ── */
 .ceo{background:var(--green-bg);border:1px solid var(--green-line);border-radius:16px;padding:24px 22px;margin-bottom:16px}
 .ceo h2{color:var(--green);display:flex;align-items:center;gap:10px;font-size:19px;font-weight:800;margin-bottom:10px}.ceo .num{background:#fff;color:var(--green)}
@@ -425,7 +447,7 @@ function showDoc(kind,doc,bannerHtml){
   let h=`<div class="head"><h1>${esc(CUR.title||'')}</h1><div class="meta">${esc(CUR.sendDate)} 발송 · 이너서클 회원 전용</div>`;
   if(kind==='tax'){
     if(CUR.twUrl)h+=`<div class="pre">📎 먼저 읽을 것 · <a href="${esc(CUR.twUrl)}" target="_blank">택스위클리 같은 주제 편</a> — 제도·용어·FAQ는 그쪽에 있고 여기서 반복하지 않습니다.</div>`;
-    $('view').innerHTML=h+`</div>`+(CUR.html||'<div class="empty">본문 없음</div>');addTaxTts();wireTts();return;
+    $('view').innerHTML=h+`</div>`+(CUR.html||'<div class="empty">본문 없음</div>');addTaxTts();wireTts();taxTidy();return;
   }
   const src=CUR.standaloneUrl||CUR.htmlUrl;   // 법인Master — 회원이 [브리핑 열기]로 보는 본문을 바로 보여 준다
   $('view').innerHTML=h.replace('class="head"','class="head head-m"')+`</div>`+(src?`<a class="smp-full" href="${esc(src)}" target="_blank" rel="noopener">전체 화면으로 보기 ›</a><iframe class="smp-frame" src="${esc(src)}" title="법인Master 본문"></iframe>`:'<div class="empty">본문 없음</div>');
@@ -522,13 +544,21 @@ async function show(id){
     h+=`<a class="open" href="${esc(CUR.standaloneUrl||CUR.htmlUrl||'#')}" target="_blank">브리핑 열기 ↗</a></div>`;   /* ★ [2026-09-27] 디자인·음성이 들어간 독립 파일 우선 (없는 회차는 조각) */
   }
   $('view').innerHTML=h;
-  if(isTax){addTaxTts();wireTts();}   /* ★ [2026-09-25] Tax Master 섹션 듣기 (§1~§8, 음성 있는 섹션만) */
+  if(isTax){addTaxTts();wireTts();taxTidy();}   /* ★ [2026-09-25] Tax Master 섹션 듣기 (§1~§8, 음성 있는 섹션만) */
   await renderCeo();   /* ★ [2026-09-09] 법인Master 도 CEO 전달본 — ceoJson 없는 회차는 renderCeo 가 스스로 건너뜀 */
 }
 
 /* ★ [2026-09-10] 섹션 듣기 — 위클리 HTML 의 <button data-tts="summary|s1..s5"> 를 innerIssues.ttsUrls 로 연결. 한 번에 하나만 재생 */
 let _audio=null,_audioBtn=null;
 function addTaxTts(){const urls=CUR.ttsUrls||{};for(let i=1;i<=8;i++){const sec=document.getElementById('it-s'+i);if(!sec||!urls['s'+i])continue;const hd=sec.querySelector('h2,h3')||sec;if(hd.querySelector('.tts-mini'))continue;hd.insertAdjacentHTML('beforeend',` <button type="button" class="play tts-mini" data-tts="s${i}"><i></i>듣기</button>`);}}
+/* ★ [2026-10-02] Tax Master 본문 정리 — 계산 근거는 처음부터 펼침, 문장형 대표 부담은 작은 글씨, 카드가 하나뿐이면 전체 폭 */
+function taxTidy(){
+  const v=$('view');if(!v)return;
+  v.querySelectorAll('details').forEach(d=>{const s=d.querySelector(':scope>summary');if(s&&/^계산\s*근거/.test(s.textContent.trim()))d.open=true;});
+  v.querySelectorAll('.card .v').forEach(x=>{if(x.textContent.replace(/\s+/g,'').length>14)x.classList.add('long');});
+  /* 카드가 연달아 홀수 개면 그 묶음의 마지막 카드는 짝이 없다 → 전체 폭(PC만, 모바일은 원래 1열) */
+  v.querySelectorAll('.cards').forEach(c=>{let run=[];const end=()=>{if(run.length%2===1)run[run.length-1].classList.add('solo');run=[];};[...c.children].forEach(x=>{if(x.classList.contains('card'))run.push(x);else end();});end();});
+}
 function wireTts(){
   const urls=CUR.ttsUrls||{};
   document.querySelectorAll('#view button[data-tts]').forEach(btn=>{
