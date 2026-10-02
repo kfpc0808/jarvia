@@ -856,6 +856,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
           <select id="rv-list-status" onchange="renderRvList()"><option value="all">전체 상태</option><option value="approved">게시중</option><option value="pending">대기</option><option value="rejected">거절</option><option value="hidden">숨김</option><option value="deleted">삭제(보관)</option></select>
           <input id="rv-list-q" placeholder="이름·아이디·제목 검색" oninput="renderRvList()" style="flex:1;min-width:160px">
           <span id="rv-list-cnt" style="font-size:13px;color:var(--text-lt)"></span>
+          <button class="btn" onclick="rvNewOpen()">＋ 새 글 작성</button><!-- ★ [2026-10-02] 관리자 작성 -->
         </div>
         <div id="rv-list-body"></div>
       </div>
@@ -868,8 +869,8 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
       </div>
       <!-- ★ [2026-10-02] 노하우&후기 글 전체 수정 모달 (관리자) -->
       <div id="mdl-rv-edit" class="modal hidden"><div class="mdl-bg" onclick="closeM('mdl-rv-edit')"></div><div class="mdl-box mdl-lg"><button class="mdl-x" onclick="closeM('mdl-rv-edit')">×</button>
-        <h3 style="margin:0 0 14px">✏️ 글 수정</h3>
-        <input type="hidden" id="rve-id">
+        <h3 id="rve-h" style="margin:0 0 14px">✏️ 글 수정</h3>
+        <input type="hidden" id="rve-id"><input type="hidden" id="rve-mode" value="edit">
         <div class="fr"><div class="fg" style="flex:1"><label>작성자 성명 <span id="rve-mask" style="font-weight:400;color:var(--text-lt);font-size:12px"></span></label><input id="rve-name" maxlength="30" oninput="rvEditMaskPreview()"></div>
           <div class="fg" style="flex:1"><label>아이디 <span style="font-weight:400;color:var(--text-lt);font-size:12px">(변경 불가)</span></label><input id="rve-lid" disabled style="background:#f3f4f6"></div></div>
         <div class="fr"><div class="fg" style="flex:1"><label>구분</label><select id="rve-cat"><option value="knowhow">노하우</option><option value="review">후기</option></select></div>
@@ -5503,7 +5504,7 @@ function renderRvList(){
       <td style="text-align:center">${_rvCatBadge(r.category)}</td>
       <td style="font-size:12px">${esc(r.topic||'-')}</td>
       <td><a style="color:var(--text);font-weight:600;cursor:pointer" onclick="rvToggleBody('l-${r.reviewId}')" title="클릭하면 본문이 펼쳐집니다">${esc(r.title||'(제목 없음)')}</a>${sub?'<div style="font-size:11px;color:var(--text-lt);margin-top:2px">'+sub+'</div>':''}</td>
-      <td style="white-space:nowrap">${esc(r.userName||'')}<div style="font-size:11px;color:var(--text-lt)">${esc(r.loginId||'')} · ${esc(r.displayName||'')}</div></td>
+      <td style="white-space:nowrap">${esc(r.userName||'')}<div style="font-size:11px;color:var(--text-lt)">${r.adminWritten?'<span style="color:#B7791F">관리자 작성</span>':esc(r.loginId||'')} · ${esc(r.displayName||'')}</div></td>
       <td style="text-align:right">${fmt(r.viewCount||0)}</td>
       <td style="text-align:right">${fmt(r.helpfulCount||0)}</td>
       <td style="text-align:right;white-space:nowrap">${r.rewardGiven?'<span style="color:#27AE60;font-weight:600">'+fmt(r.rewardPoint||RVA_REWARD)+'P</span>':'-'}</td>
@@ -5519,7 +5520,8 @@ function rvEditMaskPreview(){$('rve-mask').textContent='— 메인 표시: '+_rv
 function _rvLocalDT(t){const d=t&&t.toDate?t.toDate():null;if(!d)return'';const k=new Date(d.getTime()+9*3600000);return k.toISOString().slice(0,16);}
 function rvEditOpen(rid){
   const r=_rvAll.find(x=>x.reviewId===rid);if(!r)return;
-  $('rve-id').value=rid;$('rve-name').value=r.userName||'';$('rve-lid').value=r.loginId||'';rvEditMaskPreview();
+  $('rve-mode').value='edit';$('rve-h').textContent='✏️ 글 수정';$('rve-status').querySelectorAll('option').forEach(o=>o.disabled=false);   /* ★ 새 글 작성 모드에서 돌아올 때 초기화 */
+  $('rve-id').value=rid;$('rve-name').value=r.userName||'';$('rve-lid').value=r.adminWritten?'관리자 작성':(r.loginId||'');rvEditMaskPreview();
   $('rve-cat').value=r.category==='knowhow'?'knowhow':'review';
   const isCust=!!r.topic&&!RVA_TOPICS.includes(r.topic);
   $('rve-topic').innerHTML='<option value="">(미지정)</option>'+RVA_TOPICS.map(t=>'<option>'+esc(t)+'</option>').join('')+'<option value="__custom">직접입력</option>';
@@ -5533,7 +5535,40 @@ function rvEditOpen(rid){
   $('rve-note').textContent=(noPay?'※ 대기·거절 글은 여기서 「게시중」으로 바꿀 수 없습니다. 승인은 「승인 대기」 탭에서 처리하세요 (포인트 지급). ':'')+(r.adminEditedAt?'최근 관리자 수정: '+fdatetime(r.adminEditedAt):'');
   openM('mdl-rv-edit');
 }
+/* ★ [2026-10-02] 관리자 새 글 작성 — 회원 연결 없음(userId 빈값) · 포인트 지급 없음 · 게시중/숨김만 */
+function rvNewOpen(){
+  $('rve-mode').value='new';$('rve-h').textContent='＋ 새 글 작성 (관리자)';$('rve-id').value='';
+  $('rve-name').value='';$('rve-lid').value='관리자 작성';rvEditMaskPreview();
+  $('rve-cat').value='review';
+  $('rve-topic').innerHTML='<option value="">(미지정)</option>'+RVA_TOPICS.map(t=>'<option>'+esc(t)+'</option>').join('')+'<option value="__custom">직접입력</option>';
+  $('rve-topic').value='';$('rve-topic-cust').value='';$('rve-topic-cust').classList.add('hidden');
+  $('rve-title').value='';$('rve-body').value='';
+  const st=$('rve-status');st.querySelectorAll('option').forEach(o=>o.disabled=!['approved','hidden'].includes(o.value));st.value='approved';
+  $('rve-rej').value='';$('rve-rej-wrap').classList.add('hidden');
+  $('rve-created').value=new Date(Date.now()+9*3600000).toISOString().slice(0,16);$('rve-view').value=0;$('rve-help').value=0;
+  $('rve-note').textContent='※ 회원과 연결되지 않으며 포인트는 지급되지 않습니다. 작성일시를 바꾸면 메인에서 그 날짜 순서로 표시됩니다.';
+  openM('mdl-rv-edit');
+}
 async function rvEditSave(){
+  if($('rve-mode').value==='new'){
+    const name=$('rve-name').value.trim(),title=$('rve-title').value.trim(),body=$('rve-body').value,st=$('rve-status').value;
+    let topic=$('rve-topic').value;if(topic==='__custom'){topic=$('rve-topic-cust').value.trim();if(!topic){toast('분야를 직접 입력해 주세요.','warning');return;}}
+    if(!name){toast('작성자 성명을 입력해 주세요.','warning');return;}
+    if(!title){toast('제목을 입력해 주세요.','warning');return;}
+    if(!body.trim()){toast('본문을 입력해 주세요.','warning');return;}
+    if(!['approved','hidden'].includes(st)){toast('상태는 게시중 또는 숨김만 선택할 수 있습니다.','warning');return;}
+    const dt=$('rve-created').value;const ms=dt?Date.parse(dt+':00+09:00'):Date.now();
+    if(isNaN(ms)){toast('작성일시 형식을 확인해 주세요.','warning');return;}
+    const nid=gid();
+    const data={reviewId:nid,userId:'',loginId:'',userName:name,displayName:_rvMask(name),category:$('rve-cat').value,topic:topic,title:title,body:body,
+      status:st,viewCount:Math.max(0,parseInt($('rve-view').value,10)||0),helpfulCount:Math.max(0,parseInt($('rve-help').value,10)||0),
+      createdAt:Timestamp.fromMillis(ms),adminWritten:true,adminCreatedAt:serverTimestamp(),adminCreatedBy:admUser?admUser.uid:'',rewardGiven:false};
+    if(st==='approved')data.approvedAt=serverTimestamp();
+    if(!confirm('「'+title+'」 글을 '+(st==='approved'?'게시':'숨김 상태로 등록')+'하시겠습니까?\n메인 표시 작성자: '+data.displayName+'\n작성일시: '+(dt||'지금').replace('T',' ')))return;
+    try{await setDoc(doc(db,'user_reviews',nid),data);toast('새 글 등록 완료','success');closeM('mdl-rv-edit');loadReviewAdmin();}
+    catch(e){toast('등록 실패: '+(e.message||e),'error');}
+    return;
+  }
   const rid=$('rve-id').value,r=_rvAll.find(x=>x.reviewId===rid);if(!r)return;
   const name=$('rve-name').value.trim(),title=$('rve-title').value.trim(),body=$('rve-body').value,st=$('rve-status').value;
   let topic=$('rve-topic').value;if(topic==='__custom'){topic=$('rve-topic-cust').value.trim();if(!topic){toast('분야를 직접 입력해 주세요.','warning');return;}}
@@ -5579,13 +5614,14 @@ function renderRvRewards(){
 function renderRvMembers(){
   const tb=$('tb-rv-members');
   const map={};
-  _rvAll.forEach(r=>{const k=r.userId;if(!map[k])map[k]={name:r.userName||'',loginId:r.loginId||'',approved:0,pending:0,rejected:0,total:0,reward:0};map[k].total++;if(r.status==='approved'||r.status==='hidden')map[k].approved++;else if(r.status==='pending')map[k].pending++;else if(r.status==='rejected')map[k].rejected++;});
+  _rvAll.forEach(r=>{if(r.adminWritten)return;   /* ★ [2026-10-02] 관리자 작성 글 제외 */
+    const k=r.userId;if(!map[k])map[k]={name:r.userName||'',loginId:r.loginId||'',approved:0,pending:0,rejected:0,total:0,reward:0};map[k].total++;if(r.status==='approved'||r.status==='hidden')map[k].approved++;else if(r.status==='pending')map[k].pending++;else if(r.status==='rejected')map[k].rejected++;});
   _rvRewards.forEach(t=>{const k=t.userId;if(!map[k])map[k]={name:t.userName||'',loginId:t.loginId||'',approved:0,pending:0,rejected:0,total:0,reward:0};map[k].reward+=(t.amount||0);});
   const rows=Object.values(map).sort((a,b)=>b.reward-a.reward);
   if(!rows.length){tb.innerHTML='<tr><td colspan="7" class="tc">데이터가 없습니다.</td></tr>';return;}
   tb.innerHTML=rows.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.loginId)}</td><td>${m.approved}</td><td>${m.pending}</td><td>${m.rejected}</td><td>${m.total}</td><td style="font-weight:600;color:var(--primary)">${fmt(m.reward)}P</td></tr>`).join('');
 }
-window.rvTab=rvTab;window.rvApprove=rvApprove;window.rvRejectOpen=rvRejectOpen;window.rvReject=rvReject;window.rvToggleBody=rvToggleBody;window.rvSetStatus=rvSetStatus;window.rvDelete=rvDelete;window.renderRvList=renderRvList;window.rvTopicEditToggle=rvTopicEditToggle;window.rvTopicSave=rvTopicSave;window.rvEditOpen=rvEditOpen;window.rvEditSave=rvEditSave;window.rvEditMaskPreview=rvEditMaskPreview;
+window.rvTab=rvTab;window.rvApprove=rvApprove;window.rvRejectOpen=rvRejectOpen;window.rvReject=rvReject;window.rvToggleBody=rvToggleBody;window.rvSetStatus=rvSetStatus;window.rvDelete=rvDelete;window.renderRvList=renderRvList;window.rvTopicEditToggle=rvTopicEditToggle;window.rvTopicSave=rvTopicSave;window.rvEditOpen=rvEditOpen;window.rvEditSave=rvEditSave;window.rvEditMaskPreview=rvEditMaskPreview;window.rvNewOpen=rvNewOpen;
 
 /* ═══════════════════════════════════════════════════════════
    ★ [2026-09-12] 공통 집계 기준 — 대시보드·접속통계 동일값 보장
