@@ -829,7 +829,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
             <button class="btn" onclick="subLoad()">🔄 조회</button>
             <button class="btn btn-sec" onclick="subExcel()">📥 엑셀</button>
           </div>
-          <div class="tbl-wrap mt"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:70px">회원</th><th style="width:90px">신청 경로</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="8" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
+          <div class="tbl-wrap mt"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:110px">회원</th><th style="width:90px">신청 경로</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="8" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
         </div>
       </div>
     </div>
@@ -10905,6 +10905,7 @@ function esExcel(){const s=_esSess.find(x=>x.id===_esCur);const rows=esFiltered(
 async function subLoad(){
   try{const snap=await getDocs(collection(db,'seminar_subscribers'));_subs=snap.docs.map(d=>({id:d.id,...d.data()}));}
   catch(e){toast('구독자 불러오기 실패: '+e.message,'error');_subs=[];}
+  await zsFetchMembers(true);   /* ★ [2026-10-02] 회원 유형 판별용 */
   subRender();
 }
 /* ★ 신청 경로 — signup=회원가입 화면, 그 외(zoom_seminar)=교육 신청 페이지 */
@@ -10914,6 +10915,11 @@ function subFiltered(){const src=$('sub-f-src')?.value||'',k=$('sub-f-kind')?.va
     .filter(s=>!src||(src==='page'?!['signup','member_link'].includes(s.source):s.source===src))
     .filter(s=>!kw||[s.name,s.phone,_esTel(s.phone)].join(' ').toLowerCase().includes(kw))
     .sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));}
+/* ★ [2026-10-02] 회원 칸 상세 유형 — 활용교육 탭과 동일 판별(zsMemberOf) */
+function _subMemCell(s){const mi=zsMemberOf(s);
+  return mi?('회원'+(mi.auto?'<span style="color:#E67E22;font-weight:700" title="신청 시 비로그인 — 연락처로 자동 매칭됨">*</span>':'')
+    +(mi.loginId?('<br><span style="color:#7F8C8D;font-size:11px">'+esc(mi.loginId)+'</span>'):'')
+    +'<br><span style="color:#2E86AB;font-size:11px;font-weight:700">'+esc(zsRoleLabel(mi.role))+'</span>'):'비회원';}
 function subRender(){
   const on=_subs.filter(s=>s.zoom||s.expert),mStart=_esToday().slice(0,7);
   const canc=_subs.filter(s=>!s.zoom&&!s.expert&&s.canceledAt?.toDate&&new Date(s.canceledAt.toDate().getTime()+9*3600000).toISOString().slice(0,7)===mStart).length;
@@ -10924,7 +10930,7 @@ function subRender(){
   tb.innerHTML=rows.map(s=>{const act=s.zoom||s.expert;
     return '<tr'+(act?'':' style="opacity:.55"')+'><td>'+esc(zsWhen(s.createdAt))+'</td><td>'+esc(s.name||'')+'</td><td>'+esc(_esTel(s.phone||s.id))+'</td>'
       +'<td>'+[s.zoom?'활용교육':'',s.expert?'전문분야 세션':''].filter(Boolean).join(' · ')+'</td>'
-      +'<td>'+(act?'<span style="color:#1D8A5B;font-weight:700">구독</span>':'취소 '+esc(zsWhen(s.canceledAt)))+'</td><td>'+(s.isMember?'회원':'비회원')+'</td><td>'+_subSrc(s)+'</td>'
+      +'<td>'+(act?'<span style="color:#1D8A5B;font-weight:700">구독</span>':'취소 '+esc(zsWhen(s.canceledAt)))+'</td><td>'+_subMemCell(s)+'</td><td>'+_subSrc(s)+'</td>'
       +'<td>'+(act?'<button class="btn btn-sm btn-danger" onclick="subAdminCancel(\''+s.id+'\')">해제</button>':'')+'</td></tr>';}).join('');
 }
 async function subAdminCancel(id){const s=_subs.find(x=>x.id===id);if(!s)return;
@@ -10934,7 +10940,7 @@ async function subAdminCancel(id){const s=_subs.find(x=>x.id===id);if(!s)return;
 function subExcel(){const rows=subFiltered();if(!rows.length)return toast('내려받을 구독자가 없습니다.','warning');
   zsLoadXLSX(ok=>{if(!ok)return toast('엑셀 모듈을 불러오지 못했습니다.','error');
     const out=rows.map((s,i)=>({'No':i+1,'신청일시':zsWhen(s.createdAt),'성명':s.name||'','연락처':_esTel(s.phone||s.id),'활용교육':s.zoom?'O':'','전문분야':s.expert?'O':'',
-      '상태':(s.zoom||s.expert)?'구독':'취소','취소일시':s.canceledAt?zsWhen(s.canceledAt):'','회원':s.isMember?'회원':'비회원','신청경로':_subSrc(s),'아이디':s.loginId||''}));
+      '상태':(s.zoom||s.expert)?'구독':'취소','취소일시':s.canceledAt?zsWhen(s.canceledAt):'','회원':zsMemberOf(s)?'회원':'비회원','회원유형':zsMemberOf(s)?zsRoleLabel(zsMemberOf(s).role):'','신청경로':_subSrc(s),'아이디':zsMemberOf(s)?.loginId||s.loginId||''}));
     const ws=XLSX.utils.json_to_sheet(out);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'일정안내구독자');
     XLSX.writeFile(wb,'일정안내_구독자_'+rows.length+'명.xlsx');toast('엑셀 다운로드 완료','success');});}
 function subNoticeReset(){_subConfirm='';$('sub-preview').style.display='none';$('sub-send-msg').textContent='';}
