@@ -897,6 +897,7 @@ textarea.ag{overflow:hidden;min-height:48px}
     <div class="hmAct" id="hmAct" style="display:none"></div>   <!-- ★ [2026-09-05] 팀장·지점장 빠른 실행 (공지·코멘트·출근 현황) -->
     <div class="strat" id="hmStrat" onclick="wlStOpen()"></div>
     <div class="upStrat" id="hmUpStrat" style="display:none"></div>   <!-- ★ [2026-09-02] 지점·팀 전략 (상위자 작성, 읽기) -->
+    <div class="sec" id="hmMr" style="display:none;margin:0 0 12px"></div>   <!-- ★ [2026-10-03] 월간 영업전략리포트 월별 목록 -->
     <div class="org" id="hmOrg" style="display:none"></div>   <!-- ★ [2026-09-01] 조직 카드 -->
     <div class="ledger" id="ledger"></div>
     <div class="sec"><h3>이번 달 영업 흐름</h3><div class="fun" id="hmFun"></div></div>
@@ -1387,6 +1388,7 @@ const WL_CONSULT=[
 
 /* ═══ 상태 ═══ */
 let me=null,_loginId='',_myPhone='',_clients=null,_cache=null,_editId=null;   /* ★ [2026-09-02] _myPhone — 알림톡 수신번호 표시용 */
+let _myRole='';   /* ★ [2026-10-03] 월간 영업전략리포트 노출 판정용 */
 let _orgMe=null;   /* ★ [2026-09-01] 조직 상태 (wlOrgView mode:me) */
 let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',ptype:'',clientId:'',deal:false};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
@@ -1425,6 +1427,7 @@ onAuthStateChanged(auth,async user=>{
     const u=ud.exists()?(ud.data()||{}):{};
     _loginId=u.loginId||'';
     _myPhone=String(u.phone||'').replace(/\D/g,'');   /* ★ [2026-09-02] */
+    _myRole=u.role||'';   /* ★ [2026-10-03] */
     const pass=WL_ALLOWED.includes(u.role)&&(!WL_TEST_IDS.length||WL_TEST_IDS.includes(u.loginId||''));
     if(!pass){
       $('gateMsg').innerHTML='업무일지는 <b>정규회원 전용</b> 기능입니다.';
@@ -1436,6 +1439,7 @@ onAuthStateChanged(auth,async user=>{
     loadOrgMe().catch(()=>{});   /* ★ [2026-09-01] 조직 상태 — 실패해도 업무일지는 정상 동작 */
     loadInbox().catch(()=>{});   /* ★ [2026-09-01] 받은 메시지 */
     loadCki().catch(()=>{});   /* ★ [2026-09-02] 오늘 출첵 */
+    loadMr().catch(()=>{});    /* ★ [2026-10-03] 월간 영업전략리포트 목록 — 실패해도 업무일지는 정상 동작 */
     $('vGate').style.display='none';
     buildFilters();renderList();      /* 업무기록 탭 데이터 준비 */
     wlTab('home');                    /* ★ 초기화면 = 홈 */
@@ -3410,6 +3414,20 @@ function renderIdeas(){
     </div>`;
   }).join(''):'<div class="stub" style="padding:34px 20px"><div class="e">💡</div><b>첫 아이디어를 담아보세요</b><p>고객 미팅 직후, 이동 중 — 떠오른 그 순간 3초면 됩니다.<br>실행하면 체크, 상담으로 이어지면 「기록으로」.</p></div>';
 }
+/* ★ [2026-10-03] 홈 — 월간 영업전략리포트 월별 목록 (monthly-report.html 과 같은 노출 규칙: 게시중 + reportUrl) */
+const MR_ROLES=['jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager'];   /* monthly-report.html 과 동일 */
+async function loadMr(){
+  const el=$('hmMr'); if(!el)return;
+  if(!MR_ROLES.includes(_myRole)){ el.style.display='none'; return; }
+  const snap=await getDocs(query(collection(db,'monthly_reports'),orderBy('month','desc'),limit(24)));
+  const L=snap.docs.map(d=>({id:d.id,...d.data()})).filter(r=>r.reportUrl&&r.status==='published'&&/^\d{6}$/.test(r.id));
+  if(!L.length){ el.style.display='none'; return; }
+  el.innerHTML='<h3>월간 영업전략리포트 <small>'+L.length+'개월</small><button type="button" class="more" onclick="location.href=\'./monthly-report.html\'">전체 보기 →</button></h3>'
+    +'<div class="todo">'+L.slice(0,6).map(r=>'<div class="td" onclick="location.href=\'./monthly-report.html?m='+r.id+'\'">'
+      +'<span>📊</span><span class="tx"><b>'+r.id.slice(0,4)+'년 '+(+r.id.slice(4))+'월호</b></span><span class="ok">열기 ›</span></div>').join('')+'</div>';
+  el.style.display='';
+}
+
 function renderHome(){
   const A=_cache||[];
   const d=new Date(Date.now()+9*3600000);
