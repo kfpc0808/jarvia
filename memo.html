@@ -73,6 +73,12 @@ sup{font-size:.62em;line-height:0;vertical-align:.5em;margin-left:1px;font-weigh
 .mm-note{font-size:calc(var(--fs) - 1.5px);line-height:calc(var(--lh) - 2px);color:#6B7280;padding:0 2px calc(var(--pv) + 1px);outline:none;white-space:pre-wrap;word-break:break-word;caret-color:var(--acc)}
 .mm-note:empty::before{content:'노트';color:#C3C9D2}
 .mm-row.done .mm-note{color:#B8BFC8}
+/* ★ [2026-10-03] 노트 접기·펼치기 — 기본 첫 줄만, 편집 중엔 전체 */
+.mm-nw{display:flex;align-items:flex-start;gap:4px}
+.mm-nw .mm-note{flex:1;min-width:0}
+.mm-note.fold:not(:focus){display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
+.mm-nt{flex:none;font-size:11px;line-height:calc(var(--lh) - 2px);color:var(--acc);padding:0 4px;cursor:pointer;user-select:none;white-space:nowrap}
+.mm-nt[hidden],.mm-nw:focus-within .mm-nt{display:none}
 a.mm-link{color:#1A73E8;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
 a.mm-link:hover{color:#1557B0}
 .mm-row.done a.mm-link{color:inherit}
@@ -355,6 +361,7 @@ mark.mm-hit.cur{background:#FB8C00;color:#fff}
   <button type="button" data-m="expand"><span class="mi">▾</span>전체 펼치기</button>
   <button type="button" data-m="collapse"><span class="mi">▸</span>전체 접기</button>
   <button type="button" data-m="hidedone"><span class="mi" id="hdMark">☐</span>완료 항목 숨기기</button>
+  <button type="button" data-m="noteall"><span class="mi" id="naMark">☐</span>노트 모두 펼치기</button>
   <hr>
   <button type="button" data-m="help"><span class="mi">⌨</span>단축키 안내</button>
   <div class="foot" id="menuFoot"></div>
@@ -707,6 +714,9 @@ function linkify(root){
   });
 }
 let noteOpen=null;
+/* ★ [2026-10-03] 노트 접기·펼치기 — 펼친 노트(이 화면에서만 기억) · 노트 모두 펼치기(기기별 기억) */
+const noteExp=new Set();
+let noteAll=(()=>{try{return localStorage.getItem('mm_noteAll')==='1';}catch(e){return false;}})();
 /* ═══ 모아보기: ★ 중요 / 📅 날짜 ═══ */
 function dateOf(t){const m=[...String(t).matchAll(/data-d="(\d{4}-\d{2}-\d{2})"/g)].map(x=>x[1]).sort();return m[0]||null;}
 function pathOf(i){return ancestors(i).map(k=>plain(items[k].t).slice(0,18)||'(빈 항목)').join(' › ');}
@@ -743,7 +753,7 @@ function rowHtml(x,i,R,kids,srch){
     +(kids&&!srch?'<span class="mm-tog'+(x.c?'':' open')+'" data-a="tog" style="left:'+((isMobile()?0:16)+d*step)+'px">▶</span>':'')
     +'<span class="mm-bul'+(x.c&&kids?' col':'')+'" data-a="bul"><span><i></i></span></span>'
     +'<div class="mm-body"><div class="mm-txt" contenteditable="'+(x.k||srch?'false':'true')+'" tabindex="0" spellcheck="false" data-ph="'+(items.length===1?'여기에 입력하세요':'')+'">'+x.t+'</div>'
-    +(x.n!=null&&(x.n||noteOpen===x.id)&&!(srch&&!x.n)?'<div class="mm-note" contenteditable="'+(x.k||srch?'false':NOTE_CE)+'" spellcheck="false">'+esc(x.n)+'</div>':'')+'</div>'
+    +(x.n!=null&&(x.n||noteOpen===x.id)&&!(srch&&!x.n)?'<div class="mm-nw"><div class="mm-note'+(noteAll||noteExp.has(x.id)?'':' fold')+'" contenteditable="'+(x.k||srch?'false':NOTE_CE)+'" spellcheck="false">'+esc(x.n)+'</div><span class="mm-nt" hidden></span></div>':'')+'</div>'
     +'<span class="mm-meta">'+cnt+'<span class="mm-star'+(x.s?' on':'')+'" data-a="star" title="'+(x.s?'중요 해제':'중요 표시')+'">'+(x.s?IC.starOn:IC.starOff)+'</span><span class="mm-lock'+(x.k?' on':'')+'" data-a="lock" title="'+(x.k?'보호 해제':'보호하기 — 수정·삭제 잠금')+'">'+(x.k?IC.lockOn:IC.lockOff)+'</span></span>'
     +'</div>';
 }
@@ -1039,6 +1049,7 @@ R_.addEventListener('pointerdown',e=>{
 });
 R_.addEventListener('click',e=>{
   const lk=e.target.closest('a.mm-link');if(lk){e.preventDefault();window.open(lk.href,'_blank','noopener');return;}
+  const nt=e.target.closest('.mm-nt');if(nt){const nr=nt.closest('.mm-row'),nn=nt.parentNode.querySelector('.mm-note');if(nr&&nn){const nid_=nr.dataset.id;if(noteExp.has(nid_))noteExp.delete(nid_);else noteExp.add(nid_);nn.classList.toggle('fold',!noteExp.has(nid_));markNotes();}return;}   /* ★ 노트 펼치기·접기 */
   const row=e.target.closest('.mm-row');if(!row)return;const id=row.dataset.id;
   if(row.classList.contains('srch')){jumpTo(id);return;}
   const a=e.target.closest('[data-a]');if(!a)return;const k=a.dataset.a;
@@ -1055,6 +1066,21 @@ let lastFocusId=null;
 R_.addEventListener('focusin',e=>{if(e.target.classList.contains('mm-txt')||e.target.classList.contains('mm-note'))lastFocusId=e.target.closest('.mm-row').dataset.id;});
 $('tb').addEventListener('pointerdown',e=>{if(e.target.closest('button'))e.preventDefault();});
 $('tb').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const f=curFocus();act(b.dataset.a,f?f.id:lastFocusId,f?f.off:null);});
+/* ★ [2026-10-03] 노트 접기·펼치기 — 첫 줄을 넘는 노트에만 버튼 표시 */
+function markNotes(){
+  document.querySelectorAll('#rows .mm-nw').forEach(w=>{
+    const n=w.querySelector('.mm-note'),b=w.querySelector('.mm-nt');
+    if(!n){w.remove();return;}if(!b||n===document.activeElement)return;
+    let over=false;
+    if(!noteAll){const f=n.classList.contains('fold');if(!f)n.classList.add('fold');over=n.scrollHeight>n.clientHeight+2;if(!f)n.classList.remove('fold');}
+    b.hidden=!over;if(over){const f=n.classList.contains('fold');b.textContent=f?'▾ 펼치기':'▴ 접기';b.title=f?'노트 펼치기':'노트 접기';}
+  });
+}
+let markNT=0;const markSoon=()=>{cancelAnimationFrame(markNT);markNT=requestAnimationFrame(markNotes);};
+new MutationObserver(markSoon).observe(R_,{childList:true});
+window.addEventListener('resize',markSoon);
+R_.addEventListener('focusout',e=>{if(e.target.classList&&e.target.classList.contains('mm-note'))setTimeout(markNotes,0);});
+R_.addEventListener('pointerdown',e=>{if(e.target.closest&&e.target.closest('.mm-nt'))e.preventDefault();});   /* 버튼 눌러도 편집 포커스 유지 */
 
 /* ═══ 서식 ═══ */
 let fbRange=null;
@@ -1400,6 +1426,7 @@ $('bkOv').addEventListener('click',e=>{
 /* ═══ 메뉴 ═══ */
 function paintMenuFoot(){
   $('hdMark').textContent=hideDone?'☑':'☐';
+  $('naMark').textContent=noteAll?'☑':'☐';
   $('menuFoot').textContent=meta.lastBackup?('마지막 저장 '+meta.lastBackup+' · '+daysSince(meta.lastBackup)+'일 전'):'아직 파일로 저장한 적이 없습니다';
 }
 $('btnMenu').addEventListener('click',e=>{
@@ -1415,6 +1442,7 @@ $('menu').addEventListener('click',e=>{
   else if(k==='import')$('fileIn').click();
   else if(k==='expand'||k==='collapse'){const v=k==='collapse';const R=range();snap();let ch=false;for(let i=R.s;i<R.e;i++){if(hasKids(i)&&items[i].c!==v){items[i].c=v;ch=true;}}if(ch){render();save();}else hist.pop();}
   else if(k==='hidedone'){hideDone=!hideDone;try{localStorage.setItem('mm_hideDone',hideDone?'1':'0');}catch(_){}render();toast(hideDone?'완료 항목을 숨겼습니다':'완료 항목을 다시 표시합니다');}
+  else if(k==='noteall'){noteAll=!noteAll;noteExp.clear();try{localStorage.setItem('mm_noteAll',noteAll?'1':'0');}catch(_){}render();toast(noteAll?'노트를 모두 펼쳐 표시합니다':'노트를 첫 줄만 표시합니다');}
   else if(k==='help')openHelp();
 });
 
