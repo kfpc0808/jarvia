@@ -30,6 +30,7 @@
   var MIN_SAVE_GAP = 8000;  // 연속 저장 최소 간격 — 과도한 쓰기 방지
   var DONE_RATIO = 0.8;     // 이수 기준
   var CARRY_MONTHS = 24;    /* ★ [2026-10-01] 이전 달 기록을 이어받을 범위(개월) */
+  var VIDEO_TRACK = "video"; /* ★ [2026-10-05] 해설 영상 트랙 — 음성과 따로 진도를 계산해 둘 중 높은 쪽으로 이수 판정 */
 
   var S = {
     ready: false,
@@ -83,19 +84,30 @@
   function calcCourse(c) {
     if (!c || !c.tracks) return { playedSec: 0, ratio: 0 };
     var played = 0;
+    var pv = 0, dv = 0, hasV = false;      /* ★ [2026-10-05] 해설 영상 트랙은 따로 센다 */
     Object.keys(c.tracks).forEach(function (k) {
       var t = c.tracks[k];
       var n = slotsToSet(t.slots).size * SLOT;
       if (t.dur > 0) n = Math.min(n, t.dur);   /* ★ [2026-10-01] 트랙 길이를 넘지 않게 */
+      if (k === VIDEO_TRACK) { hasV = true; pv += n; dv += (t.dur || 0); return; }
       played += n;
     });
     var total = c.totalSec || 0;
     if (!total) {
-      /* 강좌 전체 길이를 모르면 알고 있는 트랙 길이 합으로 대신한다 */
-      Object.keys(c.tracks).forEach(function (k) { total += (c.tracks[k].dur || 0); });
+      /* 강좌 전체 길이를 모르면 알고 있는 트랙 길이 합으로 대신한다 (해설 영상 제외) */
+      Object.keys(c.tracks).forEach(function (k) { if (k !== VIDEO_TRACK) total += (c.tracks[k].dur || 0); });
     }
     var ratio = total > 0 ? Math.min(1, played / total) : 0;
-    return { playedSec: Math.min(played, total || played), ratio: ratio, totalSec: total };
+    if (!hasV) return { playedSec: Math.min(played, total || played), ratio: ratio, totalSec: total };
+    /* ★ [2026-10-05] 음성·영상 중 높은 진도로 이수 판정, 학습시간은 실제로 들은 시간 + 본 시간 */
+    var rv = dv > 0 ? Math.min(1, pv / dv) : 0;
+    var useV = rv > ratio;
+    return {
+      playedSec: Math.min(played, total || played) + Math.min(pv, dv || pv),
+      ratio: Math.max(ratio, rv),
+      totalSec: useV ? dv : total,          /* 이수한 쪽(음성 또는 영상)의 길이 */
+      media: useV ? "video" : "audio",
+    };
   }
 
   /* ── 문서 로드 ─────────────────────────────────────────── */
@@ -159,8 +171,9 @@
       if (!d.title && s.title) d.title = s.title;
     });
     if (src.completed) {
-      if (!dst.completed) { dst.completed = true; dst.completedAt = src.completedAt || dst.completedAt || ""; }
-      else if (src.completedAt && (!dst.completedAt || String(src.completedAt) < String(dst.completedAt))) dst.completedAt = src.completedAt;
+      if (!dst.completed) { dst.completed = true; dst.completedAt = src.completedAt || dst.completedAt || ""; if (src.eduSec) dst.eduSec = src.eduSec; if (src.doneMedia) dst.doneMedia = src.doneMedia; }
+      else if (src.completedAt && (!dst.completedAt || String(src.completedAt) < String(dst.completedAt))) { dst.completedAt = src.completedAt; if (src.eduSec) dst.eduSec = src.eduSec; if (src.doneMedia) dst.doneMedia = src.doneMedia; }
+      else if (!dst.eduSec && src.eduSec) { dst.eduSec = src.eduSec; if (src.doneMedia) dst.doneMedia = src.doneMedia; }
     }
     if (src.carried) dst.carried = true;
     if (src.lastAt && String(src.lastAt) > String(dst.lastAt || "")) dst.lastAt = src.lastAt;
@@ -280,6 +293,8 @@
       if (!c.completed && r.ratio >= DONE_RATIO) {
         c.completed = true;
         c.completedAt = day;
+        c.eduSec = r.totalSec || 0;         /* ★ [2026-10-05] 교육시간 — 이수한 쪽(음성 또는 영상)의 길이 */
+        c.doneMedia = r.media || "audio";
         newDone++;
         out.doneC[day] = out.doneC[day] || {};
         out.doneC[day][cid] = 1;
@@ -431,7 +446,7 @@
         /* 강좌 전체 길이를 아직 모르면 트랙 길이 합으로 채워둔다 */
         if (!c.totalSec) {
           var sum = 0;
-          Object.keys(c.tracks).forEach(function (k) { sum += (c.tracks[k].dur || 0); });
+          Object.keys(c.tracks).forEach(function (k) { if (k !== VIDEO_TRACK) sum += (c.tracks[k].dur || 0); });   /* ★ [2026-10-05] 해설 영상 제외 */
           c.totalSec = sum;
         }
       }
@@ -516,7 +531,7 @@
       if (payload.dur) t.dur = payload.dur | 0;
       if (!c.totalSec) {
         var sum = 0;
-        Object.keys(c.tracks).forEach(function (k) { sum += (c.tracks[k].dur || 0); });
+        Object.keys(c.tracks).forEach(function (k) { if (k !== VIDEO_TRACK) sum += (c.tracks[k].dur || 0); });   /* ★ [2026-10-05] 해설 영상 제외 */
         c.totalSec = sum;
       }
       S.dirty = true;

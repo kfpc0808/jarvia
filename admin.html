@@ -1036,6 +1036,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <b id="vg-seln">0편 선택</b>
         <button class="btn" id="vg-bulk-go" onclick="vgEnqueueSel()" disabled>선택 영상 생성</button>
         <button class="btn btn-sec" id="vg-bulk-cancel" onclick="vgCancelSel()" disabled>선택 대기 취소</button>
+        <button class="btn" id="vg-bulk-pub" onclick="vgApproveSel()" disabled style="background:#2E7D32;border-color:#2E7D32">선택 승인·게시</button>
         <span style="flex:1"></span>
         <span>동시 생성 <select id="vg-max" onchange="vgSetMax(this.value)"><option value="1">1편</option><option value="2">2편</option><option value="3">3편</option></select></span>
         <span id="vg-qinfo" style="color:#7a8299">대기 0편</span>
@@ -26533,6 +26534,8 @@ function vgBulkBar(list){
   $('vg-seln').textContent=`${sel.length}편 선택`;
   $('vg-bulk-go').disabled=!canGo;$('vg-bulk-go').textContent=canGo?`선택 영상 생성 (${canGo}편)`:'선택 영상 생성';
   $('vg-bulk-cancel').disabled=!canCancel;$('vg-bulk-cancel').textContent=canCancel?`선택 대기 취소 (${canCancel}편)`:'선택 대기 취소';
+  const canPub=sel.filter(vgCanPub).length;   /* ★ 완성됐고 아직 공개 안 된 영상 */
+  $('vg-bulk-pub').disabled=!canPub||_vgPubBusy;$('vg-bulk-pub').textContent=_vgPubBusy?'승인·게시 진행 중…':(canPub?`선택 승인·게시 (${canPub}편)`:'선택 승인·게시');
   const elig=(list||vgFiltered()).filter(x=>!vgBusy(x.job));
   $('vg-all').checked=elig.length>0&&elig.every(x=>_vgSel.has(x.id));
   const mx=$('vg-max');if(mx&&document.activeElement!==mx)mx.value=String(_vgQ.max||3);
@@ -26549,6 +26552,26 @@ async function vgEnqueueSel(){
   try{const r=await vgApi('vgEnqueue',{items:items.map(x=>({id:x.id,track:x.track}))});
     toast(`대기열 등록 ${r.added}편${r.skipped?` · 건너뜀 ${r.skipped}편`:''}${r.started?` · 바로 시작 ${r.started}편`:''}`,'success');_vgSel.clear();vgLoad();}
   catch(e){toast('등록 실패: '+e.message,'error');}
+}
+/* ── 선택 승인·게시 — 한 편씩 차례로 (비메오 등록·공개 설정) ── */
+let _vgPubBusy=false;
+const vgCanPub=x=>!!(x&&x.job&&x.job.status==='done'&&!x.job.published);
+async function vgApproveSel(){
+  const items=[..._vgSel].map(id=>_vgItems.find(x=>x.id===id)).filter(vgCanPub);
+  if(!items.length||_vgPubBusy)return;
+  if(!confirm(`선택한 ${items.length}편을 승인·게시합니다.\n비메오에 차례로 올라가고, 비메오 처리가 끝나는 대로(보통 10~30분) 회원에게 공개됩니다.\n진행하는 동안 이 화면을 닫지 마세요. 진행할까요?`))return;
+  _vgPubBusy=true;vgBulkBar();
+  let ok=0,fail=[];
+  for(let i=0;i<items.length;i++){
+    const x=items[i];
+    $('vg-sum').textContent=`승인·게시 ${i+1}/${items.length} — ${x.title}`;
+    try{await vgApi('vgApprove',{id:x.id});ok++;_vgSel.delete(x.id);}
+    catch(e){fail.push(`${x.title}: ${e.message}`);}
+  }
+  _vgPubBusy=false;
+  toast(`승인·게시 ${ok}편 완료${fail.length?` · 실패 ${fail.length}편`:''}`,fail.length?'error':'success');
+  if(fail.length)alert('승인·게시 실패\n\n'+fail.join('\n'));
+  vgLoad();
 }
 async function vgCancelSel(ids){
   ids=ids||[..._vgSel].filter(id=>{const it=_vgItems.find(x=>x.id===id);return it&&it.job&&it.job.status==='waiting';});
@@ -26741,7 +26764,7 @@ async function vgApplyEdits(){
   try{await vgApi('vgEditLines',{id:_vgOpen,lines});toast('수정 반영을 시작했습니다','success');_vgEdits={};_vgOpen=null;_vgJob=null;vgLoad();}
   catch(e){toast('반영 실패: '+e.message,'error');}
 }
-window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
+window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgApproveSel=vgApproveSel;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
 window.vgLoad=vgLoad;window.vgRender=vgRender;window.vgGo=vgGo;window.vgStart=vgStart;window.vgRetry=vgRetry;window.vgDetail=vgDetail;window.vgDrawDetail=vgDrawDetail;window.vgEdit=vgEdit;window.vgApplyEdits=vgApplyEdits;
 Object.defineProperty(window,'vgPage',{get:()=>vgPage,set:v=>{vgPage=v;}});
 Object.defineProperty(window,'_vgWarnOnly',{get:()=>_vgWarnOnly,set:v=>{_vgWarnOnly=v;}});
