@@ -10907,6 +10907,13 @@ function fccBuildLink(cid){
   u+='&v=2';
   return u;
 }
+/* ★ [2026-10-06] 회원 아침독서 이번 주 링크 — 메인 「아침독서」 카드와 같은 계산(_mrWeekUrl), consultants 문서 10분 캐시 */
+let _mrFc=null,_mrFcAt=0;
+async function fccMrUrl(){
+  const lid=(meData&&meData.loginId)||'';if(!me||!lid)return '';
+  if(!_mrFc||Date.now()-_mrFcAt>600000){try{const s=await getDoc(doc(db,'consultants',lid));_mrFc=s.exists()?s.data():{};_mrFcAt=Date.now();}catch(e){if(!_mrFc)_mrFc={};}}
+  return (typeof window._mrWeekUrl==='function')?(window._mrWeekUrl(_mrFc)||''):'';
+}
 window.fccSyncLinks=async function(el){   /* ★ [2026-08-22] async — 링크 첨부 전 서명 키 확보 */
   const ed=el&&el.closest?el.closest('.fcc-msg-ed'):el; if(!ed)return;
   const ta=ed.querySelector('.fcc-msg-ta'); if(!ta)return;
@@ -10916,9 +10923,14 @@ window.fccSyncLinks=async function(el){   /* ★ [2026-08-22] async — 링크 �
   /* ★ [2026-10-06] 모닝 컨센서스 링크 — 체크하면 고객별 서명 링크 발급 후 첨부 */
   const mtog=ed.querySelector('.fcc-mc-tog');let _mcU='';
   if(mtog&&mtog.checked){const _e=await fccEnsureMcKey(cid);_mcU=fccBuildMcLink(cid,_e);if(!_mcU){mtog.checked=false;toast('컨센서스 링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요','error');}}
-  let v=(ta.value||'').replace(/\n*▶ 오늘의 인사이트 보기:[^\n]*/g,'').replace(/\n*▶ 오늘의 모닝 컨센서스:[^\n]*/g,'').replace(/\n*🔗 내 채널:[^\n]*/g,'').replace(/\s+$/,'');
-  if(tog&&tog.checked){const lk=fccBuildLink(cid);if(lk)v+='\n\n▶ 오늘의 인사이트 보기: '+lk;}
-  if(_mcU)v+=(tog&&tog.checked?'\n':'\n\n')+'▶ 오늘의 모닝 컨센서스: '+_mcU;
+  /* ★ [2026-10-06] 아침독서 링크 — 회원의 이번 주 아침독서(북집) 링크를 그대로 첨부 */
+  const rtog=ed.querySelector('.fcc-mr-tog');let _mrU='';
+  if(rtog&&rtog.checked){_mrU=await fccMrUrl();if(!_mrU){rtog.checked=false;toast('등록된 아침독서 링크가 없습니다','warning');}}
+  let v=(ta.value||'').replace(/\n*▶ 오늘의 인사이트 보기:[^\n]*/g,'').replace(/\n*▶ 오늘의 모닝 컨센서스:[^\n]*/g,'').replace(/\n*▶ 이번 주 아침독서:[^\n]*/g,'').replace(/\n*🔗 내 채널:[^\n]*/g,'').replace(/\s+$/,'');
+  let _first=true;const _add=(t)=>{v+=(_first?'\n\n':'\n')+t;_first=false;};
+  if(tog&&tog.checked){const lk=fccBuildLink(cid);if(lk)_add('▶ 오늘의 인사이트 보기: '+lk);}
+  if(_mcU)_add('▶ 오늘의 모닝 컨센서스: '+_mcU);
+  if(_mrU)_add('▶ 이번 주 아침독서: '+_mrU);
   ta.value=v;
 };
 async function fccMsgShareKakao(msg,cid){   /* ★ [2026-08-22] async — 카톡 버튼 링크에 서명 키 필수 */
@@ -10949,6 +10961,7 @@ window.fccMsgClick=function(e){
     if(a==='copy-msg')fccCopyText(ta.value);
     else if(a==='copy-link')fccEnsureDlKey(cid).then(_k=>{if(!_k&&fccDlKeyMissing()){toast('링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요','error');return;}fccCopyText(fccBuildLink(cid));});   /* ★ [2026-08-22] 서명 키 확보 후 복사 */
     else if(a==='copy-mclink')fccEnsureMcKey(cid).then(_e=>{const _u=fccBuildMcLink(cid,_e);if(!_u){toast('컨센서스 링크 서명 발급에 실패했습니다 — 잠시 후 다시 시도해주세요','error');return;}fccCopyText(_u);});   /* ★ [2026-10-06] 모닝 컨센서스 링크 복사 */
+    else if(a==='copy-mrlink')fccMrUrl().then(_u=>{if(!_u){toast('등록된 아침독서 링크가 없습니다','warning');return;}fccCopyText(_u);});   /* ★ [2026-10-06] 아침독서 링크 복사 */
     else if(a==='sms-send')fccSmsSend(ed,ta,cid);
     return;
   }
@@ -10984,6 +10997,8 @@ window.fccMsgClick=function(e){
   const _linkTog='<div style="display:flex;align-items:center;gap:8px;background:#F0FAF6;border:1px solid #BFE6D6;border-radius:8px;padding:6px 8px 6px 10px"><label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#0F6E56;font-weight:700;cursor:pointer;flex:1"><input type="checkbox" class="fcc-link-tog" onchange="fccSyncLinks(this)" style="width:15px;height:15px;margin:0"> 📊 고객용 데일리 리포트 링크</label><button type="button" data-act="copy-link" style="font-size:11px;font-weight:700;color:#0F6E56;background:#fff;border:1px solid #9FE1CB;border-radius:7px;padding:5px 12px;cursor:pointer;white-space:nowrap">🔗 복사</button></div>';
   /* ★ [2026-10-06] 모닝 컨센서스 링크 — 데일리 리포트 링크와 같은 방식(체크하면 문자에 첨부, 복사 버튼) */
   const _mcTog='<div style="display:flex;align-items:center;gap:8px;background:#FFF8EC;border:1px solid #F1D9A8;border-radius:8px;padding:6px 8px 6px 10px"><label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#9A6A12;font-weight:700;cursor:pointer;flex:1"><input type="checkbox" class="fcc-mc-tog" onchange="fccSyncLinks(this)" style="width:15px;height:15px;margin:0"> 🌅 모닝 컨센서스 링크</label><button type="button" data-act="copy-mclink" style="font-size:11px;font-weight:700;color:#9A6A12;background:#fff;border:1px solid #F1D9A8;border-radius:7px;padding:5px 12px;cursor:pointer;white-space:nowrap">🔗 복사</button></div>';
+  /* ★ [2026-10-06] 아침독서 링크 — 아침독서 링크가 등록된 회원에게만 보임 */
+  const _mrTog='<div class="fcc-mr-wrap" style="display:none;align-items:center;gap:8px;background:#F4F0FA;border:1px solid #D9CCEE;border-radius:8px;padding:6px 8px 6px 10px"><label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#5B3E8F;font-weight:700;cursor:pointer;flex:1"><input type="checkbox" class="fcc-mr-tog" onchange="fccSyncLinks(this)" style="width:15px;height:15px;margin:0"> 📚 아침독서 링크</label><button type="button" data-act="copy-mrlink" style="font-size:11px;font-weight:700;color:#5B3E8F;background:#fff;border:1px solid #D9CCEE;border-radius:7px;padding:5px 12px;cursor:pointer;white-space:nowrap">🔗 복사</button></div>';
   row.insertAdjacentHTML('afterend',
     '<div class="fcc-msg-ed" data-cid="'+fccEsc(cid)+'" data-mk="'+fccEsc(mk||'')+'" data-mn="'+fccEsc(mn||'')+'" data-mm="'+fccEsc(mm||'')+'" data-md="'+fccEsc(md||'')+'" data-mp="'+fccEsc(mp||'')+'" style="border:1px solid #D4A03C;background:#FFFDF5;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px">'
     +'<div style="font-size:11px;font-weight:700;color:#A16207">메시지 톤 선택 <span style="font-weight:400;color:#B0A48A">— 골라서 복사 후 수정해 보내세요</span></div>'
@@ -10992,12 +11007,14 @@ window.fccMsgClick=function(e){
     +_hint
     +_linkTog
     +_mcTog
+    +_mrTog
     +'<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
     +'<button type="button" data-act="copy-msg" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #C7D2DE;border-radius:8px;padding:7px 16px;cursor:pointer">📋 메시지 복사</button>'
     +'<button type="button" data-act="sms-send" style="font-size:12px;font-weight:800;color:#fff;background:#D4A03C;border:1px solid #D4A03C;border-radius:8px;padding:7px 16px;cursor:pointer">📱 문자 보내기</button>'
     +'</div>'
     +'<div style="font-size:11px;color:#138A5E;font-weight:700;text-align:right">💰 내 폰으로 발송 · 문자비 0원 <span style="color:#9CA3AF;font-weight:500">(내 요금제 문자 사용)</span></div>'
     +'</div>');
+  fccMrUrl().then(_u=>{if(!_u)return;const _ed=row.nextElementSibling;const _w=_ed&&_ed.querySelector&&_ed.querySelector('.fcc-mr-wrap');if(_w)_w.style.display='flex';}).catch(()=>{});   /* ★ [2026-10-06] 아침독서 링크 있는 회원만 표시 */
 };
 // ── 📱 문자 보내기: 로컬 번호 + sms: 호출 (전화번호 서버 미전송) ──
 // ── 문자발송 배너: admin·gildong + 멤버십 회원(자비아멤버십·이너서클·컨홈·지사장) 진입 / 그 외 안내 ──
