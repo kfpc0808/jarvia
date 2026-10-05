@@ -1038,6 +1038,8 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <button class="btn btn-sec" id="vg-bulk-cancel" onclick="vgCancelSel()" disabled>선택 대기 취소</button>
         <button class="btn" id="vg-bulk-pub" onclick="vgApproveSel()" disabled style="background:#2E7D32;border-color:#2E7D32">선택 승인·게시</button>
         <span style="flex:1"></span>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer" title="게시 전 완성된 신규 콘텐츠를 30분마다 찾아 영상을 만들고, 게시 시각에 자동 공개"><input type="checkbox" id="vg-auto" onchange="vgAutoToggle(this.checked)"> 신규 콘텐츠 자동 영상</label>
+        <button class="btn btn-sec" onclick="vgAutoScan()" title="지금 바로 신규 콘텐츠 확인">지금 확인</button>
         <span>동시 생성 <select id="vg-max" onchange="vgSetMax(this.value)"><option value="1">1편</option><option value="2">2편</option><option value="3">3편</option></select></span>
         <span id="vg-qinfo" style="color:#7a8299">대기 0편</span>
       </div>
@@ -26494,7 +26496,7 @@ async function vgApi(fn,body){
 async function vgLoad(){
   try{
     if(_vgUploading){clearTimeout(_vgTimer);_vgTimer=setTimeout(()=>{if(!$('p-vgen').classList.contains('hidden'))vgLoad();},10000);return;}   /* 편집본 업로드 중에는 화면을 다시 그리지 않음 (진행률 유지) */
-    const j=await vgApi('vgList',{});_vgItems=j.items||[];_vgQ=j.queue||_vgQ;
+    const j=await vgApi('vgList',{});_vgItems=j.items||[];_vgQ=j.queue||_vgQ;if($('vg-auto'))$('vg-auto').checked=j.autoOn!==false;
     const ids=new Set(_vgItems.map(x=>x.id));[..._vgSel].forEach(id=>{const it=_vgItems.find(x=>x.id===id);if(!ids.has(id)||vgBusy(it&&it.job))_vgSel.delete(id);});
     vgRender();
     if(_vgOpen){const it=_vgItems.find(x=>x.id===_vgOpen);if(it&&it.job&&(it.job.status==='done'||it.job.status==='error')&&(!_vgJob||_vgJob.status!==it.job.status))vgDetail(_vgOpen,true);}
@@ -26573,6 +26575,21 @@ async function vgApproveSel(){
   if(fail.length)alert('승인·게시 실패\n\n'+fail.join('\n'));
   vgLoad();
 }
+/* ── 신규 콘텐츠 자동 연결 ── */
+async function vgAutoToggle(on){
+  try{const r=await vgApi('vgAutoSet',{enabled:!!on});toast(r.enabled?'신규 콘텐츠 자동 영상 생성을 켰습니다':'신규 콘텐츠 자동 영상 생성을 껐습니다','success');}
+  catch(e){toast('변경 실패: '+e.message,'error');vgLoad();}
+}
+async function vgAutoScan(){
+  try{toast('신규 콘텐츠 확인 중…','info');const r=await vgApi('vgAutoSet',{scanNow:true});const sc=r.scan||{};
+    toast(sc.off?'자동 영상 생성이 꺼져 있습니다':`게시 전 완성본 ${sc.found||0}편 확인 · 새로 등록 ${sc.added||0}편${sc.redo?` · 다시 생성 ${sc.redo}편`:''}`,'success');vgLoad();}
+  catch(e){toast('확인 실패: '+e.message,'error');}
+}
+async function vgAutoHold(hold){
+  if(!_vgOpen)return;
+  try{await vgApi('vgAutoHold',{id:_vgOpen,hold:!!hold});toast(hold?'자동 공개를 보류했습니다':'자동 공개 보류를 풀었습니다','success');vgDetail(_vgOpen,true);vgLoad();}
+  catch(e){toast('변경 실패: '+e.message,'error');}
+}
 async function vgCancelSel(ids){
   ids=ids||[..._vgSel].filter(id=>{const it=_vgItems.find(x=>x.id===id);return it&&it.job&&it.job.status==='waiting';});
   if(!ids.length)return;
@@ -26588,7 +26605,9 @@ function vgRow(x){
   const j=x.job,open=_vgOpen===x.id;
   let st,acts;
   const ck=vgBusy(j)?'':`<input type="checkbox" ${_vgSel.has(x.id)?'checked':''} onchange="vgSel('${x.id}',this.checked)">`;
-  if(j&&j.status==='waiting'){const pos=_vgQ.waiting.indexOf(x.id)+1;st=`<b style="color:#3949AB">대기 ${pos||''}번째</b><div style="font-size:11px;color:#9aa2b5">동시 ${_vgQ.max||3}편씩 차례로 생성</div>`;
+  const auto=j&&j.autoNew&&!j.published&&j.status!=='cancelled'?`<div style="font-size:11px;color:${j.autoHold?'#c62828':'#3949AB'}">${j.autoHold?'⏸ 자동 공개 보류':'🕘 신규 · '+esc(vgDt(j.publishAt).slice(5,16))+' 자동 공개'}</div>`:'';
+  if(j&&j.status==='cancelled'){st=`<span style="color:#9aa2b5">자동 생성 취소됨</span>`;acts=`<button class="btn" onclick="vgStart('${x.id}','${x.track}')">영상 생성</button>`;}
+  else if(j&&j.status==='waiting'){const pos=_vgQ.waiting.indexOf(x.id)+1;st=`<b style="color:#3949AB">대기 ${pos||''}번째</b><div style="font-size:11px;color:#9aa2b5">동시 ${_vgQ.max||3}편씩 차례로 생성</div>`;
     acts=`<button class="btn btn-sec" onclick="vgCancelSel(['${x.id}'])">대기 취소</button><button class="btn" onclick="vgStart('${x.id}','${x.track}')">지금 바로</button>`;}
   else if(!j){st='<span style="color:#9aa2b5">영상 없음</span>';acts=`<button class="btn" onclick="vgStart('${x.id}','${x.track}')">영상 생성</button>`;}
   else if(vgBusy(j)){st=`<b style="color:#B0883C">${esc(j.stage||'생성 중')}</b><div class="vg-prog"><i style="width:${j.progress||0}%"></i></div>`;acts=`<span style="font-size:12px;color:#7a8299">${j.progress||0}%</span>`;}
@@ -26601,7 +26620,7 @@ function vgRow(x){
     <span class="vg-badge">${VG_TRACK[x.track]||x.track}${x.published?'':' · 예정'}</span>
     <b style="font-size:12.5px">${esc(x.date||'')}</b>
     <div class="vg-title">${esc(x.title)}</div>
-    <div class="vg-st">${st}</div>
+    <div class="vg-st">${st}${auto}</div>
     <div class="vg-acts">${acts}</div></div>
     ${open?`<div class="vg-detail" id="vg-detail-${x.id}"><div style="color:#7a8299">불러오는 중…</div></div>`:''}</div>`;
 }
@@ -26679,6 +26698,8 @@ function vgPubBox(j){
   else if(outdated)notes.push('다시 만든 영상이 아직 비메오에 반영되지 않았습니다.');
   if(j.vimeoError)notes.push(`<span style="color:#c62828">${esc(j.vimeoError)}</span>`);
   if(j.vimeoView==='unlisted')notes.push('요금제 제한으로 비메오 공개 설정이 「링크 공유」로 되어 있습니다.');
+  if(j.autoNew&&!j.published){notes.push(j.autoHold?'<b style="color:#c62828">자동 공개 보류 중</b> — 게시 시각이 되어도 공개되지 않습니다.':`신규 콘텐츠 — <b>${esc(vgDt(j.publishAt).slice(0,16))}</b> 게시 시각에 자동 공개됩니다. 완성되면 비메오에 미리 올라갑니다. 지금 공개하려면 [승인·게시]를 누르세요.`);
+    btns.push(`<button class="btn btn-sec" onclick="vgAutoHold(${j.autoHold?'false':'true'})">${j.autoHold?'자동 공개 보류 해제':'자동 공개 보류'}</button>`);}
   return `<div style="margin-top:14px;padding:12px;border:1px solid #e3e6ee;border-radius:10px;background:#fafbfd">
     <div style="font-size:13px;font-weight:700;color:#1F3A6B;margin-bottom:6px">회원 공개 · ${vgPubBadge(j)}</div>
     <div style="font-size:12px;color:#7a8299;line-height:1.6;margin-bottom:8px">승인·게시하면 영상이 비메오(「${'JARVIA 콘텐츠 영상'}」 폴더)에 올라가고, 비메오 처리가 끝나면 회원에게 공개됩니다. 비메오 사이트에서는 숨겨지고 자비아에서만 재생됩니다.${notes.length?'<br>'+notes.join('<br>'):''}</div>
@@ -26764,7 +26785,7 @@ async function vgApplyEdits(){
   try{await vgApi('vgEditLines',{id:_vgOpen,lines});toast('수정 반영을 시작했습니다','success');_vgEdits={};_vgOpen=null;_vgJob=null;vgLoad();}
   catch(e){toast('반영 실패: '+e.message,'error');}
 }
-window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgApproveSel=vgApproveSel;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
+window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgAutoToggle=vgAutoToggle;window.vgAutoScan=vgAutoScan;window.vgAutoHold=vgAutoHold;window.vgApproveSel=vgApproveSel;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
 window.vgLoad=vgLoad;window.vgRender=vgRender;window.vgGo=vgGo;window.vgStart=vgStart;window.vgRetry=vgRetry;window.vgDetail=vgDetail;window.vgDrawDetail=vgDrawDetail;window.vgEdit=vgEdit;window.vgApplyEdits=vgApplyEdits;
 Object.defineProperty(window,'vgPage',{get:()=>vgPage,set:v=>{vgPage=v;}});
 Object.defineProperty(window,'_vgWarnOnly',{get:()=>_vgWarnOnly,set:v=>{_vgWarnOnly=v;}});
