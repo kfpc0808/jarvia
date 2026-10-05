@@ -13500,7 +13500,18 @@ async function _lmsLoadRows(){
     const ym=yms[i], d=snap.data()||{}, cs=d.courses||{};
     Object.keys(cs).forEach(cid=>{
       const c=cs[cid]||{};
-      rows.push({ym, courseId:cid, type:c.type||'', title:c.title||cid,
+      /* ★ [2026-10-05] 마지막으로 학습한 매체 — 트랙별 마지막 학습 시각(at)이 가장 늦은 쪽. 시각이 없으면 해설 영상 트랙만 있을 때 영상 */
+      const tr=c.tracks||{};let media='audio',bestAt=-1;
+      Object.keys(tr).forEach(k=>{const at=+(tr[k]&&tr[k].at)||0;if(at>bestAt){bestAt=at;media=k==='video'?'video':'audio';}});
+      if(bestAt<=0)media=(tr.video&&!Object.keys(tr).some(k=>k!=='video'))?'video':'audio';
+      /* ★ [2026-10-05] 매체별 진도 — 음성(해설 영상 외 트랙)과 해설 영상(video)을 따로 보여준다 */
+      const _sl=t=>{const n=String((t&&t.slots)||'').split(',').filter(v=>v!=='').length*10;return t&&t.dur>0?Math.min(n,t.dur):n;};
+      let aP=0,aD=0,vP=0,vD=0,hasA=false,hasV=false;
+      Object.keys(tr).forEach(k=>{const t=tr[k]||{};if(k==='video'){hasV=true;vP+=_sl(t);vD+=(t.dur||0);}else{hasA=true;aP+=_sl(t);aD+=(t.dur||0);}});
+      if(c.totalSec)aD=c.totalSec;   /* 음성 강좌 길이는 등록된 전체 길이 우선 */
+      const aud=hasA?{played:Math.min(aP,aD||aP),total:aD,ratio:aD>0?Math.min(1,aP/aD):0}:null;
+      const vid=hasV?{played:Math.min(vP,vD||vP),total:vD,ratio:vD>0?Math.min(1,vP/vD):0}:null;
+      rows.push({ym, courseId:cid, type:c.type||'', title:c.title||cid, media, mediaAt:bestAt, aud, vid,
                  ratio:c.ratio||0, playedSec:c.playedSec||0, totalSec:c.totalSec||0,
                  completed:!!c.completed, completedAt:c.completedAt||'', recent:recent.has(ym)});
     });
@@ -13508,8 +13519,8 @@ async function _lmsLoadRows(){
   /* 같은 강좌가 여러 달에 걸쳐 있으면 진도가 높은 쪽만 남긴다 */
   const best={};
   rows.forEach(r=>{ const p=best[r.courseId];
-    if(!p||r.ratio>p.ratio){ best[r.courseId]=Object.assign({},r,{recent:(p?p.recent:false)||r.recent}); }
-    else if(r.recent){ p.recent=true; } });
+    if(!p||r.ratio>p.ratio){ best[r.courseId]=Object.assign({},r,{recent:(p?p.recent:false)||r.recent}); if(p&&(p.mediaAt||0)>(r.mediaAt||0)){best[r.courseId].media=p.media;best[r.courseId].mediaAt=p.mediaAt;} }
+    else{ if(r.recent)p.recent=true; if((r.mediaAt||0)>(p.mediaAt||0)){p.media=r.media;p.mediaAt=r.mediaAt;} } });   /* ★ [2026-10-05] 매체는 가장 최근 기록 기준 */
   return Object.values(best).sort((a,b)=>(b.completedAt||b.ym).localeCompare(a.completedAt||a.ym));
 }
 function _lmsMin(sec){const s=Math.max(0,sec|0);return Math.floor(s/60)+'분 '+String(s%60).padStart(2,'0')+'초';}
@@ -13522,12 +13533,29 @@ function _lmsCard(r){
    +'<div style="min-width:0"><div style="font-size:12px;color:#7C8CA5;margin-bottom:4px">'+esc(_lmsKind(r))+'</div>'
    +'<div style="font-size:15px;font-weight:600;color:#1B2A41;line-height:1.4">'+esc(_lmsLabel(r))+'</div></div>'
    +(done?'<span style="flex:0 0 auto;background:#E8F5EE;color:#1E7B4E;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px">이수 완료'+(day?' · '+day:'')+'</span>'
-         :'<button class="btn-accent" style="flex:0 0 auto;padding:7px 14px;font-size:13px" onclick="lmsResume(\''+r.courseId+'\',\''+(r.type||'')+'\')">이어 듣기</button>')
+         :(r.aud||r.vid)?''   /* ★ [2026-10-05] 매체별 줄에 각각 버튼이 있으므로 머리 버튼은 숨김 */
+         :'<button class="btn-accent" style="flex:0 0 auto;padding:7px 14px;font-size:13px" onclick="lmsResume(\''+r.courseId+'\',\''+(r.type||'')+'\',\''+(r.media||'audio')+'\')">'+(r.media==='video'?'이어 보기':'이어 듣기')+'</button>')
    +'</div>'
-   +'<div style="margin-top:10px;height:6px;background:#EEF2F6;border-radius:3px;overflow:hidden">'
-   +'<div style="height:100%;width:'+pct+'%;background:'+(done?'#2ECC71':'#1B3A5C')+'"></div></div>'
-   +'<div style="margin-top:6px;font-size:12px;color:#7C8CA5">진도 '+pct+'% · 들은 시간 '+_lmsMin(r.playedSec)+(r.totalSec?' / '+_lmsMin(r.totalSec):'')+'</div>'
+   +((r.aud||r.vid)?_lmsMediaRows(r,done)   /* ★ [2026-10-05] 음성·영상을 각각 표시 */
+     :'<div style="margin-top:10px;height:6px;background:#EEF2F6;border-radius:3px;overflow:hidden">'
+     +'<div style="height:100%;width:'+pct+'%;background:'+(done?'#2ECC71':'#1B3A5C')+'"></div></div>'
+     +'<div style="margin-top:6px;font-size:12px;color:#7C8CA5">진도 '+pct+'% · 들은 시간 '+_lmsMin(r.playedSec)+(r.totalSec?' / '+_lmsMin(r.totalSec):'')+'</div>')
    +'</div>';
+}
+/* ★ [2026-10-05] 매체별 진도 줄 — 회원이 실제로 들은 음성·본 영상만 보여준다. 이수는 둘 중 하나라도 80% 이상 */
+function _lmsMediaRows(r,done){
+  const usedA=r.aud&&r.aud.played>0, usedV=r.vid&&r.vid.played>0;
+  const line=(isV,m,used)=>{
+    if(!m)return '';
+    if(!used&&(usedA||usedV))return '';   /* 쓴 매체만 표시 (둘 다 기록이 없으면 있는 것을 표시) */
+    const p=Math.min(100,Math.round(m.ratio*1000)/10);
+    const btn=done?'':'<button class="btn-accent" style="flex:0 0 auto;padding:5px 12px;font-size:12px" onclick="lmsResume(\''+r.courseId+'\',\''+(r.type||'')+'\',\''+(isV?'video':'audio')+'\')">'+(isV?'이어 보기':'이어 듣기')+'</button>';
+    return '<div style="display:flex;align-items:center;gap:10px;margin-top:10px">'
+      +'<span style="flex:0 0 54px;font-size:12px;font-weight:700;color:#1B3A5C">'+(isV?'🎬 영상':'🎧 음성')+'</span>'
+      +'<div style="flex:1;min-width:0"><div style="height:6px;background:#EEF2F6;border-radius:3px;overflow:hidden"><div style="height:100%;width:'+p+'%;background:'+(p>=80?'#2ECC71':'#1B3A5C')+'"></div></div>'
+      +'<div style="margin-top:4px;font-size:12px;color:#7C8CA5">진도 '+p+'% · '+(isV?'본 시간 ':'들은 시간 ')+_lmsMin(m.played)+(m.total?' / '+_lmsMin(m.total):'')+'</div></div>'+btn+'</div>';
+  };
+  return line(false,r.aud,usedA)+line(true,r.vid,usedV);
 }
 window.lmsSubTab=function(k,btn){
   _lmsSub=k;
@@ -13571,7 +13599,7 @@ async function loadLmsStatus(){
   $('lms-sum').innerHTML=box('수강 중',ing+'개')+box('이수 완료',done+'개')+box('총 학습 시간',Math.floor(secs/60)+'분');
   _lmsRender();
 }
-window.lmsResume=function(courseId,type){
+window.lmsResume=function(courseId,type,media){
   const m=/^(daily|client|consensus)_(\d{8})$/.exec(courseId);
   if(m){
     if(m[1]==='daily'){location.href='./dr-viewer.html?id='+m[2];return;}
@@ -13582,7 +13610,12 @@ window.lmsResume=function(courseId,type){
   /* 콘텐츠 강좌 — 음성 플레이어를 바로 연다 (문서 뷰어가 아니라) */
   const cid=_lmsContentId(courseId);
   const open={master_guide:'mgPayAndOpen',tax_weekly:'twPayAndOpen',case_report:'crPayAndOpen',medical_weekly:'mwPayAndOpen'}[type||''];
-  if(open&&typeof window[open]==='function'){window[open](cid,'audio');return;}
+  if(open&&typeof window[open]==='function'){
+    /* ★ [2026-10-05] 마지막에 영상으로 봤고 영상이 공개돼 있으면 영상을, 아니면 음성을 연다 (위치는 각 플레이어가 이어 줌) */
+    const _c=(typeof allContents!=='undefined'&&Array.isArray(allContents))?allContents.find(x=>x.contentId===cid):null;
+    const _v=media==='video'&&_c&&_c.explainVideo&&_c.explainVideo.player;
+    window[open](cid,_v?'video':'audio');return;
+  }
   if(typeof doView==='function'){doView(cid);return;}
   alert('해당 콘텐츠를 찾을 수 없습니다.');
 };

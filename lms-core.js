@@ -163,11 +163,12 @@
     dst.tracks = dst.tracks || {};
     Object.keys(src.tracks || {}).forEach(function (k) {
       var s = src.tracks[k] || {}, d = dst.tracks[k];
-      if (!d) { dst.tracks[k] = { title: s.title || "", slots: s.slots || "", pos: s.pos || 0, dur: s.dur || 0 }; return; }
+      if (!d) { dst.tracks[k] = { title: s.title || "", slots: s.slots || "", pos: s.pos || 0, dur: s.dur || 0 }; if (s.at) dst.tracks[k].at = s.at; return; }
       var u = slotsToSet(d.slots);
       slotsToSet(s.slots).forEach(function (v) { u.add(v); });
       d.slots = setToSlots(u);
       if (!d.dur && s.dur) d.dur = s.dur;
+      if ((s.at || 0) > (d.at || 0)) d.at = s.at;   /* ★ [2026-10-05] 마지막 학습 시각은 최신 값 */
       if (!d.title && s.title) d.title = s.title;
     });
     if (src.completed) {
@@ -438,6 +439,7 @@
         t.slots = setToSlots(slots || new Set());
         c.lastAt = todayKey();            /* ★ [2026-09-23] 강좌별 마지막 학습일 */
         t.pos = Math.floor(el.currentTime || 0);
+        t.at = Date.now();                /* ★ [2026-10-05] 트랙별 마지막 학습 시각 — 이어 듣기가 마지막에 쓴 매체(음성/영상)를 연다 */
         S.touched[cid + "|" + tid] = true;
         if (el.duration && isFinite(el.duration)) t.dur = Math.round(el.duration);
         /* ★ [2026-10-01] 강좌 전체 길이 — 등록(lms_courses)되면 그 값으로 보강 */
@@ -527,7 +529,7 @@
       slotsToSet(payload.slots).forEach(function (v) { merged.add(v); });
       t.slots = setToSlots(merged);
       c.lastAt = todayKey();              /* ★ [2026-09-23] 강좌별 마지막 학습일 */
-      if (payload.pos !== undefined) { t.pos = payload.pos | 0; S.touched[cid + "|" + tid] = true; }
+      if (payload.pos !== undefined) { t.pos = payload.pos | 0; t.at = Date.now(); S.touched[cid + "|" + tid] = true; }
       if (payload.dur) t.dur = payload.dur | 0;
       if (!c.totalSec) {
         var sum = 0;
