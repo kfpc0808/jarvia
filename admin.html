@@ -1029,10 +1029,11 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <select id="vg-st" onchange="vgPage=0;vgRender()"><option value="">전체 상태</option><option value="none">영상 없음</option><option value="waiting">대기</option><option value="busy">생성 중</option><option value="done">완료</option><option value="error">오류</option></select>
         <input id="vg-q" placeholder="제목·날짜 검색" oninput="vgPage=0;vgRender()" style="min-width:220px">
         <button class="btn btn-sec" onclick="vgLoad()">새로고침</button>
+        <span style="font-size:12.5px;color:#4a5573">한 화면 <select id="vg-psize" onchange="vgSetPage(this.value)" style="padding:5px 8px"><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="500">500</option></select>개</span>
         <span id="vg-sum" style="font-size:12.5px;color:#7a8299"></span>
       </div>
       <div class="vg-bulk">
-        <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="vg-all" onchange="vgSelAll(this.checked)"> 목록 전체 선택</label>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="vg-all" onchange="vgSelAll(this.checked)"> 이 화면 전체 선택</label>
         <b id="vg-seln">0편 선택</b>
         <button class="btn" id="vg-bulk-go" onclick="vgEnqueueSel()" disabled>선택 영상 생성</button>
         <button class="btn btn-sec" id="vg-bulk-cancel" onclick="vgCancelSel()" disabled>선택 대기 취소</button>
@@ -26480,7 +26481,9 @@ async function thRevert(id){
 window.thLoad=thLoad;window.thRender=thRender;window.thRerun=thRerun;window.thApply=thApply;window.thRevert=thRevert;window.thPick=thPick;window.thFilePicked=thFilePicked;window.thVariants=thVariants;window.thPickVar=thPickVar;window.thSetTab=thSetTab;window.thToggle=thToggle;window.thToggleSel=thToggleSel;window.thZoom=thZoom;window.thReview=thReview;window.thReviewSel=thReviewSel;window.thReviewPage=thReviewPage;window.thPreview=thPreview;window.thSearch=thSearch;window.thGo=thGo;
 /* ═══ ★ [2026-10-04] 영상 생성 (functions/videoGen.js — vgList·vgStart·vgGet·vgEditLines·vgRetry, 관리자 로그인 토큰 인증) ═══ */
 let _vgUploading=false,_vgItems=[],_vgOpen=null,_vgJob=null,_vgEdits={},_vgTimer=null,vgPage=0,_vgWarnOnly=false,_vgSel=new Set(),_vgQ={max:3,limit:3,waiting:[]};
-const VG_PAGE=30;
+let VG_PAGE=20;   /* 한 화면에 보이는 개수 (20·50·100·200·500) */
+function vgPageView(){const list=vgFiltered();const pages=Math.max(1,Math.ceil(list.length/VG_PAGE));const pg=Math.min(vgPage,pages-1);return list.slice(pg*VG_PAGE,(pg+1)*VG_PAGE);}
+function vgSetPage(v){VG_PAGE=Math.max(20,Number(v)||20);vgPage=0;vgRender();}
 const VG_TRACK={case_report:'클로징',tax_weekly:'택스',master_guide:'마스터',medical_weekly:'메디컬'};
 const VG_BUSY=['queued','script','assemble','subfix','tts','layout','render','concat'];
 const vgBusy=j=>!!j&&VG_BUSY.includes(j.status);
@@ -26538,14 +26541,14 @@ function vgBulkBar(list){
   $('vg-bulk-cancel').disabled=!canCancel;$('vg-bulk-cancel').textContent=canCancel?`선택 대기 취소 (${canCancel}편)`:'선택 대기 취소';
   const canPub=sel.filter(vgCanPub).length;   /* ★ 완성됐고 아직 공개 안 된 영상 */
   $('vg-bulk-pub').disabled=!canPub||_vgPubBusy;$('vg-bulk-pub').textContent=_vgPubBusy?'승인·게시 진행 중…':(canPub?`선택 승인·게시 (${canPub}편)`:'선택 승인·게시');
-  const elig=(list||vgFiltered()).filter(x=>!vgBusy(x.job));
+  const elig=vgPageView().filter(x=>!vgBusy(x.job));   /* 이 화면에 보이는 것 기준 */
   $('vg-all').checked=elig.length>0&&elig.every(x=>_vgSel.has(x.id));
   const mx=$('vg-max');if(mx&&document.activeElement!==mx)mx.value=String(_vgQ.max||3);
   const wn=_vgQ.waiting.length;$('vg-qinfo').textContent=wn?`대기 ${wn}편 · 예상 약 ${vgEta(wn)}`:'대기 0편';
 }
 function vgEta(n){const m=Math.ceil(n/Math.max(1,_vgQ.max||3))*15;return m>=60?`${Math.floor(m/60)}시간${m%60?' '+(m%60)+'분':''}`:`${m}분`;}
 function vgSel(id,on){on?_vgSel.add(id):_vgSel.delete(id);vgBulkBar();}
-function vgSelAll(on){vgFiltered().filter(x=>!vgBusy(x.job)).forEach(x=>on?_vgSel.add(x.id):_vgSel.delete(x.id));vgRender();}
+function vgSelAll(on){vgPageView().filter(x=>!vgBusy(x.job)).forEach(x=>on?_vgSel.add(x.id):_vgSel.delete(x.id));vgRender();}   /* 이 화면에 보이는 것만 선택 */
 async function vgEnqueueSel(){
   const items=[..._vgSel].map(id=>_vgItems.find(x=>x.id===id)).filter(x=>x&&!vgBusy(x.job)&&!(x.job&&x.job.status==='waiting'));
   if(!items.length)return;
@@ -26785,7 +26788,7 @@ async function vgApplyEdits(){
   try{await vgApi('vgEditLines',{id:_vgOpen,lines});toast('수정 반영을 시작했습니다','success');_vgEdits={};_vgOpen=null;_vgJob=null;vgLoad();}
   catch(e){toast('반영 실패: '+e.message,'error');}
 }
-window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgAutoToggle=vgAutoToggle;window.vgAutoScan=vgAutoScan;window.vgAutoHold=vgAutoHold;window.vgApproveSel=vgApproveSel;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
+window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgSetPage=vgSetPage;window.vgAutoToggle=vgAutoToggle;window.vgAutoScan=vgAutoScan;window.vgAutoHold=vgAutoHold;window.vgApproveSel=vgApproveSel;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
 window.vgLoad=vgLoad;window.vgRender=vgRender;window.vgGo=vgGo;window.vgStart=vgStart;window.vgRetry=vgRetry;window.vgDetail=vgDetail;window.vgDrawDetail=vgDrawDetail;window.vgEdit=vgEdit;window.vgApplyEdits=vgApplyEdits;
 Object.defineProperty(window,'vgPage',{get:()=>vgPage,set:v=>{vgPage=v;}});
 Object.defineProperty(window,'_vgWarnOnly',{get:()=>_vgWarnOnly,set:v=>{_vgWarnOnly=v;}});
