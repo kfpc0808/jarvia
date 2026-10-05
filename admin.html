@@ -26476,7 +26476,7 @@ async function thRevert(id){
 }
 window.thLoad=thLoad;window.thRender=thRender;window.thRerun=thRerun;window.thApply=thApply;window.thRevert=thRevert;window.thPick=thPick;window.thFilePicked=thFilePicked;window.thVariants=thVariants;window.thPickVar=thPickVar;window.thSetTab=thSetTab;window.thToggle=thToggle;window.thToggleSel=thToggleSel;window.thZoom=thZoom;window.thReview=thReview;window.thReviewSel=thReviewSel;window.thReviewPage=thReviewPage;window.thPreview=thPreview;window.thSearch=thSearch;window.thGo=thGo;
 /* ═══ ★ [2026-10-04] 영상 생성 (functions/videoGen.js — vgList·vgStart·vgGet·vgEditLines·vgRetry, 관리자 로그인 토큰 인증) ═══ */
-let _vgItems=[],_vgOpen=null,_vgJob=null,_vgEdits={},_vgTimer=null,vgPage=0,_vgWarnOnly=false,_vgSel=new Set(),_vgQ={max:3,limit:3,waiting:[]};
+let _vgUploading=false,_vgItems=[],_vgOpen=null,_vgJob=null,_vgEdits={},_vgTimer=null,vgPage=0,_vgWarnOnly=false,_vgSel=new Set(),_vgQ={max:3,limit:3,waiting:[]};
 const VG_PAGE=30;
 const VG_TRACK={case_report:'클로징',tax_weekly:'택스',master_guide:'마스터',medical_weekly:'메디컬'};
 const VG_BUSY=['queued','script','assemble','subfix','tts','layout','render','concat'];
@@ -26491,6 +26491,7 @@ async function vgApi(fn,body){
 }
 async function vgLoad(){
   try{
+    if(_vgUploading){clearTimeout(_vgTimer);_vgTimer=setTimeout(()=>{if(!$('p-vgen').classList.contains('hidden'))vgLoad();},10000);return;}   /* 편집본 업로드 중에는 화면을 다시 그리지 않음 (진행률 유지) */
     const j=await vgApi('vgList',{});_vgItems=j.items||[];_vgQ=j.queue||_vgQ;
     const ids=new Set(_vgItems.map(x=>x.id));[..._vgSel].forEach(id=>{const it=_vgItems.find(x=>x.id===id);if(!ids.has(id)||vgBusy(it&&it.job))_vgSel.delete(id);});
     vgRender();
@@ -26567,7 +26568,7 @@ function vgRow(x){
     acts=`<button class="btn btn-sec" onclick="vgCancelSel(['${x.id}'])">대기 취소</button><button class="btn" onclick="vgStart('${x.id}','${x.track}')">지금 바로</button>`;}
   else if(!j){st='<span style="color:#9aa2b5">영상 없음</span>';acts=`<button class="btn" onclick="vgStart('${x.id}','${x.track}')">영상 생성</button>`;}
   else if(vgBusy(j)){st=`<b style="color:#B0883C">${esc(j.stage||'생성 중')}</b><div class="vg-prog"><i style="width:${j.progress||0}%"></i></div>`;acts=`<span style="font-size:12px;color:#7a8299">${j.progress||0}%</span>`;}
-  else if(j.status==='done'){st=`<b style="color:#2E7D32">완료</b> · ${vgDur(j.durationSec)}${j.warnCount?` · <span class="vg-flag">확인 ${j.warnCount}</span>`:''}<div style="font-size:11px;color:#9aa2b5">${esc(j.updatedAt||'')}</div>`;
+  else if(j.status==='done'){st=`<b style="color:#2E7D32">완료</b> · ${vgDur(j.durationSec)}${j.warnCount?` · <span class="vg-flag">확인 ${j.warnCount}</span>`:''}<div style="font-size:11px;color:#9aa2b5">${esc(j.updatedAt||'')} · ${vgPubBadge(j)}</div>`;
     acts=`<button class="btn" onclick="vgDetail('${x.id}')">${open?'닫기':'보기·수정'}</button><a class="btn btn-sec" href="${j.videoUrl}" download>다운로드</a><button class="btn btn-sec" onclick="vgStart('${x.id}','${x.track}',true)">처음부터</button>`;}
   else{st=`<b style="color:#c62828">오류</b><div style="font-size:11px;color:#c62828;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.error||'')}">${esc(j.error||'')}</div>`;
     acts=`<button class="btn" onclick="vgRetry('${x.id}')">이어서 다시</button><button class="btn btn-sec" onclick="vgStart('${x.id}','${x.track}',true)">처음부터</button>${j.videoUrl?`<button class="btn btn-sec" onclick="vgDetail('${x.id}')">${open?'닫기':'보기'}</button>`:''}`;}
@@ -26616,6 +26617,7 @@ function vgDrawDetail(){
         ${j.videoUrl?`<a href="${j.videoUrl}" download>영상 다운로드</a>`:''}${j.srtUrl?`<a href="${j.srtUrl}" target="_blank">자막(SRT)</a>`:''}${j.scriptUrl?`<a href="${j.scriptUrl}" target="_blank">대본</a>`:''}<a href="${j.htmlUrl}" target="_blank">원본</a>
         ${(j.status==='done'||j.status==='error')&&(j.lines||[]).length?`<div style="margin-top:8px"><button class="btn btn-sec" onclick="vgRerender()">화면만 다시 만들기</button> <span style="font-size:11.5px;color:#9aa2b5">대본·음성은 그대로 두고 화면만 다시 녹화합니다 (없는 표지 낭독만 새로 생성)</span></div>
         <div style="margin-top:6px"><button class="btn btn-sec" onclick="vgRedoTts()">음성부터 다시 만들기</button> <span style="font-size:11.5px;color:#9aa2b5">대본은 그대로 두고 자막 맞춤·낭독 다듬기·음성·영상을 새로 만듭니다</span></div>`:''}</div>
+      ${vgPubBox(j)}
     </div>
     <div>
       <div class="vg-edbar"><label style="display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" ${_vgWarnOnly?'checked':''} onchange="_vgWarnOnly=this.checked;vgDrawDetail()"> 확인 필요·고친 문장만</label>
@@ -26629,6 +26631,85 @@ function vgEdit(k,f,v){
   const e=_vgEdits[k]||{};e[f]=v;
   if((e.t==null||e.t===l.t)&&(e.say==null||e.say===l.say))delete _vgEdits[k];else _vgEdits[k]=e;
   const n=Object.keys(_vgEdits).length;$('vg-edn').textContent=n;$('vg-edbtn').disabled=!n;
+}
+/* ── 회원 공개 (비메오) ── */
+function vgPubBadge(j){
+  if(j.vimeoState==='error')return '<b style="color:#c62828">비메오 오류</b>';
+  if(j.published&&j.vimeoState==='ready')return '<b style="color:#2E7D32">● 공개됨</b>';
+  if(j.published&&j.vimeoState==='processing')return '<b style="color:#B0883C">비메오 처리 중 (끝나면 공개)</b>';
+  if(j.vimeoId&&j.vimeoState==='processing')return '<span style="color:#B0883C">비메오 처리 중</span>';
+  return '<span style="color:#9aa2b5">미공개</span>';
+}
+function vgPubBox(j){
+  if(!(j.status==='done'||j.vimeoId))return '';
+  const btns=[];
+  if(!j.vimeoId)btns.push(`<button class="btn" onclick="vgApprove()">승인·게시</button>`);
+  else if(!j.published)btns.push(`<button class="btn" onclick="vgApprove()">게시</button>`);
+  if(j.published)btns.push(`<button class="btn btn-sec" onclick="vgUnpublish()">게시 취소</button>`);
+  const outdated=j.vimeoId&&j.videoUrl&&j.status==='done'&&j.vimeoSource&&j.vimeoSource!==j.videoUrl;
+  if(outdated)btns.push(`<button class="btn btn-sec" onclick="vgApprove(true)">${j.edited?'생성본으로 되돌리기 (편집본 덮어씀)':'새 생성본으로 비메오 교체'}</button>`);
+  else if(j.vimeoId&&j.vimeoState==='error'&&j.status==='done'&&j.videoUrl)btns.push(`<button class="btn btn-sec" onclick="vgApprove(true)">생성본으로 비메오 다시 올리기</button>`);
+  btns.push(`<label class="btn btn-sec" style="cursor:pointer">편집본 업로드<input type="file" accept="video/*" style="display:none" onchange="vgUploadEdited(this.files[0]);this.value=''"></label>`);
+  const notes=[];
+  if(j.edited)notes.push(`비메오에는 <b>편집본</b>이 올라가 있습니다${j.editedBy?` (${esc(j.editedBy)})`:''}.`);
+  else if(outdated)notes.push('다시 만든 영상이 아직 비메오에 반영되지 않았습니다.');
+  if(j.vimeoError)notes.push(`<span style="color:#c62828">${esc(j.vimeoError)}</span>`);
+  if(j.vimeoView==='unlisted')notes.push('요금제 제한으로 비메오 공개 설정이 「링크 공유」로 되어 있습니다.');
+  return `<div style="margin-top:14px;padding:12px;border:1px solid #e3e6ee;border-radius:10px;background:#fafbfd">
+    <div style="font-size:13px;font-weight:700;color:#1F3A6B;margin-bottom:6px">회원 공개 · ${vgPubBadge(j)}</div>
+    <div style="font-size:12px;color:#7a8299;line-height:1.6;margin-bottom:8px">승인·게시하면 영상이 비메오(「${'JARVIA 콘텐츠 영상'}」 폴더)에 올라가고, 비메오 처리가 끝나면 회원에게 공개됩니다. 비메오 사이트에서는 숨겨지고 자비아에서만 재생됩니다.${notes.length?'<br>'+notes.join('<br>'):''}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>
+    <div id="vg-up" style="display:none;margin-top:8px;font-size:12px;color:#4a5573"><div class="vg-prog"><i id="vg-up-bar" style="width:0%"></i></div><span id="vg-up-txt"></span></div>
+    ${j.vimeoId&&j.vimeoState==='ready'&&j.vimeoPlayer?`<div style="margin-top:10px"><button class="btn btn-sec" onclick="this.outerHTML='<iframe src=&quot;${esc(j.vimeoPlayer)}&quot; style=&quot;width:100%;aspect-ratio:16/9;border:0;border-radius:8px&quot; allow=&quot;autoplay; fullscreen; picture-in-picture&quot; allowfullscreen></iframe>'">비메오 재생 확인</button></div>`:''}
+  </div>`;
+}
+async function vgApprove(replace){
+  if(!_vgOpen||!_vgJob)return;
+  const j=_vgJob;
+  const msg=!j.vimeoId?'이 영상을 비메오에 올리고 회원에게 공개합니다.\n비메오 처리가 끝나면(보통 10~30분) 공개됩니다. 진행할까요?'
+    :replace&&j.vimeoState==='error'&&j.vimeoSource===j.videoUrl?'비메오 처리 오류가 난 영상을 생성본으로 다시 올립니다. 진행할까요?'
+    :replace?(j.edited?'비메오의 편집본을 지금 생성본으로 덮어씁니다. 편집본은 비메오 버전 기록에만 남습니다.\n진행할까요?':'비메오 영상을 새로 만든 생성본으로 교체합니다. 주소·ID는 그대로입니다.\n진행할까요?')
+    :'회원에게 다시 공개합니다. 진행할까요?';
+  if(!confirm(msg))return;
+  try{await vgApi('vgApprove',{id:_vgOpen,replace:!!replace});toast(replace?'비메오 교체를 시작했습니다':'게시했습니다 (비메오 처리 후 공개)','success');vgDetail(_vgOpen,true);vgLoad();}
+  catch(e){toast('게시 실패: '+e.message,'error');}
+}
+async function vgUnpublish(){
+  if(!_vgOpen||!confirm('회원 화면에서 이 영상을 내립니다. 비메오 영상은 그대로 둡니다. 진행할까요?'))return;
+  try{await vgApi('vgUnpublish',{id:_vgOpen});toast('게시를 취소했습니다','success');vgDetail(_vgOpen,true);vgLoad();}
+  catch(e){toast('취소 실패: '+e.message,'error');}
+}
+/* 편집본 → 비메오 직접 업로드 (tus, 64MB씩) */
+function vgTusPatch(url,blob,offset,onProg){
+  return new Promise((res,rej)=>{
+    const x=new XMLHttpRequest();x.open('PATCH',url);
+    x.setRequestHeader('Tus-Resumable','1.0.0');x.setRequestHeader('Upload-Offset',String(offset));x.setRequestHeader('Content-Type','application/offset+octet-stream');
+    x.upload.onprogress=e=>{if(e.lengthComputable)onProg(e.loaded);};
+    x.onload=()=>{if(x.status>=200&&x.status<300){const h=x.getResponseHeader('Upload-Offset'),o=h==null||h===''?NaN:Number(h);res(isNaN(o)||o<=offset?offset+blob.size:o);}else rej(new Error('업로드 '+x.status));};
+    x.onerror=()=>rej(new Error('네트워크 오류'));x.send(blob);
+  });
+}
+async function vgUploadEdited(file){
+  if(!file||!_vgOpen)return;
+  const id=_vgOpen,j=_vgJob||{};
+  if(!confirm(`「${file.name}」(${(file.size/1048576).toFixed(0)}MB)을 편집본으로 올립니다.\n${j.vimeoId?'비메오의 같은 영상 원본이 교체되며 주소·ID·학습 기록은 그대로입니다.':'비메오에 새로 등록됩니다 (공개는 승인·게시 후).'}\n업로드가 끝날 때까지 이 창을 닫지 마세요.`))return;
+  const box=$('vg-up'),bar=$('vg-up-bar'),txt=$('vg-up-txt');
+  box.style.display='';txt.textContent='업로드 준비 중…';
+  window.onbeforeunload=()=>'업로드 중입니다';_vgUploading=true;
+  try{
+    const r=await vgApi('vgEditedStart',{id,size:file.size,name:file.name});
+    const CH=64*1024*1024;let off=0;
+    for(let tries=0;off<file.size;){
+      const end=Math.min(off+CH,file.size);
+      try{off=await vgTusPatch(r.uploadLink,file.slice(off,end),off,l=>{const p=Math.round((off+l)/file.size*100);bar.style.width=p+'%';txt.textContent=`업로드 ${p}% (${((off+l)/1048576).toFixed(0)} / ${(file.size/1048576).toFixed(0)}MB)`;});tries=0;}
+      catch(e){if(++tries>3)throw e;txt.textContent='연결이 끊겨 다시 시도 중…';await new Promise(z=>setTimeout(z,3000*tries));}
+    }
+    await vgApi('vgEditedDone',{id});
+    _vgUploading=false;
+    txt.textContent='업로드 완료 — 비메오 처리 중 (보통 10~30분)';toast('편집본 업로드 완료','success');
+    vgDetail(id,true);vgLoad();
+  }catch(e){txt.textContent='업로드 실패: '+e.message;toast('업로드 실패: '+e.message,'error');}
+  finally{window.onbeforeunload=null;_vgUploading=false;}
 }
 let _vgLexLoaded=false;
 async function vgLexLoad(force){
@@ -26659,7 +26740,7 @@ async function vgApplyEdits(){
   try{await vgApi('vgEditLines',{id:_vgOpen,lines});toast('수정 반영을 시작했습니다','success');_vgEdits={};_vgOpen=null;_vgJob=null;vgLoad();}
   catch(e){toast('반영 실패: '+e.message,'error');}
 }
-window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
+window.vgApprove=vgApprove;window.vgUnpublish=vgUnpublish;window.vgUploadEdited=vgUploadEdited;window.vgRedoTts=vgRedoTts;window.vgRerender=vgRerender;window.vgLexLoad=vgLexLoad;window.vgLexSave=vgLexSave;window.vgSel=vgSel;window.vgSelAll=vgSelAll;window.vgEnqueueSel=vgEnqueueSel;window.vgCancelSel=vgCancelSel;window.vgSetMax=vgSetMax;
 window.vgLoad=vgLoad;window.vgRender=vgRender;window.vgGo=vgGo;window.vgStart=vgStart;window.vgRetry=vgRetry;window.vgDetail=vgDetail;window.vgDrawDetail=vgDrawDetail;window.vgEdit=vgEdit;window.vgApplyEdits=vgApplyEdits;
 Object.defineProperty(window,'vgPage',{get:()=>vgPage,set:v=>{vgPage=v;}});
 Object.defineProperty(window,'_vgWarnOnly',{get:()=>_vgWarnOnly,set:v=>{_vgWarnOnly=v;}});
