@@ -8355,27 +8355,57 @@ window.msBsmSet=msBsmSet;
 function _rfIsMember(m){return m.role==='jarvia_member'||m.role==='jarvia_inner';}
 function _rfAmt(m){const a=Number(m.membershipJoinFee)>0?Number(m.membershipJoinFee):(Number(m.membershipJoinFeePending)>0?Number(m.membershipJoinFeePending):100000);return (a%10000===0)?(a/10000)+'만':fmt(a)+'원';}
 function _rfState(m){
-  if(!_rfIsMember(m))return '';
+  if(!_rfIsMember(m))return (m.role==='user'&&Number(m.membershipJoinFeePending)>0)?'apply':'';   /* ★ [2026-10-06] 송금 가입 신청 · 입금 대기(전환 전) */
   const paidAmt=Number(m.membershipJoinFee)>0;
   if(m.membershipJoinedVia==='self'&&paidAmt)return 'card';
   if(m.regFeePaid===true)return 'remit';
   if(m.membershipJoinedVia==='remit'&&paidAmt)return 'remit';
   return 'unpaid';
 }
-function _rfLabel(m){const st=_rfState(m);return st==='card'?'카드 '+_rfAmt(m):st==='remit'?'송금 '+_rfAmt(m):st==='unpaid'?'미송금':'';}
+function _rfLabel(m){const st=_rfState(m);return st==='card'?'카드 '+_rfAmt(m):st==='remit'?'송금 '+_rfAmt(m):st==='unpaid'?'미송금':st==='apply'?'입금 대기':'';}
 function _rfCell(m){
   const st=_rfState(m);
   if(!st)return '<td style="text-align:center;color:#94A3B8">-</td>';
   if(st==='card')return '<td style="white-space:nowrap;font-weight:600;color:#1B3A5C">카드 '+_rfAmt(m)+'</td>';
   if(st==='remit')return '<td style="white-space:nowrap;font-weight:600;color:#15803D">송금 '+_rfAmt(m)+'</td>';
+  if(st==='apply')return '<td style="white-space:nowrap"><span style="font-weight:600;color:#8A6B24">입금 대기</span> <button class="btn btn-sm" style="padding:2px 8px;font-size:11px" onclick="regFeeConfirm(\''+m.id+'\')">송금확인</button></td>';   /* ★ [2026-10-06] */
   return '<td style="white-space:nowrap"><span style="font-weight:600;color:#DC2626">미송금</span> <button class="btn btn-sm" style="padding:2px 8px;font-size:11px" onclick="regFeeConfirm(\''+m.id+'\')">송금확인</button></td>';
+}
+/* ★ [2026-10-06] 송금확인 확인창용 — 추천인 포인트 안내 줄 (서버 _mjAfterConvert 와 같은 조건: 총판·단체·이미 지급 제외) */
+async function _rfRefLine(m){
+  if(!m||!m.referredBy||m.groupMasterId||m.membershipReferralRewarded)return '';
+  try{
+    const rs=await getDocs(query(collection(db,'users'),where('referralCode','==',m.referredBy),limit(1)));
+    if(rs.empty)return '';
+    const rd=rs.docs[0].data()||{};
+    if(rd.isDistributor)return '';
+    return '\n· 추천인 '+(rd.name||rd.loginId||'')+'님께 추천 포인트 40,000P 지급';
+  }catch(e){console.warn('[송금확인] 추천인 조회 실패(안내 생략):',e.message);return '';}
 }
 async function regFeeConfirm(uid){
   let m={};
   try{const s=await getDoc(doc(db,'users',uid));if(!s.exists())return toast('회원 정보를 찾을 수 없습니다.','error');m={id:uid,...s.data()};}
   catch(e){return toast('회원 조회 실패: '+(e.message||e),'error');}
-  if(_rfState(m)!=='unpaid')return toast('이미 등록비가 확인된 회원입니다.','info'),loadMembers();
   const nm=m.name||m.loginId||'회원';
+  if(_rfState(m)==='apply'){   /* ★ [2026-10-06] 송금 가입 신청 — 입금 확인 → 자비아멤버십 전환 + 추천 포인트 + 입금확인 알림톡 (서버 adminConfirmJoin) */
+    const t=new Date();const today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+    let depositDate=prompt(nm+'님 등록비 입금일을 입력하세요 (YYYY-MM-DD)',today);
+    if(depositDate===null)return;
+    depositDate=String(depositDate).trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(depositDate))return toast('입금일 형식이 올바르지 않습니다 (예: 2026-10-01)','error');
+    const refLine=await _rfRefLine(m);
+    if(!confirm(nm+'님 등록비 '+_rfAmt(m)+' 입금을 확인하셨습니까?\n입금일 '+depositDate+'\n\n· 자비아멤버십으로 즉시 전환'+refLine+'\n· 월 이용료는 오늘 기준 익월 말일부터 카드 자동결제\n· 회원에게 입금확인 알림톡 발송'))return;
+    try{
+      const res=await httpsCallable(functions,'adminConfirmJoin')({uid,mode:'remit',depositDate,adminName:(admData&&admData.name)||''});
+      const d=res&&res.data||{};
+      if(!d.success)return toast(d.error||'처리하지 못했습니다','error');
+      try{await updateDoc(doc(db,'users',uid),{regFeePaid:true,updatedAt:serverTimestamp()});}catch(_e){console.warn('regFeePaid 동기화 실패(전환은 처리됨):',_e.message);}
+      toast(nm+'님 자비아멤버십 전환 완료 — 첫 월결제 '+(d.firstBillDate||d.firstBillYm||''),'success');
+      loadMembers();
+    }catch(e){console.error('[송금확인·전환] 오류:',e);toast('처리 실패: '+(e.message||e),'error');}
+    return;
+  }
+  if(_rfState(m)!=='unpaid')return toast('이미 등록비가 확인된 회원입니다.','info'),loadMembers();
   const remitJoin=m.membershipJoinedVia==='remit'&&Number(m.membershipJoinFeePending)>0;
   try{
     if(remitJoin){
@@ -26207,7 +26237,7 @@ function sjRender(){
     else if(st==='dismissed')memo='해제: '+esc(r.dismissedBy||'')+' '+fdatetime(r.dismissedAt);
     else if(st==='done'&&r.confirmedBy)memo='처리: '+esc(r.confirmedBy);
     let act='';
-    if(st==='failed'||st==='remit_pending')act+='<button class="btn btn-sm" onclick="sjConfirm(\''+r.id+'\',\'remit\')">입금 확인·전환</button> ';
+    if(st==='failed'||st==='remit_pending')act+='<button class="btn btn-sm" onclick="sjConfirm(\''+r.id+'\',\'remit\')">송금확인</button> ';
     if(st==='paid_not_converted')act+='<button class="btn btn-sm" onclick="sjConfirm(\''+r.id+'\',\'card\')">전환 처리</button> ';
     if(st==='remit_converted')act+='<button class="btn btn-sm" onclick="sjRemitDone(\''+r.id+'\')">송금완료</button> ';   /* ★ [2026-10-04] */
     if(st!=='done'&&st!=='dismissed'&&st!=='paid_not_converted'&&st!=='remit_converted')act+='<button class="btn btn-sm btn-sec" onclick="sjDismiss(\''+r.id+'\')">대기 해제</button>';
@@ -26223,7 +26253,8 @@ async function sjConfirm(uid,mode){
     if(depositDate===null)return;
     depositDate=String(depositDate).trim();
     if(!/^\d{4}-\d{2}-\d{2}$/.test(depositDate)){toast('입금일 형식이 올바르지 않습니다 (예: 2026-10-01)','error');return;}
-    if(!confirm((r.name||'회원')+'님\n입금일 '+depositDate+' · 등록비 '+fmt(r.joinFee||100000)+'원\n\n등록비를 기록하고 자비아멤버십으로 전환할까요?\n(월 이용료는 오늘 기준 익월 말일부터 자동결제)'))return;
+    let refLine='';try{const us=await getDoc(doc(db,'users',uid));if(us.exists())refLine=await _rfRefLine(us.data()||{});}catch(_e){}   /* ★ [2026-10-06] 추천인 포인트 안내 */
+    if(!confirm((r.name||'회원')+'님\n입금일 '+depositDate+' · 등록비 '+fmt(r.joinFee||100000)+'원\n\n등록비를 기록하고 자비아멤버십으로 전환할까요?'+refLine+'\n(월 이용료는 오늘 기준 익월 말일부터 자동결제)'))return;
   }else{
     if(!confirm((r.name||'회원')+'님\n카드 결제(TID '+(r.tid||'')+')는 승인된 상태입니다.\n\n결제를 기록하고 자비아멤버십으로 전환할까요?'))return;
   }
