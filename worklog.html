@@ -1506,7 +1506,7 @@ async function loadOrgMe(){
     _orgMe=(r.data&&r.data.success)?r.data:null;
   }catch(e){console.warn('org',e);_orgMe=null;}
   if(_view==='vHome'){renderOrgCard();renderHomeAct();}   /* ★ [2026-09-05] isUpline 확정 시점에 빠른 실행 바 갱신 */
-  if(_view==='vPerf'){renderGoalWho();renderStrat('pmStrat',_pm);}   /* ★ [2026-10-06] 직책 확정 시점에 개인/팀 목표 표시 갱신 */
+  if(_view==='vPerf'){renderGoalWho();renderStrat('pmStrat',_pm);renderAch();const ft=$('pmFinT');if(ft&&ft.textContent)ft.textContent=(+_pm.slice(5,7))+'월'+(wlIsUp()?' 내 개인':'');}   /* ★ [2026-10-06] 직책 확정 시점에 개인/팀 목표 표시 갱신 */
   renderStrat('hmStrat',_ym);   /* ★ [2026-10-06] 홈 전략 리본 개인 표시 갱신 */
   /* 팀 탭 노출 — 팀장·지점장(하위 있거나 직책 설정) */
   const up=!!(_orgMe&&_orgMe.isUpline);const tb=$('tabTeam');if(tb)tb.style.display=up?'':'none';$('tabbar').classList.toggle('svn',up);
@@ -1713,6 +1713,7 @@ window.wlStSave=async function(){
   const data={type:mode,ym,strategy:$('stText').value.trim(),
     goal:{cnt:numv('stCnt'),mchul:numv('stMchul'),inc:numv('stInc')}};
   const n=mode==='month'?monthNote(ym):orgNote(mode,ym);
+  const cf=wlGoalConflict(mode,ym,data.goal);if(cf){alert(cf);return;}   /* ★ [2026-10-06] */
   try{await noteSave(n?data:{...data,final:{}},n?.id);toast((mode==='team'?'팀 ':mode==='branch'?'지점 ':'')+'전략·목표를 저장했습니다');}
   catch(e){console.warn(e);toast('저장 실패 — 다시 시도해주세요');return;}
   wlStClose();
@@ -1975,7 +1976,7 @@ function totalsCard(t,goal,label,ck){
     <div class="tfu"><div class="fk">달성</div><div class="fv">${rate!=null?rate+'%':'—'}</div><div class="fr">${pct(t.mchul,gM)!=null?'월초 기준':gC?'활동 기준':''}</div></div>
   </div>`;
   const row=(k,lbl,v,g,gd)=>{const r=pct(v,g);return `<div class="aRow"><div class="kk">${lbl}${src}</div><div class="aBar${gd?' gdb':''}"><i style="width:${Math.min(100,r||0)}%"></i></div><div class="vv"><b>${comma(v||0)}</b>${g?` / ${comma(g)}${k==='cnt'?'건':'만'} · ${r}%`:' <span style="color:var(--mut)">(목표 미설정)</span>'}</div></div>`;};
-  return tiles+`<div class="ach">${row('cnt',label+' 활동',t.cnt,gC)}${row('mchul',label+' 월초보험료',t.mchul,gM,true)}${t.inc!=null?`<div class="aRow"><div class="kk">${label} 소득</div><div class="vv"><b>${comma(t.inc)}</b>만${goal.inc?' / '+comma(goal.inc)+'만':''} (확정분 합계)</div></div>`:''}</div>`;
+  return tiles+`<div class="ach">${row('cnt',label+' 전체 활동',t.cnt,gC)}${row('mchul',label+' 전체 월초보험료',t.mchul,gM,true)}${t.inc!=null?`<div class="aRow"><div class="kk">${label} 전체 소득</div><div class="vv"><b>${comma(t.inc)}</b>만${goal.inc?' / '+comma(goal.inc)+'만':''} (확정분 합계)</div></div>`:''}</div>`;
 }
 function stratCard(kind,note,by,editable,sumGoal){
   const mm=+_tym.slice(5,7);
@@ -1986,12 +1987,12 @@ function stratCard(kind,note,by,editable,sumGoal){
   if(editable){
     const lo=(sumGoal&&g.mchul&&sumGoal.goalMchul<g.mchul);
     gg=`<div class="gg"><div>${lbl.slice(0,2)} 전체 목표 <small>${kind==='branch'?'지점장':'팀장'} 설정</small><b>${g.cnt||g.mchul||g.inc?[g.cnt?'활동 '+comma(g.cnt)+'건':'',g.mchul?'월초 '+comma(g.mchul)+'만':'',g.inc?'소득 '+comma(g.inc)+'만':''].filter(Boolean).join(' · '):'미설정'}</b></div>
-      <div>${kind==='branch'?'소속 전원':'팀원'} 개인 목표 합계 <small>${kind==='branch'?'':'팀장 포함 · '}${sumGoal?sumGoal.goalSet+'명 설정':''}</small><b class="${lo?'lo':''}">${sumGoal&&(sumGoal.goalCnt||sumGoal.goalMchul)?`${comma(sumGoal.goalCnt)}건 · ${comma(sumGoal.goalMchul)}만`:'—'}</b></div></div>`;
+      <div>${kind==='branch'?'소속 전원':'팀원'} 개인 목표 합계 <small>${kind==='branch'?'지점장 포함 · ':'팀장 포함 · '}${sumGoal?sumGoal.goalSet+'명 설정':''}</small><b class="${lo?'lo':''}">${sumGoal&&(sumGoal.goalCnt||sumGoal.goalMchul)?`${comma(sumGoal.goalCnt)}건 · ${comma(sumGoal.goalMchul)}만`:'—'}</b></div></div>`;
     if(lo)gg+=`<div class="gn">${kind==='branch'?'소속 전원':'팀원'} 개인 목표 합계가 ${lbl.slice(0,2)} 전체 목표보다 ${comma(g.mchul-sumGoal.goalMchul)}만 낮습니다</div>`;   /* ★ [2026-10-06] 문구 통일 */
   }else if(g.cnt||g.mchul||g.inc){gg=`<div class="gn">${lbl.slice(0,2)} 전체 목표 ${[g.cnt?'활동 '+comma(g.cnt)+'건':'',g.mchul?'월초 '+comma(g.mchul)+'만':'',g.inc?'소득 '+comma(g.inc)+'만':''].filter(Boolean).join(' · ')}</div>`;}   /* ★ [2026-10-06] */
   return `<div class="tstrat ${up?'up':'team'}"${editable?` onclick="wlStOpen('${kind}')"`:''}>
     ${editable?'<span class="ed">✎</span>':''}
-    <div class="k">${mm}월 ${lbl}${by?` <small>${esc(by.name)} ${ORG_KO[by.title]||''}</small>`:''}</div>
+    <div class="k">${mm}월 ${lbl.slice(0,2)} 전체 전략·목표 <span class="wBdg ${kind}" style="font-size:9.5px;padding:2px 7px">${lbl.slice(0,2)}</span>${by?` <small>${esc(by.name)} ${ORG_KO[by.title]||''}</small>`:''}</div>
     <div class="t${has?'':' cta'}">${has?esc(note.strategy||'(전략 미작성 — 목표만 설정)'):(editable?'🎯 이번 달 '+lbl+'과 목표를 세워보세요':'(아직 작성되지 않았습니다)')}</div>${gg}</div>`;
 }
 function unlinkList(list){
@@ -2015,6 +2016,7 @@ function renderTeam(){
   }else{
     h+=stratCard('branch',{strategy:T.branch.strategy,goal:T.branch.goal},null,true,T.totals);
     h+=totalsCard(T.totals,T.branch.goal,'지점',_tym===_ym?ckStatOf(T.direct.concat(...T.teams.map(t=>[t.leader].concat(t.members)))):null);
+    if(T.me)h+=`<div class="sec"><h3>지점장 본인 <span class="wBdg me" style="font-family:'Pretendard'">개인</span> <small>지점 전체 합계에 포함</small></h3><div class="pl">${personRow(T.me)}</div></div>`;   /* ★ [2026-10-06] 지점장 개인 실적 — 본인 화면 전용 */
     h+=`<div class="sec"><h3>팀 <small>${T.teams.length}개 팀 · 팀장 ${T.headcount.leaders} · 팀원 ${T.headcount.members}</small></h3>`;
     if(!T.teams.length&&!T.direct.length)h+=`<div class="tEmpty">아직 연결된 팀장·컨설턴트가 없습니다.<br>팀장이 홈 조직 카드에서 내 아이디 <b>${esc(_loginId)}</b> 를 입력하면 여기에 나타납니다.</div>`;
     T.teams.forEach((tm,i)=>{
@@ -3234,7 +3236,7 @@ function renderPerf(){
   $('pmFinCard').style.display=isPast?'':'none';
   if(isPast){
     const auto=autoOf(_pm);const f=n?.final||{};
-    $('pmFinT').textContent=mm+'월';
+    $('pmFinT').textContent=mm+'월'+(wlIsUp()?' 내 개인':'');   /* ★ [2026-10-06] */
     const done=(f.cnt!=null||f.mchul!=null||f.inc!=null);
     const b=$('pmFinBdg');b.textContent=done?'확정됨':'입력 대기';b.className='bdg'+(done?' bdgOk':'');
     $('fCnt').value=comma(f.cnt!=null?f.cnt:auto.cnt);
@@ -3263,10 +3265,25 @@ function renderGoalWho(){
   box.innerHTML=`<span class="k">${k==='team'?'👥':'🏢'} ${lb} 전체 목표 <span class="wBdg ${k}">${lb}</span></span><span class="v">${parts.length?parts.join(' · '):`<span style="color:var(--mut)">${lb} 전체 목표를 설정하세요</span>`}</span><span class="ar">›</span>`;
   box.style.display='';
 }
+/* ★ [2026-10-06] 개인 목표 ≤ 팀·지점 전체 목표 검증 — 위반 시 안내 문구, 정상 시 '' (항목별로 둘 다 입력된 경우만 비교) */
+function wlGoalConflict(kind,ym,g){
+  if(!wlIsUp())return '';
+  const tk=_orgMe.me.title==='leader'?'team':'branch',lb=tk==='team'?'팀':'지점';
+  if(kind!=='month'&&kind!==tk)return '';
+  const my=kind==='month'?(g||{}):((monthNote(ym)||{}).goal||{});
+  const up=kind==='month'?((orgNote(tk,ym)||{}).goal||{}):(g||{});
+  const F=[['cnt','활동 건수','건'],['mchul','월초보험료','만원'],['inc','소득','만원']];
+  const bad=F.filter(([k])=>my[k]&&up[k]&&my[k]>up[k]);
+  if(!bad.length)return '';
+  const rows=bad.map(([k,n,u])=>`· ${n}: 내 개인 ${comma(my[k])}${u} > ${lb} 전체 ${comma(up[k])}${u}`).join('\n');
+  return (kind==='month'?`내 개인 목표가 ${lb} 전체 목표보다 클 수 없습니다.\n\n`:`${lb} 전체 목표가 내 개인 목표보다 작을 수 없습니다.\n\n`)
+    +rows+'\n\n'+(kind==='month'?`${lb} 전체 목표를 먼저 올리거나 개인 목표를 낮춰주세요.`:`${lb} 전체 목표를 올리거나 개인 목표를 먼저 낮춰주세요.`);
+}
 window.wlUpGoalOpen=function(){if(!wlIsUp())return;wlStOpen(_orgMe.me.title==='leader'?'team':'branch',_pm);};
 window.wlGoalSave=async function(){
   const n=monthNote(_pm);
   const data={type:'month',ym:_pm,strategy:n?.strategy||'',goal:{cnt:numv('gCnt'),mchul:numv('gMchul'),inc:numv('gInc')}};
+  const cf=wlGoalConflict('month',_pm,data.goal);if(cf){alert(cf);return;}   /* ★ [2026-10-06] */
   try{await noteSave(n?data:{...data,final:{}},n?.id);toast('목표를 저장했습니다');}catch(e){toast('저장 실패');return;}
   renderPerf();renderStrat('hmStrat',_ym);
 };
@@ -3285,7 +3302,7 @@ window.wlFinSave=async function(){
 /* 달성률 + 페이스 메시지(룰 P1~P9) */
 function renderAch(preview){
   const mm=+_pm.slice(5,7);
-  $('achT').textContent=mm+'월 달성률';
+  $('achT').textContent=mm+'월 '+(wlIsUp()?'내 개인 ':'')+'달성률';   /* ★ [2026-10-06] */
   const n=monthNote(_pm);const g=n?.goal||{};
   const cur=_pm===_ym;
   const pv=k=>{ /* 미리보기: 마감 입력값 우선 */
