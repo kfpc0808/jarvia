@@ -98,7 +98,8 @@
       Object.keys(c.tracks).forEach(function (k) { if (k !== VIDEO_TRACK) total += (c.tracks[k].dur || 0); });
     }
     var ratio = total > 0 ? Math.min(1, played / total) : 0;
-    if (!hasV) return { playedSec: Math.min(played, total || played), ratio: ratio, totalSec: total };
+    if (!hasV) return { playedSec: Math.min(played, total || played), ratio: ratio, totalSec: total,
+                        ratioA: ratio, ratioV: 0, secA: total, secV: 0 };   /* ★ [2026-10-06] 매체별 진도·길이 (수료증 인정 기준용) */
     /* ★ [2026-10-05] 음성·영상 중 높은 진도로 이수 판정, 학습시간은 실제로 들은 시간 + 본 시간 */
     var rv = dv > 0 ? Math.min(1, pv / dv) : 0;
     var useV = rv > ratio;
@@ -107,6 +108,7 @@
       ratio: Math.max(ratio, rv),
       totalSec: useV ? dv : total,          /* 이수한 쪽(음성 또는 영상)의 길이 */
       media: useV ? "video" : "audio",
+      ratioA: ratio, ratioV: rv, secA: total, secV: dv,   /* ★ [2026-10-06] 매체별 진도·길이 (수료증 인정 기준용) */
     };
   }
 
@@ -176,6 +178,12 @@
       else if (src.completedAt && (!dst.completedAt || String(src.completedAt) < String(dst.completedAt))) { dst.completedAt = src.completedAt; if (src.eduSec) dst.eduSec = src.eduSec; if (src.doneMedia) dst.doneMedia = src.doneMedia; }
       else if (!dst.eduSec && src.eduSec) { dst.eduSec = src.eduSec; if (src.doneMedia) dst.doneMedia = src.doneMedia; }
     }
+    /* ★ [2026-10-06] 매체별 이수일 — 먼저 이수한 날, 길이는 큰 값 */
+    ["A", "V"].forEach(function (x) {
+      var k = "done" + x, e = "edu" + x;
+      if (src[k] && (!dst[k] || String(src[k]) < String(dst[k]))) dst[k] = src[k];
+      if ((src[e] || 0) > (dst[e] || 0)) dst[e] = src[e];
+    });
     if (src.carried) dst.carried = true;
     if (src.lastAt && String(src.lastAt) > String(dst.lastAt || "")) dst.lastAt = src.lastAt;
     return dst;
@@ -300,6 +308,10 @@
         out.doneC[day] = out.doneC[day] || {};
         out.doneC[day][cid] = 1;
       }
+      /* ★ [2026-10-06] 매체별 이수 기록 — 강좌 이수 후에도 음성·영상 각각 80% 도달일·길이를 남긴다 (수료증 「음성+영상 / 영상만」) */
+      /*   이미 그 매체로 강좌를 이수한 기록이 있으면 그 이수일을 쓴다 (지난 기록이 오늘 날짜로 잡히지 않게) */
+      if (!c.doneA && (r.ratioA || 0) >= DONE_RATIO) { c.doneA = (c.completedAt && c.doneMedia !== "video") ? c.completedAt : day; c.eduA = r.secA || 0; }
+      if (!c.doneV && (r.ratioV || 0) >= DONE_RATIO) { c.doneV = (c.completedAt && c.doneMedia === "video") ? c.completedAt : day; c.eduV = r.secV || 0; }
       out.courses[cid] = c;
     });
     if (gainAll > 0) out.days[day] = (out.days[day] || 0) + gainAll;

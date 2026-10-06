@@ -84,6 +84,12 @@ select,input{font-family:inherit;font-size:14px;padding:9px 12px;border:1px soli
 
   <!-- 발급 화면 -->
   <div class="card setup" id="setup">
+    <!-- ★ [2026-10-06] 인정 기준 — 제출처가 음성 강의를 인정하는지에 따라 선택 -->
+    <div class="row" id="basis-row" style="display:none">
+      <label>인정 기준</label>
+      <select id="f-basis" onchange="changeBasis()"><option value="all">음성 + 영상</option><option value="video">영상만</option></select>
+      <span class="msg" style="padding:0">제출처가 영상 강의만 인정하면 「영상만」을 고르세요. 기준별로 따로 발급됩니다.</span>
+    </div>
     <div id="setup-msg" class="msg">불러오는 중...</div>
     <div id="setup-form" style="display:none">
       <div class="row">
@@ -129,6 +135,7 @@ select,input{font-family:inherit;font-size:14px;padding:9px 12px;border:1px soli
         <div>교육 기간<b id="d-period"></b></div>
         <div>총 교육시간<b id="d-hours"></b></div>
         <div>이수 건수<b id="d-count"></b></div>
+        <div>인정 기준<b id="d-basis"></b></div>
       </div>
       <div class="doc-list"><h3>이수 내역</h3><div id="d-items"></div></div>
     </div>
@@ -165,13 +172,24 @@ onAuthStateChanged(auth,async u=>{
 });
 
 /* ── 발급 화면 ── */
+const basis=()=>($('f-basis')&&$('f-basis').value==='video')?'video':'all';   /* ★ [2026-10-06] 인정 기준 */
+const BASIS_LB={all:'음성·영상 강의',video:'영상 강의'};
+window.changeBasis=async function(){
+  $('pv').style.display='none';$('pv-body').innerHTML='';
+  $('setup-form').style.display='none';
+  $('setup-msg').style.display='';$('setup-msg').textContent='불러오는 중...';
+  await showSetup();
+};
 async function showSetup(){
   try{
-    const r=(await callCert({action:'months'})).data;
+    $('basis-row').style.display='';
+    const r=(await callCert({action:'months',basis:basis()})).data;
     if(!r.ok){ $('setup-msg').innerHTML='<span class="err">'+esc(r.error)+'</span>'; return; }
     const usable=r.months.filter(m=>!m.issued||m.current);   /* 이번 달은 이미 발급했어도 다시 고를 수 있다 */
     if(!usable.length){
-      $('setup-msg').textContent='발급할 수 있는 이수 내역이 없습니다. 강좌를 80% 이상 들으시면 그 달부터 발급할 수 있습니다.';
+      $('setup-msg').textContent=basis()==='video'
+        ?'영상으로 이수한 내역이 없습니다. 해설 영상을 80% 이상 보시면 그 달부터 발급할 수 있습니다.'
+        :'발급할 수 있는 이수 내역이 없습니다. 강좌를 80% 이상 들으시면 그 달부터 발급할 수 있습니다.';
     }else{
       $('setup-msg').style.display='none';
       $('setup-form').style.display='';
@@ -188,7 +206,7 @@ async function loadHist(){
     const r=(await callCert({action:'list'})).data;
     if(!r.ok||!r.list.length)return;
     $('hist').style.display='';
-    $('hist-b').innerHTML=r.list.map(c=>'<tr><td>'+esc(c.certNo)+((c.revision||0)>0?' <span style="color:#7C8CA5;font-size:12px">갱신 '+c.revision+'회</span>':'')+'</td><td>'+ymT(c.from)+' ~ '+ymT(c.to)+'</td><td>'
+    $('hist-b').innerHTML=r.list.map(c=>'<tr><td>'+esc(c.certNo)+((c.revision||0)>0?' <span style="color:#7C8CA5;font-size:12px">갱신 '+c.revision+'회</span>':'')+'</td><td>'+ymT(c.from)+' ~ '+ymT(c.to)+(c.basis==='video'?' <span style="color:#7C8CA5;font-size:12px">영상만</span>':'')+'</td><td>'
       +dT(c.refreshedAt||c.issuedAt)+'</td><td>'+(c.courseCount+c.dailyCount)+'건</td>'
       +'<td><button class="btn-sec" onclick="location.href=\'./cert.html?no='+encodeURIComponent(c.certNo)+'\'">보기</button></td></tr>').join('');
   }catch(_e){}
@@ -204,15 +222,19 @@ window.doPreview=async function(){
   if(from>to){alert('시작 월이 종료 월보다 늦습니다.');return;}
   $('pv').style.display='';
   $('pv-body').innerHTML='<div class="msg">확인 중...</div>';
-  const r=(await callCert({action:'preview',from,to})).data;
+  const r=(await callCert({action:'preview',from,to,basis:basis()})).data;
   if(!r.ok){ $('pv-body').innerHTML='<div class="msg err">'+esc(r.error)+'</div>'; return; }
   let h='<div class="msg">아래 내용으로 '+(r.refresh?'갱신':'발급')+'됩니다. 총 <b>'+r.total+'건</b>'
     +(r.secTotal?' · 교육시간 <b>'+hMS(r.secTotal)+'</b>':'')+'</div>';
   if(r.refresh) h+='<div class="msg">이번 달 수료증('+esc(r.refreshNo)+')이 이미 있어 <b>같은 번호로 내용이 갱신</b>됩니다. 이전에 출력한 수료증은 최신 내용으로 다시 출력해 주세요.</div>';
   if(r.skipped.length) h+='<div class="msg">이미 발급된 달은 제외되었습니다 — '+r.skipped.map(ymT).join(', ')+'</div>';
   if(r.courses.length){
-    h+='<table class="tbl"><thead><tr><th>과정</th><th style="width:110px">교육시간</th><th style="width:110px">이수일</th></tr></thead><tbody>'
-     +r.courses.map(c=>'<tr><td>'+esc(c.title)+'</td><td>'+(c.totalSec?hMS(c.totalSec):'-')+'</td><td>'+dT(c.completedAt)+'</td></tr>').join('')+'</tbody></table>';
+    /* ★ [2026-10-06] 매체별 칸 — 음성+영상: 음성·영상·교육시간(긴 쪽) / 영상만: 영상 */
+    const vOnly=r.basis==='video';
+    const t=v=>v?hMS(v):'-';
+    h+='<div class="msg">인정 기준: <b>'+BASIS_LB[vOnly?'video':'all']+'</b>'+(vOnly?'':' · 음성과 영상을 모두 이수한 과정은 긴 쪽 하나만 교육시간에 넣습니다.')+'</div>'
+     +'<table class="tbl"><thead><tr><th>과정</th>'+(vOnly?'':'<th style="width:96px">음성</th>')+'<th style="width:96px">영상</th>'+(vOnly?'':'<th style="width:110px">교육시간</th>')+'<th style="width:100px">이수일</th></tr></thead><tbody>'
+     +r.courses.map(c=>'<tr><td>'+esc(c.title)+'</td>'+(vOnly?'':'<td>'+t(c.aSec)+'</td>')+'<td>'+t(c.vSec)+'</td>'+(vOnly?'':'<td>'+t(c.totalSec)+'</td>')+'<td>'+dT(c.completedAt)+'</td></tr>').join('')+'</tbody></table>';
   }
   if(r.groups.length){
     h+='<table class="tbl" style="margin-top:10px"><thead><tr><th>정기 콘텐츠</th><th style="width:110px">교육시간</th><th style="width:150px">이수</th></tr></thead><tbody>'
@@ -224,7 +246,7 @@ window.doIssue=async function(){
   const birth6=($('f-birth').value||'').replace(/[^0-9]/g,'');
   if(birth6.length!==6){alert('생년월일 6자리를 입력해 주세요.');return;}
   const b=$('btn-issue'); b.disabled=true; b.textContent='발급 중...';
-  const r=(await callCert({action:'issue',from:$('f-from').value,to:$('f-to').value,birth6})).data;
+  const r=(await callCert({action:'issue',from:$('f-from').value,to:$('f-to').value,birth6,basis:basis()})).data;
   b.disabled=false; b.textContent='수료증 발급';
   if(!r.ok){alert(r.error||'발급하지 못했습니다.');return;}
   location.href='./cert.html?no='+encodeURIComponent(r.certNo);
@@ -245,11 +267,15 @@ async function showCert(no){
   $('d-period').textContent=ymT(c.from)+' ~ '+ymT(c.to);
   $('d-hours').textContent=c.secTotal?hMS(c.secTotal):'-';
   $('d-count').textContent=(c.total||0)+'건';
+  $('d-basis').textContent=BASIS_LB[c.basis==='video'?'video':'all'];   /* ★ [2026-10-06] 기존 발급분은 음성·영상 */
   $('d-date').textContent=dT(c.refreshedAt||c.issuedAt);
   if((c.revision||0)>0) $('d-no').textContent+='  ·  최종 갱신 '+dT(c.refreshedAt);
   const items=[];
-  (c.courses||[]).forEach(x=>items.push('<div class="li"><i>·</i><span>'+esc(x.title)
-    +(x.totalSec?'<u>'+hMS(x.totalSec)+'</u>':'')+'</span><em>'+dT(x.completedAt)+'</em></div>'));
+  /* ★ [2026-10-06] 과정별 매체 시간 — 이수한 매체만 「음성 20분 · 영상 50분」, 기존 발급분은 교육시간 한 칸 */
+  const mt=x=>{const a=[];if(c.basis!=='video'&&x.aSec)a.push('음성 '+hMS(x.aSec));if(x.vSec)a.push('영상 '+hMS(x.vSec));
+    return a.length?a.join(' · '):(x.totalSec?hMS(x.totalSec):'');};
+  (c.courses||[]).forEach(x=>{const m=mt(x);items.push('<div class="li"><i>·</i><span>'+esc(x.title)
+    +(m?'<u>'+m+'</u>':'')+'</span><em>'+dT(x.completedAt)+'</em></div>');});
   (c.groups||[]).forEach(g=>items.push('<div class="li"><i>·</i><span>'+esc(g.label)+' — '+esc(g.text)
     +(g.totalSec?'<u>'+hMS(g.totalSec)+'</u>':'')+'</span></div>'
     +'<div class="days">'+esc(g.dayText)+'</div>'));
