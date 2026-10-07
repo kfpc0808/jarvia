@@ -20619,6 +20619,7 @@ function _fcrSubscribe(){
       if(list) list.innerHTML = '<div style="padding:30px;text-align:center;color:#DC2626;font-size:12px">목록을 불러올 수 없습니다: ' + _fcrEsc(err.message) + '</div>';
     });
     _fcrKnockSubscribe();   /* ★ [2026-08-18] 보안채팅 노크도 배지·목록에 합산 */
+    _fcrMatWatch();         /* ★ [2026-10-07] 만기 등록 요청 실시간 감지 */
   }catch(e){
     console.warn('[fcr] 구독 시작 실패:', e.message);
   }
@@ -20655,6 +20656,24 @@ function _fcrKnockSubscribe(){
       try{ _rqpCheck(); }catch(_e){}   /* ★ [2026-10-02] 고객 요청 상세 팝업 */
     }, err => { console.warn('[fcr-knock] 구독 실패:', err.message); });
   }catch(e){ console.warn('[fcr-knock] 구독 시작 실패:', e.message); }
+}
+/* ★ [2026-10-07] 만기 등록 요청 실시간 감지 — report_subscriber_meta/{uid}.maturityLastAt 변경 시 목록 재조회 → 팝업 */
+let _fcrMatWatchUnsub = null, _fcrMatLastAt = null;
+function _fcrMatWatch(){
+  if(_fcrMatWatchUnsub){ try{ _fcrMatWatchUnsub(); }catch(e){} _fcrMatWatchUnsub = null; }
+  _fcrMatLastAt = null;
+  if(!me || !me.uid) return;
+  try{
+    _fcrMatWatchUnsub = onSnapshot(doc(db, 'report_subscriber_meta', me.uid), s => {
+      const v = s.exists() ? s.data().maturityLastAt : null;
+      const ms = (v && v.toMillis) ? v.toMillis() : 0;
+      if(_fcrMatLastAt === null){ _fcrMatLastAt = ms; return; }   /* 첫 수신은 기준값만 기록 */
+      if(ms && ms !== _fcrMatLastAt){
+        _fcrMatLastAt = ms;
+        _fcrMatLoad().then(() => { try{ _rqpCheck(); }catch(_e){} });
+      }
+    }, err => { console.warn('[fcr-mat] 구독 실패:', err.message); });
+  }catch(e){ console.warn('[fcr-mat] 구독 시작 실패:', e.message); }
 }
 window._fcrGoSecureChat = function(){
   const lid = (window.meData && meData.loginId) || '';
