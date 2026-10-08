@@ -11337,7 +11337,7 @@ window.fcqSetMonth=function(m){fcqMonth=m;fcqRender();};   /* ★ [2026-08-03] �
 /* ═══ 🔔 [2026-07-31] 고객 반응 — fc_client_views(고객별 합계)·fc_view_logs(열람자별 상세) 재활용 ═══ */
 let jvSigRange='7d';   /* 'today' | '7d' | 'month' */
 let _jvSigAgg=null;    /* cid → {name,total,ch,dl,days,todayN,last,byCard,bySec} */
-let _jvSigViewer={};   /* cid → {viewers:[{n,first,last}],friendN,newN} — 상세 캐시 */
+let _jvSigViewer={};   /* cid → {self,legacy,friend:[{n,first,last,dev}],friendN,newN} — 상세 캐시 (★ 2026-10-08 본인/지인/구분 전) */
 function _jvSigYmd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function _jvSigFrom(){const t=new Date();if(jvSigRange==='today')return _jvSigYmd(t);if(jvSigRange==='month')return _jvSigYmd(new Date(t.getFullYear(),t.getMonth(),1));const f=new Date(t);f.setDate(t.getDate()-6);return _jvSigYmd(f);}
 /* ★ [2026-08-10] 모닝 컨센서스 — 전 회원 오픈. 클릭 시 소개 팝업 → [확인] 후 진입 */
@@ -11473,6 +11473,10 @@ window.jvSigGuideToggle=function(){   /* ★ [2026-07-31] 활용 가이드 접�
   if(a)a.textContent=hide?'펼치기 ▾':'접기 ▴';
   try{localStorage.setItem('jvSigGuideHide',hide?'1':'0');}catch(_e){}
 };
+/* ★ [2026-10-08] 고객 반응 — 고객 본인 / 소개 지인 / 구분 전 기록을 나눠 집계
+   · 본인     : fc_client_views (clientId — 리포트 화면에서 「직접 받은 분」으로 확인된 기기만 귀속)
+   · 소개 지인 : fc_ref_views (refCid — 고객이 공유했거나 전달받은 분이 연 열람. 소개한 고객 기준)
+   · 구분 전   : 2026-10-08 이전 기록(self 표시 없음) — 고객 본인의 다른 기기와 지인이 섞여 있을 수 있다 */
 async function jvSigLoad(){
   const el=$('jvsig-list');
   try{
@@ -11484,34 +11488,54 @@ async function jvSigLoad(){
       hs.forEach(d=>{if(nameMap[d.id])return;const c=d.data()||{};const nick=c.nickByFc||(c.brand&&c.brand.title)||'';nameMap[d.id]=nick?(nick+' (@'+d.id+')'):('@'+d.id);});
     }catch(_e){}
     const today=_jvSigYmd(new Date());
-    const snap=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid),where('date','>=',_jvSigFrom()),where('date','<=',today)));
     const agg={};
+    const _row=cid=>agg[cid]||(agg[cid]={name:nameMap[cid]||'고객',total:0,ch:0,dl:0,days:0,todayN:0,last:0,byCard:{},bySec:{},call:0,share:0,fr:{total:0,days:0,todayN:0,last:0,call:0}});
+    const snap=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid),where('date','>=',_jvSigFrom()),where('date','<=',today)));
     snap.forEach(d=>{const v=d.data();const cid=v.clientId;if(!cid)return;
-      const a=agg[cid]||(agg[cid]={name:nameMap[cid]||'고객',total:0,ch:0,dl:0,days:0,todayN:0,last:0,byCard:{},bySec:{}});
+      const a=_row(cid);
       a.total+=v.total||0;a.ch+=v.channelVisit||0;a.dl+=v.dailyVisit||0;a.days++;
+      a.call+=v.callClick||0;a.share+=v.shareClick||0;
       if(v.date===today)a.todayN+=v.total||0;
       const lm=v.lastViewedAt&&v.lastViewedAt.toMillis?v.lastViewedAt.toMillis():0;if(lm>a.last)a.last=lm;
       Object.entries(v.byCard||{}).forEach(([k,n])=>a.byCard[k]=(a.byCard[k]||0)+n);
       Object.entries(v.bySection||{}).forEach(([k,n])=>a.bySec[k]=(a.bySec[k]||0)+n);
     });
+    /* 소개 지인 열람 — 소개한 고객(refCid) 기준. 조회 실패(권한·배포 전)해도 본인 집계는 그대로 보인다 */
+    try{
+      const rs=await getDocs(query(collection(db,'fc_ref_views'),where('fcAuthUid','==',me.uid),where('date','>=',_jvSigFrom()),where('date','<=',today)));
+      rs.forEach(d=>{const v=d.data();const cid=v.refCid;if(!cid)return;
+        const f=_row(cid).fr;
+        f.total+=v.total||0;f.days++;f.call+=v.callClick||0;
+        if(v.date===today)f.todayN+=v.total||0;
+        const lm=v.lastViewedAt&&v.lastViewedAt.toMillis?v.lastViewedAt.toMillis():0;if(lm>f.last)f.last=lm;
+      });
+    }catch(_re){console.warn('jvSigLoad 소개 지인 집계 건너뜀:',_re&&_re.message);}
+    Object.values(agg).forEach(a=>{if(a.fr.last>a.last)a.last=a.fr.last;});
     _jvSigAgg=agg;
     jvSigRender();
     jvSigViewerScan();   /* 지인 신호 백그라운드 보강 (상위 고객만) */
   }catch(e){console.error('jvSigLoad:',e);if(el)el.innerHTML='<div style="font-size:12px;color:#DC2626;padding:4px 0">열람 기록을 불러오지 못했습니다.</div>';}
 }
 function _jvSigTime(ms){if(!ms)return'';const d=new Date(ms);const t=new Date();if(_jvSigYmd(d)===_jvSigYmd(t))return'오늘 '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');return(d.getMonth()+1)+'/'+d.getDate();}
+/* ★ [2026-10-08] 「많이 본 내용」 이름 — 내부 코드(calc_retire 등)를 화면용 이름으로 */
+function _jvSigItemLabel(k){
+  k=String(k||'');
+  if(k.indexOf('calc_')===0){const c=k.slice(5);return '계산기 · '+((typeof MP_CALC_NAMES!=='undefined'&&MP_CALC_NAMES[c])||c);}
+  if(typeof FCV_CARD_LABELS!=='undefined'&&FCV_CARD_LABELS[k])return FCV_CARD_LABELS[k];
+  return k.replace(/_/g,' ');
+}
 function jvSigRender(){
   const el=$('jvsig-list');if(!el)return;
   /* 기간 탭 */
   const tb=$('jvsig-tabs');
   if(tb)tb.innerHTML=[['today','오늘'],['7d','최근 7일'],['month','이번 달']].map(([k,lb])=>{const on=(jvSigRange===k);return '<button type="button" onclick="jvSigSetRange(\''+k+'\')" style="font-size:12px;font-weight:700;padding:6px 14px;border-radius:16px;cursor:pointer;border:1px solid '+(on?'#1B3A5C':'#D1D5DB')+';background:'+(on?'#1B3A5C':'#fff')+';color:'+(on?'#fff':'#475569')+'">'+lb+'</button>';}).join('');
   const rows=Object.entries(_jvSigAgg||{}).map(([cid,a])=>({cid,...a}));
-  /* 요약 칩 */
+  /* 요약 칩 — 지인 열람은 실제 소개 지인 기록이 있는 고객만 센다 */
   const todayN=rows.filter(r=>r.todayN>0).length;
   const repN=rows.filter(r=>r.days>=3||r.total>=5).length;
-  let friendN=0;Object.values(_jvSigViewer).forEach(v=>{if(v.newN>0)friendN++;});
+  const friendN=rows.filter(r=>r.fr.total>0).length;
   const ch=$('jvsig-chips');
-  if(ch)ch.innerHTML=[['👀 오늘 열람',todayN,'#F0F4F8','#5B6B7E','#1B3A5C'],['🔥 새 열람자 유입',friendN,'#FEF3E2','#A8752A','#B45309'],['🔁 반복 열람',repN,'#E1F5EE','#3E8B74','#0F6E56']]
+  if(ch)ch.innerHTML=[['👀 오늘 열람',todayN,'#F0F4F8','#5B6B7E','#1B3A5C'],['🤝 지인 열람',friendN,'#FEF3E2','#A8752A','#B45309'],['🔁 반복 열람',repN,'#E1F5EE','#3E8B74','#0F6E56']]
     .map(([lb,n,bg,lc,nc])=>'<div style="flex:1;min-width:104px;background:'+bg+';border-radius:10px;padding:9px 12px"><div style="font-size:11px;font-weight:700;color:'+lc+';white-space:nowrap">'+lb+'</div><div style="font-size:20px;font-weight:800;color:'+nc+';margin-top:1px;line-height:1.2">'+n+'<span style="font-size:12px;font-weight:700">명</span></div></div>').join('');
   /* ★ [2026-07-31] 영업 활용 가이드 — 접기 상태 기억 */
   const g=$('jvsig-guide');
@@ -11520,24 +11544,33 @@ function jvSigRender(){
     g.innerHTML='<div style="background:#FFFBEF;border:1px solid #F0E3BC;border-radius:10px;padding:10px 13px">'
       +'<div onclick="jvSigGuideToggle()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer"><span style="font-size:12px;font-weight:800;color:#8A6A15">💡 이렇게 활용하세요</span><span id="jvsig-guide-arrow" style="font-size:11px;color:#B49A55;font-weight:700">'+(hide?'펼치기 ▾':'접기 ▴')+'</span></div>'
       +'<div id="jvsig-guide-body" style="display:'+(hide?'none':'block')+';margin-top:8px;font-size:12px;color:#6B5A2A;line-height:1.75">'
-      +'<b style="color:#B45309">🔥 새 열람자 유입</b> — 고객이 지인에게 내 리포트를 공유했다는 신호입니다. <b>"주변에 도움 필요한 분 계시면 소개해 주세요"</b>라고 말할 최적의 타이밍입니다.<br>'
+      +'<b style="color:#B45309">🤝 지인 열람</b> — 고객이 내 리포트를 주변에 공유했고, 그 지인이 실제로 열어 봤습니다. <b>"주변에 도움 필요한 분 계시면 소개해 주세요"</b>라고 말할 최적의 타이밍입니다.<br>'
       +'<b style="color:#0F6E56">👀 오늘 열람</b> — 지금 내 자료에 관심이 켜져 있는 상태입니다. <b>오늘 중 가벼운 안부 연락(💬 멘트)</b>이 가장 자연스럽게 닿습니다.<br>'
       +'<b style="color:#3B4A9F">🔁 반복 열람</b> — 꾸준히 챙겨 보는 고객입니다. 관계가 무르익었으니 <b>정기 방문·심층 상담을 제안</b>해 보세요.<br>'
+      +'<span style="display:block;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFB8;color:#8A6A15">본인 열람은 리포트에서 「직접 받은 분」으로 확인된 기기만, 지인 열람은 고객이 공유한 링크로 연 분만 셉니다. 2026-10-08 이전 기록은 「구분 전」으로 따로 보여 드립니다.</span>'
       +'<span style="display:block;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFB8;color:#8A6A15">한 줄 요약: <b>"오늘 누구에게 연락할까"를 감이 아니라 고객의 행동으로 정하는 도구</b>입니다.</span>'
       +'</div></div>';
   }
   if(!rows.length){el.innerHTML='<div style="font-size:12px;color:#C5CAD6;padding:4px 0">기간 내 열람 기록이 없습니다.</div>';return;}
-  /* 신호 강한 순: 새 열람자 > 오늘 열람 > 총합 */
-  rows.sort((a,b)=>{const av=_jvSigViewer[a.cid],bv=_jvSigViewer[b.cid];const an=av?av.newN:0,bn=bv?bv.newN:0;if(bn!==an)return bn-an;if((b.todayN>0)!==(a.todayN>0))return(b.todayN>0)?1:-1;return b.total-a.total;});
+  /* 신호 강한 순: 새 지인 > 지인 열람 > 오늘 열람 > 총합 */
+  rows.sort((a,b)=>{const av=_jvSigViewer[a.cid],bv=_jvSigViewer[b.cid];const an=av?av.newN:0,bn=bv?bv.newN:0;if(bn!==an)return bn-an;
+    if((b.fr.total>0)!==(a.fr.total>0))return(b.fr.total>0)?1:-1;
+    if((b.todayN>0)!==(a.todayN>0))return(b.todayN>0)?1:-1;return (b.total+b.fr.total)-(a.total+a.fr.total);});
   el.innerHTML=rows.map(r=>{
     const v=_jvSigViewer[r.cid];
     let sig='',sbg='#EEF2FF',sfg='#3B4A9F';
-    if(v&&v.newN>0){sig='🔥 새 열람자 +'+v.newN;sbg='#FEF3E2';sfg='#B45309';}
+    if(v&&v.newN>0){sig='🔥 새 지인 +'+v.newN;sbg='#FEF3E2';sfg='#B45309';}
+    else if(r.fr.total>0){sig='🤝 지인 열람';sbg='#FEF3E2';sfg='#B45309';}
     else if(r.todayN>0){sig='👀 오늘 열람';sbg='#E1F5EE';sfg='#0F6E56';}
     else if(r.days>=3||r.total>=5){sig='🔁 반복 열람';}
     else{sig='열람';sbg='#F3F4F6';sfg='#6B7280';}
-    const stat='총 '+r.total+'회'+(v?' · 열람자 최대 '+v.viewers.length+'명':'')+(r.days>1?' · '+r.days+'일 열람':'');
-    return '<div style="border:1px solid '+((v&&v.newN>0)?'#D4A03C':'#EDF0F4')+';border-radius:10px'+((v&&v.newN>0)?';background:#FFFDF6':'')+'">'
+    const hot=(v&&v.newN>0)||r.fr.total>0;
+    const stat=[
+      r.total>0?('본인 '+r.total+'회'+(r.days>1?'('+r.days+'일)':'')):'',   /* 지인 열람만 있는 고객은 본인 표시 생략 */
+      r.fr.total>0?('지인 '+(v?v.friend.length+'명 · ':'')+r.fr.total+'회'):'',
+      (r.call+r.fr.call)>0?('📞 전화 '+(r.call+r.fr.call)+'회'):''
+    ].filter(Boolean).join(' · ');
+    return '<div style="border:1px solid '+(hot?'#D4A03C':'#EDF0F4')+';border-radius:10px'+(hot?';background:#FFFDF6':'')+'">'
       +'<div class="fcc-al-row" data-mk="안부" data-mn="'+fccEsc(r.name)+'" data-mm="" data-md="" data-mp="" data-cid="'+fccEsc(r.cid)+'" style="display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;overflow-x:auto;-webkit-overflow-scrolling:touch">'
       +'<span style="font-size:13.5px;font-weight:800;color:#1F2937;white-space:nowrap">'+fccEsc(r.name)+'</span>'
       +'<span style="font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+sbg+';color:'+sfg+'">'+sig+'</span>'
@@ -11550,18 +11583,42 @@ function jvSigRender(){
       +'</div>';
   }).join('');
 }
-/* 열람자별 상세 — fc_view_logs (fcAuthUid+clientId 등가 조회, 기존 channelV2와 동일 패턴) */
+/* 열람자별 상세 — fc_view_logs 원본(전체 기간·최근 기록 기준)
+   · 본인 기록 : fcAuthUid+clientId (최신순 — 색인 fcAuthUid+clientId+createdAt desc. 색인 오류 시 순서 없이 조회)
+   · 지인 기록 : fcAuthUid+refCid (등가 조회)
+   ★ [2026-10-08] 「본인 추정 = 첫 열람자」 방식 폐지 — 리포트의 본인 확인(self)과 소개 토큰(refCid)으로 나눈다 */
+const JV_SIG_LOG_MAX=500;
+function _jvSigGroup(docs){
+  const vk={};
+  docs.forEach(l=>{const k=l.viewerKey||'?';const ms=l.createdAt&&l.createdAt.toMillis?l.createdAt.toMillis():0;
+    const o=vk[k]||(vk[k]={n:0,first:ms||Infinity,last:0,self:false,legacy:true,dev:''});
+    o.n++;if(ms&&ms<o.first)o.first=ms;if(ms>=o.last){o.last=ms;o.dev=l.device||l.ua||o.dev;}
+    if(l.self===true)o.self=true;
+    if(l.self===true||l.self===false)o.legacy=false;});
+  /* 본인 확인(self:true) 기록이 한 번이라도 있으면 본인, 없으면 구분 전 — 새 화면 배포 전 구버전 화면이 보낸 기록(self:false)도 구분 전으로 본다 */
+  return Object.values(vk).map(o=>({n:o.n,first:o.first===Infinity?0:o.first,last:o.last,self:o.self,legacy:!o.self,dev:o.dev})).sort((a,b)=>b.n-a.n||a.first-b.first);
+}
 async function jvSigViewers(cid){
   if(_jvSigViewer[cid])return _jvSigViewer[cid];
-  const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('clientId','==',cid),limit(300)));
-  const vk={};
-  qs.forEach(d=>{const l=d.data();const k=l.viewerKey||'?';const ms=l.createdAt&&l.createdAt.toMillis?l.createdAt.toMillis():0;
-    const o=vk[k]||(vk[k]={n:0,first:ms||Infinity,last:0});o.n++;if(ms&&ms<o.first)o.first=ms;if(ms>o.last)o.last=ms;});
-  const viewers=Object.values(vk).map(o=>({n:o.n,first:o.first===Infinity?0:o.first,last:o.last})).sort((a,b)=>b.n-a.n||a.first-b.first);
-  /* 본인 추정 = 가장 먼저 등장한 열람자 / NEW = 최근 7일 내 첫 등장 */
-  let selfIdx=0,minF=Infinity;viewers.forEach((v,i)=>{if(v.first&&v.first<minF){minF=v.first;selfIdx=i;}});
-  const wk=Date.now()-7*86400000;let newN=0;viewers.forEach((v,i)=>{if(i!==selfIdx&&v.first>=wk)newN++;});
-  const r={viewers,selfIdx,newN,friendN:Math.max(0,viewers.length-1)};
+  let own=[];
+  try{
+    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('clientId','==',cid),orderBy('createdAt','desc'),limit(JV_SIG_LOG_MAX)));
+    qs.forEach(d=>own.push(d.data()));
+  }catch(_oe){
+    const qs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('clientId','==',cid),limit(JV_SIG_LOG_MAX)));
+    own=[];qs.forEach(d=>own.push(d.data()));
+  }
+  let frd=[];
+  try{
+    const fs=await getDocs(query(collection(db,'fc_view_logs'),where('fcAuthUid','==',me.uid),where('refCid','==',cid),limit(JV_SIG_LOG_MAX)));
+    fs.forEach(d=>frd.push(d.data()));
+  }catch(_fe){}
+  const ownV=_jvSigGroup(own);
+  const self=ownV.filter(x=>!x.legacy),legacy=ownV.filter(x=>x.legacy);
+  const friend=_jvSigGroup(frd);
+  const wk=Date.now()-7*86400000;
+  const newN=friend.filter(x=>x.first>=wk).length;
+  const r={self,legacy,friend,newN,friendN:friend.length,capped:(own.length>=JV_SIG_LOG_MAX||frd.length>=JV_SIG_LOG_MAX)};
   _jvSigViewer[cid]=r;return r;
 }
 window.jvSigExpand=async function(cid){
@@ -11570,26 +11627,40 @@ window.jvSigExpand=async function(cid){
   d.style.display='block';d.innerHTML='<span style="color:#9CA3AF">열람자 분석 중...</span>';
   try{
     const v=await jvSigViewers(cid);
-    const a=(_jvSigAgg||{})[cid]||{byCard:{},bySec:{}};
-    if(!v.viewers.length){d.innerHTML='<span style="color:#9CA3AF">상세 열람 기록이 없습니다.</span>';return;}
-    const maxN=Math.max(1,...v.viewers.map(x=>x.n));
+    const a=(_jvSigAgg||{})[cid]||{byCard:{},bySec:{},call:0,share:0,fr:{call:0}};
+    const all=[...v.self.map(x=>({...x,kind:'self'})),...v.friend.map(x=>({...x,kind:'friend'})),...v.legacy.map(x=>({...x,kind:'legacy'}))];
+    if(!all.length){d.innerHTML='<span style="color:#9CA3AF">상세 열람 기록이 없습니다.</span>';return;}
+    const maxN=Math.max(1,...all.map(x=>x.n));
     let interp='';
-    if(v.newN>0)interp='<div style="font-size:12px;color:#7A5A10;background:#FFF6DE;border:1px solid #EFDCA8;border-radius:8px;padding:8px 10px;line-height:1.6;margin-bottom:9px">💡 <b style="color:#B45309">소개 요청 타이밍입니다.</b> 최근 7일 내 새로운 열람자 '+v.newN+'명이 들어왔습니다 — 지인에게 리포트가 퍼지고 있다는 신호입니다.</div>';
-    else if(v.viewers.length>1)interp='<div style="font-size:12px;color:#3A4453;background:#F0F4F8;border-radius:8px;padding:8px 10px;line-height:1.6;margin-bottom:9px">💡 본인 외 열람자가 있었던 고객입니다. 리포트를 주변과 공유했을 가능성이 있습니다.</div>';
-    const rowsH=v.viewers.slice(0,8).map((x,i)=>{
-      const isSelf=(i===v.selfIdx);const isNew=(!isSelf&&x.first>=Date.now()-7*86400000);
-      return '<tr><td style="padding:5px 7px;border-top:1px solid #F3EEDC'+(isSelf?';font-weight:700':'')+'">열람자 '+(i+1)
-        +(isSelf?' <span style="font-size:10px;font-weight:800;color:#1B3A5C;background:#E8EEF5;border-radius:8px;padding:1px 6px">본인 추정</span>':' <span style="font-size:10px;font-weight:800;color:#B45309;background:#FEF3E2;border-radius:8px;padding:1px 6px">지인 추정'+(isNew?' · NEW':'')+'</span>')
+    if(v.newN>0)interp='<div style="font-size:12px;color:#7A5A10;background:#FFF6DE;border:1px solid #EFDCA8;border-radius:8px;padding:8px 10px;line-height:1.6;margin-bottom:9px">💡 <b style="color:#B45309">소개 요청 타이밍입니다.</b> 최근 7일 동안 이 고객이 공유한 리포트를 새 지인 '+v.newN+'명이 열어 봤습니다.</div>';
+    else if(v.friend.length)interp='<div style="font-size:12px;color:#7A5A10;background:#FFF6DE;border:1px solid #EFDCA8;border-radius:8px;padding:8px 10px;line-height:1.6;margin-bottom:9px">💡 이 고객의 공유로 지금까지 지인 '+v.friend.length+'명이 리포트를 봤습니다.</div>';
+    else if(v.legacy.length>1)interp='<div style="font-size:12px;color:#3A4453;background:#F0F4F8;border-radius:8px;padding:8px 10px;line-height:1.6;margin-bottom:9px">💡 「구분 전」 기록에는 고객 본인의 다른 기기(폰·PC)와 지인이 섞여 있을 수 있습니다.</div>';
+    const TAG={self:['본인','#1B3A5C','#E8EEF5'],friend:['지인','#B45309','#FEF3E2'],legacy:['구분 전','#6B7280','#F3F4F6']};
+    const wk=Date.now()-7*86400000;
+    const LIM=10,shown=all.slice(0,LIM);
+    const rowsH=shown.map((x,i)=>{
+      const t=TAG[x.kind];const isNew=(x.kind==='friend'&&x.first>=wk);
+      return '<tr><td style="padding:5px 7px;border-top:1px solid #F3EEDC'+(x.kind==='self'?';font-weight:700':'')+'">열람자 '+(i+1)
+        +' <span style="font-size:10px;font-weight:800;color:'+t[1]+';background:'+t[2]+';border-radius:8px;padding:1px 6px">'+t[0]+(isNew?' · NEW':'')+'</span>'
         +'</td><td style="padding:5px 7px;border-top:1px solid #F3EEDC;white-space:nowrap"><span style="display:inline-block;height:7px;border-radius:4px;background:'+(x.n>1?'#D4A03C':'#C9CFDB')+';width:'+Math.max(8,Math.round(x.n/maxN*56))+'px;vertical-align:middle;margin-right:5px"></span>'+x.n+'회</td>'
+        +'<td style="padding:5px 7px;border-top:1px solid #F3EEDC;color:#6B7280;white-space:nowrap">'+(x.dev?fccEsc(fvtDevice(x.dev)):'-')+'</td>'
         +'<td style="padding:5px 7px;border-top:1px solid #F3EEDC;color:#6B7280;white-space:nowrap">'+(_jvSigTime(x.first)||'-')+'</td>'
         +'<td style="padding:5px 7px;border-top:1px solid #F3EEDC;color:#6B7280;white-space:nowrap">'+(_jvSigTime(x.last)||'-')+'</td></tr>';
     }).join('');
-    const extra=v.viewers.length>8?'<tr><td colspan="4" style="padding:5px 7px;border-top:1px solid #F3EEDC;color:#9CA3AF">외 '+(v.viewers.length-8)+'명 (각 1회성 열람)</td></tr>':'';
+    const extra=all.length>LIM?'<tr><td colspan="5" style="padding:5px 7px;border-top:1px solid #F3EEDC;color:#9CA3AF">외 '+(all.length-LIM)+'명</td></tr>':'';
+    const sumH='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+      +[['본인 기기',v.self.length,'#1B3A5C','#E8EEF5'],['지인',v.friend.length,'#B45309','#FEF3E2'],['구분 전',v.legacy.length,'#6B7280','#F3F4F6']].filter(x=>x[1]>0)
+        .map(x=>'<span style="font-size:11px;font-weight:800;color:'+x[2]+';background:'+x[3]+';border-radius:8px;padding:3px 9px">'+x[0]+' '+x[1]+(x[0]==='본인 기기'?'대':'명')+'</span>').join('')
+      +(((a.call||0)+((a.fr&&a.fr.call)||0))>0?'<span style="font-size:11px;font-weight:800;color:#27500A;background:#EAF3DE;border-radius:8px;padding:3px 9px">📞 전화 버튼 '+((a.call||0)+((a.fr&&a.fr.call)||0))+'회</span>':'')
+      +((a.share||0)>0?'<span style="font-size:11px;font-weight:800;color:#3B4A9F;background:#EEF2FF;border-radius:8px;padding:3px 9px">공유 '+a.share+'회</span>':'')
+      +'</div>';
     const cnt=[...Object.entries(a.byCard||{}),...Object.entries(a.bySec||{})].sort((x,y)=>y[1]-x[1]).slice(0,4);
-    const cntH=cnt.length?'<div style="font-size:11px;font-weight:800;color:#B45309;margin:9px 0 5px">📰 많이 본 내용</div><div style="display:flex;flex-wrap:wrap;gap:5px">'+cnt.map(([k,n])=>'<span style="font-size:11px;font-weight:600;color:#475569;background:#fff;border:1px solid #EDF0F4;border-radius:8px;padding:4px 9px">'+fccEsc(String(k).slice(0,20))+' <b style="color:#1B3A5C">'+n+'회</b></span>').join('')+'</div>':'';
-    const html=interp
-      +'<div style="font-size:11px;font-weight:800;color:#B45309;margin-bottom:5px">📱 열람자별 현황 <span style="font-weight:500;color:#B0A48A">— 브라우저 단위·최대 인원</span></div>'
-      +'<table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;font-size:12px"><tr><th style="background:#F6F1E2;color:#7A5A10;font-weight:700;padding:5px 7px;text-align:left;font-size:11px">열람자</th><th style="background:#F6F1E2;color:#7A5A10;font-weight:700;padding:5px 7px;text-align:left;font-size:11px">횟수</th><th style="background:#F6F1E2;color:#7A5A10;font-weight:700;padding:5px 7px;text-align:left;font-size:11px">첫 열람</th><th style="background:#F6F1E2;color:#7A5A10;font-weight:700;padding:5px 7px;text-align:left;font-size:11px">최근</th></tr>'+rowsH+extra+'</table>'
+    const cntH=cnt.length?'<div style="font-size:11px;font-weight:800;color:#B45309;margin:9px 0 5px">📰 많이 본 내용 <span style="font-weight:500;color:#B0A48A">— 본인 열람 · 선택 기간</span></div><div style="display:flex;flex-wrap:wrap;gap:5px">'+cnt.map(([k,n])=>'<span style="font-size:11px;font-weight:600;color:#475569;background:#fff;border:1px solid #EDF0F4;border-radius:8px;padding:4px 9px">'+fccEsc(_jvSigItemLabel(k).slice(0,24))+' <b style="color:#1B3A5C">'+n+'회</b></span>').join('')+'</div>':'';
+    const html=interp+sumH
+      +'<div style="font-size:11px;font-weight:800;color:#B45309;margin-bottom:5px">📱 열람자별 현황 <span style="font-weight:500;color:#B0A48A">— 브라우저 단위 · 전체 기간'+(v.capped?' · 최근 '+JV_SIG_LOG_MAX+'건 기준':'')+'</span></div>'
+      +'<table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;font-size:12px"><tr>'
+      +['열람자','횟수','기기','첫 열람','최근'].map(h=>'<th style="background:#F6F1E2;color:#7A5A10;font-weight:700;padding:5px 7px;text-align:left;font-size:11px">'+h+'</th>').join('')
+      +'</tr>'+rowsH+extra+'</table>'
       +cntH;
     jvSigRender();   /* 열람자 수·신호 뱃지 갱신 후 상세 재주입 (재렌더로 DOM이 교체되므로) */
     const d2=$('jvsig-d-'+cid);if(d2){d2.style.display='block';d2.innerHTML=html;}
@@ -11598,7 +11669,7 @@ window.jvSigExpand=async function(cid){
 /* 상위 활동 고객 열람자 백그라운드 스캔 — 지인 유입 신호·칩 보강 (최대 10명) */
 async function jvSigViewerScan(){
   try{
-    const top=Object.entries(_jvSigAgg||{}).sort((a,b)=>b[1].total-a[1].total).slice(0,10).map(([cid])=>cid).filter(c=>!_jvSigViewer[c]);
+    const top=Object.entries(_jvSigAgg||{}).sort((a,b)=>(b[1].total+b[1].fr.total)-(a[1].total+a[1].fr.total)).slice(0,10).map(([cid])=>cid).filter(c=>!_jvSigViewer[c]);
     if(!top.length)return;
     await Promise.all(top.map(c=>jvSigViewers(c).catch(()=>null)));
     const m=$('mdl-jv-signal');if(m&&!m.classList.contains('hidden'))jvSigRender();
@@ -12234,6 +12305,9 @@ window._fccDelLegacy=async function(ev){
     try{
       const _vs=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid),where('clientId','==',id)));
       await Promise.all(_vs.docs.map(dv=>deleteDoc(dv.ref)));
+      /* ★ [2026-10-08] 이 고객이 소개한 지인 열람 집계(fc_ref_views)도 함께 파기 */
+      const _rv=await getDocs(query(collection(db,'fc_ref_views'),where('fcAuthUid','==',me.uid),where('refCid','==',id)));
+      await Promise.all(_rv.docs.map(dv=>deleteDoc(dv.ref)));
     }catch(_ve){console.warn('열람 기록 삭제 일부 실패:',_ve);}
     fccCache=fccCache.filter(x=>x.id!==id);
     if(fccEdit&&fccEdit.id===id)window.fccCancelEdit();
@@ -12432,6 +12506,11 @@ window.fccDelSelected=async function(){
     const _vs=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid)));
     viewRefs=_vs.docs.filter(d=>idSet.has((d.data()||{}).clientId)).map(d=>d.ref);
   }catch(_ve){console.warn('열람 기록 조회 실패:',_ve);}
+  /* ★ [2026-10-08] 소개 지인 열람 집계(fc_ref_views)도 함께 파기 */
+  try{
+    const _rv=await getDocs(query(collection(db,'fc_ref_views'),where('fcAuthUid','==',me.uid)));
+    viewRefs=viewRefs.concat(_rv.docs.filter(d=>idSet.has((d.data()||{}).refCid)).map(d=>d.ref));
+  }catch(_re){console.warn('소개 지인 열람 기록 조회 실패:',_re);}
   /* 고객 문서와 열람기록을 함께 담되, 진행률·성공수는 '고객'만 센다.
      (다른 컬렉션의 문서 id가 우연히 같아도 오집계되지 않도록 플래그로 구분) */
   const targets=ids.map(id=>({ref:doc(db,'fc_clients',id),cid:id}))
@@ -13273,6 +13352,8 @@ window.fcvPurge=async function(cid,btn){
     btn.disabled=true;btn.textContent='삭제 중...';
     const s=await getDocs(query(collection(db,'fc_client_views'),where('fcAuthUid','==',me.uid),where('clientId','==',cid)));
     await Promise.all(s.docs.map(d=>deleteDoc(d.ref)));
+    /* ★ [2026-10-08] 이 고객이 소개한 지인 열람 집계도 함께 파기 */
+    try{const _rv=await getDocs(query(collection(db,'fc_ref_views'),where('fcAuthUid','==',me.uid),where('refCid','==',cid)));await Promise.all(_rv.docs.map(d=>deleteDoc(d.ref)));}catch(_re){}
     const row=btn.closest('[data-fcv-row]');if(row)row.remove();
     toast('열람 기록 '+s.size+'건이 삭제되었습니다.','success');
   }catch(e){console.error('fcvPurge:',e);toast('삭제에 실패했습니다.','error');btn.disabled=false;btn.textContent='기록 삭제';}
@@ -13296,6 +13377,10 @@ let _fvtLoaded=false,_fvtCursor=null,_fvtNames={},_fvtRows=[];
 const FVT_DAYS=180,FVT_PAGE=100;
 function fvtDevice(ua){
   ua=String(ua||'');
+  /* ★ [2026-10-08] 새 기록은 기기 종류만 저장(device: mobile/tablet/pc) */
+  if(ua==='mobile')return '📱 휴대폰';
+  if(ua==='tablet')return '📱 태블릿';
+  if(ua==='pc')return '💻 PC';
   const app=/KAKAOTALK/i.test(ua)?' 카톡':/NAVER\(inapp/i.test(ua)?' 네이버':'';
   if(/iPhone|iPad/.test(ua))return '📱 iPhone'+app;
   if(/Android/.test(ua))return '📱 Android'+app;
@@ -13305,6 +13390,8 @@ function fvtDevice(ua){
 function fvtEvLabel(e){
   const id=String(e&&e.id||'');
   if(e.t==='channel_visit'||e.t==='daily_visit')return '방문';
+  if(e.t==='call')return '📞 전화 버튼';   /* ★ [2026-10-08] */
+  if(e.t==='share')return '공유';          /* ★ [2026-10-08] */
   if(id.indexOf('선택·')===0)return id.replace(/_/g,' ').replace('-',' → ');
   if(e.t==='card')return FCV_CARD_LABELS[id]||id.replace(/_/g,' ');
   return id.replace(/_/g,' ');
@@ -13317,6 +13404,7 @@ function fvtFmtTs(ts){
 function fvtRowHtml(v){
   const cid=v.clientId||'';
   const who=cid?('<b style="color:#1F2937">'+fccEsc(_fvtNames[cid]||'삭제된 고객')+'</b>')
+           :v.refCid?('<span style="color:#B45309">'+fccEsc(_fvtNames[v.refCid]||'고객')+' 소개 지인 · 기기 '+fccEsc(String(v.viewerKey||'').slice(0,4))+'</span>')   /* ★ [2026-10-08] */
                :('<span style="color:#6B7280">익명 · 기기 '+fccEsc(String(v.viewerKey||'').slice(0,4))+'</span>');
   const nw=v.isNew?' <span style="font-size:10px;color:#B45309;background:#FEF3C7;border-radius:6px;padding:1px 5px">첫방문</span>':'';
   const ch=v.page==='channel';
@@ -13324,7 +13412,7 @@ function fvtRowHtml(v){
   return '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:7px 0;border-top:0.5px solid #EEF2F6">'
     +'<span style="flex:0 0 auto;font-size:12px;font-weight:700;color:#1B3A6B;font-variant-numeric:tabular-nums">'+fvtFmtTs(v.createdAt)+'</span>'
     +'<span style="flex:0 0 auto;font-size:12px;min-width:110px">'+who+nw+'</span>'
-    +'<span style="flex:0 0 auto;font-size:11px;color:#6B7280">'+fvtDevice(v.ua)+'</span>'
+    +'<span style="flex:0 0 auto;font-size:11px;color:#6B7280">'+fvtDevice(v.device||v.ua)+'</span>'   /* ★ [2026-10-08] 기기 종류 우선 */
     +'<span style="flex:0 0 auto;font-size:11px;font-weight:700;color:'+(ch?'#0F6E56':'#1B3A5C')+'">'+(ch?'내채널':'데일리')+'</span>'
     +'<span style="flex:1;min-width:160px">'+(evs||'<span style="font-size:11px;color:#C5CAD6">-</span>')+'</span>'
     +'</div>';
@@ -20806,7 +20894,7 @@ async function jvCardLockNag(p){
    · 한 번 팝업에 보여준 요청은 다시 크게 띄우지 않는다 (배지·목록에는 그대로) */
 var _rqpList=[], _rqpIdx=0, _rqpQueued=false, _rqpMatTried=false, _rqpBlinkT=null, _rqpTitle0='', _rqpWaitVis=false;
 const RQP_DAYS=30;
-const RQP_LABEL={consult:'재무상담 신청',life:'생활변화 신고',quiz:'자가진단 완료',my_dates:'생활변화 신고',insurance_portfolio:'보험 정보 공유',meeting:'미팅 예약 접수',brochure:'브로슈어 상담 신청',knock:'보안 채팅 요청',maturity:'만기 등록 요청'};
+const RQP_LABEL={call_click:'📞 전화 시도',consult:'재무상담 신청',life:'생활변화 신고',quiz:'자가진단 완료',my_dates:'생활변화 신고',insurance_portfolio:'보험 정보 공유',meeting:'미팅 예약 접수',brochure:'브로슈어 상담 신청',knock:'보안 채팅 요청',maturity:'만기 등록 요청'};
 function _rqpSeenKey(){ return 'jv_rqp_seen_'+((me&&me.uid)||'x'); }
 function _rqpSeen(){ try{ return new Set(JSON.parse(localStorage.getItem(_rqpSeenKey())||'[]')); }catch(_e){ return new Set(); } }
 function _rqpMarkSeen(keys){
@@ -20864,6 +20952,15 @@ function _rqpBlink(){
   _rqpBlinkT=setInterval(()=>{ on=!on; document.title=on?('('+_rqpList.length+') 새 고객 요청'):_rqpTitle0; },1200);
 }
 function _rqpStopBlink(){ if(_rqpBlinkT){ clearInterval(_rqpBlinkT); _rqpBlinkT=null; document.title=_rqpTitle0||document.title; } }
+/* ★ [2026-10-08] 전화 버튼 — 누가 눌렀는지(본인 / ○○ 고객 소개 지인 / 익명) */
+function _fcrCallWho(r){
+  if(!fccCache){ try{ fccFetch().catch(()=>{}); }catch(_e){} }   /* 고객 목록 미로드 — 다음 표시부터 이름이 나오도록 백그라운드 로드 */
+  const nm=id=>{const c=(fccCache||[]).find(x=>x.id===id);return c?(c.name||''):'';};
+  if(r&&r.clientId){ const n=nm(r.clientId); return n?(n+' 고객'):'내 고객'; }
+  if(r&&r.refCid){ const n=nm(r.refCid); return (n?(n+' 고객'):'내 고객')+' 소개 지인'; }
+  return '리포트 열람자(익명)';
+}
+function _fcrDevLabel(d){ return d==='mobile'?'휴대폰':d==='tablet'?'태블릿':d==='pc'?'PC':''; }
 function _rqpRow(k,v){ return v?'<div class="rq-row"><span>'+_fcrEsc(k)+'</span><span>'+v+'</span></div>':''; }
 function _rqpPhone(r){
   if(r.source==='brochure') return _fcrEsc(_fcrFmtPhone(r.phone).replace(/^(\d{2,3})-(\d{3,4})-(\d{4})$/,'$1-****-$3'))+' <span style="color:#8A6410">· 상세에서 확인</span>';
@@ -20874,10 +20971,13 @@ function _rqpMsg(r){ return r.message?'<div class="rq-msg">'+_fcrEsc(r.message)+
 function _rqpBody(it){
   const r=it.r, k=it.kind;
   if(k==='knock') return '<div class="rq-msg">고객이 보안채팅 대화를 요청했습니다. 대화 내용은 내 채널의 보안채팅에서만 확인할 수 있습니다.</div>';
+  if(k==='call_click') return _rqpRow('누가',_fcrEsc(_fcrCallWho(r)))+_rqpRow('기기',_fcrEsc(_fcrDevLabel(r.device)))
+    +'<div class="rq-msg">리포트 하단 「전화」 버튼을 눌렀습니다. 통화가 연결되지 않았다면 먼저 연락해 보세요.'+(r.clientId?'':' 번호는 휴대폰 부재중 기록에서 확인할 수 있습니다.')+'</div>';
   if(k==='maturity'){
     const items=(r.items||[]).map(x=>{const dd=_matDday(x.date);return '<div class="rq-slot"><b style="flex:1;min-width:0">'+_fcrEsc(x.org)+(x.prod?' '+_fcrEsc(x.prod):'')+'</b><span style="color:#5A6484">'+_fcrEsc(x.date)+'</span><span style="font-size:11px;color:'+(dd<=30?'#DC2626':'#8A6410')+'">D-'+dd+'</span></div>';}).join('');
     return '<div class="rq-lbl">등록 요청한 만기 상품 '+((r.items||[]).length)+'건</div>'+items
-      +_rqpRow('고객 연결',(r.cid||r.matchedCid)?'<span style="color:#177A56">내 고객과 연결됨</span>':'<span style="color:#B45309">고객 선택 필요</span>');
+      +_rqpRow('고객 연결',(r.cid||r.matchedCid)?'<span style="color:#177A56">내 고객과 연결됨</span>':'<span style="color:#B45309">고객 선택 필요</span>')
+      +(r.refCid?_rqpRow('소개',_fcrEsc(_fcrCallWho({refCid:r.refCid}).replace(' 소개 지인',' 소개'))+' · 신규'):'');   /* ★ [2026-10-08] 지인 등록 — 소개한 고객 */
   }
   let h='';
   if(k==='quiz'){
@@ -20913,7 +21013,7 @@ function _rqpBody(it){
 }
 function _rqpSub(it){
   const r=it.r, when=_fcrFmtTime(it.ms?new Date(it.ms):null);
-  const from={knock:'내 채널 보안채팅에서',maturity:'리포트에서 만기 상품 등록',meeting:'확정을 기다리고 있어요',quiz:'진단 후 상담 요청',brochure:'e북 브로슈어에서 신청',insurance_portfolio:'보험 내역 공유',my_dates:'내 날짜에서 알림',life:'생활변화 신고'}[it.kind]
+  const from={call_click:'리포트 하단 전화 버튼',knock:'내 채널 보안채팅에서',maturity:'리포트에서 만기 상품 등록',meeting:'확정을 기다리고 있어요',quiz:'진단 후 상담 요청',brochure:'e북 브로슈어에서 신청',insurance_portfolio:'보험 내역 공유',my_dates:'내 날짜에서 알림',life:'생활변화 신고'}[it.kind]
     || (r.source==='client-daily'?'고객용 데일리 리포트에서 신청':'나의 플랫폼에서 신청');
   return _fcrEsc(when+' · '+from);
 }
@@ -20922,12 +21022,13 @@ function _rqpRender(){
   if(_rqpIdx>=n)_rqpIdx=n-1;
   const it=_rqpList[_rqpIdx], r=it.r;
   const name=(it.kind==='knock'?(r.fromName||'고객'):(r.name||'고객'));
-  const go={quiz:'진단 결과 보기 →',meeting:'일정 확정하러 가기 →',knock:'보안채팅 열기 →',maturity:'만기 등록 확인하기 →'}[it.kind]||'요청 상세 보기 →';
+  const ttl=(it.kind==='call_click')?_fcrCallWho(r):(name+' 고객님');   /* ★ [2026-10-08] 전화 버튼은 이름이 없어 누른 사람 구분으로 표시 */
+  const go={quiz:'진단 결과 보기 →',meeting:'일정 확정하러 가기 →',knock:'보안채팅 열기 →',maturity:'만기 등록 확인하기 →',call_click:'고객 요청 목록에서 보기 →'}[it.kind]||'요청 상세 보기 →';
   const pg=n>1?'<div class="rq-pg"><button type="button" onclick="rqpNav(-1)"'+(_rqpIdx===0?' disabled':'')+' aria-label="이전">‹</button>'+(_rqpIdx+1)+' / '+n+'<button type="button" onclick="rqpNav(1)"'+(_rqpIdx===n-1?' disabled':'')+' aria-label="다음">›</button></div>':'';
   $('rqp-card').innerHTML=
     '<div class="rq-hd"><div class="rq-top">🔔 JARVIA · 새 고객 요청'+(n>1?' '+n+'건':'')+'<button type="button" class="rq-x" onclick="rqpClose()" aria-label="닫기">×</button></div>'
     +'<div class="rq-nav"><span class="rq-badge">'+_fcrEsc(RQP_LABEL[it.kind]||'고객 요청')+'</span>'+pg+'</div>'
-    +'<div class="rq-name">'+_fcrEsc(name)+' 고객님</div><div class="rq-sub">'+_rqpSub(it)+'</div></div>'
+    +'<div class="rq-name">'+_fcrEsc(ttl)+'</div><div class="rq-sub">'+_rqpSub(it)+'</div></div>'
     +'<div class="rq-bd">'+_rqpBody(it)
     +'<button type="button" class="rq-go" onclick="rqpGo()">'+go+'</button>'
     +'<button type="button" class="rq-later" onclick="rqpClose()">나중에</button>'
@@ -20941,6 +21042,7 @@ window.rqpGo=function(){
   if(it.kind==='knock'){ _fcrGoSecureChat(); return; }
   goFcRequests();
   if(it.kind==='maturity'){ setTimeout(()=>{ try{ _fcrTypeFilter='maturity'; _fcrRenderList(_fcrCurFilter); }catch(_e){} },600); return; }
+  if(it.kind==='call_click'){ setTimeout(()=>{ try{ _fcrTypeFilter='call_click'; _fcrRenderList(_fcrCurFilter); }catch(_e){} },600); return; }   /* ★ [2026-10-08] 전화 버튼 — 상세 내용이 없어 목록으로 */
   setTimeout(()=>{ try{ openFcRequestDetail(it.r.id); }catch(_e){} },600);
 };
 // ═══════════════════════════════════════════════
@@ -20984,10 +21086,11 @@ const FCR_TYPES=[
   {k:'insurance_portfolio', t:'보험공유'},
   {k:'meeting',  t:'미팅예약'},
   {k:'brochure', t:'브로슈어상담'},   /* ★ [2026-09-26] e북 브로슈어 상담 신청 */
+  {k:'call_click', t:'📞 전화 시도'},  /* ★ [2026-10-08] 리포트 하단 전화 버튼 */
 ];
 function _fcrTypeOf(r){
   const src=String((r&&r.source)||'');
-  if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates'||src==='brochure') return src;
+  if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates'||src==='brochure'||src==='call_click') return src;   /* ★ [2026-10-08] call_click */
   if(r&&(r.quizType||r.quizAnswers||r.quizResult)) return 'quiz';
   return 'consult';
 }
@@ -21029,9 +21132,10 @@ function _fcrMatHtml(statusFilter){
         +'<b style="font-weight:700;min-width:0;flex:1">'+_fcrEsc(it.org)+(it.prod?' '+_fcrEsc(it.prod):'')+'</b>'
         +'<span style="color:#5A6484;white-space:nowrap">'+_fcrEsc(it.date)+'</span>'+tag+'</div>';
     }).join('');
-    const match=r.cid||r.matchedCid
+    const match=(r.cid||r.matchedCid
       ? '<span style="font-size:10.5px;font-weight:700;color:#177A56;background:#E9F7EF;border-radius:8px;padding:3px 9px">✓ 내 고객과 연결됨</span>'
-      : '<span style="font-size:10.5px;font-weight:700;color:#B45309;background:#FFF8E7;border-radius:8px;padding:3px 9px">⚠ 고객 선택 필요</span>';
+      : '<span style="font-size:10.5px;font-weight:700;color:#B45309;background:#FFF8E7;border-radius:8px;padding:3px 9px">⚠ 고객 선택 필요</span>')
+      +(r.refCid?' <span style="font-size:10.5px;font-weight:700;color:#8A6410;background:#FFF3D6;border-radius:8px;padding:3px 9px">🤝 '+_fcrEsc(_fcrCallWho({refCid:r.refCid}).replace(' 소개 지인',' 소개'))+'</span>':'');   /* ★ [2026-10-08] 지인 등록 — 소개한 고객 */
     const acts=done
       ? '<div style="font-size:11.5px;color:#177A56;font-weight:700;margin-top:9px">'+(r.status==='approved'?'✓ 승인 완료 — 고객 계약에 반영됨':'거절 처리됨')+'</div>'
       : '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">'
@@ -21183,11 +21287,12 @@ function _fcrRenderList(filter){
     const metaSpan = meta ? '<span style="font-size:10px;color:#8B93AE;font-weight:500;margin-left:4px">' + _fcrEsc(meta) + '</span>' : '';
     return '<div data-fcr-id="' + _fcrEsc(r.id) + '" onclick="openFcRequestDetail(\'' + _fcrEsc(r.id) + '\')" style="background:#fff;border-left:3px solid ' + c + ';border-radius:0 8px 8px 0;padding:11px 13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
-      + '<div style="font-size:13px;font-weight:800;color:#2C3E50">' + _fcrEsc(r.name || '-') + metaSpan + '</div>'
+      + '<div style="font-size:13px;font-weight:800;color:#2C3E50">' + _fcrEsc(r.source==='call_click' ? ('📞 ' + _fcrCallWho(r)) : (r.name || '-')) + metaSpan + '</div>'   /* ★ [2026-10-08] 전화 버튼 */
       + '<div style="font-size:10px;font-weight:800;color:' + tc + '">' + (_fcrStatusLabels[r.status] || r.status) + '</div>'
       + '</div>'
       + '<div class="fcrPhone" style="font-size:11px;color:#5A6484;font-family:ui-monospace,Menlo,monospace;margin-bottom:5px">'
-        + ((!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인'
+        + ((r.source === 'call_click') ? '리포트 하단 전화 버튼 클릭' + (_fcrDevLabel(r.device) ? ' · ' + _fcrDevLabel(r.device) : '')   /* ★ [2026-10-08] */
+           : (!r.phone && r.source === 'my_dates') ? '기존 고객 · 고객관리에서 확인'
            : (r.source === 'brochure')   /* ★ [2026-09-26] 브로슈어 — 목록에선 가리고, 카드를 눌러야 전체 번호 (확인 시각 기록) */
              ? _fcrEsc(_fcrFmtPhone(r.phone).replace(/^(\d{2,3})-(\d{3,4})-(\d{4})$/, '$1-****-$3')) + ' <span style="font-family:inherit;color:#8A6410;font-weight:700">· 눌러서 확인</span>'
              : _fcrEsc(_fcrFmtPhone(r.phone)))
@@ -21541,7 +21646,7 @@ window.openFcRequestDetail = async function(reqId){
   const lastResp = r.lastResponseAt ? ' · 최근 응답: ' + _fcrFmtTime(r.lastResponseAt) : '';
   box.innerHTML =
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:0.5px solid #E1E8EE">'
-    + '<div style="font-size:14px;font-weight:800;color:#2C3E50">' + _fcrEsc(r.name || '-') + metaSpan + '</div>'
+    + '<div style="font-size:14px;font-weight:800;color:#2C3E50">' + _fcrEsc(r.source==='call_click' ? ('📞 ' + _fcrCallWho(r)) : (r.name || '-')) + metaSpan + '</div>'   /* ★ [2026-10-08] 전화 버튼 */
     + '<div style="cursor:pointer;color:#8B93AE;font-size:22px;font-weight:300;line-height:1" onclick="closeM(\'mdl-fcr-detail\')">×</div>'
     + '</div>'
     + '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">'
