@@ -19298,7 +19298,7 @@ window.toggleMoreDropdown=toggleMoreDropdown;
 window.closeMoreDropdown=closeMoreDropdown;
 /* ═══ ★ [2026-07-17 영업시그널] biz_signals 실시간 리스트 ═══
    - onSnapshot 구독은 탭 최초 진입 시 1회 연결(지연 구독, 읽기 비용 절약)
-   - 신규 뱃지: localStorage('sigLastCheck') 이후 publishedAt 건수 (기기 단위)
+   - 신규 뱃지: localStorage('sigLastCheck') 이후 collectedAt(수집일) 건수 (기기 단위) — ★ [2026-10-09] 발표일→수집일 기준 (늦게 수집된 자료도 NEW)
    - 카테고리: rate공시이율/policy제도변경/dispute분쟁·판례/stats질병통계/tax세제 */
 let _sigUnsub=null,_sigDocs=[],_sigCat='all',_sigOpen={},_sigPage=1,_sigPer=10,_sigQuery='';
 const SIG_CATS={rate:['공시이율','#E1F5EE','#0F6E56'],policy:['제도변경','#E6F1FB','#185FA5'],dispute:['분쟁·판례','#EEEDFE','#3C3489'],stats:['질병통계','#EAF3DE','#3B6D11'],tax:['세제','#FAEEDA','#854F0B']};
@@ -19341,11 +19341,11 @@ function renderSignals(){
   if(!total){list.innerHTML='<div style="text-align:center;padding:40px 0;color:var(--text-lt);font-size:14px">'+(_sigDocs.length?(q?'검색 결과가 없습니다.':'해당 카테고리의 자료가 없습니다.'):'수집된 자료가 준비 중입니다.')+'</div>';if(pg)pg.innerHTML='';return;}
   let lastCheck=0;try{lastCheck=Number(localStorage.getItem('sigPrevCheck')||0);}catch(_){}
   // ── 게시판형 행 렌더 ──
-  let h='<div style="display:flex;gap:10px;padding:10px 14px;background:#F8FAFC;border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--text-lt)"><span style="flex:0 0 34px;text-align:center">번호</span><span style="flex:0 0 62px;text-align:center">분류</span><span style="flex:1">제목</span><span style="flex:0 0 70px;text-align:right">등록일</span></div>';
+  let h='<div style="display:flex;gap:10px;padding:10px 14px;background:#F8FAFC;border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--text-lt)"><span style="flex:0 0 34px;text-align:center">번호</span><span style="flex:0 0 62px;text-align:center">분류</span><span style="flex:1">제목</span><span style="flex:0 0 70px;text-align:right">발표일</span></div>';
   pageRows.forEach((s,i)=>{
     const no=total-start-i;
     const c=SIG_CATS[s.category]||['기타','#F1F5F9','#64748B'];
-    const isHi=s.importance==='high';const isNew=lastCheck&&_sigMs(s.publishedAt)>lastCheck;
+    const isHi=s.importance==='high';const isNew=lastCheck&&_sigMs(s.collectedAt||s.publishedAt)>lastCheck;
     const open=!!_sigOpen[s.id];
     const atts=Array.isArray(s.attachments)?s.attachments:[];
     h+='<div style="border-bottom:1px solid var(--border-lt)">';
@@ -19359,7 +19359,7 @@ function renderSignals(){
     h+='<span style="flex:0 0 70px;text-align:right;font-size:12px;color:var(--text-lt)">'+_sigDate(s.publishedAt)+'</span></div>';
     if(open){
       h+='<div style="padding:4px 16px 16px;background:#F8FAFC">';
-      h+='<div style="font-size:12px;color:var(--text-lt);margin:4px 0 8px">'+(s.sourceName?esc(s.sourceName):'')+'</div>';
+      h+='<div style="font-size:12px;color:var(--text-lt);margin:4px 0 8px">'+[s.sourceName?esc(s.sourceName):'',s.publishedAt?'발표일 '+_sigDate(s.publishedAt):'',s.collectedAt?'수집일 '+_sigDate(s.collectedAt):''].filter(Boolean).join(' · ')+'</div>';
       h+='<div style="font-size:13px;color:var(--text);line-height:1.7;background:#fff;border:1px solid var(--border-lt);border-radius:8px;padding:11px 13px">'+esc(s.summary)+'</div>';
       if(s.salesPoint)h+='<div style="background:#fff;border:1px solid var(--border-lt);border-radius:8px;padding:10px 13px;margin-top:8px;font-size:13px;color:var(--text);line-height:1.6"><b style="color:var(--accent)">💡 영업 포인트</b> · '+esc(s.salesPoint)+'</div>';
       if(s.clientMessage){h+='<div style="margin-top:8px"><div style="font-size:11px;color:var(--text-lt);margin-bottom:4px">고객 발송 멘트 · 브랜드 미노출</div><div style="background:#FFFBEB;border:1px solid #FAC775;border-radius:8px;padding:10px 13px;font-size:13px;color:#633806;line-height:1.65">'+esc(s.clientMessage)+'</div></div>';}
@@ -19409,8 +19409,11 @@ async function initSignalBadge(){
     if(!sigAllowed())return;
     const lc=Number(localStorage.getItem('sigLastCheck')||0);
     if(lc)localStorage.setItem('sigPrevCheck',String(lc));
-    const snap=await getDocs(query(collection(db,'biz_signals'),orderBy('publishedAt','desc'),limit(20)));
-    const n=snap.docs.filter(d=>{const t=_sigMs(d.data().publishedAt);return !lc||t>lc;}).length;
+    // ★ [2026-10-09] 수집일 기준 — 마지막 확인 이후 수집분만 조회, 스킵 마커(skipped) 제외
+    const snap=lc
+      ?await getDocs(query(collection(db,'biz_signals'),where('collectedAt','>',Timestamp.fromMillis(lc)),orderBy('collectedAt','desc'),limit(100)))
+      :await getDocs(query(collection(db,'biz_signals'),orderBy('publishedAt','desc'),limit(20)));
+    const n=snap.docs.filter(d=>{const x=d.data();if(x.skipped)return false;const t=_sigMs(x.collectedAt||x.publishedAt);return !lc||t>lc;}).length;
     const bd=$('signal-badge');if(bd&&n>0){bd.textContent=n>=20?'20+':n;bd.style.display='';}
   }catch(e){/* 규칙 미배포·비로그인 등 — 뱃지 생략 */}
 }
