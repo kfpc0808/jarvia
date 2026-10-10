@@ -633,7 +633,44 @@ function boot(s){   /* 첫 화면 표시 */
   render();focusFirst();
   setSt(s.metadata.fromCache?'오프라인':'동기화됨',s.metadata.fromCache?'':'ok');
   if(!meta.firstSeen)saveMeta({firstSeen:todayK()});
-  setTimeout(bootPopups,700);
+  if(stIdeaAdd(s))setTimeout(bkCheck,1500);else setTimeout(bootPopups,700);   /* ★ [2026-10-10] 영업주제 「아이디어 메모하기」로 들어오면 소개 팝업만 생략(주간 저장 확인은 유지) */
+}
+/* ★ [2026-10-10] 오늘의 영업주제 → 「아이디어 메모하기」 (salestalk.html 이 ?st={t,u} 로 연다)
+   「💡 영업주제 아이디어」 항목 아래에 카드 줄(제목 + 카드 링크)을 두고, 그 밑에 빈 줄을 만들어 바로 적게 한다.
+   같은 카드로 다시 오면 카드 줄은 그대로 두고 빈 줄만 하나 더 만든다. 메모 데이터는 이 화면이 평소처럼 저장한다.
+   첫 화면이 기기 캐시로 열렸으면(온라인) 서버 최신본을 받아 그 위에 추가한다 — 다른 기기에서 고친 내용을 덮어쓰지 않게. */
+function stIdeaAdd(s){
+  let raw=null;try{raw=new URLSearchParams(location.search).get('st');}catch(e){}
+  if(!raw)return false;
+  try{history.replaceState(history.state,'',location.pathname+location.hash);}catch(e){}   /* 새로고침해도 두 번 추가되지 않게 */
+  let p=null;try{p=JSON.parse(raw);}catch(e){return false;}
+  const title=String((p&&p.t)||'').replace(/\s+/g,' ').trim().slice(0,160);
+  const url=String((p&&p.u)||'');
+  if(!title||!/^https:\/\/jarvia\.co\.kr\/salestalk\.html\?d=\d{4}-\d{2}-\d{2}&s=(job|age)$/.test(url))return false;
+  if(s&&s.metadata&&s.metadata.fromCache&&navigator.onLine){
+    getDoc(memoRef()).then(fs=>{
+      const dd=fs.exists()?fs.data():null;
+      if(dd&&Array.isArray(dd.items)){items=dd.items.map(norm);items.forEach(x=>{if(!x.n)delete x.n;});pendRemote=null;ensureOne();}
+      stIdeaInsert(title,url);
+    }).catch(()=>stIdeaInsert(title,url));
+  }else stIdeaInsert(title,url);
+  return true;
+}
+function stIdeaInsert(title,url){
+  snap();   /* Ctrl+Z 로 되돌릴 수 있게 */
+  if(items.length===1&&!plain(items[0].t).trim()&&!items[0].n)items=[];   /* 처음 쓰는 메모의 빈 시작 줄은 정리 */
+  const PARENT='💡 영업주제 아이디어';
+  let pi=items.findIndex(x=>x.lv===0&&plain(x.t).trim()===PARENT);
+  if(pi<0){items.unshift(newItem(0,sanitize(esc(PARENT))));pi=0;}
+  const end=subEnd(pi);
+  let ci=-1;for(let k=pi+1;k<end;k++){if(items[k].lv===1&&plain(items[k].t).includes(url)){ci=k;break;}}
+  if(ci<0){items.splice(pi+1,0,newItem(1,sanitize(esc(title+' '+url))));ci=pi+1;}
+  const ne=newItem(2);items.splice(subEnd(ci),0,ne);
+  items[pi].c=false;items[ci].c=false;items[pi].d=false;items[ci].d=false;   /* 접힘·완료 숨김에 가려 새 줄이 안 보이는 일 방지 */
+  view=null;zoom=null;try{history.replaceState({mmz:null},'',location.pathname);}catch(e){}
+  render();save();
+  setTimeout(()=>{const r=rowEl(ne.id);if(r)r.scrollIntoView({block:'center'});focusItem(ne.id,0);},60);
+  toast(isMobile()?'영업주제 카드를 담았습니다 — 빈 줄을 눌러 아이디어를 적어 주세요':'영업주제 카드를 담았습니다 — 아이디어를 적어 주세요');
 }
 const norm=x=>({id:String(x.id||nid()),t:sanitize(String(x.t||'')),n:String(x.n||'').slice(0,20000),lv:Math.max(0,x.lv|0),d:!!x.d,c:!!x.c,s:!!x.s,k:!!x.k});
 function tryApplyRemote(){

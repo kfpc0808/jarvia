@@ -26977,6 +26977,9 @@ function stcPills(c){
   return p.join('');
 }
 function stcRender(){
+  /* ★ [2026-10-10] 다시 그릴 때 입력 중인 메시지·분류 정보가 지워지지 않게 보관 후 복원 */
+  const _keep={},_kb=_stc.open&&$('stc-d-'+_stc.open);   /* 같은 카드가 열려 있을 때만 (다른 카드로 바꾸면 보관 안 함) */
+  if(_kb)['stc-msg-0','stc-msg-1','stc-msg-2','stc-m-title','stc-m-seg','stc-m-cl','stc-m-kw'].forEach(k=>{const e=_kb.querySelector('#'+k);if(e&&e.dataset.dirty)_keep[k]=e.value;});
   const list=_stc.cards;
   if(!list.length){$('stc-cards').innerHTML=`<div class="stc-empty">${esc(_stc.month)} 카드가 없습니다. 위에서 날짜를 골라 생성할 수 있습니다.</div>`;return;}
   $('stc-cards').innerHTML=list.map(c=>`<div class="stc-item${_stc.open===c.id?' open':''}" id="stc-i-${c.id}">
@@ -26988,6 +26991,7 @@ function stcRender(){
     </div>
     ${_stc.open===c.id?`<div class="stc-detail" id="stc-d-${c.id}"><div><iframe class="stc-frame" id="stc-f-${c.id}" sandbox="allow-popups allow-popups-to-escape-sandbox" title="회원 화면 미리보기"></iframe></div><div class="stc-side">${stcSide(c)}</div></div>`:''}
   </div>`).join('');
+  Object.keys(_keep).forEach(k=>{const e=$(k);if(e){e.value=_keep[k];e.dataset.dirty='1';}});
   if(_stc.open)stcPreview(_stc.open);
 }
 function stcSide(c){
@@ -27002,6 +27006,7 @@ function stcSide(c){
       <button class="btn-danger" onclick="stcRemove('${c.id}')">삭제</button>
     </div>
     <div class="stc-box"><h4>검증 결과 ${v.status?`(${v.status==='fail'?'점검 필요':v.status==='warn'?'경미 지적':'통과'} · ${v.rounds||1}회차${(v.verifiers||[]).length?' · '+esc(v.verifiers.join(', ')):''})`:''}</h4>${notes}</div>
+    ${stcMsgBox(c)}
     <div class="stc-box stc-form"><h4>분류 정보 (검색·목록용)</h4>
       <label>제목</label><input id="stc-m-title" value="${esc(c.title||'')}">
       <label>대상</label><input id="stc-m-seg" value="${esc(c.segment||'')}">
@@ -27073,6 +27078,25 @@ function stcLogBox(c){
   const info=stcRunInfo(c);if(!info.log.length)return '';
   return `<div class="stc-box"><h4>생성 과정 ${info.running?'(진행 중)':`(총 ${stcDur(info.lastAt-info.start)})`}</h4>${stcBars(c,info)}<div class="stc-log" style="border-top:none">${stcLogRows(info)}</div></div>`;
 }
+/* ★ [2026-10-10] 고객에게 바로 보내는 메시지 — 회원 화면 「복사」 대상. 저장 시 서버(stAdmin saveMessages)가 생성과 같은 기준으로 검사 */
+const STC_MSG_TYPES=['안부형','정보형','재접촉형'];
+function stcMsgBox(c){
+  const ms=(c.sections&&Array.isArray(c.sections.messages))?c.sections.messages:[];
+  const val=t=>{const m=ms.find(x=>x&&x.type===t);return m?String(m.text||''):'';};
+  return `<div class="stc-box stc-form"><h4>고객에게 보내는 메시지 ${ms.length?`(${ms.length}개)`:'<span style="color:#C62828">(없음)</span>'}</h4>
+    ${STC_MSG_TYPES.map((t,i)=>`<label>${t}</label><textarea id="stc-msg-${i}" rows="5" placeholder="○○님으로 시작 · 3~5문장 · 상품명·수익·단정 표현·링크 금지">${esc(val(t))}</textarea>`).join('')}
+    <div style="margin-top:8px"><button class="btn" onclick="stcMsgSave('${c.id}')" ${STC_RUN.includes(c.genState)?'disabled title="생성 중에는 저장할 수 없습니다"':''}>메시지 저장</button></div>
+    <div style="font-size:11.5px;color:#7a8299;margin-top:4px">3종 모두 입력해야 저장됩니다. 고객 이름 자리는 「○○」로 둡니다(회원이 이름을 넣으면 바뀌어 복사). 이전 메시지는 이전본에 보관됩니다.</div>
+  </div>`;
+}
+async function stcMsgSave(id){
+  const messages=STC_MSG_TYPES.map((t,i)=>({type:t,text:($('stc-msg-'+i).value||'').trim()}));
+  const empty=messages.filter(m=>!m.text).map(m=>m.type);
+  if(empty.length){toast('빈 칸이 있습니다: '+empty.join(', '),'error');return;}
+  try{await stcApi({action:'saveMessages',cardId:id,messages});[0,1,2].forEach(i=>{const e=$('stc-msg-'+i);if(e)delete e.dataset.dirty;});toast('메시지를 저장했습니다 — 회원 화면에 바로 반영됩니다','success');await stcLoad();}
+  catch(e){toast('저장 실패: '+e.message,'error');}
+}
+document.addEventListener('input',e=>{const t=e.target;if(t&&t.closest&&t.closest('#p-salestalk .stc-side'))t.dataset.dirty='1';});   /* ★ 입력 중 표시 — 자동 새로고침에도 보존 */
 function stcToggle(id){_stc.open=_stc.open===id?'':id;stcRender();}
 async function stcPreview(id){
   const f=$('stc-f-'+id);if(!f)return;
@@ -27238,7 +27262,7 @@ async function stcLawAck(id){
   catch(e){toast('처리 실패: '+e.message,'error');}
 }
 window.stcLoad=stcLoad;window.stcTab=stcTab;window.stcToggle=stcToggle;window.stcDownload=stcDownload;window.stcUploadPick=stcUploadPick;window.stcUploadPicked=stcUploadPicked;
-window.stcRegen=stcRegen;window.stcAct=stcAct;window.stcRemove=stcRemove;window.stcGenerate=stcGenerate;window.stcMetaSave=stcMetaSave;window.stcHist=stcHist;window.stcRestore=stcRestore;
+window.stcRegen=stcRegen;window.stcAct=stcAct;window.stcRemove=stcRemove;window.stcGenerate=stcGenerate;window.stcMetaSave=stcMetaSave;window.stcHist=stcHist;window.stcRestore=stcRestore;window.stcMsgSave=stcMsgSave;
 window.stcPlanAdd=stcPlanAdd;window.stcPlanSave=stcPlanSave;window.stcPlanRun=stcPlanRun;window.stcSetSave=stcSetSave;window.stcLawOpen=stcLawOpen;window.stcLawAck=stcLawAck;
 /* ═══ ★ [2026-10-02] 콘텐츠 선물 현황 (functions/share.js — giftAdminStats, 관리자 로그인 토큰 인증) ═══ */
 let _gf=null,_gfSort={k:'signup',d:-1},_gfRank='shares',_gfRangeKey='this';
