@@ -184,6 +184,19 @@ main{padding:0 16px calc(60px + env(safe-area-inset-bottom,0px))}
 #gate{text-align:center;padding:90px 24px;color:var(--pg-sub);line-height:1.8}
 #gate h2{color:var(--pg-ink);font-size:18px;margin:8px 0}
 #gate button{margin-top:14px;border:none;background:var(--pg-navy);color:#fff;border-radius:10px;padding:11px 18px;font-size:15px}
+/* ★ [2026-10-10] 카드 하단 동료 추천 */
+.st-ref{margin:18px 0 6px;background:#fff;border:1px solid var(--pg-line);border-radius:18px;padding:20px 18px;word-break:keep-all}
+.st-ref h3{margin:0;font-size:18px;line-height:1.45;font-weight:800;color:var(--pg-navy)}
+.st-ref p{margin:10px 0 0;font-size:14px;line-height:1.7;color:var(--pg-sub)}
+.st-ref p b{color:var(--pg-navy)}
+.st-ref ul{margin:12px 0 0;padding:12px 14px 12px 32px;background:var(--pg-soft);border-radius:12px;font-size:13.5px;line-height:1.9;color:var(--pg-ink)}
+.st-ref-pt{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;background:var(--pg-navy);border-radius:12px;padding:12px 14px;font-size:13px;color:#fff}
+.st-ref-pt b{font-size:15px;color:var(--pg-gold);white-space:nowrap}
+.st-ref-s{margin-top:8px;font-size:12.5px;color:var(--pg-sub)}
+.st-ref-b{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.st-ref-b button{min-height:46px;padding:0 16px;border-radius:12px;font-size:14px;font-weight:700;border:1px solid var(--pg-navy);background:#fff;color:var(--pg-navy)}
+.st-ref-b .go{flex:1;min-width:180px;border:0;background:#FEE500;color:#191919}
+.st-ref-l{display:block;text-align:right;margin-top:6px;padding:10px 0;font-size:13px;font-weight:700;color:var(--pg-navy);text-decoration:none}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>
 </head>
@@ -276,6 +289,7 @@ const clean=html=>{
 
 /* ═══ 상태 ═══ */
 let myName='',myLoginId='';
+let myRefUrl='';   /* ★ [2026-10-10] 카드 하단 동료 추천 — 자비아멤버십·비총판만 (index.html jvRefOk 와 같은 기준) */
 let loadedWeek=null;                    /* 실제로 카드를 불러온 주 (깊은 링크·즐겨찾기 열기 판단용) */
 let favs=[],favsLoaded=false;          /* ★ 즐겨찾기 [{id,date,slot,segment,title,at}] — users/{uid}/private/salestalk */
 let fcDoc=null,mcLink=null,mcBusy=null; /* ★ 고객 링크 재료 (consultants 문서 · 모닝 컨센서스 서명 링크) */
@@ -287,14 +301,16 @@ const today=todayK();
 const ROLES=['admin','branch_manager','inner_circle','con_homepage','jarvia_member','jarvia_inner'];
 async function checkRole(user){
   if(/@javia-admin\.internal$/.test(user.email||''))return true;
-  try{const d=await getDoc(doc(db,'users',user.uid));myName=d.exists()?(d.data().name||''):'';myLoginId=d.exists()?String(d.data().loginId||''):'';return ROLES.includes(d.exists()?d.data().role:'');}
+  try{const d=await getDoc(doc(db,'users',user.uid));myName=d.exists()?(d.data().name||''):'';myLoginId=d.exists()?String(d.data().loginId||''):'';
+    const _u=d.exists()?d.data():{};myRefUrl=(['jarvia_member','admin'].includes(_u.role)&&_u.isDistributor!==true&&_u.referralCode)?(location.origin+'/?ref='+encodeURIComponent(_u.referralCode)):'';   /* ★ [2026-10-10] */
+    return ROLES.includes(d.exists()?d.data().role:'');}
   catch(e){console.warn('[salestalk] role',e);return false;}
 }
 function gate(html){$('app').style.display='none';$('gate').style.display='';$('gateMsg').innerHTML=html;$('gateBtn').style.display='';}
 onAuthStateChanged(auth,async user=>{
   if(!user){me=null;gate('자비아 <b>로그인 후</b> 이용할 수 있습니다.<br>메인에서 로그인해 주세요.');return;}
   if(me&&me.uid===user.uid)return;
-  me=user;myName='';myLoginId='';fcDoc=null;mcLink=null;favs=[];favsLoaded=false;msgNameVal='';mcErrDay='';   /* 기기 공용 시 이전 계정 값이 남지 않게 */
+  me=user;myName='';myLoginId='';myRefUrl='';fcDoc=null;mcLink=null;favs=[];favsLoaded=false;msgNameVal='';mcErrDay='';   /* 기기 공용 시 이전 계정 값이 남지 않게 */
   if(!(await checkRole(user))){gate('오늘의 영업주제는 <b>정규회원</b> 전용입니다.<br>(지사장 · 이너서클 · 컨홈 · 자비아멤버십)');return;}
   $('gate').style.display='none';$('app').style.display='';
   logVisit(user);
@@ -353,7 +369,8 @@ function renderDay(){
   const cur=c[slot],fid=cardId(cur);
   $('dayPane').innerHTML=`<div class="pick${c.job&&c.age?'':' one'}" id="pick">${pk}</div>`
     +`<div class="cbar"><button type="button" class="fav${isFav(fid)?' on':''}" id="favBtn" aria-pressed="${isFav(fid)}">${isFav(fid)?'★ 즐겨찾기됨':'☆ 즐겨찾기'}</button><button type="button" id="ideaBtn">💡 아이디어 메모하기</button><span class="sp"></span><button type="button" class="all" id="allToggle">모두 펼치기</button></div>`
-    +cardBlock(cur);
+    +cardBlock(cur)
+    +refBlock();   /* ★ [2026-10-10] 동료 추천 */
   enhance($('dayPane'),cur);
 }
 $('dayPane').addEventListener('click',e=>{
@@ -364,7 +381,28 @@ $('dayPane').addEventListener('click',e=>{
   if(e.target.closest('#ideaBtn')){openIdea(cur);return;}
   if(e.target.closest('#allToggle')){toggleAll();return;}
   const cp=e.target.closest('.st-copy');if(cp){copyMsg(cur,Number(cp.dataset.i),cp);return;}
+  const rf=e.target.closest('[data-ref]');if(rf){refAct(rf.dataset.ref,cur);return;}   /* ★ [2026-10-10] */
 });
+/* ═══ ★ [2026-10-10] 카드 하단 동료 추천 — 이 카드를 동료도 매일 받게 ═══ */
+function refBlock(){
+  if(!myRefUrl)return '';
+  return `<section class="st-ref" aria-label="동료 추천">
+    <h3>이 카드, 같은 팀 동료와<br>함께 보면 더 강해집니다</h3>
+    <p>같은 주제로 고객을 만나고 결과를 서로 나누면 화법이 훨씬 빨리 다듬어집니다. 동료도 매일 아침 <b>직업·연령별 카드 2장</b>을 받게 해주세요.</p>
+    <ul><li>매일 바뀌는 고객 대화 주제 2장</li><li>상담에서 바로 꺼내 쓰는 질문과 화법</li><li>팀이 같은 주제로 함께 연습</li></ul>
+    <div class="st-ref-pt"><span>동료 1명 자비아멤버십 등록 시</span><b>5만P · 한 달 무료</b></div>
+    <div class="st-ref-s">가입만 해도 1만P · 링크로 가입하면 추천인 자동 등록</div>
+    <div class="st-ref-b"><button type="button" class="go" data-ref="send">오늘 카드와 추천링크 함께 보내기</button><button type="button" data-ref="copy">추천링크 복사</button></div>
+    <a class="st-ref-l" href="index.html?promo=ref">내 포인트 내역 보기 →</a>
+  </section>`;
+}
+async function refAct(a,c){
+  if(!myRefUrl)return;
+  const t=a==='copy'?myRefUrl:'오늘 「'+String((c&&c.title)||'영업주제')+'」 카드로 고객 상담을 준비했어요. 자비아에서는 이런 영업주제 카드를 매일 아침 받아볼 수 있습니다. 아래 링크로 가입해 보세요.\n'+myRefUrl;
+  if(a==='send'&&navigator.share){try{await navigator.share({text:t});}catch(e){}return;}   /* 휴대폰 — 카톡 등 앱 선택 */
+  if(await writeClip(t))toast(a==='copy'?'추천링크를 복사했습니다 — 카톡에 붙여 넣어 보내세요':'추천 메시지를 복사했습니다 — 카톡에 붙여 넣어 보내세요');
+  else{$('cpText').value=t;$('cpModal').hidden=false;}   /* 자동 복사가 막힌 경우 — 기존 수동 복사 창 */
+}
 $('dayPane').addEventListener('change',e=>{
   const x=e.target.closest('.lk input[type=checkbox]');if(!x)return;
   const p=linkPrefs();p[x.dataset.k]=x.checked;saveLinkPrefs(p);

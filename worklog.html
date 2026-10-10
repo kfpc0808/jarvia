@@ -1401,6 +1401,7 @@ const WL_CONSULT=[
 /* ═══ 상태 ═══ */
 let me=null,_loginId='',_myPhone='',_clients=null,_cache=null,_editId=null;   /* ★ [2026-09-02] _myPhone — 알림톡 수신번호 표시용 */
 let _myRole='';   /* ★ [2026-10-03] 월간 영업전략리포트 노출 판정용 */
+let _myRefCode='',_myDist=false;   /* ★ [2026-10-10] 팀원 초대(추천링크)용 */
 let _orgMe=null;   /* ★ [2026-09-01] 조직 상태 (wlOrgView mode:me) */
 let _sel={ct:'personal',chan:'대면',prods:[],stage:'',consults:[],insurer:'',ptype:'',clientId:'',deal:false};
 let _q='',_sort='dateDesc',_fp='',_fs='',_view='list';
@@ -1440,6 +1441,7 @@ onAuthStateChanged(auth,async user=>{
     _loginId=u.loginId||'';
     _myPhone=String(u.phone||'').replace(/\D/g,'');   /* ★ [2026-09-02] */
     _myRole=u.role||'';   /* ★ [2026-10-03] */
+    _myRefCode=u.referralCode||'';_myDist=u.isDistributor===true;   /* ★ [2026-10-10] */
     const pass=WL_ALLOWED.includes(u.role)&&(!WL_TEST_IDS.length||WL_TEST_IDS.includes(u.loginId||''));
     if(!pass){
       $('gateMsg').innerHTML='업무일지는 <b>정규회원 전용</b> 기능입니다.';
@@ -2034,8 +2036,39 @@ function renderTeam(){
     if(T.direct.length)h+=`<div class="sec"><h3>직속 컨설턴트 <small>팀 소속 없음 · ${T.direct.length}명</small></h3><div class="tm direct" style="padding:0"><div class="pl" style="border:none;box-shadow:none;background:transparent">${T.direct.map(p=>personRow(p,{unlink:true})).join('')}</div></div></div>`;
     h+=unlinkList(T.unlinks);
   }
+  h+=wlRefInvite(T.title);   /* ★ [2026-10-10] 팀원 초대 = 추천링크 */
   $('tmBody').innerHTML=h;
 }
+/* ══════ ★ [2026-10-10] 팀원 초대 — 팀장·지점장 팀 화면 하단 ══════
+   · 초대 링크 = 본인 추천링크 (가입 시 추천인 자동 등록)
+   · 가입한 팀원은 홈 조직 카드에서 내 아이디를 넣어 팀으로 연결 — 기존 연결 방식 그대로
+   · 포인트 안내는 총판 제외 */
+function wlRefMsg(title){
+  const url=location.origin+'/?ref='+encodeURIComponent(_myRefCode);
+  return (title==='leader'?'우리 팀':'우리 지점')+' 업무일지를 자비아로 함께 관리하려고 합니다.\n아래 링크로 가입한 뒤, 업무일지 홈의 조직 카드에 제 아이디를 입력하면 바로 연결됩니다. (제 아이디: '+_loginId+')\n'+url;
+}
+function wlRefInvite(title){
+  if(!_myRefCode||(title!=='leader'&&title!=='branch'))return '';
+  const who=title==='leader'?'팀원':'팀장·컨설턴트';
+  return `<div class="sec" style="border:1px solid #E4DCC8;background:#FBF9F4;border-radius:14px;padding:18px 16px">
+    <h3 style="margin:0 0 6px">아직 자비아를 안 쓰는 ${title==='leader'?'팀원이':'팀장·컨설턴트가'} 있나요?</h3>
+    <div style="font-size:13.5px;line-height:1.7;color:#34465E;word-break:keep-all">초대 메시지를 보내면, 가입 후 조직 카드에서 내 아이디 <b>${esc(_loginId)}</b> 를 입력해 바로 ${title==='leader'?'팀':'지점'}으로 연결됩니다. 함께 쓰면 목표·활동을 한 화면에서 챙길 수 있습니다.</div>
+    ${_myDist?'':`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;background:#13253F;border-radius:12px;padding:11px 14px;margin-top:12px"><span style="font-size:12.5px;color:#fff">1명 자비아멤버십 등록 시 · 가입만 해도 1만P</span><b style="font-size:14.5px;color:#E8C57A;white-space:nowrap">5만P</b></div>`}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" onclick="wlRefSend('${title}')" style="flex:1;min-width:140px;min-height:46px;border:0;border-radius:12px;background:#FEE500;color:#191919;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">${who} 초대하기</button><button type="button" onclick="wlRefCopy('${title}')" style="min-height:46px;padding:0 16px;border:1px solid #13253F;border-radius:12px;background:#fff;color:#13253F;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">초대 메시지 복사</button></div>
+    ${_myDist?'':`<div style="text-align:right;margin-top:6px"><a href="/?promo=ref" target="_blank" rel="noopener" style="display:inline-block;padding:10px 0;font-size:13px;font-weight:700;color:#13253F;text-decoration:none">내 포인트 내역 보기 →</a></div>`}
+  </div>`;
+}
+window.wlRefCopy=function(title){
+  const t=wlRefMsg(title);
+  const done=()=>toast('초대 메시지를 복사했습니다. 카톡·문자에 붙여넣어 보내세요.');
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(done).catch(()=>prompt('아래 메시지를 복사하세요:',t));
+  else prompt('아래 메시지를 복사하세요:',t);
+};
+window.wlRefSend=function(title){
+  const t=wlRefMsg(title);
+  if(navigator.share){navigator.share({text:t}).catch(()=>{});return;}   /* 휴대폰 — 카톡 등 앱 선택 */
+  window.wlRefCopy(title);
+};
 function teamFind(uid){
   const T=_team;if(!T)return null;
   const pool=T.title==='leader'?[T.leader].concat(T.members):[T.me].concat(T.direct,...T.teams.map(t=>[t.leader].concat(t.members)));
