@@ -126,6 +126,7 @@ main{padding:0 16px calc(60px + env(safe-area-inset-bottom,0px))}
 .msg-opts{display:flex;flex-direction:column;gap:8px;background:var(--pg-soft);border-radius:12px;padding:10px 12px;margin-bottom:10px}
 .msg-opts .nm{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:700;color:var(--pg-sub)}
 .msg-opts .nm input{flex:1;min-width:0;font:inherit;font-size:16px;border:1px solid #d5dbe5;border-radius:9px;padding:7px 10px;min-height:40px;background:#fff;color:var(--pg-ink)}
+.msg-opts .nm input::placeholder{color:#b8c0cc;font-weight:400;opacity:1}   /* ★ 예시(홍길동)는 흐리게 */
 .msg-opts .lk{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:14px}
 .msg-opts .lk>span{font-size:13px;font-weight:700;color:var(--pg-sub);width:100%}
 .msg-opts .lk label{display:inline-flex;align-items:center;gap:5px;min-height:32px;white-space:nowrap}
@@ -293,7 +294,7 @@ function gate(html){$('app').style.display='none';$('gate').style.display='';$('
 onAuthStateChanged(auth,async user=>{
   if(!user){me=null;gate('자비아 <b>로그인 후</b> 이용할 수 있습니다.<br>메인에서 로그인해 주세요.');return;}
   if(me&&me.uid===user.uid)return;
-  me=user;myName='';myLoginId='';fcDoc=null;mcLink=null;favs=[];favsLoaded=false;   /* 기기 공용 시 이전 계정 값이 남지 않게 */
+  me=user;myName='';myLoginId='';fcDoc=null;mcLink=null;favs=[];favsLoaded=false;msgNameVal='';mcErrDay='';   /* 기기 공용 시 이전 계정 값이 남지 않게 */
   if(!(await checkRole(user))){gate('오늘의 영업주제는 <b>정규회원</b> 전용입니다.<br>(지사장 · 이너서클 · 컨홈 · 자비아멤버십)');return;}
   $('gate').style.display='none';$('app').style.display='';
   logVisit(user);
@@ -367,7 +368,7 @@ $('dayPane').addEventListener('click',e=>{
 $('dayPane').addEventListener('change',e=>{
   const x=e.target.closest('.lk input[type=checkbox]');if(!x)return;
   const p=linkPrefs();p[x.dataset.k]=x.checked;saveLinkPrefs(p);
-  if(x.dataset.k==='mc'&&x.checked)ensureMcLink().catch(()=>{});
+  if(x.dataset.k==='mc'&&x.checked)mcErrDay='';   /* 다시 체크하면 다시 시도 */
   refreshMsgs();   /* ★ 체크한 링크를 메시지 아래에 바로 보여 줌 */
 });
 $('dayPane').addEventListener('input',e=>{   /* ★ 고객 이름을 넣으면 메시지의 ○○ 이 바로 바뀜 */
@@ -467,21 +468,48 @@ function buildMsgSec(c){
   const d=document.createElement('details');d.className='st-sec st-s-msg';d.open=true;
   d.innerHTML='<summary>고객에게 바로 보내는 메시지</summary><div class="st-sec-body">'
     +'<p class="st-hint">떠오르는 고객이 있으면 이름을 넣고 복사해 카톡으로 보내 보세요</p>'
-    +'<div class="msg-opts"><label class="nm">고객 이름 <input type="text" id="msgName" maxlength="20" placeholder="예: 홍길동" autocomplete="off"></label>'
+    +`<div class="msg-opts"><label class="nm">고객 이름 <input type="text" id="msgName" maxlength="20" placeholder="예: 홍길동" autocomplete="off" value="${esc(msgNameVal)}"></label>`
     +'<div class="lk"><span>함께 보낼 링크 · 체크하면 메시지 아래에 붙어 복사돼요</span>'
     +MSG_LINKS.map(l=>{const ok=linkAvail(l.k);return `<label class="${ok?'':'off'}" title="${ok?'':(l.k==='bz'?'아침독서 링크가 등록되지 않았습니다':'회원 아이디를 확인할 수 없습니다')}"><input type="checkbox" data-k="${l.k}"${ok&&p[l.k]?' checked':''}${ok?'':' disabled'}> ${esc(l.label)}</label>`;}).join('')
     +'</div></div><div class="st-msgs">'
-    +msgs.map((m,i)=>`<div class="st-msg"><div class="st-msg-h"><b>${esc(m.type||'메시지')}</b><button type="button" class="st-copy" data-i="${i}">복사</button></div><div class="st-msg-t">${esc(m.text)}</div></div>`).join('')
+    +msgs.map((m,i)=>`<div class="st-msg"><div class="st-msg-h"><b>${esc(m.type||'메시지')}</b><button type="button" class="st-copy" data-i="${i}">복사</button></div><div class="st-msg-t" data-i="${i}"></div><div class="st-msg-lk" hidden></div></div>`).join('')
     +'</div></div>';
-  if(p.mc&&linkAvail('mc'))ensureMcLink().catch(()=>{});
+  d._msgs=msgs;
+  refreshMsgs(d);   /* 모닝 컨센서스가 체크돼 있으면 여기서 링크를 받아 옴 */
   return d;
+}
+/* ★ [2026-10-10] 화면 미리보기 — 복사될 내용과 같게: ○○ → 입력한 이름, 체크한 링크는 메시지 아래에 */
+function msgNm(){return String(msgNameVal||'').trim().replace(/님$/,'');}
+function linkNow(k){   /* 지금 바로 알 수 있는 주소 (모닝 컨센서스는 받아 둔 것만) */
+  if(k==='cd')return myLoginId?'https://jarvia.co.kr/client-daily?fc='+encodeURIComponent(myLoginId):'';
+  if(k==='bz')return bookzipUrl();
+  if(k==='mc')return (mcLink&&mcLink.day===today)?mcLink.url:'';
+  return '';
+}
+function refreshMsgs(root){
+  const sec=root||document.querySelector('#dayPane .st-s-msg');if(!sec||!sec._msgs)return;
+  const nm=msgNm();
+  sec.querySelectorAll('.st-msg-t[data-i]').forEach(el=>{
+    const m=sec._msgs[Number(el.dataset.i)];if(!m)return;
+    el.innerHTML=nm?String(m.text).split('○○').map(esc).join(`<mark class="nm">${esc(nm)}</mark>`):esc(m.text);
+  });
+  const picks=[...sec.querySelectorAll('.lk input[type=checkbox]:checked')].map(x=>x.dataset.k);
+  let h='';
+  for(const l of MSG_LINKS){
+    if(!picks.includes(l.k))continue;
+    const u=linkNow(l.k);
+    if(u)h+=`<span>· ${esc(l.name)}</span><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`;
+    else if(l.k==='mc')h+=`<span>· ${esc(l.name)}</span><span class="wait">${mcErrDay===today?'링크를 만들지 못했습니다 — 복사할 때 다시 시도합니다':'링크 준비 중…'}</span>`;
+  }
+  sec.querySelectorAll('.st-msg-lk').forEach(el=>{el.innerHTML=h?'<b>📌 함께 보시면 좋은 자료</b>'+h:'';el.hidden=!h;});
+  if(picks.includes('mc')&&!linkNow('mc')&&mcErrDay!==today)ensureMcLink().then(()=>refreshMsgs(),()=>{mcErrDay=today;refreshMsgs();});
 }
 async function loadFcDoc(){
   if(!myLoginId)return;
   try{const s=await getDoc(doc(db,'consultants',myLoginId));fcDoc=s.exists()?s.data():null;}catch(e){fcDoc=null;}
   /* 첫 카드가 먼저 그려졌으면 아침독서 체크 가능 여부만 다시 반영 */
   const bz=document.querySelector('#dayPane .lk input[data-k="bz"]');
-  if(bz){const ok=linkAvail('bz');bz.disabled=!ok;bz.parentElement.classList.toggle('off',!ok);if(ok&&linkPrefs().bz)bz.checked=true;}
+  if(bz){const ok=linkAvail('bz');bz.disabled=!ok;bz.parentElement.classList.toggle('off',!ok);if(ok&&linkPrefs().bz)bz.checked=true;refreshMsgs();}
 }
 function bookzipUrl(){   /* index.html _mrWeekUrl 과 같은 계산 — 기준 월요일(bookzipBaseDate)부터 매주 b+1 */
   const fc=fcDoc;if(!fc||!fc.morningBookzipUrl||!/^https?:\/\//i.test(fc.morningBookzipUrl))return '';
@@ -536,6 +564,7 @@ async function copyMsg(c,i,btn){
   if(!ok){$('cpText').value=res.text;$('cpModal').hidden=false;try{$('cpText').focus();$('cpText').select();}catch(e){}return;}
   btn.textContent='복사됨 ✓';btn.classList.add('done');setTimeout(()=>{btn.textContent='복사';btn.classList.remove('done');},1800);
   toast(res.miss?`${res.miss} 링크를 만들지 못해 빼고 복사했습니다`:'복사했습니다 — 카톡에 붙여 넣어 보내세요');
+  refreshMsgs();   /* 복사하며 받아 온 링크를 화면에도 반영 */
 }
 async function writeClip(t){
   try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(t);return true;}}catch(e){}
