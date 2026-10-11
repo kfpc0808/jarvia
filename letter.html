@@ -318,6 +318,7 @@ h2{font-size:17px;font-weight:800;color:var(--navy2);line-height:1.5}
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
+import{getAuth,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';   /* 관리자 미리보기용 */
 
 const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app"};
 const app=initializeApp(FC);
@@ -335,7 +336,8 @@ const SHORT='https://jarvia.co.kr/l/';
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const code=(new URLSearchParams(location.search).get('c')||'').trim();
-const PV=new URLSearchParams(location.search).get('pv')==='1';   /* 회원 미리보기 — 집계·신청 안 함 */
+const ADM=(new URLSearchParams(location.search).get('adm')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,120);   /* 관리자 미리보기 — 승인 전 레터 (admin.html) */
+const PV=ADM?true:new URLSearchParams(location.search).get('pv')==='1';   /* 회원 미리보기 — 집계·신청 안 함 */
 
 /* 열람자 임의값 — 1인 1회 집계용 (개인정보 없음). 저장이 막힌 브라우저는 이번 방문만 */
 const vid=(()=>{const mk=()=>{let s='';const a='abcdefghijklmnopqrstuvwxyz0123456789';const r=crypto.getRandomValues(new Uint8Array(16));for(const x of r)s+=a[x%36];return s;};
@@ -459,6 +461,7 @@ $('form').addEventListener('submit',async e=>{
 
 /* 지인에게 공유 — 같은 공통 링크(카톡 카드 이미지가 붙는 주소)를 전달 */
 $('barShare').addEventListener('click',async()=>{
+  if(ADM){toast('관리자 미리보기에서는 공유하지 않습니다');return;}
   const url=SHORT+encodeURIComponent(code);
   const title=document.title;
   track('share');
@@ -467,7 +470,21 @@ $('barShare').addEventListener('click',async()=>{
   catch(_){const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('링크가 복사되었습니다.');}catch(__){toast(url);}document.body.removeChild(ta);}
 });
 
+/* 관리자 미리보기 — 관리자 로그인 상태에서 letterAdmin(get)으로 승인 전 레터를 불러온다. 보낸 사람은 예시 */
+async function admPreview(){
+  const auth=getAuth(app);
+  const u=await new Promise(res=>{const off=onAuthStateChanged(auth,x=>{off();res(x);});setTimeout(()=>res(auth.currentUser),6000);});
+  if(!u){fail('관리자 로그인이 필요합니다','관리자 화면에 로그인한 뒤 다시 열어 주세요.');return;}
+  const r=await call('letterAdmin',{action:'get',key:ADM});
+  if(!r.ok||!r.row||!r.row.letter){fail('미리보기를 열 수 없습니다',r.message||'아직 생성되지 않은 레터입니다.');return;}
+  D={track:r.row.track,letter:r.row.letter,cardUrl:r.row.cardUrl||'',date:new Date(Date.now()+9*3600e3).toISOString().slice(0,10),
+     member:{name:'홍길동',title:'재무컨설턴트',company:'(회원 소속이 표시됩니다)',phone:'',photoUrl:''}};
+  render();
+  const b=document.createElement('div');b.textContent='관리자 미리보기 — 보낸 사람은 예시이며, 실제로는 보낸 회원의 이름·사진·전화번호가 표시됩니다';b.style.cssText='position:sticky;top:0;z-index:95;background:#E8F0FB;color:#1B3A5C;font-size:12px;font-weight:700;text-align:center;padding:7px 12px;line-height:1.5';document.body.insertBefore(b,document.body.firstChild);
+}
+
 (async()=>{
+  if(ADM){try{await admPreview();}catch(e){fail('미리보기를 열 수 없습니다',(e&&e.message)||'잠시 후 다시 열어 주세요.');}return;}
   if(!/^[A-Za-z0-9]{6,12}$/.test(code)){fail('레터를 찾을 수 없습니다','받으신 링크를 다시 한번 확인해 주세요.');return;}
   try{
     const r=await call('letterView',PV?{c:code,vid,pv:true}:{c:code,vid});
