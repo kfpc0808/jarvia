@@ -17759,6 +17759,272 @@ function _openPdfWindow(url,title){var isMobile=/Android|iPhone|iPad|iPod|Mobile
 window.doViewPdf=doViewPdf;
 window.openTaxWeeklyAudio=openTaxWeeklyAudio;window.openTaxWeeklyCards=openTaxWeeklyCards;window.openTaxWeeklyCardsSeamless=openTaxWeeklyCardsSeamless;window.openTaxWeeklyHtml=openTaxWeeklyHtml;
 window.showDetail=showDetail;window.doView=doView;window.doFav=doFav;window.doViewVideo=doViewVideo;window.doDownloadPPTX=doDownloadPPTX;window.doPreview=doPreview;
+/* ═══ ★ [2026-10-11] 일반회원 고객 레터 (functions/customerLetter.js — letterMember·letterMyStats) ═══
+   · 콘텐츠 상세 창 맨 위: [고객에게 레터 보내기] (관리자가 승인한 레터가 있는 콘텐츠만)
+   · 보내기 창: 카톡 카드 미리보기 · 문구 편집(개인 메시지·제목·도입·상담 문구) · 카카오톡 보내기(휴대폰 공유창) · 링크 복사 · 미리보기 · 반응
+   · 진열대 4개 시리즈 제목 옆 ⓘ — 레터 활용 안내
+   · 고객 화면에 자비아가 드러나지 않도록 카톡 SDK 카드 대신 링크 공유(카톡이 카드 이미지를 자동으로 붙인다) */
+const JVL_TRACK={closing:{t:'클로징 리포트',ac:'#B5503F',series:'case_report'},tax:{t:'택스컨설팅 위클리',ac:'#2D78B0',series:'tax_weekly'},master:{t:'마스터가이드',ac:'#B08A45',series:'master_guide'},medical:{t:'메디컬 위클리',ac:'#2A8C7C',series:'medical_weekly'}};
+const JVL_SERIES2TRACK={case_report:'closing',tax_weekly:'tax',master_guide:'master',medical_weekly:'medical'};
+const JVL_EDIT=[['msg','개인 메시지','맨 위에 회원님이 쓴 편지처럼 보입니다. 고객과 나눈 이야기를 한 줄 넣어 보세요.',4,400],['headline','레터 제목','줄바꿈은 그대로 보입니다.',3,80],['lead','도입 문장','',3,300],['ctaHead','상담 신청 위 질문','',2,60]];
+let _jvlAvail=null,_jvlAvailUid='',_jvlAvailAt=0,_jvlCur=null,_jvlStats=null;
+const jvlEsc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const jvlCall=(action,data)=>httpsCallable(functions,'letterMember')(Object.assign({action},data||{})).then(r=>(r&&r.data)||{});
+
+const JVL_CSS=`
+.jm-info{position:relative;align-self:center;width:22px;height:22px;margin:0 -2px 0 -4px;padding:0;border:0;background:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.jm-info::after{content:"";position:absolute;inset:-11px}
+.jm-info span{width:17px;height:17px;border-radius:50%;border:1.5px solid #B9975A;color:#9E7F45;font:italic 900 11px/1 'Noto Serif KR',Georgia,serif;display:flex;align-items:center;justify-content:center;transition:.15s;background:#fff}
+.jm-info:hover span,.jm-info:focus-visible span{background:#9E7F45;color:#fff;border-color:#9E7F45}
+.jvl-entry{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#0E2438,#1B3A5C);color:#fff;border-radius:14px;padding:13px 14px;margin:28px 0 14px;cursor:pointer;border:0;width:100%;text-align:left;font-family:var(--font)}
+.jvl-entry .ic{width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#E9D3A6,#C9A96E 55%,#9E7F45);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.jvl-entry b{display:block;font-size:14.5px;font-weight:800}.jvl-entry small{display:block;font-size:12px;color:#C8D3E0;margin-top:2px;line-height:1.45}
+.jvl-entry .go{margin-left:auto;font-size:20px;color:#C9A96E;flex-shrink:0}
+.jvl-sheet{max-width:460px !important;max-height:92vh;overflow-y:auto}
+.jvl-sec{margin-top:16px}.jvl-lb{font-size:12.5px;font-weight:800;color:#3A4353;margin-bottom:8px}
+.jvl-kk{background:#B2C7D9;border-radius:14px;padding:14px 12px;display:flex;gap:8px;align-items:flex-start}
+.jvl-kk .pf{width:36px;height:36px;border-radius:13px;background:#C9A96E;color:#0E2438;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+.jvl-kk .pf img{width:100%;height:100%;object-fit:cover}
+.jvl-kk .nm{font-size:12px;color:#3A4353}
+.jvl-kk .cd{margin-top:4px;width:250px;max-width:100%;background:#fff;border-radius:4px 14px 14px 14px;overflow:hidden}
+.jvl-kk .cd img,.jvl-kk .cd .ph{display:block;width:100%;aspect-ratio:2/1;object-fit:cover;background:#0E2438}
+.jvl-kk .cd .ph{display:flex;align-items:center;justify-content:center;color:#AFC0D3;font-size:12px}
+.jvl-kk .ti{padding:11px 13px 0;font-size:13.5px;font-weight:800;color:#191919}
+.jvl-kk .ds{padding:3px 13px 0;font-size:12px;color:#6B6B6B;line-height:1.5}
+.jvl-kk .bt{margin:10px;background:#F2F2F2;border-radius:6px;padding:9px;text-align:center;font-size:12.5px;font-weight:700;color:#191919}
+.jvl-edit-cta{background:#FBF6EC;border:1.5px solid #C9A96E;border-radius:14px;padding:13px 14px;display:flex;gap:12px;align-items:center}
+.jvl-edit-cta b{display:block;font-size:14px;color:#0E2438}.jvl-edit-cta span{display:block;font-size:12.5px;line-height:1.55;color:#3A4353;margin-top:2px}
+.jvl-edit-cta button{flex-shrink:0;min-height:42px;padding:0 14px;border-radius:10px;border:0;background:#0E2438;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:var(--font)}
+.jvl-edit-cta.done{background:#EEF8F3;border-color:#7CC3A3}
+.jvl-f{display:flex;flex-direction:column;gap:5px;margin-top:12px;font-size:12.5px;font-weight:700;color:#3A4353}
+.jvl-f small{font-weight:400;color:#6B7585;font-size:11.5px}
+.jvl-f textarea{border:1px solid #D5DBE3;border-radius:10px;padding:9px 11px;font-size:14px;line-height:1.6;font-family:var(--font);color:#141A24;resize:vertical}
+.jvl-f textarea:focus{outline:2px solid #1B3A5C;border-color:#1B3A5C}
+.jvl-eb{display:flex;gap:8px;margin-top:12px}.jvl-eb button{flex:1;min-height:44px;border-radius:10px;font-weight:800;font-size:13.5px;cursor:pointer;font-family:var(--font)}
+.jvl-stat{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.jvl-stat>div{background:#F6F7FA;border-radius:10px;padding:9px 6px;text-align:center}
+.jvl-stat .v{font-size:17px;font-weight:800;color:#0E2438}.jvl-stat .l{font-size:11px;color:#6B7585;margin-top:1px}
+.jvl-btns{display:flex;flex-direction:column;gap:8px;margin-top:18px}
+.jvl-kkbtn{min-height:52px;border-radius:12px;border:0;background:#FEE500;color:#191919;font-size:15.5px;font-weight:800;cursor:pointer;font-family:var(--font)}
+.jvl-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.jvl-two button{min-height:46px;border-radius:12px;border:1px solid #D5DBE3;background:#fff;color:#0E2438;font-size:13.5px;font-weight:700;cursor:pointer;font-family:var(--font)}
+.jvl-note{font-size:11.5px;color:#7A8299;line-height:1.6;margin-top:10px}
+.jvl-link{background:none;border:0;color:#1B3A5C;font-size:12.5px;font-weight:700;text-decoration:underline;cursor:pointer;padding:6px 0;font-family:var(--font)}
+.jvl-row{display:flex;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid #EEF0F3}
+.jvl-row .t{flex:1;min-width:0;font-size:13px;font-weight:700;color:#141A24;line-height:1.45}
+.jvl-row .s{font-size:11.5px;color:#6B7585;margin-top:2px;font-weight:500}
+.jli-hd{position:relative;padding:20px 22px 18px;color:#fff;background:linear-gradient(135deg,#0E2438,#1B3A5C)}
+.jli-k{font-size:11.5px;font-weight:800;letter-spacing:.06em;color:#E9D3A6}
+.jli-t{font:900 20px/1.45 'Noto Serif KR',serif;margin-top:6px;letter-spacing:-.02em}
+.jli-s{font-size:13px;line-height:1.6;color:rgba(255,255,255,.86);margin-top:6px}
+.jli-tabs{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #E4E8EE}
+.jli-tab{min-height:46px;border:0;background:#fff;font:600 14px var(--font);color:#6B7585;cursor:pointer;border-bottom:2.5px solid transparent}
+.jli-tab[aria-selected="true"]{color:#0E2438;font-weight:800;border-bottom-color:#C9A96E}
+.jli-bd{padding:18px 22px}
+.jli-pane{display:none}.jli-pane.on{display:block}
+.jli-h{font-size:15px;font-weight:800;color:#0E2438;margin:0 0 6px}
+.jli-p{font-size:13.5px;line-height:1.75;color:#3A4353;margin:0}
+.jli-box{background:#F7F8FA;border-radius:14px;padding:14px 16px;margin-top:14px}
+.jli-box .lb{font-size:12.5px;font-weight:800;color:#9E7F45;margin-bottom:8px}
+.jli-li{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.6;margin-top:8px}
+.jli-n{width:22px;height:22px;border-radius:50%;background:#0E2438;color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.jli-li b{color:#0E2438}.jli-li em{font-style:normal;color:#6B7585}
+.jli-step{display:flex;gap:12px;align-items:flex-start;margin-top:16px}.jli-step:first-child{margin-top:0}
+.jli-sn{width:28px;height:28px;border-radius:8px;background:#FBF6EC;color:#9E7F45;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.jli-step b{display:block;font-size:14.5px;color:#0E2438}.jli-step div>span{display:block;font-size:13px;line-height:1.65;color:#3A4353;margin-top:3px}
+.jli-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:7px}
+.jli-tip{margin-top:16px;background:#FBF6EC;border-radius:12px;padding:13px 14px;font-size:13px;line-height:1.65;color:#0E2438}
+.jli-ft{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;padding:12px 22px 18px;border-top:1px solid #EEF0F3}
+.jli-ft button{min-height:48px;border-radius:12px;font:800 14px var(--font);cursor:pointer}
+.jli-ft .sec{background:#fff;border:1px solid #D5DBE3;color:#0E2438}.jli-ft .pri{background:#0E2438;border:0;color:#fff}
+`;
+(function(){try{if(!document.getElementById('jvl-css')){const st=document.createElement('style');st.id='jvl-css';st.textContent=JVL_CSS;document.head.appendChild(st);}}catch(_){}})();
+
+/* 승인된 레터 목록 — 로그인 회원당 1회 (상세 창·ⓘ 안내에서 사용) */
+async function jvlLoadAvail(force){
+  if(!me||!meData)return [];
+  if(!force&&_jvlAvail&&_jvlAvailUid===me.uid&&Date.now()-_jvlAvailAt<600000)return _jvlAvail;   /* 10분마다 새로 — 새로 승인된 레터 반영 */
+  try{const r=await jvlCall('available');_jvlAvail=(r.ok&&Array.isArray(r.items))?r.items:[];_jvlAvailUid=me.uid;_jvlAvailAt=Date.now();}
+  catch(e){console.warn('[letter] 목록 조회 실패:',e&&e.message);_jvlAvail=_jvlAvail||[];}
+  return _jvlAvail;
+}
+function jvlHas(cid){return !!(_jvlAvail&&_jvlAvail.some(x=>x.contentId===cid));}
+
+/* 상세 창 맨 위 진입 버튼 — 기존 showDetail 이 그린 뒤 덧붙인다 (기존 함수 무수정) */
+async function jvlDetailHook(cid){
+  if(!me||!meData||!cid)return;
+  await jvlLoadAvail();
+  if(!jvlHas(cid))return;
+  const box=$('detail-inner'),mdl=$('mdl-detail');
+  if(!box||!mdl||mdl.classList.contains('hidden')||box.querySelector('.jvl-entry'))return;
+  const b=document.createElement('button');b.type='button';b.className='jvl-entry';
+  b.innerHTML='<span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0E2438" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><span><b>고객에게 레터 보내기</b><small>이 콘텐츠를 고객용 짧은 레터로 · 카톡 한 번에</small></span><span class="go" aria-hidden="true">›</span>';
+  b.addEventListener('click',()=>{closeM('mdl-detail');jvlOpen(cid);});
+  box.insertBefore(b,box.firstChild);
+}
+const _jvlShowDetail0=window.showDetail;
+window.showDetail=async function(cid){const r=await _jvlShowDetail0.apply(this,arguments);try{jvlDetailHook(cid);}catch(_e){}return r;};
+
+/* ── 보내기 창 ── */
+async function jvlOpen(cid){
+  if(!me||!meData){openM('mdl-login-prompt');return;}
+  jvGiftShow('<div class="jvg-grip"></div><div class="jvg-h">✉️ 고객에게 레터 보내기<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div><div style="padding:30px 0;text-align:center;color:#7A8299;font-size:13px">레터를 준비하는 중…</div>');
+  let r;
+  try{r=await jvlCall('get',{contentId:cid});}catch(e){jvGiftClose();toast('레터를 불러오지 못했습니다: '+((e&&e.message)||''),'error');return;}
+  if(!r.ok){jvGiftClose();toast(r.message||'이 콘텐츠의 레터는 아직 준비 중입니다.','warning');return;}
+  _jvlCur={cid,key:r.key,code:r.code,url:r.url,track:r.track,letter:r.letter||{},cardUrl:r.cardUrl||'',memo:r.memo||{}};
+  _jvlStats=null;
+  jvlRender();
+  try{const s=await httpsCallable(functions,'letterMyStats')({});const row=((s&&s.data&&s.data.rows)||[]).find(x=>x.key===_jvlCur.key);_jvlStats=row||{views:0,uniqueViews:0,checkers:0,reqs:0,sends:0};jvlRenderStats();}catch(_e){}
+}
+function jvlVal(k){const c=_jvlCur;return (c.memo&&c.memo[k])||(c.letter&&c.letter[k])||'';}
+function jvlRender(edit){
+  const c=_jvlCur,L=c.letter,tk=JVL_TRACK[c.track]||JVL_TRACK.closing;
+  const name=(meData&&meData.name)||'';
+  const photo=(window._jvlPhoto||'');
+  const edited=Object.keys(c.memo||{}).length>0;
+  const editPane=edit?`<div class="jvl-sec" id="jvl-edit">${JVL_EDIT.map(([k,l,h,rows,max])=>`<label class="jvl-f">${l}${h?`<small>${h}</small>`:''}<textarea data-k="${k}" rows="${rows}" maxlength="${max}">${jvlEsc(jvlVal(k))}</textarea></label>`).join('')}
+      <div class="jvl-eb"><button type="button" style="background:#fff;border:1px solid #D5DBE3;color:#0E2438" onclick="jvlReset()">기본 원고로</button><button type="button" style="background:#0E2438;border:0;color:#fff" onclick="jvlSave()">저장</button></div>
+      <div class="jvl-note">고친 문구는 회원님 링크에만 적용됩니다. 상품 권유·단정 표현(무조건·100% 등)·회사명은 저장되지 않습니다.</div></div>`
+    :`<div class="jvl-sec"><div class="jvl-edit-cta${edited?' done':''}"><div style="min-width:0;flex:1"><b>${edited?'회원님 문구로 보냅니다':'기본 원고 그대로 보내시겠어요?'}</b><span>${edited?'고친 문구가 레터에 반영되어 있습니다.':'개인 메시지에 회원님의 한마디를 넣으면 반응이 달라집니다.'}</span></div><button type="button" onclick="jvlRender(true)">${edited?'다시 고치기':'편집하기'}</button></div></div>`;
+  jvGiftShow(`<div class="jvg-grip"></div><div class="jvg-h">✉️ 고객에게 레터 보내기<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div>
+    <div style="font-size:12px;font-weight:700;color:${tk.ac}">${jvlEsc(tk.t)} · ${jvlEsc(L.aud||'')}</div>
+    <div class="jvl-sec" style="margin-top:8px"><div class="jvl-lb">고객 카카오톡에 이렇게 보입니다</div>
+      <div class="jvl-kk"><span class="pf">${photo?`<img src="${jvlEsc(photo)}" alt="">`:jvlEsc((name||'?')[0])}</span><div style="min-width:0"><div class="nm">${jvlEsc(name)}</div>
+        <div class="cd">${c.cardUrl?`<img src="${jvlEsc(c.cardUrl)}" alt="레터 카드">`:'<div class="ph">카드 이미지 준비 중</div>'}<div class="ti">${jvlEsc(name)} 컨설턴트가 드리는 레터</div><div class="ds">${jvlEsc(L.desc||'')}</div><div class="bt">레터 열어보기</div></div></div></div>
+    </div>
+    ${editPane}
+    <div class="jvl-sec"><div class="jvl-lb">이 레터 반응 <span style="font-weight:500;color:#7A8299">· 회원님 링크 기준</span></div><div class="jvl-stat" id="jvl-stat"><div><div class="v">·</div><div class="l">보낸 횟수</div></div><div><div class="v">·</div><div class="l">열어본 고객</div></div><div><div class="v">·</div><div class="l">자가진단</div></div><div><div class="v">·</div><div class="l">상담 신청</div></div></div></div>
+    <div class="jvl-btns">
+      <button type="button" class="jvl-kkbtn" onclick="jvlShare()">카카오톡으로 보내기</button>
+      <div class="jvl-two"><button type="button" onclick="jvlCopy()">링크 복사 (문자·밴드용)</button><button type="button" onclick="jvlPreview()">미리보기</button></div>
+    </div>
+    <div class="jvl-note">휴대폰에서는 공유창에서 카카오톡을 고르면 여러 고객·채팅방에 한 번에 보낼 수 있습니다. 비용은 없고 회원님 이름으로 도착합니다. PC에서는 링크를 복사해 카톡 대화창에 붙여 넣으세요.<br><button type="button" class="jvl-link" onclick="jvlMyStats()">내 레터 반응 전체 보기</button></div>`);
+  if(_jvlStats)jvlRenderStats();
+  if(edit)setTimeout(()=>{const t=document.querySelector('#jvl-edit textarea');if(t)t.focus();},60);
+}
+function jvlRenderStats(){
+  const el=$('jvl-stat');if(!el||!_jvlStats)return;const s=_jvlStats,n=v=>Number(v||0).toLocaleString('ko-KR');
+  el.innerHTML=`<div><div class="v">${n(s.sends)}</div><div class="l">보낸 횟수</div></div><div><div class="v">${n(s.uniqueViews)}</div><div class="l">열어본 고객</div></div><div><div class="v">${n(s.checkers)}</div><div class="l">자가진단</div></div><div><div class="v" style="color:${s.reqs?'#0A7B61':'#0E2438'}">${n(s.reqs)}</div><div class="l">상담 신청</div></div>`;
+}
+async function jvlSave(){
+  const fields={};document.querySelectorAll('#jvl-edit textarea[data-k]').forEach(t=>{fields[t.dataset.k]=t.value.replace(/\r/g,'');});
+  try{const r=await jvlCall('saveMemo',{contentId:_jvlCur.cid,fields});if(!r.ok){toast(r.message||'저장하지 못했습니다','warning');return;}
+    _jvlCur.memo=r.fields||{};toast(Object.keys(_jvlCur.memo).length?'회원님 문구로 저장했습니다':'기본 원고로 보냅니다','success');jvlRender(false);}
+  catch(e){toast('저장 실패: '+((e&&e.message)||''),'error');}
+}
+async function jvlReset(){
+  if(!confirm('고친 문구를 지우고 기본 원고로 되돌릴까요?'))return;
+  try{const r=await jvlCall('saveMemo',{contentId:_jvlCur.cid,fields:{}});if(!r.ok){toast(r.message||'처리하지 못했습니다','warning');return;}_jvlCur.memo={};toast('기본 원고로 되돌렸습니다','success');jvlRender(false);}
+  catch(e){toast('처리 실패: '+((e&&e.message)||''),'error');}
+}
+function jvlLogShared(channel){try{jvlCall('shared',{contentId:_jvlCur.cid,channel}).then(()=>{if(_jvlStats){_jvlStats.sends=(_jvlStats.sends||0)+1;jvlRenderStats();}}).catch(()=>{});}catch(_e){}}
+window.jvlShare=async function(){
+  const c=_jvlCur;if(!c)return;
+  if(navigator.share&&/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||'')){
+    try{await navigator.share({url:c.url});jvlLogShared('kakao');toast('보냈습니다','success');return;}
+    catch(e){if(e&&e.name==='AbortError')return;}
+  }
+  jvlCopy(true);
+};
+function jvlCopy(fromShare){
+  const c=_jvlCur;if(!c)return;
+  const done=()=>{jvlLogShared('copy');toast(fromShare?'링크를 복사했습니다. 카톡 대화창에 붙여 넣으면 카드로 보입니다.':'링크를 복사했습니다. 문자·카톡에 붙여 넣어 보내세요.','success');};
+  const fb=()=>{try{const ta=document.createElement('textarea');ta.value=c.url;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();done();}catch(_e){prompt('아래 링크를 복사해 주세요',c.url);}};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(c.url).then(done).catch(fb);else fb();
+}
+window.jvlCopy=()=>jvlCopy(false);
+window.jvlPreview=function(){const c=_jvlCur;if(!c)return;jvOpenTab('https://jarvia.co.kr/letter.html?c='+encodeURIComponent(c.code)+'&pv=1');};
+window.jvlMyStats=async function(){
+  jvGiftShow('<div class="jvg-grip"></div><div class="jvg-h">📊 내 레터 반응<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div><div style="padding:30px 0;text-align:center;color:#7A8299;font-size:13px">불러오는 중…</div>');
+  let rows=[],sum={views:0,checkers:0,reqs:0};
+  try{const s=(await httpsCallable(functions,'letterMyStats')({})).data||{};rows=s.rows||[];sum=s.sum||sum;}catch(e){jvGiftClose();toast('불러오지 못했습니다','error');return;}
+  const n=v=>Number(v||0).toLocaleString('ko-KR');
+  const list=rows.length?rows.map(r=>`<div class="jvl-row"><div class="t">${jvlEsc(r.title||r.sourceTitle||'')}<div class="s">${jvlEsc((JVL_TRACK[r.track]||{}).t||'')} · 보낸 ${n(r.sends)}회 · 열람 ${n(r.uniqueViews)}명 · 자가진단 ${n(r.checkers)}명</div></div><div style="text-align:right;flex-shrink:0"><div style="font-size:17px;font-weight:800;color:${r.reqs?'#0A7B61':'#B4B2A9'}">${n(r.reqs)}</div><div style="font-size:10.5px;color:#7A8299">상담 신청</div></div></div>`).join('')
+    :'<div style="padding:24px 0;text-align:center;color:#7A8299;font-size:13px">아직 보낸 레터가 없습니다.<br>콘텐츠 상세 창 맨 위 「고객에게 레터 보내기」에서 시작해 보세요.</div>';
+  jvGiftShow(`<div class="jvg-grip"></div><div class="jvg-h">📊 내 레터 반응<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div>
+    <div class="jvl-stat"><div><div class="v">${n(rows.length)}</div><div class="l">보낸 레터</div></div><div><div class="v">${n(sum.views)}</div><div class="l">총 열람</div></div><div><div class="v">${n(sum.checkers)}</div><div class="l">자가진단</div></div><div><div class="v" style="color:#0A7B61">${n(sum.reqs)}</div><div class="l">상담 신청</div></div></div>
+    <div style="margin-top:10px;max-height:52vh;overflow-y:auto">${list}</div>
+    <div class="jvl-note">공통 링크라 누가 열었는지는 알 수 없고, 열람·자가진단은 같은 사람을 1회로 셉니다. 상담 신청은 「고객 요청」에서 「레터상담」으로 확인하세요.</div>`);
+};
+window.jvlOpen=jvlOpen;window.jvlRender=jvlRender;window.jvlSave=jvlSave;window.jvlReset=jvlReset;
+
+/* ── 진열대 ⓘ 활용 안내 ── */
+const JVL_INFO={
+  case_report:{sub:'실제 사례를 짧게 보여 주고 「내 얘기네」 하고 상담을 신청하게 만드는 레터입니다.',what:'클로징 리포트 원문 중 사례의 흐름·흔한 오해·사실만 뽑아 고객용으로 정리합니다. 화법·반론 대응 같은 회원님용 내용과 상품 이야기는 넣지 않습니다.'},
+  tax_weekly:{sub:'세법 기준과 요건을 「지금 확인해 봐야 할 이유」로 바꿔 주는 레터입니다.',what:'택스컨설팅 위클리의 세법 해설 중 고객에게 해당되는 기준·요건·흔한 오해만 뽑아 정리합니다. 원문에 있는 수치만 쓰고, 지난 연도 기준은 쓰지 않습니다.'},
+  master_guide:{sub:'제도의 핵심 원리 하나로 「우리는 준비됐나」를 묻게 하는 레터입니다.',what:'마스터가이드의 제도 설명 중 고객이 바로 이해할 원리와 자가진단만 담습니다. 실행 방법은 이름만 보여 주고 「고객님께 맞는 조합과 순서는 상담에서」로 연결합니다.'},
+  medical_weekly:{sub:'병의원을 운영하는 고객님께 맞춘 세무·경영 기준으로 만든 레터입니다.',what:'메디컬 위클리 중 병의원 고객님에게 해당되는 세무·경영 기준과 미리 점검할 항목만 담습니다.'}
+};
+window.jvlInfoBtn=function(series){return JVL_INFO[series]?'<button type="button" class="jm-info" aria-label="'+jvlEsc(JVL_TRACK[JVL_SERIES2TRACK[series]].t)+' 레터 활용 안내" onclick="event.stopPropagation();jvlInfo(\''+series+'\')"><span aria-hidden="true">i</span></button>':'';};
+window.jvlInfo=async function(series){
+  const I=JVL_INFO[series],tk=JVL_TRACK[JVL_SERIES2TRACK[series]];if(!I||!tk)return;
+  jvGiftShow(`<div><div class="jli-hd"><div class="jli-k">${jvlEsc(tk.t)} · 레터 활용 안내</div><div class="jli-t">읽고 끝내지 마세요.<br>고객에게 레터로 보내세요</div><div class="jli-s">${jvlEsc(I.sub)}</div>
+      <button class="jvg-x" style="position:absolute;right:10px;top:8px;color:rgba(255,255,255,.8);width:44px;height:44px" onclick="jvGiftClose()" aria-label="닫기">×</button></div>
+    <div class="jli-tabs" role="tablist"><button class="jli-tab" role="tab" aria-selected="true" data-tab="0" onclick="jvlInfoTab(0)">레터란?</button><button class="jli-tab" role="tab" aria-selected="false" data-tab="1" onclick="jvlInfoTab(1)">보내는 법</button><button class="jli-tab" role="tab" aria-selected="false" data-tab="2" onclick="jvlInfoTab(2)">신청 이후</button></div>
+    <div class="jli-bd">
+      <div class="jli-pane on" data-pane="0"><p class="jli-h">고객용 레터란?</p><p class="jli-p">${jvlEsc(I.what)}</p>
+        <div class="jli-box"><div class="lb">고객이 받는 레터 구성</div>
+          <div class="jli-li"><span class="jli-n">1</span><div><b>개인 메시지</b> <em>회원님이 쓴 편지처럼 맨 위에</em></div></div>
+          <div class="jli-li"><span class="jli-n">2</span><div><b>제목 · 핵심 한 줄</b> <em>궁금증을 만드는 질문형</em></div></div>
+          <div class="jli-li"><span class="jli-n">3</span><div><b>한눈에 이해 · 오해와 사실</b> <em>원문에서 뽑은 내용만</em></div></div>
+          <div class="jli-li"><span class="jli-n">4</span><div><b>자가진단 3개</b> <em>고객이 직접 체크 → 해당 개수 표시</em></div></div>
+          <div class="jli-li"><span class="jli-n">5</span><div><b>점검 방향</b> <em>이름만 · 「맞는 조합과 순서는 상담에서」</em></div></div>
+          <div class="jli-li"><span class="jli-n">6</span><div><b>상담 신청 · 전화</b> <em>통화 편한 시간·메모까지</em></div></div></div>
+        <p class="jli-p" style="margin-top:12px;font-size:12.5px;color:#6B7585">고객 화면에는 자비아 이름이 나오지 않고, 회원님 이름·사진·전화번호만 보입니다. 보험·상품 권유는 들어가지 않습니다.</p></div>
+      <div class="jli-pane" data-pane="1">
+        <div class="jli-step"><span class="jli-sn">1</span><div><b>콘텐츠를 열고 [고객에게 레터 보내기]</b><span>${jvlEsc(tk.t)} 상세 창 맨 위에 있습니다. 관리자가 확인을 마친 레터만 나타납니다.</span></div></div>
+        <div class="jli-step"><span class="jli-sn">2</span><div><b>고객에 맞게 고치기 (권장)</b><span>레터는 콘텐츠에서 뽑은 기본 원고입니다. 개인 메시지에 고객과 나눈 이야기를 한 줄 넣고, 제목·도입·상담 문구를 다듬어 보내세요. 부족한 부분은 회원님이 채워 주세요.</span></div></div>
+        <div class="jli-step"><span class="jli-sn">3</span><div><b>카카오톡으로 보내기</b><span>레터마다 회원님 전용 링크가 하나 생깁니다. 휴대폰 공유창에서 카카오톡을 고르면 여러 고객·채팅방에 한 번에 보낼 수 있고, 고객 카톡에는 카드 이미지와 함께 회원님 이름으로 도착합니다. 비용은 없습니다.</span></div></div>
+        <p class="jli-p" style="margin-top:14px;font-size:12.5px;color:#6B7585">카톡 친구가 아닌 고객은 「링크 복사」로 문자에 붙여 보내세요.</p></div>
+      <div class="jli-pane" data-pane="2">
+        <div class="jli-step"><span class="jli-dot" style="background:#8A3B2E"></span><div><b>고객이 상담 신청</b><span>성함·연락처·통화 편한 시간·남긴 말씀과 체크한 자가진단이 접수됩니다.</span></div></div>
+        <div class="jli-step"><span class="jli-dot" style="background:#C9A96E"></span><div><b>알림톡 도착</b><span>회원님께 「상담 요청」 알림톡이, 고객에게 「접수 확인」 알림톡이 갑니다(각 20P).</span></div></div>
+        <div class="jli-step"><span class="jli-dot" style="background:#1B5E8C"></span><div><b>「고객 요청」 → 레터상담</b><span>어떤 레터로 들어왔는지, 무엇에 체크했는지, 고객 메모까지 한 화면에서 봅니다.</span></div></div>
+        <div class="jli-step"><span class="jli-dot" style="background:#1B7A5A"></span><div><b>연락하고 상태 정리</b><span>신규 → 연락중 → 완료로 관리하고 내 메모를 남깁니다.</span></div></div>
+        <div class="jli-tip"><b>반응을 확인하세요.</b> 공통 링크라 누가 열었는지는 알 수 없지만, 열어본 고객 수·자가진단 수·상담 신청 수가 레터별로 집계됩니다.</div></div>
+    </div>
+    <div class="jli-ft"><button class="sec" type="button" onclick="jvlInfoSample('${series}')">최신 레터 열기</button><button class="pri" type="button" onclick="jvGiftClose()">확인했습니다</button></div></div>`,true);
+  const sh=document.querySelector('#jvg-dim .jvg-sheet');if(sh){sh.style.maxWidth='520px';sh.style.maxHeight='90vh';sh.style.overflowY='auto';}
+};
+window.jvlInfoTab=function(n){document.querySelectorAll('#jvg-dim .jli-tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab==n?'true':'false'));document.querySelectorAll('#jvg-dim .jli-pane').forEach(p=>p.classList.toggle('on',p.dataset.pane==n));};
+window.jvlInfoSample=async function(series){
+  if(!me||!meData){jvGiftClose();openM('mdl-login-prompt');return;}
+  const track=JVL_SERIES2TRACK[series];
+  const av=(await jvlLoadAvail()).filter(x=>x.track===track).map(x=>x.contentId);
+  const items=(allContents||[]).filter(c=>av.includes(c.contentId)).sort((a,b)=>((b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0)-(a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0)));
+  if(!items.length){toast('이 시리즈는 아직 준비된 레터가 없습니다. 관리자 확인 후 순서대로 열립니다.','warning');return;}
+  jvlOpen(items[0].contentId);
+};
+/* 회원 사진 — 카톡 미리보기용 (실패해도 이니셜) */
+async function jvlLoadPhoto(){try{if(window._jvlPhoto!==undefined||!meData||!meData.loginId)return;const s=await getDoc(doc(db,'consultants',String(meData.loginId)));const p=s.exists()?String((s.data()||{}).photoUrl||''):'';window._jvlPhoto=/^https:\/\//i.test(p)?p:'';}catch(_e){window._jvlPhoto='';}}
+(function(){let n=0;setTimeout(function jvlBoot(){if(me&&meData){jvlLoadAvail();jvlLoadPhoto();}else if(++n<40)setTimeout(jvlBoot,3000);},4000);})();   /* 비로그인 방문자는 2분 뒤 확인 중단 */
+
+/* ── 고객 요청: 레터상담 표시 ── */
+function _jvlRqpBody(r){
+  const chk=(r.letterChecks||[]).map(x=>'<span class="rq-chip">'+_fcrEsc(x)+'</span>').join('');
+  return _rqpRow('레터',_fcrEsc(r.letterTitle||r.letterTopic||''))
+    +(r.letterCheckTotal?_rqpRow('자가진단',_fcrEsc((r.letterCheckCount||0)+' / '+r.letterCheckTotal+'개 해당')):'')
+    +(chk?'<div class="rq-lbl">체크한 항목</div><div>'+chk+'</div><div style="height:6px"></div>':'')
+    +_rqpRow('통화 편한 시간',_fcrEsc(r.preferredSlot||''))
+    +_rqpRow('연락처',_rqpPhone(r))+_rqpMsg(r);
+}
+function _jvlListBadge(r){
+  if(r.source!=='letter')return '';
+  return '<span style="font-size:10px;padding:2px 8px;background:#0E2438;color:#E9D3A6;border-radius:8px;font-weight:800">✉️ 레터 · '+_fcrEsc(r.letterTopic||'상담')+'</span>'
+    +(r.letterCheckTotal?'<span style="font-size:10px;padding:2px 7px;background:#FBF6EC;color:#8A6410;border-radius:8px;font-weight:700">진단 '+(r.letterCheckCount||0)+'/'+r.letterCheckTotal+'</span>':'')
+    +(r.preferredSlot?'<span style="font-size:10px;padding:2px 7px;background:#F4F5F8;color:#5A6484;border-radius:8px;font-weight:600">'+_fcrEsc(r.preferredSlot)+' 통화</span>':'');
+}
+function _jvlDetail(r){
+  const lb='font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px';
+  const chk=(r.letterChecks||[]).map(x=>'<div style="display:flex;gap:6px;font-size:12px;line-height:1.5;color:#2C3E50;margin-top:4px"><span style="color:#B08A45">✓</span><span>'+_fcrEsc(x)+'</span></div>').join('');
+  return '<div style="margin-bottom:12px"><div style="'+lb+'">고객 레터 상담</div>'
+    +'<div style="background:#F7F8FA;border-radius:9px;padding:10px 12px">'
+    +'<div style="font-size:12.5px;font-weight:800;color:#0E2438;line-height:1.5">✉️ '+_fcrEsc(r.letterTitle||r.letterTopic||'')+'</div>'
+    +'<div style="font-size:11px;color:#5A6484;margin-top:3px">'+_fcrEsc([(JVL_TRACK[r.letterTrack]||{}).t,r.preferredSlot?r.preferredSlot+' 통화 희망':''].filter(Boolean).join(' · '))+'</div>'
+    +(r.letterCheckTotal?'<div style="font-size:11px;font-weight:700;color:#8A6410;margin-top:8px">자가진단 '+(r.letterCheckCount||0)+' / '+r.letterCheckTotal+'개 해당</div>'+chk:'')
+    +'</div></div>';
+}
 /* ★ 고객용 리포트: 기록(service_logs)은 module 스코프에서만 가능 → 여기서 처리 후 이동 */
 /* ═══════════════════════════════════════════════════════════════
    ★ [2026-09-09] 리포트 알림톡 발송 (rpt) — 컨설턴트 화면
@@ -21128,7 +21394,7 @@ async function jvCardLockNag(p){
    · 한 번 팝업에 보여준 요청은 다시 크게 띄우지 않는다 (배지·목록에는 그대로) */
 var _rqpList=[], _rqpIdx=0, _rqpQueued=false, _rqpMatTried=false, _rqpBlinkT=null, _rqpTitle0='', _rqpWaitVis=false;
 const RQP_DAYS=30;
-const RQP_LABEL={call_click:'📞 전화 시도',consult:'재무상담 신청',life:'생활변화 신고',quiz:'자가진단 완료',my_dates:'생활변화 신고',insurance_portfolio:'보험 정보 공유',meeting:'미팅 예약 접수',brochure:'브로슈어 상담 신청',knock:'보안 채팅 요청',maturity:'만기 등록 요청'};
+const RQP_LABEL={call_click:'📞 전화 시도',consult:'재무상담 신청',life:'생활변화 신고',quiz:'자가진단 완료',my_dates:'생활변화 신고',insurance_portfolio:'보험 정보 공유',meeting:'미팅 예약 접수',brochure:'브로슈어 상담 신청',knock:'보안 채팅 요청',maturity:'만기 등록 요청',letter:'✉️ 레터 상담 신청'};   /* ★ [2026-10-11] letter — 고객 레터 상담 */
 function _rqpSeenKey(){ return 'jv_rqp_seen_'+((me&&me.uid)||'x'); }
 function _rqpSeen(){ try{ return new Set(JSON.parse(localStorage.getItem(_rqpSeenKey())||'[]')); }catch(_e){ return new Set(); } }
 function _rqpMarkSeen(keys){
@@ -21204,6 +21470,7 @@ function _rqpPhone(r){
 function _rqpMsg(r){ return r.message?'<div class="rq-msg">'+_fcrEsc(r.message)+'</div>':''; }
 function _rqpBody(it){
   const r=it.r, k=it.kind;
+  if(k==='letter') return _jvlRqpBody(r);   /* ★ [2026-10-11] 고객 레터 상담 */
   if(k==='knock') return '<div class="rq-msg">고객이 보안채팅 대화를 요청했습니다. 대화 내용은 내 채널의 보안채팅에서만 확인할 수 있습니다.</div>';
   if(k==='call_click') return _rqpRow('누가',_fcrEsc(_fcrCallWho(r)))+_rqpRow('기기',_fcrEsc(_fcrDevLabel(r.device)))
     +'<div class="rq-msg">리포트 하단 「전화」 버튼을 눌렀습니다. 통화가 연결되지 않았다면 먼저 연락해 보세요.'+(r.clientId?'':' 번호는 휴대폰 부재중 기록에서 확인할 수 있습니다.')+'</div>';
@@ -21247,7 +21514,7 @@ function _rqpBody(it){
 }
 function _rqpSub(it){
   const r=it.r, when=_fcrFmtTime(it.ms?new Date(it.ms):null);
-  const from={call_click:'리포트 하단 전화 버튼',knock:'내 채널 보안채팅에서',maturity:'리포트에서 만기 상품 등록',meeting:'확정을 기다리고 있어요',quiz:'진단 후 상담 요청',brochure:'e북 브로슈어에서 신청',insurance_portfolio:'보험 내역 공유',my_dates:'내 날짜에서 알림',life:'생활변화 신고'}[it.kind]
+  const from={call_click:'리포트 하단 전화 버튼',knock:'내 채널 보안채팅에서',maturity:'리포트에서 만기 상품 등록',meeting:'확정을 기다리고 있어요',quiz:'진단 후 상담 요청',brochure:'e북 브로슈어에서 신청',insurance_portfolio:'보험 내역 공유',my_dates:'내 날짜에서 알림',life:'생활변화 신고',letter:'고객 레터에서 신청'}[it.kind]
     || (r.source==='client-daily'?'고객용 데일리 리포트에서 신청':'나의 플랫폼에서 신청');
   return _fcrEsc(when+' · '+from);
 }
@@ -21321,9 +21588,11 @@ const FCR_TYPES=[
   {k:'meeting',  t:'미팅예약'},
   {k:'brochure', t:'브로슈어상담'},   /* ★ [2026-09-26] e북 브로슈어 상담 신청 */
   {k:'call_click', t:'📞 전화 시도'},  /* ★ [2026-10-08] 리포트 하단 전화 버튼 */
+  {k:'letter', t:'✉️ 레터상담'},  /* ★ [2026-10-11] 고객 레터 상담 신청 */
 ];
 function _fcrTypeOf(r){
   const src=String((r&&r.source)||'');
+  if(src==='letter') return 'letter';   /* ★ [2026-10-11] 고객 레터 */
   if(src==='insurance_portfolio'||src==='meeting'||src==='my_dates'||src==='brochure'||src==='call_click') return src;   /* ★ [2026-10-08] call_click */
   if(r&&(r.quizType||r.quizAnswers||r.quizResult)) return 'quiz';
   return 'consult';
@@ -21531,7 +21800,7 @@ function _fcrRenderList(filter){
              ? _fcrEsc(_fcrFmtPhone(r.phone).replace(/^(\d{2,3})-(\d{3,4})-(\d{4})$/, '$1-****-$3')) + ' <span style="font-family:inherit;color:#8A6410;font-weight:700">· 눌러서 확인</span>'
              : _fcrEsc(_fcrFmtPhone(r.phone)))
         + '</div>'
-      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + brBadge + bkBadge + insBadge + dateBadge + quizBadge + (r.source==='brochure' ? '' : tags) + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
+      + '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' + brBadge + bkBadge + insBadge + dateBadge + quizBadge + _jvlListBadge(r) + ((r.source==='brochure'||r.source==='letter') ? '' : tags) + '<span style="font-size:10px;color:#B4B2A9;margin-left:auto">' + _fcrFmtTime(r.createdAt) + '</span></div>'
       + '</div>';
   }).join('') + moreHtml;
   _fcrFillPhones(arr);   // ★ 내 날짜 요청 연락처를 이 기기 로컬에서 보완 (2026-08-01)
@@ -21892,7 +22161,8 @@ window.openFcRequestDetail = async function(reqId){
     + emailLink
     + '</div>'
     + '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">진행 상태</div><div style="display:flex;gap:5px;flex-wrap:wrap">' + statusBtns + '</div></div>'
-    + ((r.source==='brochure')   /* ★ [2026-09-26] 브로슈어 상담 — 상담 분야·회사명 */
+    + ((r.source==='letter') ? _jvlDetail(r)   /* ★ [2026-10-11] 고객 레터 상담 — 레터·체크 항목·통화 시간 */
+      : (r.source==='brochure')   /* ★ [2026-09-26] 브로슈어 상담 — 상담 분야·회사명 */
         ? '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:#8B93AE;margin-bottom:5px;letter-spacing:.3px">브로슈어 상담</div><div style="display:flex;gap:4px;flex-wrap:wrap">'
           + '<span style="padding:4px 9px;background:#3A332C;color:#D9BE87;border-radius:8px;font-size:10px;font-weight:700">📘 ' + _fcrEsc(r.area||'-') + '</span>'
           + (r.company ? '<span style="padding:4px 9px;background:#F5F2ED;color:#5A5148;border-radius:8px;font-size:10px;font-weight:600">🏢 ' + _fcrEsc(r.company) + '</span>' : '')
@@ -24032,7 +24302,7 @@ window.addEventListener('load', ()=>{ _actWhenReady(handleClientReportAction); }
       var guideBtn=key==='daily_report'
         ?'<span class="jm-when jm-guide" style="background:#FFF8E7;color:#8B6914;border:1px solid #E8D9A8;cursor:pointer" onclick="window.open(\'./guide-interest.html\',\'_blank\')">\ud83d\udcd6 고객관심사확인</span>'
         :'';
-      html+='<div class="jm-rail"><div class="jm-rail-hd"><h3>'+r.t+'</h3><span class="jm-when" style="'+r.wc+'">'+r.w+'</span>'+guideBtn+allBtn+'</div>'
+      html+='<div class="jm-rail"><div class="jm-rail-hd"><h3>'+r.t+'</h3>'+(window.jvlInfoBtn?window.jvlInfoBtn(key):'')+'<span class="jm-when" style="'+r.wc+'">'+r.w+'</span>'+guideBtn+allBtn+'</div>'
         +'<div class="'+rowCls+'">'+cards+'</div></div>';
     });
     if(!html)return;
