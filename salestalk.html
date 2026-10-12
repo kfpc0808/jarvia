@@ -132,6 +132,19 @@ main{padding:0 16px calc(60px + env(safe-area-inset-bottom,0px))}
 .msg-opts .lk label{display:inline-flex;align-items:center;gap:5px;min-height:32px;white-space:nowrap}
 .msg-opts .lk input{width:18px;height:18px;accent-color:var(--pg-teal)}
 .msg-opts .lk label.off{opacity:.45}
+/* ★ [2026-10-12] 고객 카톡 미리보기 — 보내기 전에 고객 화면 그대로 확인 */
+.kpv{border:1.5px solid #E8B84A;background:#FFFBF0;border-radius:12px;overflow:hidden;margin-top:2px}
+.kpv>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;font-size:13.5px;font-weight:800;color:#8a5a00;min-height:40px}
+.kpv>summary::-webkit-details-marker{display:none}
+.kpv>summary::after{content:'펼치기 ▾';font-size:12px;font-weight:600;color:#9a7b3a}.kpv[open]>summary::after{content:'접기 ▴'}
+.kpv-kt{background:#B2C7D9;padding:12px 10px}
+.kpv-msg{background:#FEE500;border-radius:12px;padding:9px 11px;font-size:12.5px;line-height:1.6;color:#191919;margin-left:26px;white-space:pre-line;word-break:keep-all}
+.kpv-msg u{color:#1a5fb4;word-break:break-all}
+.kpv-bub{background:#fff;border-radius:12px;overflow:hidden;margin:6px 0 0 26px}
+.kpv-bub.off{opacity:.45}
+.kpv-img{display:block;width:100%;aspect-ratio:2/1;background:#0E2438 center/contain no-repeat;object-fit:cover}
+.kpv-m{padding:8px 10px}.kpv-m b{display:block;font-size:13px;color:#191919;line-height:1.4}.kpv-m span{display:block;font-size:11.5px;color:#777}.kpv-m i{display:block;font-style:normal;font-size:11px;color:#1a5fb4;margin-top:2px}
+.kpv-n{padding:9px 12px;font-size:12px;color:#6b5420;line-height:1.6}
 .st-msgs{display:flex;flex-direction:column;gap:10px}
 .st-msg{border:1px solid var(--st-line);border-radius:14px;background:#FFFDF5;padding:12px 14px}
 .st-msg-h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
@@ -509,10 +522,11 @@ function buildMsgSec(c){
     +`<div class="msg-opts"><label class="nm">고객 이름 <input type="text" id="msgName" maxlength="20" placeholder="예: 홍길동" autocomplete="off" value="${esc(msgNameVal)}"></label>`
     +'<div class="lk"><span>함께 보낼 링크 · 체크하면 메시지 아래에 붙어 복사돼요</span>'
     +MSG_LINKS.map(l=>{const ok=linkAvail(l.k);return `<label class="${ok?'':'off'}" title="${ok?'':(l.k==='bz'?'아침독서 링크가 등록되지 않았습니다':'회원 아이디를 확인할 수 없습니다')}"><input type="checkbox" data-k="${l.k}"${ok&&p[l.k]?' checked':''}${ok?'':' disabled'}> ${esc(l.label)}</label>`;}).join('')
-    +'</div></div><div class="st-msgs">'
+    +'</div><details class="kpv"><summary>📱 고객 카톡에 이렇게 보여요</summary><div class="kpv-b"></div></details></div><div class="st-msgs">'
     +msgs.map((m,i)=>`<div class="st-msg"><div class="st-msg-h"><b>${esc(m.type||'메시지')}</b><button type="button" class="st-copy" data-i="${i}">복사</button></div><div class="st-msg-t" data-i="${i}"></div><div class="st-msg-lk" hidden></div></div>`).join('')
     +'</div></div>';
-  d._msgs=msgs;d._cid=cardId(c);
+  d._msgs=msgs;d._cid=cardId(c);d._card=c;
+  const kp=d.querySelector('.kpv');if(kp)kp.addEventListener('toggle',()=>{if(kp.open)kpvRender(d);});   /* ★ 펼칠 때만 카드 이미지를 불러온다 */
   refreshMsgs(d);   /* 모닝 컨센서스가 체크돼 있으면 여기서 링크를 받아 옴 */
   return d;
 }
@@ -543,7 +557,24 @@ function refreshMsgs(root){
     else if(l.k==='mc')h+=`<span>· ${esc(l.name)}</span><span class="wait">${mcErrDay===today?'링크를 만들지 못했습니다 — 복사할 때 다시 시도합니다':'링크 준비 중…'}</span>`;
   }
   sec.querySelectorAll('.st-msg-lk').forEach(el=>{el.innerHTML=h?'<b>📌 함께 보시면 좋은 자료</b>'+h:'';el.hidden=!h;});
+  const kp=sec.querySelector('.kpv');if(kp&&kp.open)kpvRender(sec);
   if(picks.includes('mc')&&!linkNow('mc')&&mcErrDay!==today)ensureMcLink().then(()=>refreshMsgs(),()=>{mcErrDay=today;refreshMsgs();});
+}
+/* ★ [2026-10-12] 고객 카톡 미리보기 — 첫 번째 메시지 + 실제 카드 이미지(shareCardImg, 회원 이름·날짜)로 고객 화면 그대로 */
+function kpvRender(sec){
+  const box=sec.querySelector('.kpv-b');if(!box)return;
+  const c=sec._card||{},m=(sec._msgs||[])[0];if(!m){box.innerHTML='';return;}
+  const nm=msgNm();
+  let t=String(m.text||'');if(nm)t=t.split('○○').join(nm);
+  if(t.length>90)t=t.slice(0,88)+'…';
+  const picks=[...sec.querySelectorAll('.lk input[type=checkbox]:checked')].map(x=>x.dataset.k);
+  const cd=picks.includes('cd'),cid=sec._cid;
+  const img=myLoginId&&/^\d{4}-\d{2}-\d{2}_(job|age)$/.test(String(cid||''))?'https://sharecardimg-cvmdsjgzxa-du.a.run.app?k=st&fc='+encodeURIComponent(myLoginId)+'&s='+encodeURIComponent(cid):'';
+  const who=myName?esc(myName)+' 컨설턴트':'담당 컨설턴트';
+  box.innerHTML='<div class="kpv-kt"><div class="kpv-msg">'+esc(t)+(cd?'\n\n📌 함께 보시면 좋은 자료\n· 매일 아침 생활·경제 리포트\n<u>'+esc(stLink(cid))+'</u>':'')+'</div>'
+    +(img?'<div class="kpv-bub'+(cd?'':' off')+'"><img class="kpv-img" alt="고객 카톡에 보이는 카드 미리보기" src="'+esc(img)+'"><div class="kpv-m"><b>'+esc(c.title||'')+'</b><span>'+who+'가 전해드리는 오늘의 이야기</span><i>jarvia.co.kr</i></div></div>':'')+'</div>'
+    +'<div class="kpv-n">'+(cd?'✔ 「고객 리포트」가 체크되어 있어 이 카드가 메시지와 함께 갑니다. 고객이 누르면 선생님 이름의 고객 리포트가 열려요.':'지금은 링크 없이 글만 갑니다. 「고객 리포트」를 체크하면 위 카드가 메시지와 함께 가요.')
+    +'<br>처음 볼 때는 카드를 만드느라 몇 초 걸릴 수 있어요.</div>';
 }
 async function loadFcDoc(){
   if(!myLoginId)return;
