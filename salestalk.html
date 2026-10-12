@@ -512,14 +512,17 @@ function buildMsgSec(c){
     +'</div></div><div class="st-msgs">'
     +msgs.map((m,i)=>`<div class="st-msg"><div class="st-msg-h"><b>${esc(m.type||'메시지')}</b><button type="button" class="st-copy" data-i="${i}">복사</button></div><div class="st-msg-t" data-i="${i}"></div><div class="st-msg-lk" hidden></div></div>`).join('')
     +'</div></div>';
-  d._msgs=msgs;
+  d._msgs=msgs;d._cid=cardId(c);
   refreshMsgs(d);   /* 모닝 컨센서스가 체크돼 있으면 여기서 링크를 받아 옴 */
   return d;
 }
 /* ★ [2026-10-10] 화면 미리보기 — 복사될 내용과 같게: ○○ → 입력한 이름, 체크한 링크는 메시지 아래에 */
 function msgNm(){return String(msgNameVal||'').trim().replace(/님$/,'');}
-function linkNow(k){   /* 지금 바로 알 수 있는 주소 (모닝 컨센서스는 받아 둔 것만) */
-  if(k==='cd')return myLoginId?'https://jarvia.co.kr/client-daily?fc='+encodeURIComponent(myLoginId):'';
+/* ★ [2026-10-12] 고객 리포트 링크 = 오늘 주제 카드 링크 — 카톡 미리보기에 그날 카드 주제·담당자 이름 카드가 뜨고, 누르면 고객 리포트로 간다 (ogProxy t=st) */
+function stLink(cid){if(!myLoginId)return '';const ok=/^\d{4}-\d{2}-\d{2}_(job|age)$/.test(String(cid||''));return 'https://jarvia.co.kr/briefing?fc='+encodeURIComponent(myLoginId)+(ok?'&t=st&s='+encodeURIComponent(cid):'&od='+today.replace(/-/g,''));}
+function stWarm(cid){try{if(!myLoginId||!/^\d{4}-\d{2}-\d{2}_(job|age)$/.test(String(cid||'')))return;fetch('https://sharecardimg-cvmdsjgzxa-du.a.run.app?k=st&fc='+encodeURIComponent(myLoginId)+'&s='+encodeURIComponent(cid),{mode:'no-cors'}).catch(()=>{});}catch(e){}}   /* 붙여 넣기 전에 카드 이미지를 미리 만들어 둠 */
+function linkNow(k,cid){   /* 지금 바로 알 수 있는 주소 (모닝 컨센서스는 받아 둔 것만) */
+  if(k==='cd')return stLink(cid);
   if(k==='bz')return bookzipUrl();
   if(k==='mc')return (mcLink&&mcLink.day===today)?mcLink.url:'';
   return '';
@@ -535,7 +538,7 @@ function refreshMsgs(root){
   let h='';
   for(const l of MSG_LINKS){
     if(!picks.includes(l.k))continue;
-    const u=linkNow(l.k);
+    const u=linkNow(l.k,sec._cid);
     if(u)h+=`<span>· ${esc(l.name)}</span><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`;
     else if(l.k==='mc')h+=`<span>· ${esc(l.name)}</span><span class="wait">${mcErrDay===today?'링크를 만들지 못했습니다 — 복사할 때 다시 시도합니다':'링크 준비 중…'}</span>`;
   }
@@ -572,14 +575,14 @@ function ensureMcLink(){   /* consensus.html 과 같은 방식 — 최신 발행
   })().finally(()=>{mcBusy=null;});
   return mcBusy;
 }
-async function composeMsg(m,picks){
+async function composeMsg(m,picks,cid){
   const nm=(($('msgName')&&$('msgName').value)||'').trim().replace(/님$/,'');
   let text=nm?m.text.split('○○').join(nm):m.text;
   const lines=[];let miss='';
   for(const l of MSG_LINKS){
     if(!picks.includes(l.k))continue;
     let url='';
-    if(l.k==='cd')url=myLoginId?'https://jarvia.co.kr/client-daily?fc='+encodeURIComponent(myLoginId):'';
+    if(l.k==='cd')url=stLink(cid);
     else if(l.k==='bz')url=bookzipUrl();
     else if(l.k==='mc'){url=(mcLink&&mcLink.day===today)?mcLink.url:'';if(!url){try{url=await ensureMcLink();}catch(e){miss='모닝 컨센서스';}}}
     if(url)lines.push(`· ${l.name}\n${url}`);
@@ -591,7 +594,8 @@ async function copyMsg(c,i,btn){
   const m=((c.sections&&c.sections.messages)||[]).filter(x=>x&&x.text)[i];if(!m)return;
   const picks=[...document.querySelectorAll('#dayPane .lk input[type=checkbox]:checked')].map(x=>x.dataset.k);
   const needWait=picks.includes('mc')&&!(mcLink&&mcLink.day===today);
-  const textP=composeMsg(m,picks);
+  if(picks.includes('cd'))stWarm(cardId(c));
+  const textP=composeMsg(m,picks,cardId(c));
   let res=null,ok=false;
   /* 링크를 받아오는 동안에도 탭 동작이 유지되도록(iOS Safari) Promise 를 그대로 클립보드에 넘긴다 */
   if(needWait&&window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write){
