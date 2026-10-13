@@ -2379,7 +2379,19 @@ function cdPrefetchTodayKey(){
       .catch(()=>{});
   }catch(_e){}
 }
-_jvOwnerP.then(o=>{if(o)cdPrefetchTodayKey();});
+_jvOwnerP.then(o=>{if(o){cdPrefetchTodayKey();cdPrefetchCard(fcId);}});
+/* ★ [2026-10-13] 카톡 카드 이미지 미리 만들기 — 그날 카드는 처음 요청 때 그려지므로(수 초) 붙여넣기 전에 요청해 둔다.
+   주소 규칙은 ogProxy.js(CARD_FN·CARD_VER) 와 같다. 한 회원·하루에 한 번만 보낸다 */
+const CD_CARD_FN='https://sharecardimg-cvmdsjgzxa-du.a.run.app', CD_CARD_VER='v2';
+const _cdCardDone={};
+function cdPrefetchCard(lid){
+  try{
+    const f=String(lid||'').trim(), d=getTodayKST();
+    if(!/^[A-Za-z0-9_.-]{1,40}$/.test(f))return;
+    const k=f.toLowerCase()+'|'+d; if(_cdCardDone[k])return; _cdCardDone[k]=1;
+    const im=new Image(); im.src=CD_CARD_FN+'?v='+CD_CARD_VER+'&k=d&fc='+encodeURIComponent(f)+'&d='+d;
+  }catch(_e){}
+}
 function cdShareGuard(){
   if(getTodayKST()<DAILY_KEY_FROM)return true;   /* 발효 전 — 서명 없이도 유효 */
   /* ★ [2026-09-01] 로그인 사용자는 키 없이 공유(fc만) — 게이트가 여는 날 오늘 키를 자동 발급하므로 대기 불필요.
@@ -4375,6 +4387,7 @@ window.cdCall=function(){
   return false;
 };
 function _cdSharePlain(){
+  cdPrefetchCard(fcId);   /* ★ [2026-10-13] 카톡 카드 미리 만들기 */
   // 카톡 SDK 카드 대신 OG 링크 복사 (붙여넣기 시 저장 이미지 카드 자동생성 · 자비아 푸터 노출 방지)
   const url='https://briefingog-cvmdsjgzxa-du.a.run.app?'+cdShareQS();
   if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>showToast('링크가 복사되었습니다. 카톡에 붙여넣어 전달하세요.'));}
@@ -4388,10 +4401,64 @@ async function _cdShareForClient(cid,nm){
     if(r&&r.data&&r.data.success){key=String(r.data.key||'');lid=String(r.data.loginId||'');}
   }catch(e){ console.warn('[cdshare] 고객별 키 발급 실패:',e&&e.message); }
   if(!key||!lid){ showToast('링크 서명 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.'); return; }
+  cdPrefetchCard(lid);   /* ★ [2026-10-13] 카톡 카드 미리 만들기 */
   const url='https://briefingog-cvmdsjgzxa-du.a.run.app?fc='+encodeURIComponent(lid)+'&c='+encodeURIComponent(cid)+'&k='+encodeURIComponent(key)+'&v=2';
   const done=()=>showToast((nm||'고객')+'님께 보낼 링크를 복사했습니다 — 열람하면 [열람현황]에 기록됩니다.');
   if(navigator.clipboard){navigator.clipboard.writeText(url).then(done).catch(()=>{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();});}
   else{const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();}
+}
+/* ★ [2026-10-13] 「고객 카톡에는 이렇게 보여요」 — 고객 카톡방에 붙여넣었을 때의 링크 카드 모양.
+   제목·설명·이미지는 ogProxy.js 와 같은 규칙으로 만든다(규칙을 바꾸면 이쪽도 함께 바꿀 것). */
+function cdKakaoPreview(o){
+  const old=document.getElementById('kk-pv-ov'); if(old)old.remove();
+  const e=esc;
+  const now=new Date(), h=now.getHours(), mm=String(now.getMinutes()).padStart(2,'0');
+  const tm=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+mm;
+  const ov=document.createElement('div');
+  ov.id='kk-pv-ov';
+  ov.style.cssText='position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:18px';
+  ov.innerHTML='<div style="background:#fff;border-radius:16px;width:100%;max-width:380px;overflow:hidden;box-shadow:0 12px 40px rgba(15,23,42,.3)">'
+    +'<div style="display:flex;align-items:center;padding:13px 15px;border-bottom:1px solid #F0F3F6"><b style="font-size:14px;color:#1C2024">💬 고객 카톡에는 이렇게 보여요</b>'
+    +'<button type="button" data-kkclose style="margin-left:auto;border:none;background:none;font-size:17px;cursor:pointer;color:#8A9098;padding:2px 4px">✕</button></div>'
+    +'<div style="background:#B8CCDD;padding:18px 14px 20px">'
+      +'<div style="display:flex;justify-content:flex-end;align-items:flex-end;gap:6px">'
+        +'<span style="font-size:10.5px;color:#3F5266;white-space:nowrap;margin-bottom:2px">'+tm+'</span>'
+        +'<div style="width:250px;max-width:82%;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.1)">'
+          +'<div style="position:relative;width:100%;aspect-ratio:2/1;background:#F3F3F3"><img id="kk-pv-img" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .2s"></div>'
+          +'<div style="padding:10px 12px 11px">'
+            +'<div style="font-size:14px;font-weight:800;color:#111;line-height:1.4;word-break:keep-all">'+e(o.title)+'</div>'
+            +'<div style="font-size:12.5px;color:#777;line-height:1.5;margin-top:3px;word-break:keep-all;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">'+e(o.desc)+'</div>'
+            +'<div style="font-size:11.5px;color:#1A64D6;text-decoration:underline;margin-top:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">briefingog-cvmdsjgzxa-du.a.run.app</div>'
+          +'</div></div></div></div>'
+    +'<div style="padding:12px 15px 15px;font-size:11.5px;color:#5A6484;line-height:1.65;word-break:keep-all">'
+      +'링크를 카톡에 붙여넣으면 위와 같은 카드로 표시됩니다. 고객이 누르면 리포트가 바로 열립니다.'
+      +(o.note?'<div style="margin-top:6px;color:#8A6410;font-weight:700">'+e(o.note)+'</div>':'')
+    +'</div></div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('click',function(ev){ if(ev.target===ov||ev.target.closest('[data-kkclose]'))ov.remove(); });
+  const im=document.getElementById('kk-pv-img');
+  if(im){
+    let tried=false;
+    im.onload=function(){im.style.opacity='1';};
+    im.onerror=function(){ if(!tried&&o.fallback){tried=true;im.src=o.fallback;} };
+    im.src=o.image;
+  }
+}
+/* 데일리 리포트 카드 — ogProxy.js 데일리 분기와 같은 규칙(회원이 정한 제목·설명·이미지 우선, 없으면 이름·날짜 카드) */
+function cdKakaoPreviewOpen(){
+  const sp=spData||{}, d=getTodayKST();
+  const md=Number(d.slice(4,6))+'월 '+Number(d.slice(6,8))+'일';
+  const nm=(fcData&&fcData.name)?String(fcData.name):'';
+  const customImg=!!(sp.shareImageUrl&&!/client_report_share_v2\.png/.test(String(sp.shareImageUrl)));
+  const base=CD_CARD_FN+'?k=base';
+  cdPrefetchCard(fcId);
+  cdKakaoPreview({
+    title:sp.shareTitle||(nm?(nm+' 컨설턴트의 '+md+' 리포트'):(md+' 오늘의 경제·생활 리포트')),
+    desc:sp.shareDesc||'아침 5분, 꼭 알아야 할 소식만 정리했습니다',
+    image:customImg?String(sp.shareImageUrl):(CD_CARD_FN+'?v='+CD_CARD_VER+'&k=d&fc='+encodeURIComponent(fcId)+'&d='+d),
+    fallback:customImg?'':base,
+    note:(sp.shareTitle||sp.shareDesc||customImg)?'제목·설명·이미지는 마이페이지 「카톡 공유 설정」에 저장된 값이 쓰입니다. 비우면 담당자 이름과 날짜로 자동 표시됩니다.':''
+  });
 }
 /* 고객 선택 바텀시트 — 컨설턴트 본인 전용. 검색·2열 20명·페이지 이동·미지정 구성은 마이페이지와 동일 */
 async function cdPickClient(){
@@ -4406,12 +4473,13 @@ async function cdPickClient(){
     +'<button type="button" data-cdpclose style="margin-left:auto;border:none;background:none;font-size:16px;cursor:pointer;color:#8A9098;padding:2px 4px">✕</button></div>'
     +'<div style="padding:9px 14px;border-bottom:1px solid #ECEEF3"><input id="cd-pick-q" placeholder="이름 검색..." style="width:100%;padding:10px 11px;border:1px solid #DFE2EA;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit"></div>'
     +'<div id="cd-pick-list" style="overflow-y:auto;flex:1;min-height:120px"><div style="padding:26px 16px;font-size:12.5px;color:#8A9098;text-align:center">고객 목록을 불러오는 중…</div></div>'
-    +'<div style="padding:10px 14px 16px;border-top:1px solid #ECEEF3"><button type="button" data-cdpick="" data-cdnm="" style="width:100%;padding:13px 10px;border:2px solid #C9A05C;border-radius:10px;background:#1B3A5C;font-size:15px;font-weight:800;letter-spacing:-.2px;cursor:pointer;color:#fff;font-family:inherit">🔗 링크복사(고객미지정)</button>'
+    +'<div style="padding:10px 14px 16px;border-top:1px solid #ECEEF3"><button type="button" data-cdpv style="width:100%;margin-bottom:8px;padding:10px;border:1.5px solid #E0C36B;border-radius:10px;background:#FFFBEA;font-size:13px;font-weight:800;color:#8A6410;cursor:pointer;font-family:inherit">💬 고객 카톡에는 이렇게 보여요</button><button type="button" data-cdpick="" data-cdnm="" style="width:100%;padding:13px 10px;border:2px solid #C9A05C;border-radius:10px;background:#1B3A5C;font-size:15px;font-weight:800;letter-spacing:-.2px;cursor:pointer;color:#fff;font-family:inherit">🔗 링크복사(고객미지정)</button>'
     +'<div style="font-size:11.5px;color:#64748B;font-weight:600;margin-top:7px;text-align:center;line-height:1.5">단체방·SNS·개별 카톡 어디든 붙여넣기 · 열람 기록은 남지 않습니다</div>'
     +'<div style="font-size:10.5px;color:#B91C1C;font-weight:700;margin-top:7px;line-height:1.55">고객을 선택하면 해당 고객의 열람 여부를 마이페이지 <b>[열람현황]</b>에서 확인할 수 있습니다.</div></div></div>';
   document.body.appendChild(ov);
   ov.addEventListener('click',function(ev){
     if(ev.target===ov||ev.target.closest('[data-cdpclose]')){ov.remove();return;}
+    if(ev.target.closest('[data-cdpv]')){cdKakaoPreviewOpen();return;}   /* ★ [2026-10-13] 카톡 미리보기 */
     const b=ev.target.closest('[data-cdpick]');
     if(b){
       const cid=b.getAttribute('data-cdpick')||'',nm=b.getAttribute('data-cdnm')||'';
