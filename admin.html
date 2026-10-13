@@ -6453,11 +6453,11 @@ async function updateMemberInfo(uid){
   const role=$('ed-role-'+uid).value;
   if(!name)return toast('이름을 입력하세요.','error');
   if(role==='jarvia_member'){
-    try{await updateDoc(doc(db,'users',uid),{name,phone,updatedAt:serverTimestamp()});toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();loadMembership();}catch(e){toast('수정 실패: '+e.message,'error');}
+    try{await updateDoc(doc(db,'users',uid),{name,phone,updatedAt:serverTimestamp()});toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();loadMembership();if(_rcData.length)rcRefreshAll();}catch(e){toast('수정 실패: '+e.message,'error');}
     return;
   }
   if(role==='jarvia_report'){
-    try{await updateDoc(doc(db,'users',uid),{name,phone,updatedAt:serverTimestamp()});toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();loadMembership();}catch(e){toast('수정 실패: '+e.message,'error');}
+    try{await updateDoc(doc(db,'users',uid),{name,phone,updatedAt:serverTimestamp()});toast('회원 정보 수정 완료','success');closeM('mdl-member');loadMembers();loadMembership();if(_rcData.length)rcRefreshAll();}catch(e){toast('수정 실패: '+e.message,'error');}
     return;
   }
   if(role==='inner_circle'){
@@ -8896,7 +8896,7 @@ function renderRecurring(){
     if($('rc-comm-sum'))$('rc-comm-sum').textContent=fmt(_rcComm.attributed*DIST_COMM_UNIT);
     if($('rc-comm-sub'))$('rc-comm-sub').textContent='결제완료 '+_rcComm.total+'건 중 총판 연결 '+_rcComm.attributed+'건'+(_rcComm.excluded?' (탈퇴 제외 '+_rcComm.excluded+'건)':'')+' · 총판관리 '+mv+' 수수료와 동일';
   }else{if($('rc-comm-sum'))$('rc-comm-sum').textContent='-';if($('rc-comm-sub'))$('rc-comm-sub').textContent='';}
-  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="17" class="tc">조회 월을 선택하세요.</td></tr>';if($('rc-pager'))$('rc-pager').innerHTML='';return;}
+  if(!mv){if($('tb-recurring'))$('tb-recurring').innerHTML='<tr><td colspan="18" class="tc">조회 월을 선택하세요.</td></tr>';if($('rc-pager'))$('rc-pager').innerHTML='';return;}
   const a=mv.split('-').map(Number);const viewYM=a[0]*12+(a[1]-1);
   /* ★ [2026-08-31] 결제월 표시 — 헤더·셀에 조회 월 명시 (A) */
   const mmTag=mv.slice(5)+'월';
@@ -9167,10 +9167,21 @@ async function rcLoadMonthStatus(){
       _rcPrevYm=prevYm;
     }catch(e){console.error('전월 결제현황 로드 오류:',e);}
   }
+  /* ★ [2026-10-13] 결제현황을 읽자마자 먼저 그린다 — 총판 수수료 산정을 기다리느라 목록 반영이 늦어지지 않게 */
+  renderRecurring();
   /* ★ [2026-09-28] 총판 수수료 (결제일 기준 · 총판관리와 동일 산정) */
   _rcComm=null;
   if(mv){try{_rcComm=await _commLedger(mv,_rcCommUsers);}catch(e){console.error('총판 수수료 산정 오류:',e);}}
   renderRecurring();
+}
+/* ★ [2026-10-13] 정기결제 대상 전체 새로고침 — 회원정보(잔액·포인트·과금설정) + 결제현황을 서버에서 다시 읽어 즉시 반영 */
+async function rcRefreshAll(){
+  try{
+    const snap=await getDocs(collection(db,'users'));
+    _rcCommUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
+    _rcData=_rcCommUsers.filter(m=>m.role==='jarvia_member'&&!m.groupMasterId&&!m.isGroup&&m.status==='active');   /* loadRecurring과 동일 필터 */
+  }catch(e){console.error('정기결제 대상 새로고침 오류:',e);}
+  await rcLoadMonthStatus();
 }
 async function toggleMemberBilling(uid){
   const m=_rcData.find(x=>x.id===uid);if(!m)return;
@@ -9458,7 +9469,7 @@ async function rcRecSave(){
     if(res.data&&res.data.success){toast('결제 기록을 수정했습니다.','success');_rcRecEdit=null;}
     else{toast((res.data&&res.data.error)||'수정 실패','error');return;}
   }catch(e){console.error('결제 기록 수정 오류:',e);toast('처리 중 오류가 발생했습니다.','error');return;}
-  await rcLoadMonthStatus();rcRenderStatus();
+  await rcRefreshAll();rcRenderStatus();   /* ★ [2026-10-13] 회원정보까지 새로 읽어 즉시 반영 */
 }
 async function rcRecRevert(ym){
   if(!_rcMng)return;
@@ -9476,7 +9487,7 @@ async function rcRecRevert(ym){
       if(_rcRecEdit===ym)_rcRecEdit=null;
     }else{toast((res.data&&res.data.error)||'처리 실패','error');return;}
   }catch(e){console.error('되돌리기 오류:',e);toast('처리 중 오류가 발생했습니다.','error');return;}
-  await rcLoadMonthStatus();rcRenderStatus();
+  await rcRefreshAll();rcRenderStatus();   /* ★ [2026-10-13] 회원정보까지 새로 읽어 즉시 반영 */
 }
 /* ★ [2026-09-29] 수작업 결제 — 미납 월 목록(과금시작월~max(이번 달, 조회 월), 최근 12개월) · 오래된 달부터 자동 선택 */
 let _rcManMonths=[];
@@ -9552,7 +9563,7 @@ async function rcChargeCard(){
     }
     else toast((r.data&&r.data.error)||'결제 실패','error');
   }catch(e){console.error('카드결제 오류:',e);toast('결제 중 오류가 발생했습니다.','error');}
-  await rcLoadMonthStatus();rcRenderStatus();
+  await rcRefreshAll();rcRenderStatus();   /* ★ [2026-10-13] 회원정보까지 새로 읽어 즉시 반영 */
 }
 function _rcTodayKst(){return new Date(Date.now()+9*3600*1000).toISOString().slice(0,10);}   /* ★ [2026-09-28] */
 async function rcMarkTransfer(){
@@ -9577,7 +9588,7 @@ async function rcMarkTransfer(){
     if(r.data&&r.data.success)toast(months.length+'개월 결제완료 처리되었습니다.','success');
     else toast((r.data&&r.data.error)||'처리 실패','error');
   }catch(e){console.error('송금완료 오류:',e);toast('처리 중 오류가 발생했습니다.','error');}
-  await rcLoadMonthStatus();rcRenderStatus();
+  await rcRefreshAll();rcRenderStatus();   /* ★ [2026-10-13] 회원정보까지 새로 읽어 즉시 반영 */
 }
 async function rcRevert(){
   if(!_rcMng)return;
@@ -9593,7 +9604,7 @@ async function rcRevert(){
     else if(r.data&&r.data.success)toast('미결로 되돌렸습니다.'+(r.data.wasCard?' (카드 청구는 이노페이에서 별도 취소 필요)':''),'success');
     else toast((r.data&&r.data.error)||'처리 실패','error');
   }catch(e){console.error('되돌리기 오류:',e);toast('처리 중 오류가 발생했습니다.','error');}
-  await rcLoadMonthStatus();rcRenderStatus();
+  await rcRefreshAll();rcRenderStatus();   /* ★ [2026-10-13] 회원정보까지 새로 읽어 즉시 반영 */
 }
 window.openRcManage=openRcManage;window.rcSaveFee=rcSaveFee;window.rcChargeCard=rcChargeCard;window.rcMarkTransfer=rcMarkTransfer;window.rcRecEdit=rcRecEdit;window.rcRecSave=rcRecSave;window.rcRecRevert=rcRecRevert;   /* ★ [2026-09-29] */window.rcManAutoMonths=rcManAutoMonths;window.rcManPreview=rcManPreview;   /* ★ [2026-09-29] */window.rcRevert=rcRevert;
 
@@ -9963,7 +9974,7 @@ async function updateJarviaMember(uid){
   /* ★ [2026-08-30] 일반회원도 시작월 사용 (요구 2) — 형식 검증을 연납·일반 공통 적용, 비연납 저장 시 값이 지워지던 동작 제거 */
   if(bsm&&!/^\d{4}-\d{2}$/.test(bsm))return toast('정기결제 시작월 형식이 올바르지 않습니다 (예: 2027-08)','error');
   try{await updateDoc(doc(db,'users',uid),{regFeePaid:regFee,monthlyFee,annualPrepaid:annual,billingStartMonth:bsm,updatedAt:serverTimestamp()});
-    toast(annual?('JARVIA멤버십 저장 완료 — 연납회원'+(bsm?' (정기결제 '+bsm+'부터 재개)':' (시작월 미설정: 정기결제 계속 제외)')):('JARVIA멤버십 정보 저장 완료'+(bsm?' (정기결제 '+bsm+'부터)':'')),'success');loadMembers();loadMembership();
+    toast(annual?('JARVIA멤버십 저장 완료 — 연납회원'+(bsm?' (정기결제 '+bsm+'부터 재개)':' (시작월 미설정: 정기결제 계속 제외)')):('JARVIA멤버십 정보 저장 완료'+(bsm?' (정기결제 '+bsm+'부터)':'')),'success');loadMembers();loadMembership();if(_rcData.length)rcRefreshAll();   /* ★ [2026-10-13] 정기결제 대상 목록 즉시 반영 */
   }catch(e){toast('저장 실패: '+e.message,'error');}
 }
 /* ★ [2026-08-06] 연납 체크 토글 — 금액 입력 비활성화 (★ [2026-08-30] 시작월은 일반·연납 공용이므로 항상 표시) */
