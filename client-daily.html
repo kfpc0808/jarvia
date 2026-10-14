@@ -1513,9 +1513,25 @@ if(fcId){
     if(!_jvVK){_jvVK=Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem('jv_vk',_jvVK);_jvNew=true;}
   }catch(e){_jvVK='na';}
 }
-window.jvTrack=function(t,id){if(!fcId)return;_jvQ.push(id?{t:t,id:id}:{t:t});};
+window.jvTrack=function(t,id){if(!fcId)return;_jvQ.push(id?{t:t,id:id}:{t:t});_jvSoon();};   /* ★ [2026-10-14] 몇 초 뒤 전송 예약 */
+/* ★ [2026-10-14] 화면을 떠날 때만 보내면 휴대폰에서 기록이 자주 빠진다 — 누른 뒤 3초 안에 전송.
+   동의 여부가 정해지기 전(팝업 대기 중)에는 보내지 않는다(익명으로 미리 새는 것 방지). */
+let _jvT=null,_jvReady=false;
+function _jvCanSend(){
+  if(!_jvReady)return false;
+  if(_jvOwner||!_jvCID||_jvSelfState()==='n')return true;
+  if(_jvConsent==='')_jvConsent=_jvCLoad();
+  return _jvConsent!=='';
+}
+function _jvSoon(){
+  if(_jvT)clearTimeout(_jvT);
+  _jvT=setTimeout(function(){_jvT=null;if(_jvCanSend())jvFlush();},3000);
+}
+_jvOwnerP.then(function(){_jvReady=true;_jvSoon();});
 function jvFlush(){
   if(!fcId||!_jvQ.length)return;
+  /* ★ [2026-10-14] 보낼 때마다 저장된 동의를 다시 읽는다 — 다른 화면(컨센서스)에서 한 동의도 바로 반영 */
+  if(!_jvOwner&&_jvCID){const _c=_jvCLoad();if(_c)_jvConsent=_c;}
   const ev=_jvQ.splice(0);
   /* ★ [2026-08-11] 동의 게이트 — 동의('y')일 때만 clientId 귀속, 그 외(거부·미정)는 익명 집계만 */
   /* ★ [2026-10-08] 본인 확인된 기기만 고객 귀속(clientId·self), 그 외는 소개 토큰(ref)으로 「소개 지인」 집계 */
@@ -1554,6 +1570,7 @@ window.jvConsentAgree=async function(){
   try{ jvFwdRender(); }catch(_e){}   /* ★ [2026-10-09] 동의한 기기 — 전달받은 분 질문 상자 숨김 */
   try{document.getElementById('jvConsentModal').classList.remove('active');}catch(e){}
   _jvUiConsented();
+  try{ jvFlush(); }catch(_e){}   /* ★ [2026-10-14] 동의 즉시 전송 — 이번 방문을 고객 이름으로 기록 */
   try{ ciResume(); }catch(_e){}   /* 동의 직전에 고른 관심사가 있으면 이어서 저장 */
   try{
     await setDoc(doc(db,'fc_client_consents',_jvCKey()),{
@@ -1569,6 +1586,7 @@ window.jvConsentDecline=function(){
   try{_jvVK=Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem('jv_vk',_jvVK);_jvNew=true;}catch(e){}
   try{document.getElementById('jvConsentModal').classList.remove('active');}catch(e){}
   _jvUiDeclined();
+  try{ jvFlush(); }catch(_e){}   /* ★ [2026-10-14] 거부 즉시 전송 — 익명 집계 */
 };
 // 고객 식별 토큰 방문(컨설턴트 본인 뷰 제외): 동의 상태별 분기 (2026-08-11)
 /* ★ [2026-10-09] 처음 여는 팝업(본인 확인)은 없앴다 — 고객 링크로 연 기기는 본인으로 보고 열람 동의만 묻는다.
