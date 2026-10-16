@@ -501,8 +501,10 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
       <div class="dx-cols">
         <section class="dx-card">
           <div class="dx-sh"><h3>매출 · 결제</h3><button type="button" class="dx-link" onclick="_dgo('p-pays')">결제/충전관리 →</button></div>
-          <button type="button" class="dx-li" onclick="_dgo('p-billing-history')"><span>당월 정기결제 완료</span><b><span id="d-bill-paid">0</span> <small id="d-bill-paid-sub">건</small></b></button>
-          <button type="button" class="dx-li" onclick="_dgo('p-recurring')"><span>이번 달 청구 대상 <small>연납·총판·단체 제외</small></span><b id="dx-bill-target">-</b></button>
+          <button type="button" class="dx-li" onclick="_dgo('p-recurring')"><span>이번 달분 청구 대상 <small id="dx-bill-when">지난달까지 전환 · 말일 결제</small></span><b id="dx-bill-target">-</b></button>
+          <button type="button" class="dx-li" onclick="_dgo('p-billing-history')"><span>결제 완료</span><b><span id="d-bill-paid">0</span> <small id="d-bill-paid-sub">건</small></b></button>
+          <button type="button" class="dx-li" onclick="_dgo('p-recurring')"><span>결제 남음 <small id="dx-bill-left-sub"></small></span><b id="dx-bill-left">-</b></button>
+          <button type="button" class="dx-li" onclick="_dgo('p-recurring')"><span>다음 달 첫 청구 <small>이번 달 전환 · 다음 달 말일 결제</small></span><b id="dx-bill-next">-</b></button>
           <button type="button" class="dx-li" onclick="_dgo('p-recurring')"><span>당일 카드 신규등록</span><b><span id="d-card-new">0</span> <small id="d-card-chg-sub">명 · 카드변경 0명</small></b></button>
           <button type="button" class="dx-li" onclick="_dgo('p-point-ledger')"><span>미사용 포인트 합계 <small>회원 보유</small></span><b id="dx-pt">-</b></button>
           <button type="button" class="dx-li" onclick="_dgo('p-pays')"><span>충전 잔액 합계 <small>회원 보유</small></span><b id="dx-bal">-</b></button>
@@ -6231,6 +6233,7 @@ async function loadDash(){
     const cardSet=new Set();
     const cSnap=await getDocs(collection(db,'billing_cards'));
     cSnap.docs.forEach(d=>{if(d.data().status==='active')cardSet.add(d.id);});
+    window._dxCardSet=cardSet;   /* ★ [2026-10-16] 대시보드 청구 현황용 */
     /* 정기결제 관리 화면(_rcData)과 동일 필터 — 실제 청구 대상이라 직원 계정도 제외하지 않는다 */
     const targets=uArr.filter(u=>u.role==='jarvia_member'&&!u.groupMasterId&&!u.isGroup&&u.status==='active'&&u.isDistributor!==true);   /* ★ [2026-10-14] 총판 정기결제 면제 — 청구 불가 집계 제외 */
     set('d-nocard',fmt(targets.filter(u=>!cardSet.has(u.id)).length));
@@ -6363,15 +6366,35 @@ async function _dxAfter(uArr,exUids){
   let pt=0,bal=0;live.forEach(u=>{pt+=Number(u.point)||0;bal+=Number(u.balance)||0;});
   _dxSet('dx-pt',fmt(pt)+'P');_dxSet('dx-bal',fmt(bal)+'원');
   _dxSet('dx-dist',fmt(live.filter(u=>u.isDistributor===true).length)+'명');
-  const tg=(uArr||[]).filter(u=>u.role==='jarvia_member'&&!u.groupMasterId&&!u.isGroup&&u.status==='active'&&u.isDistributor!==true&&u.annualPrepaid!==true);
-  const tgAmt=tg.reduce((s,u)=>s+(u.monthlyFee!=null?Number(u.monthlyFee)||0:50000),0);
-  _dxSet('dx-bill-target',fmt(tg.length)+'명 · '+fmt(tgAmt)+'원');
+  _dx.users=uArr||[];
   _dxBadges();
   _dxDrawMix();
   await Promise.allSettled([_dxComm(uArr),_dxCdr(),_dxLoadMonthly(exUids),_dxLoadAcc(uArr)]);
   _dxMark();
 }
 
+/* 정기결제 청구 현황 — 정기결제 대상 화면과 같은 기준(_rcBillStartIdx·_rcFee)
+   · 후불제: 전환(가입)월은 무료, 그다음 달부터 매월 말일(휴일이면 직전 영업일) 결제 → 이번 달 전환자는 다음 달 첫 청구
+   · 결제 순서: 포인트(5만P↑) → 충전잔액(5만원↑) → 등록 카드 */
+function _dxBill(paidNow){
+  try{
+    const t=new Date();const cur=t.getFullYear()*12+t.getMonth();const M=t.getMonth()+1;
+    let lb='-';try{lb=lastBizDayOfMonth(t.getFullYear(),t.getMonth());}catch(_e){}
+    const cs=window._dxCardSet||new Set();
+    const base=(_dx.users||[]).filter(u=>u.role==='jarvia_member'&&!u.groupMasterId&&!u.isGroup&&u.status==='active'&&u.isDistributor!==true);
+    const tg=[],nx=[];base.forEach(u=>{const i=_rcBillStartIdx(u);if(i==null)return;if(i<=cur)tg.push(u);else if(i===cur+1)nx.push(u);});
+    const fee=u=>Number(_rcFee(u))||0;const sum=a=>a.reduce((x,u)=>x+fee(u),0);
+    _dxSet('dx-bill-when',M+'월분 · '+M+'/'+lb+' 결제 · 연납·총판·단체 제외');
+    _dxSet('dx-bill-target',fmt(tg.length)+'명 · '+fmt(sum(tg))+'원');
+    const left=tg.filter(u=>!(paidNow&&paidNow.has(u.id)));
+    let pt=0,bl=0,cd=0,nc=0,cdAmt=0;
+    left.forEach(u=>{if(_rcPointOk(u))pt++;else if(_rcBalanceOk(u))bl++;else if(cs.has(u.id)){cd++;cdAmt+=fee(u);}else nc++;});
+    _dxSet('dx-bill-left',fmt(left.length)+'명 · '+fmt(sum(left))+'원');
+    const el=$('dx-bill-left-sub');if(el)el.textContent='카드 '+fmt(cd)+'명('+fmt(cdAmt)+'원) · 포인트 '+fmt(pt)+' · 잔액 '+fmt(bl)+(nc?' · 카드 미등록 '+fmt(nc)+'명':'');
+    if(el&&nc)el.style.color='#93370D';
+    _dxSet('dx-bill-next',fmt(nx.length)+'명 · '+fmt(sum(nx))+'원');
+  }catch(e){console.warn('청구 현황 집계 실패:',e);}
+}
 /* 총판 수수료 — 총판관리·정기결제 화면과 같은 산정(_commLedger): 당월 결제분, 익월 10일(영업일) 지급, 원천징수 전 */
 async function _dxComm(uArr){
   try{const ym=_dxYm(new Date());const L=await _commLedger(ym,uArr);
@@ -6403,11 +6426,14 @@ async function _dxLoadMonthly(exUids){
     ]);
     pS.forEach(d=>{const p=d.data();const dt=_dxD(p.createdAt);if(!dt)return;const ym=_dxYm(dt);const amt=Number(p.paidAmount)||0;if(R[ym])R[ym].charge+=amt;
       if(ym===curYm)mtd+=amt;else if(ym===prevYm&&dt<prevCut)pmtd+=amt;});
+    const paidNow=new Set();
     bS.forEach(d=>{const r=d.data();const ym=r.ym;if(!R[ym])return;
+      if(r.status==='paid'&&ym===curYm&&r.uid)paidNow.add(r.uid);
       if(r.status==='paid'){R[ym].paid++;if(r.method==='point'||r.method==='balance')return;const amt=Number(r.amount)||0;R[ym].card+=amt;
         const dt=_dxD(r.paidAt||r.chargedAt||r.processedAt||r.createdAt);if(ym===curYm)mtd+=amt;else if(ym===prevYm&&(!dt||dt<prevCut))pmtd+=amt;}
       else if(r.status==='failed')R[ym].fail++;});
     _dx.rev={months:months.map(m=>R[m]),mtd,pmtd};
+    _dxBill(paidNow);
     if(pmtd>0){const r=(mtd-pmtd)/pmtd*100;const el=$('dx-rev-mom');if(el){el.textContent=(r>=0?'+':'')+r.toFixed(1)+'%';el.style.color=r>=0?'#1A7F4B':'#B42318';}}else _dxSet('dx-rev-mom','-');
     _dxDrawRev();
   }catch(e){console.warn('월별 매출 집계 실패:',e);_dxWait('rev','매출 데이터를 불러오지 못했습니다');}
