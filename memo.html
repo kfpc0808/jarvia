@@ -651,6 +651,7 @@ function boot(s){   /* 첫 화면 표시 */
    · 기기 캐시로 열린 첫 화면이면 서버 최신본 위에 추가 (stIdeaAdd 와 같은 이유) */
 let ibBusy=false,ibAt=0;
 const IB_PARENT='📥 받은 메모';
+const ibKeyId=k=>{let h=5381;const t=String(k);for(let i=0;i<t.length;i++)h=((h*33)^t.charCodeAt(i))>>>0;return 'ik_'+h.toString(36)+'_'+t.length.toString(36);};   /* key → 항목 id (같은 대상은 늘 같은 id) */
 const IB_LINK=/^https:\/\/jarvia\.co\.kr\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*$/;
 async function inboxPull(fromCacheBoot){
   if(!me||!loaded||ibBusy)return;
@@ -660,32 +661,46 @@ async function inboxPull(fromCacheBoot){
     const qs=await getDocs(collection(db,'users',me.uid,'memo_inbox'));
     if(qs.empty)return;
     const got=qs.docs.map(d=>{const x=d.data()||{};const ms=x.createdAt&&x.createdAt.toMillis?x.createdAt.toMillis():Date.now();
-      return {id:d.id,ms,text:String(x.text||'').slice(0,3000),from:String(x.from||'').slice(0,40),link:(IB_LINK.test(String(x.link||''))?String(x.link):'')};})
-      .filter(x=>x.text.trim()).sort((a,b)=>a.ms-b.ms);   /* 오래된 것부터 위에 끼워 넣어 최신이 맨 위 */
+      return {id:d.id,ms,text:String(x.text||'').slice(0,3000),from:String(x.from||'').slice(0,40),link:(IB_LINK.test(String(x.link||''))?String(x.link):''),
+        key:String(x.key||'').slice(0,120),del:String(x.del||'').slice(0,120)};})
+      .filter(x=>x.text.trim()||x.del).sort((a,b)=>a.ms-b.ms);   /* 시간순 처리 — 담기·삭제 요청이 섞여 있어도 마지막 상태가 남는다 */
     if(fromCacheBoot&&navigator.onLine&&!hist.length){   /* 아직 손대지 않은 첫 화면만 서버본으로 바꾼다 */
       try{const fs=await getDoc(memoRef());const dd=fs.exists()?fs.data():null;
         if(dd&&Array.isArray(dd.items)){items=dd.items.map(norm);items.forEach(x=>{if(!x.n)delete x.n;});pendRemote=null;ensureOne();}}catch(e){}
     }
-    const fresh=got.filter(x=>idx('ib_'+x.id)<0);
-    if(fresh.length){
-      snap();
+    let added=0,removed=0,done=0,snapped=false;const newIds=new Set();
+    const snapOnce=()=>{if(!snapped){snap();snapped=true;}};
+    const parentIdx=()=>items.findIndex(x=>x.lv===0&&plain(x.t).trim()===IB_PARENT);
+    for(const x of got){
+      if(x.del){   /* ★ 담은 줄 삭제 요청 — 노트·하위 줄이 있으면 지우지 않고 완료(취소선) 표시 */
+        const i=idx(ibKeyId(x.del));if(i<0)continue;
+        snapOnce();
+        if(items[i].n||hasKids(i)){if(!items[i].d){items[i].d=true;done++;}}
+        else{const rid=items[i].id;items.splice(i,1);if(newIds.has(rid)){newIds.delete(rid);added--;}else removed++;}
+        continue;
+      }
+      const iid=x.key?ibKeyId(x.key):'ib_'+x.id;
+      const ei=idx(iid)>=0?idx(iid):idx('ib_'+x.id);
+      if(ei>=0){if(x.key&&items[ei].d){snapOnce();items[ei].d=false;added++;}continue;}   /* 같은 대상(key)·같은 문서는 한 줄만 — 완료 표시였던 줄을 다시 찜하면 되살림 */
+      const d=new Date(x.ms+9*3600000);const md=(d.getUTCMonth()+1)+'/'+d.getUTCDate();
+      const lines=x.text.split('\n').map(t=>t.trim()).filter(Boolean);
+      let head=(lines[0]||'').replace(/\s+/g,' ');if(head.length>120)head=head.slice(0,119)+'…';
+      const t=sanitize(esc('['+(x.from||'자비아')+' '+md+'] '+head+(x.link?' '+x.link:'')));
+      let pi=parentIdx();
+      if(!x.key&&pi>=0){const e=subEnd(pi);let dup=false;for(let k=pi+1;k<e;k++){if(items[k].lv===1&&items[k].t===t){dup=true;break;}}if(dup)continue;}   /* 받은 메모 안에 똑같은 줄이 이미 있으면 건너뜀 */
+      snapOnce();
       if(items.length===1&&!plain(items[0].t).trim()&&!items[0].n)items=[];
-      let pi=items.findIndex(x=>x.lv===0&&plain(x.t).trim()===IB_PARENT);
       if(pi<0){items.unshift(newItem(0,sanitize(esc(IB_PARENT))));pi=0;}
       items[pi].c=false;items[pi].d=false;
-      fresh.forEach(x=>{
-        const d=new Date(x.ms+9*3600000);const md=(d.getUTCMonth()+1)+'/'+d.getUTCDate();
-        const lines=x.text.split('\n').map(t=>t.trim()).filter(Boolean);
-        let head=(lines[0]||'').replace(/\s+/g,' ');if(head.length>120)head=head.slice(0,119)+'…';
-        const full=x.text.trim();
-        const it=newItem(1,sanitize(esc('['+(x.from||'자비아')+' '+md+'] '+head+(x.link?' '+x.link:''))));
-        it.id='ib_'+x.id;
-        if(full.replace(/\s+/g,' ')!==head)it.n=full.slice(0,20000);
-        items.splice(pi+1,0,it);
-      });
-      view=null;
+      const it=newItem(1,t);it.id=iid;
+      const full=x.text.trim();if(full.replace(/\s+/g,' ')!==head)it.n=full.slice(0,20000);
+      items.splice(pi+1,0,it);added++;newIds.add(iid);
+    }
+    if(added||removed||done){
+      ensureOne();view=null;
       render();save();
-      toast('받은 메모 '+fresh.length+'건을 「'+IB_PARENT+'」에 넣었습니다');
+      const msg=[added?'받은 메모 '+added+'건을 「'+IB_PARENT+'」에 넣었습니다':'',removed?removed+'건을 지웠습니다':'',done?done+'건은 메모가 있어 완료로 표시했습니다':''].filter(Boolean).join(' · ');
+      toast(msg);
       await flush();   /* 메모에 저장된 뒤에만 받은 메모함에서 지운다 */
       if($('st').className==='err')return;
     }

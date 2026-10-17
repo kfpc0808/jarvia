@@ -128,14 +128,25 @@
       var text=clip(o&&o.text,3000);if(!text){toast('담을 내용이 없어요');return false;}
       var link=String((o&&o.link)||'');if(!LINK_RE.test(link)||link.length>500)link='';
       var from=clip((o&&o.from)||'',40);
-      if(lastAdd.t===text&&Date.now()-lastAdd.at<30000){toast('방금 담은 내용이에요',true);return true;}
+      var key=String((o&&o.key)||'').slice(0,120);   /* ★ 같은 대상(예: 게시예정 찜)을 메모에서 한 줄로 관리 — 중복 방지·삭제 요청에 사용 */
+      if(lastAdd.t===text&&Date.now()-lastAdd.at<30000){if(!(o&&o.silent))toast('방금 담은 내용이에요',true);return lastAdd.id||true;}
       try{
         var ref=cfg.fs.doc(cfg.fs.collection(cfg.db,'users',cfg.uid,'memo_inbox'));
-        var data={text:text,from:from,createdAt:cfg.fs.serverTimestamp()};if(link)data.link=link;
+        var data={text:text,from:from,createdAt:cfg.fs.serverTimestamp()};if(link)data.link=link;if(key)data.key=key;
         await cfg.fs.setDoc(ref,data);
-        lastAdd={t:text,at:Date.now()};
-        toast('이지메모에 담았어요',true);return true;
+        lastAdd={t:text,at:Date.now(),id:ref.id};
+        if(!(o&&o.silent))toast('이지메모에 담았어요',true);
+        return ref.id;   /* 받은 메모함 문서 id — 아직 메모로 옮겨지기 전이면 remove 에서 바로 지운다 */
       }catch(e){console.warn('[JvMemo] add',e);toast('담지 못했어요 — 잠시 후 다시 시도해 주세요');return false;}
+    },
+    /* ★ 담은 줄 지우기 — ① 아직 받은 메모함에 있으면 그 문서를 지우고 ② 이미 메모로 옮겨졌을 수 있으니 「삭제 요청」을 남긴다.
+       memo.html 이 열릴 때 요청을 보고 그 줄을 지운다(노트·하위 줄이 있으면 지우지 않고 완료 표시) */
+    remove:async function(key,inboxId){
+      if(!ok||!cfg||!key)return false;key=String(key).slice(0,120);
+      if(inboxId&&cfg.fs.deleteDoc){try{await cfg.fs.deleteDoc(cfg.fs.doc(cfg.db,'users',cfg.uid,'memo_inbox',String(inboxId)));}catch(_e){}}
+      if(lastAdd.id&&lastAdd.id===inboxId)lastAdd={t:'',at:0};
+      try{var ref=cfg.fs.doc(cfg.fs.collection(cfg.db,'users',cfg.uid,'memo_inbox'));await cfg.fs.setDoc(ref,{del:key,createdAt:cfg.fs.serverTimestamp()});return true;}
+      catch(e){console.warn('[JvMemo] remove',e);return false;}
     },
     /* 고객 할 일 — 이름 + 직접 적은 할 일만 담는다 (연락처·주민번호 등은 담지 않음) */
     todo:function(o){
