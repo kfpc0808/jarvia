@@ -101,6 +101,7 @@ a{color:inherit;text-decoration:none}
 .statItem.divider{border-left:.5px solid rgba(255,255,255,.15);border-right:.5px solid rgba(255,255,255,.15)}
 .statValue{font-size:18px;font-weight:800;color:#fff}
 .statValue .unit{font-size:11px;color:var(--gold)}
+.statsRow.n4 .statValue{font-size:16px}   /* ★ [2026-10-17] 신뢰 지표 4칸 */
 .statLabel{font-size:9px;color:rgba(255,255,255,.6);margin-top:2px}
 
 /* ─── 콘텐츠 영역 ─── */
@@ -805,6 +806,14 @@ a{color:inherit;text-decoration:none}
           <div class="statItem">
             <div class="statValue" id="stat3Value">— <span class="unit">★</span></div>
             <div class="statLabel">만족도</div>
+          </div>
+          <div class="statItem" style="display:none">   <!-- ★ [2026-10-17] 상담 건수 -->
+            <div class="statValue" id="stat4Value">— <span class="unit">건</span></div>
+            <div class="statLabel">상담 건수</div>
+          </div>
+          <div class="statItem" style="display:none">   <!-- ★ [2026-10-17] 계약 유지율 -->
+            <div class="statValue" id="stat5Value">— <span class="unit">%</span></div>
+            <div class="statLabel">계약 유지율</div>
           </div>
         </div>
       </div>
@@ -2443,7 +2452,7 @@ function renderHeader(){
   const title=consultantData?.title||fcData.title||'';
   const photo=consultantData?.photoUrl||consultantData?.photo||fcData.photoUrl||'';
   const bio=cd.bio||consultantData?.greeting||'고객의 자산을 함께 지키는 자산관리 전문가';
-  const stats=cd.statsHidden?{}:(cd.stats||{});   /* ★ [2026-10-16] 신뢰 지표 표시 OFF 반영 */
+  const stats=cd.statsHidden?{}:ccStatsPicked(cd);   /* ★ [2026-10-17] 선택 항목만 · [2026-10-16] 신뢰 지표 표시 OFF 반영 */
   // URL 태그·헤들 표시 (urlTag는 KFPC 요청에 따라 비표시)
   if($('footerHandle'))$('footerHandle').textContent='@'+loginId;
   // 컨설턴트 정보
@@ -2467,11 +2476,14 @@ function renderHeader(){
   if(s.years)$('stat1Value').innerHTML=`${s.years}<span class="unit">년</span>`;
   if(s.clients)$('stat2Value').innerHTML=`${(s.clients).toLocaleString()}<span class="unit">명</span>`;
   if(s.rating)$('stat3Value').innerHTML=`${s.rating}<span class="unit">★</span>`;
+  if(s.consults)$('stat4Value').innerHTML=`${Number(s.consults).toLocaleString()}<span class="unit">건</span>`;   /* ★ [2026-10-17] */
+  if(s.retention)$('stat5Value').innerHTML=`${s.retention}<span class="unit">%</span>`;   /* ★ [2026-10-17] */
   /* ★ [2026-10-16] 빈 칸은 해당 칸만 숨김 ("—" 미표시) */
-  (function(){const vis=[];[['stat1Value',s.years],['stat2Value',s.clients],['stat3Value',s.rating]].forEach(([id,v])=>{const el=$(id);const box=el&&el.parentElement;if(!box||box===$('statsRow'))return;box.style.display=v?'':'none';box.style.borderLeft=box.style.borderRight='';if(v)vis.push(box);});
+  (function(){const vis=[];[['stat1Value',s.years],['stat2Value',s.clients],['stat3Value',s.rating],['stat4Value',s.consults],['stat5Value',s.retention]].forEach(([id,v])=>{const el=$(id);const box=el&&el.parentElement;if(!box||box===$('statsRow'))return;box.style.display=v?'':'none';box.style.borderLeft=box.style.borderRight='';if(v)vis.push(box);});
     $('statsRow').style.gridTemplateColumns='';   /* 재렌더 시 초기화 */
-    if(vis.length&&vis.length<3){$('statsRow').style.gridTemplateColumns='repeat('+vis.length+',1fr)';vis.forEach((b,i)=>{b.style.borderRight='none';b.style.borderLeft=i?'.5px solid rgba(255,255,255,.15)':'none';});}})();
-  if(!s.years&&!s.clients&&!s.rating)$('statsRow').style.display='none';
+    $('statsRow').classList.toggle('n4',vis.length>=4);   /* ★ [2026-10-17] 4칸 글자 축소 */
+    if(vis.length){$('statsRow').style.gridTemplateColumns='repeat('+vis.length+',1fr)';vis.forEach((b,i)=>{b.style.borderRight='none';b.style.borderLeft=i?'.5px solid rgba(255,255,255,.15)':'none';});}})();   /* ★ [2026-10-17] 2~4칸 균등 배치 */
+  if(!s.years&&!s.clients&&!s.rating&&!s.consults&&!s.retention)$('statsRow').style.display='none';
 }
 
 // ═══ 카탈로그 렌더링 ═══
@@ -10137,6 +10149,15 @@ const INS_CONSENT_VERSION='insurance-portfolio-2026-08-v1';
 /* ★ [2026-08-09] 소개·역량 기본 문구 — 미설정 컨설턴트 카드에도 표시. 누구에게나 참이 되도록 순화된 문구(확약·숫자 없음). index.html JV_SAMPLES ①과 함께 수정할 것 */
 const CC_DEFAULT_BIO='고객님의 상황을 먼저 살피고, 꼭 필요한 준비를 함께 찾아드립니다.';
 const CC_DEFAULT_STATS={years:'10',clients:'300',rating:'9.0'};
+/* ★ [2026-10-17] 신뢰 지표 5종 — 표시 순서 고정. statsPick(2~4개)에 든 항목만 표시.
+   statsPick 없는 기존 저장분은 기존 3종 값 그대로 표시. index.html jvStatsPicked()와 동일 규칙 유지. */
+const CC_STAT_KEYS=['years','clients','rating','consults','retention'];
+function ccStatsPicked(cd){
+  const st=cd.stats||{};
+  const pk=Array.isArray(cd.statsPick)?cd.statsPick:['years','clients','rating'];
+  const o={};CC_STAT_KEYS.forEach(k=>{if(pk.includes(k)&&st[k])o[k]=st[k];});
+  return o;
+}
 const CC_DEFAULT_CERTS=['금융자산관리사','재무컨설팅 전문'];
 const CC_DEFAULT_CAP='상담은 고객님의 상황을 충분히 여쭙는 것에서 시작합니다. 지금 갖고 계신 보험과 자산을 먼저 살펴 중복되는 부분과 부족한 부분을 알기 쉽게 정리해 드리고, 잘 유지되고 있는 것은 그대로 인정해 드립니다. 어려운 약관과 금융 용어는 이해되실 때까지 쉬운 말로 설명드리며, 충분히 비교하고 검토하신 뒤 편안하게 결정하실 수 있도록 돕겠습니다. 인생의 단계마다 믿고 다시 찾을 수 있는 담당자가 되겠습니다.';
 function ccConsultantProfile(){
@@ -10148,7 +10169,7 @@ function ccConsultantProfile(){
     company: consultantData?.company||fcData?.company||'',
     bio: cd.bio||consultantData?.greeting||CC_DEFAULT_BIO,   /* ★ [2026-08-09] 미설정 시 기본 문구 — index.html JV_SAMPLES ①과 동일 유지 */
     capability: cd.capability||CC_DEFAULT_CAP,
-    stats: cd.statsHidden?{}:(cd.stats||{}),   /* ★ [2026-10-16] 입력값 그대로 — 표시 OFF이거나 모두 비우면 신뢰 지표 줄 숨김 (기본값 대체 제거, index.html과 동일) */
+    stats: cd.statsHidden?{}:ccStatsPicked(cd),   /* ★ [2026-10-17] 선택 항목만 · [2026-10-16] 입력값 그대로 — 표시 OFF이거나 모두 비우면 신뢰 지표 줄 숨김 (기본값 대체 제거, index.html과 동일) */
     photo: consultantData?.photoUrl||consultantData?.photo||fcData?.photoUrl||'',
     phone: consultantData?.phone||fcData?.phone||'',   /* ★ [2026-08-08] 카드 하단 문자(sms:) 버튼용 — contactFooter(2786행)와 동일 우선순위 */
     certifications: (Array.isArray(cd.certifications)&&cd.certifications.length)?cd.certifications:CC_DEFAULT_CERTS,
@@ -10218,8 +10239,10 @@ function ccBuildConsultantCard(){
   const dailyUrl='/client-daily.html?fc='+encodeURIComponent(loginId)+(function(){try{const v=jvClientId();return v?('&c='+encodeURIComponent(v)):'';}catch(_e){return '';}})();   /* ★ [2026-08-22] 고객 식별 전달 — 고객 홈페이지에서 열람현황 귀속 */
   const stat=(v,u,l)=>v?'<div style="flex:1;text-align:center"><div style="font-size:16px;font-weight:800;color:#fff">'+esc(v)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">'+u+'</span></div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">'+l+'</div></div>':'';
   const statDiv='<div style="width:1px;background:rgba(255,255,255,.09)"></div>';
-  const ratingTxt=cStats.rating?(esc(cStats.rating)+'<span style="font-size:11px;color:#C9A96E;font-weight:500">/10★</span>'):'';
-  const hasStats=!!(cStats.years||cStats.clients||cStats.rating);
+  /* ★ [2026-10-17] 신뢰 지표 5종 중 선택 항목만 순서대로 — index.html jvcbBuild와 동일 */
+  const statCells=[['years','년','경력'],['clients','명','고객 수'],['rating','/10★','만족도'],['consults','건','상담 건수'],['retention','%','계약 유지율']]
+    .filter(d=>cStats[d[0]]).map(d=>stat((d[0]==='clients'||d[0]==='consults')?Number(cStats[d[0]]).toLocaleString():String(cStats[d[0]]),d[1],d[2]));
+  const hasStats=statCells.length>0;
   /* 우측 상단 두 줄 링크 — 각 줄 nowrap 고정 (글자 단위 세로 깨짐 방지) */
   const linkSt='color:rgba(216,222,233,.85);padding:1px 2px 3px;font-size:10.5px;font-weight:600;text-align:center;line-height:1.4;text-decoration:none;cursor:pointer';
   const line=t=>'<span style="white-space:nowrap;display:block">'+t+'</span>';
@@ -10256,11 +10279,7 @@ function ccBuildConsultantCard(){
     +'</div>'
     +'</div>'
     +(hasStats?'<div style="display:flex;gap:2px;margin-top:15px;padding:11px 18px 13px;border-top:1px solid rgba(201,169,110,.22);background:rgba(0,0,0,.18)">'
-      +stat(cStats.years,'년','경력')
-      +((cStats.years&&(cStats.clients||cStats.rating))?statDiv:'')
-      +stat(cStats.clients?Number(cStats.clients).toLocaleString():'','명','고객 수')
-      +((cStats.clients&&cStats.rating)?statDiv:'')
-      +(cStats.rating?'<div style="flex:1;text-align:center"><div style="font-size:16px;font-weight:800;color:#fff">'+ratingTxt+'</div><div style="font-size:10px;color:#8FA0C2;margin-top:2px">만족도</div></div>':'')
+      +statCells.join(statDiv)
       +'</div>':'')
     +'</div>'
     +(P.certifications.length?'<div style="background:#fff;padding:11px 15px;border-bottom:1px solid #EEF0F4"><div style="display:flex;flex-wrap:wrap;gap:6px">'+P.certifications.map(c=>'<span style="font-size:10.5px;font-weight:700;color:#8a6a1f;background:#FFF8E7;border:1px solid #E0C36B;padding:3px 10px;border-radius:99px">'+esc(c)+'</span>').join('')+'</div></div>':'')
