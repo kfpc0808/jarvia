@@ -14549,6 +14549,7 @@ function renderMedicalWeeklyTable(){
       if(c.url){
         downloads+=`<button class="btn-sm" onclick="window.open('${c.url}','_blank')" style="background:#1565C0;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer;white-space:nowrap" title="HTML 콘텐츠 새 탭에서 열람">📄 HTML</button>`;
         downloads+=`<button class="btn-sm" onclick="mwDownloadHtml('${cidEsc}','${c.url}')" style="background:#0EA5E9;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer;white-space:nowrap" title="HTML 파일 다운로드">⬇ HTML</button>`;
+        downloads+=`<button class="btn-sm" onclick="mwUploadHtml('${cidEsc}')" style="background:#0369a1;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer;white-space:nowrap" title="담당자 수정 HTML 업로드 (썸네일 유지)">📄 HTML 교체</button>`;   /* ★ [2026-10-17] */
       }
       if(c.scriptUrl)downloads+=`<button class="btn-sm" onclick="mwDownloadScript('${cidEsc}','${c.scriptUrl}')" style="background:#7C3AED;color:#fff;border:none;padding:3px 7px;border-radius:4px;font-size:10px;cursor:pointer;white-space:nowrap" title="오디오 생성용 스크립트 다운로드 (NotebookLM 등에 사용)">🎙 스크립트</button>`;
       if(c.audioUrl){
@@ -15271,6 +15272,48 @@ window.mwDownloadScript=mwDownloadScript;
 window.mwDownloadHtml=mwDownloadHtml;
 window.mwDownloadAudio=mwDownloadAudio;
 window.mwUploadAudio=mwUploadAudio;
+/* ★ [2026-10-17] 메디컬 HTML 교체 — 담당자 수정본 업로드. contents 의 url 만 바꾸고 썸네일(thumbAuto·thumbAutoCard)은 건드리지 않는다.
+   업로드 전 본문의 원래 주제 제목을 현재 게시 제목(썸네일 적용·담당자 수정 제목)으로 맞춘다. */
+function mwUploadHtml(contentId){
+  const c=_mwContents.find(x=>(x.contentId||x.id)===contentId);
+  if(!c){toast('콘텐츠를 찾을 수 없습니다','error');return;}
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='.html,.htm,text/html';
+  input.onchange=async(e)=>{
+    const file=e.target.files[0];
+    if(!file)return;
+    if(!/\.html?$/i.test(file.name)){toast('HTML 파일만 올릴 수 있습니다','error');return;}
+    if(!confirm(`"${file.name}" 으로 HTML을 교체하시겠습니까?\n\n※ 썸네일은 그대로 유지됩니다.`))return;
+    try{
+      toast('⬆ HTML 업로드 중...','info');
+      let src=await file.text();
+      const t=_MW_TOPICS.find(x=>x.id===c.topicId);
+      const orig=String((t&&t.title)||'').trim(),cur=String(c.title||'').trim();
+      let cnt=0;
+      if(orig&&cur&&orig!==cur){
+        const e1=orig.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const eCur=cur.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const vars=[...new Set([orig,e1,e1.replace(/"/g,'&quot;').replace(/'/g,'&#39;'),e1.replace(/'/g,'&#x27;').replace(/"/g,'&quot;')])];
+        vars.forEach(v=>{const parts=src.split(v);if(parts.length>1){cnt+=parts.length-1;src=parts.join(v===orig?cur:eCur);}});
+      }
+      const path=`medical-weekly/${contentId}.html`;
+      const sRef=stRef(storage,path);
+      const blob=new Blob([src],{type:'text/html;charset=utf-8'});
+      await uploadBytesResumable(sRef,blob,{contentType:'text/html;charset=utf-8',cacheControl:'public, max-age=300'});
+      const url=await getDownloadURL(sRef);
+      await updateDoc(doc(db,'contents',contentId),{url,updatedAt:serverTimestamp()});
+      toast('✅ HTML 교체 완료'+(cnt?` (본문 제목 ${cnt}곳 현재 제목으로 맞춤)`:''),'success');
+      await loadMedicalWeekly();
+    }catch(err){
+      console.error('[MW] HTML 교체 실패:',err);
+      toast('HTML 교체 실패: '+err.message,'error');
+    }
+  };
+  input.click();
+}
+window.mwUploadHtml=mwUploadHtml;
+
 window.mwViewCards=mwViewCards;
 window.mwDelete=mwDelete;
 
