@@ -729,6 +729,7 @@ a{color:inherit;text-decoration:none}
 <script src="calendarData.js"></script>
 <!-- 📱 문자발송 공용 코어 (window.SmsCore) — AI 비서 카드 문자 발송용 · index.html과 동일 IndexedDB 공유 -->
 <script src="sms-core.js"></script>
+<script src="jv-memo.js"></script>   <!-- ★ [2026-10-17] 이지메모 「이 답변 담기」 (AI 비서) -->
 <!-- ─── PWA: 동적 manifest + iOS 호환 (setupPWA() 함수에서 채워짐) ─── -->
 <link rel="prefetch" href="/client-daily.html"><!-- ★ 데일리 뷰어 사전 로딩 (클릭 체감 개선) -->
 <link rel="manifest" id="pwaManifest">
@@ -7095,7 +7096,48 @@ function aiOpen(){
   try{const _bx=document.getElementById('aiMsgs');if(_bx&&!aiPinned)_bx.scrollTop=0;}catch(_e){}
   if(!aiSideNarrow())aiSideToggle(true);   /* ★ PC = 대화 목록 사이드바 기본 펼침 (2026-07-18) */
   aiUsageRender();   /* ★ [2026-07-23] 최초 생성 시에도 월 캐시 기반 사용횟수 즉시 표시 */
+  /* ★ [2026-10-17] 이지메모 「이 답변 담기」(A안) — 입력창 바로 위(시트 안) · 정규회원만.
+     답변을 누르면 그 답변이 선택(금색 테두리)되고, 고르지 않으면 마지막 답변을 담는다. 처음 한 번 저장 위치를 안내 */
+  try{
+    const _mb=document.getElementById('aiMsgs');
+    if(window.JvMemo&&auth.currentUser&&_mb&&!document.getElementById('aiJvmAnchor')){
+      const _anc=document.createElement('div');_anc.id='aiJvmAnchor';_anc.style.cssText='position:relative;height:0;flex-shrink:0;z-index:5';
+      _mb.parentNode.insertBefore(_anc,_mb.nextSibling);
+      _mb.addEventListener('click',ev=>{
+        if(!JvMemo.ready()||ev.target.closest('button,a,input,textarea,select,summary'))return;
+        const b=_aiJvmBubble(ev.target);if(!b)return;
+        const on=!b.classList.contains('jvmSel');
+        _mb.querySelectorAll('.jvmSel').forEach(x=>{x.classList.remove('jvmSel');x.style.outline='';});
+        if(on){b.classList.add('jvmSel');b.style.outline='2px solid #C9A96E';b.style.outlineOffset='1px';}
+      });
+      JvMemo.init({db,uid:auth.currentUser.uid,email:auth.currentUser.email||'',fs:{doc,getDoc,collection,setDoc,serverTimestamp},
+        from:'AI 비서',pill:'이 답변 담기',anchor:_anc,getItem:_aiJvmItem,newTab:true,confirmKey:'jvm_ai_ok',
+        confirm:'AI 답변을 이지메모에 담습니다.\n담은 답변은 이지메모(본인만 열람)에 저장됩니다. AI 대화 기록은 지금처럼 내 드라이브에만 저장됩니다.\n\n계속할까요?'});
+    }
+  }catch(_e){}
   setTimeout(()=>{const inp=document.getElementById('aiInput');if(inp)inp.focus();},150);
+}
+/* ★ [2026-10-17] 이지메모 담기 — AI 답변 말풍선 찾기·글자 추출 (듣기 버튼 등은 빼고) */
+function _aiJvmBubble(t){   /* 흰 바탕 AI 답변만 (정규회원·잔액 안내 등 노란 안내 말풍선은 제외) */
+  const w=t&&t.closest?t.closest('#aiMsgs > div'):null;
+  if(!w||w.id==='aiTypingBubble'||w.style.justifyContent!=='flex-start')return null;
+  const b=w.firstElementChild;return (b&&b.style.borderTopLeftRadius==='4px'&&/^(#fff|rgb\(255, 255, 255\))$/i.test(b.style.backgroundColor||b.style.background))?b:null;
+}
+const _AI_JVM_SYS=/^(응답을 받지 못했어요|AI 서버에 연결하지 못했어요|짧은 시간에 너무 많이 요청)/;
+function _aiJvmText(b){   /* 듣기 버튼·유료 차감 줄은 빼고 답변 글자만 */
+  const c=b.cloneNode(true);
+  c.querySelectorAll('button').forEach(x=>{const p=x.parentElement;(p&&p!==c&&p.children.length===1?p:x).remove();});
+  [...c.querySelectorAll('div')].forEach(x=>{if(/원 차감 · 잔액/.test(x.textContent||''))x.remove();});
+  return String(c.textContent||'').trim();
+}
+function _aiJvmItem(){
+  const box=document.getElementById('aiMsgs');if(!box)return null;
+  let b=box.querySelector('.jvmSel'),text='';
+  if(b)text=_aiJvmText(b);
+  else{const all=[...box.children].map(_aiJvmBubble).filter(Boolean);
+    for(let i=all.length-1;i>=0;i--){const t=_aiJvmText(all[i]);if(t&&!_AI_JVM_SYS.test(t)){b=all[i];text=t;break;}}}
+  if(!b||!text)return null;
+  return {text:text,pill:b.classList.contains('jvmSel')?'고른 답변 담기':'이 답변 담기'};
 }
 /* ═══ 🔊 듣기 모드 (2026-08-06) — 폰 내장 TTS(speechSynthesis) 사용, 본사 비용 0원.
    질문은 키보드 🎤(기기 받아쓰기), 답변은 답변별 🔊 버튼 또는 헤더 🎧 자동 듣기.
