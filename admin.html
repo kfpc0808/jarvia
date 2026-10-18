@@ -1483,6 +1483,7 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
       <div class="stc-bar">
         <input type="month" id="stc-month" onchange="stcLoad()">
         <button class="btn btn-sec" onclick="stcLoad()">새로고침</button>
+        <button class="btn btn-sec" onclick="stcCustBackfill()" title="게시된 카드 중 고객용 화면이 없거나 점검 필요인 것을 모두 생성">고객용 일괄 생성</button><!-- ★ [2026-10-19] -->
         <span style="flex:1"></span>
         <input type="date" id="stc-gdate" title="생성할 날짜">
         <select id="stc-gslot"><option value="">2장 모두</option><option value="job">직업 카드만</option><option value="age">연령 카드만</option></select>
@@ -27956,11 +27957,11 @@ async function stcLoad(auto){
     _stc.cards=snap.docs.map(d=>({id:d.id,...d.data()}));
     const cur=_stc.cards.find(x=>x.id===_stc.open);
     /* 자동 새로고침: 열어 둔 카드가 바뀌지 않았으면 다시 그리지 않음 (미리보기 스크롤·입력 유지) */
-    if(!(auto&&cur&&prev&&prev.genState===cur.genState&&prev.status===cur.status&&prev.html===cur.html&&(prev.stepLog||[]).length===(cur.stepLog||[]).length))stcRender();
+    if(!(auto&&cur&&prev&&prev.genState===cur.genState&&prev.custState===cur.custState&&prev.custStale===cur.custStale&&prev.status===cur.status&&prev.html===cur.html&&(prev.stepLog||[]).length===(cur.stepLog||[]).length))stcRender();
     stcRunRender();
     if(!auto)stcLawCount();
     clearTimeout(_stc.timer);
-    if(_stc.cards.some(c=>STC_RUN.includes(c.genState)))_stc.timer=setTimeout(()=>{if(!$('p-salestalk').classList.contains('hidden'))stcLoad(true);},10000);
+    if(_stc.cards.some(c=>STC_RUN.includes(c.genState)||c.custState==='running'))_stc.timer=setTimeout(()=>{if(!$('p-salestalk').classList.contains('hidden'))stcLoad(true);},10000);
   }catch(e){$('stc-cards').innerHTML=`<div class="stc-empty" style="color:#c62828">불러오기 실패: ${esc(e.message)}</div>`;}
 }
 function stcPills(c){
@@ -27977,7 +27978,7 @@ function stcPills(c){
 function stcRender(){
   /* ★ [2026-10-10] 다시 그릴 때 입력 중인 메시지·분류 정보가 지워지지 않게 보관 후 복원 */
   const _keep={},_kb=_stc.open&&$('stc-d-'+_stc.open);   /* 같은 카드가 열려 있을 때만 (다른 카드로 바꾸면 보관 안 함) */
-  if(_kb)['stc-msg-0','stc-msg-1','stc-msg-2','stc-m-title','stc-m-seg','stc-m-cl','stc-m-kw'].forEach(k=>{const e=_kb.querySelector('#'+k);if(e&&e.dataset.dirty)_keep[k]=e.value;});
+  if(_kb)['stc-msg-0','stc-msg-1','stc-msg-2','stc-m-title','stc-m-seg','stc-m-cl','stc-m-kw'].concat([..._kb.querySelectorAll('[id^="stc-cu-"]')].map(e=>e.id)).forEach(k=>{const e=_kb.querySelector('#'+k);if(e&&e.dataset.dirty)_keep[k]=e.value;});   /* ★ [2026-10-19] 고객용 입력칸(stc-cu-*)도 보관 */
   const list=_stc.cards;
   if(!list.length){$('stc-cards').innerHTML=`<div class="stc-empty">${esc(_stc.month)} 카드가 없습니다. 위에서 날짜를 골라 생성할 수 있습니다.</div>`;return;}
   $('stc-cards').innerHTML=list.map(c=>`<div class="stc-item${_stc.open===c.id?' open':''}" id="stc-i-${c.id}">
@@ -28005,6 +28006,7 @@ function stcSide(c){
     </div>
     <div class="stc-box"><h4>검증 결과 ${v.status?`(${v.status==='fail'?'점검 필요':v.status==='warn'?'경미 지적':'통과'} · ${v.rounds||1}회차${(v.verifiers||[]).length?' · '+esc(v.verifiers.join(', ')):''})`:''}</h4>${notes}</div>
     ${stcMsgBox(c)}
+    ${stcCustBox(c)}
     <div class="stc-box stc-form"><h4>분류 정보 (검색·목록용)</h4>
       <label>제목</label><input id="stc-m-title" value="${esc(c.title||'')}">
       <label>대상</label><input id="stc-m-seg" value="${esc(c.segment||'')}">
@@ -28093,6 +28095,56 @@ async function stcMsgSave(id){
   if(empty.length){toast('빈 칸이 있습니다: '+empty.join(', '),'error');return;}
   try{await stcApi({action:'saveMessages',cardId:id,messages});[0,1,2].forEach(i=>{const e=$('stc-msg-'+i);if(e)delete e.dataset.dirty;});toast('메시지를 저장했습니다 — 회원 화면에 바로 반영됩니다','success');await stcLoad();}
   catch(e){toast('저장 실패: '+e.message,'error');}
+}
+/* ★ [2026-10-19] 고객용 「오늘의 이야기」(mypb.kr/story.html) — 고객이 보는 문안. 저장 시 서버(stAdmin custSave)가 생성과 같은 기준으로 검사 */
+function stcCustBox(c){
+  const u=c.cust||null,v=(u&&u.verify)||{},run=c.custState==='running';
+  const st=run?'<span class="stc-pill run">생성 중</span>':u&&c.custStale?'<span class="stc-pill bad">보류 — 회원 카드 수정됨</span>':!u?'<span class="stc-pill">없음</span>':v.status==='fail'?`<span class="stc-pill bad">점검 필요 ${v.critical||''} — 고객에게 안 보임</span>`:v.status==='manual'?'<span class="stc-pill man">담당자 수정본</span>':v.status==='warn'?'<span class="stc-pill warn">경미 지적</span>':'<span class="stc-pill pub">검증 통과</span>';
+  const notes=(v.notes||[]).map(n=>`<div class="stc-note"><b class="${n.severity==='critical'?'c':'m'}">${n.severity==='critical'?'치명':'경미'}</b> · ${esc(n.by||'')}${n.item?' '+esc(n.item):''} — ${esc(n.issue||n.reason||'')}${n.fix?`<br><span style="color:#2E7D32">→ ${esc(n.fix)}</span>`:''}</div>`).join('');
+  const x=u||{},pts=x.points||[],ck=x.checklist||[],cn=(c.sections&&c.sections.numbers)||{},rn=(x.raw&&x.raw.numbers)||{};
+  const nl=(cn.rows||[]).map((r,i)=>(rn.rows&&rn.rows[i])||(x.numbers&&x.numbers.rows&&x.numbers.rows[i]&&x.numbers.rows[i].label)||r.label||'');
+  const tl=rn.total||(x.numbers&&x.numbers.total&&x.numbers.total.label)||(cn.total&&cn.total.label)||'';
+  const f=(id,lab,val,rows)=>`<label>${lab}</label>`+(rows?`<textarea id="stc-cu-${id}" rows="${rows}">${esc(val||'')}</textarea>`:`<input id="stc-cu-${id}" value="${esc(val||'')}">`);
+  const pv=c.status==='published'?`https://mypb.kr/story.html?s=${encodeURIComponent(c.id)}&fc=gildong&x=cd,bz&pv=1`:'';   /* pv=1: 미리보기 — 상담 신청 접수 안 됨 */
+  return `<div class="stc-box stc-form"><h4>고객용 「오늘의 이야기」 ${st}</h4>
+    ${c.custStale&&u?'<div class="stc-note" style="color:#c62828;font-weight:700">⚠ 회원 카드(HTML)가 수정되어 고객용 화면을 보류 중입니다 — 아래 문안이 수정 내용과 맞는지 확인 후 「고객용 저장」 또는 「고객용 다시 생성」을 눌러 주세요.</div>':''}
+    ${c.lawWatch&&c.lawWatch.changed&&u?'<div class="stc-note" style="color:#c62828;font-weight:700">⚠ 법령 개정이 감지되어 고객용 화면을 보류 중입니다 — 위 「작업」의 카드 「다시 생성」을 하거나, 내용 확인 후 「법령 개정 감지」 탭에서 확인 처리하면 다시 보입니다.</div>':''}
+    ${c.custError&&c.custState==='failed'?`<div class="stc-note" style="color:#c62828">생성 실패: ${esc(c.custError)}</div>`:''}
+    ${notes?`<details${v.status==='fail'?' open':''}><summary style="cursor:pointer;font-weight:700">검수 지적 (${(v.notes||[]).length})</summary>${notes}</details>`:''}
+    ${pv?`<details style="margin:6px 0"><summary style="cursor:pointer;font-weight:700">고객 화면 미리보기 (홍길동 기준)</summary><iframe src="${esc(pv)}" style="width:100%;height:640px;border:1px solid #e3e6ee;border-radius:8px;margin-top:6px" sandbox="allow-scripts allow-same-origin allow-popups" loading="lazy" title="고객 화면 미리보기"></iframe><a href="${esc(pv)}" target="_blank" rel="noopener" style="font-size:12px">새 창으로 열기 ↗</a></details>`:'<div style="font-size:11.5px;color:#7a8299">미리보기는 게시된 카드만 볼 수 있습니다.</div>'}
+    <details${u&&v.status!=='fail'?'':' open'}><summary style="cursor:pointer;font-weight:700">문안 수정</summary>
+    ${f('hook','제목 (질문형, 40자 이내)',x.hook)}${f('lead','도입 2문장 (**강조 구절**)',x.lead,3)}${f('aud','대상 한 줄',x.audienceLine)}
+    ${[0,1,2].map(i=>f('pt'+i,`핵심 ${i+1} 제목`,(pts[i]||{}).title)+f('pb'+i,`핵심 ${i+1} 내용`,(pts[i]||{}).body,3)+f('pl'+i,`핵심 ${i+1} 법령 (카드에 있는 조문만, 없으면 비움)`,(pts[i]||{}).law)).join('')}
+    ${(cn.rows||[]).length?f('nt','숫자 예시 제목',(rn.title||(x.numbers&&x.numbers.title)||''))+nl.map((l,i)=>f('nr'+i,`숫자 ${i+1} 라벨 (금액 ${esc(String(cn.rows[i].value))} — 자동)`,l)).join('')+(cn.total?f('ntt','합계 라벨',tl):'')+f('ncap','숫자 고지',(rn.caption||(x.numbers&&x.numbers.caption)||''))+f('nkey','숫자 아래 핵심 한 문장 (금액 숫자 없이, 선택)',(rn.key||(x.numbers&&x.numbers.key)||'')):''}
+    ${[0,1,2,3].map(i=>f('ck'+i,`자가 점검 ${i+1}`,ck[i])).join('')}
+    ${f('how','확인 방법',x.how,3)}${f('cm','버튼 문구 (16자 이내)',x.cta&&x.cta.main)}${f('cs','버튼 보조 (26자 이내)',x.cta&&x.cta.sub)}
+    ${f('cau','고지 (한 줄에 하나, 1~4개)',(x.cautions||[]).join('\n'),3)}
+    </details>
+    <div style="margin-top:8px"><button class="btn" onclick="stcCustSave('${c.id}')" ${run?'disabled':''}>고객용 저장</button>
+      <button class="btn btn-sec" onclick="stcCustRegen('${c.id}')" ${run||!c.sections?'disabled':''}>고객용 다시 생성</button></div>
+    <div style="font-size:11.5px;color:#7a8299;margin-top:4px">금액은 카드 숫자에서 자동으로 채워집니다. 카드에 없는 숫자·법령, 판매 표현은 저장되지 않습니다. 이전 고객용은 보관됩니다.</div>
+  </div>`;
+}
+async function stcCustSave(id){
+  const c=_stc.cards.find(x=>x.id===id)||{},cn=(c.sections&&c.sections.numbers)||{};
+  const g=k=>{const e=$('stc-cu-'+k);return e?String(e.value||'').trim():'';};
+  const cust={hook:g('hook'),lead:g('lead'),audienceLine:g('aud'),
+    points:[0,1,2].map(i=>({title:g('pt'+i),body:g('pb'+i),law:g('pl'+i)})),
+    numbers:(cn.rows||[]).length?{title:g('nt'),rows:cn.rows.map((r,i)=>g('nr'+i)),total:cn.total?g('ntt'):'',caption:g('ncap'),key:g('nkey')}:null,
+    checklist:[0,1,2,3].map(i=>g('ck'+i)),how:g('how'),cta:{main:g('cm'),sub:g('cs')},
+    cautions:g('cau').split('\n').map(t=>t.trim()).filter(Boolean)};
+  try{await stcApi({action:'custSave',cardId:id,cust});document.querySelectorAll('#p-salestalk [id^="stc-cu-"]').forEach(e=>delete e.dataset.dirty);toast('고객용 문안을 저장했습니다 — 고객 화면에 바로 반영됩니다','success');await stcLoad();}
+  catch(e){toast('저장 실패: '+e.message,'error');}
+}
+async function stcCustRegen(id){
+  if(!confirm('고객용 문안을 다시 생성할까요? (지금 문안은 이력에 보관됩니다)'))return;
+  try{const r=await stcApi({action:'custRegenerate',cardId:id});toast(r.message||'다시 생성을 시작했습니다','success');await stcLoad();}
+  catch(e){toast('실패: '+e.message,'error');}
+}
+async function stcCustBackfill(){
+  if(!confirm('게시된 카드 중 고객용 화면이 없거나 점검 필요인 카드를 모두 생성합니다. 수십 분 걸릴 수 있습니다. 시작할까요?'))return;
+  try{const r=await stcApi({action:'custBackfill'});toast(r.message||'일괄 생성을 시작했습니다','success');}
+  catch(e){toast('실패: '+e.message,'error');}
 }
 document.addEventListener('input',e=>{const t=e.target;if(t&&t.closest&&t.closest('#p-salestalk .stc-side'))t.dataset.dirty='1';});   /* ★ 입력 중 표시 — 자동 새로고침에도 보존 */
 function stcToggle(id){_stc.open=_stc.open===id?'':id;stcRender();}
