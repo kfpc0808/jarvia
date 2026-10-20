@@ -1279,6 +1279,7 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
           <span style="margin-left:auto"></span>
           <button class="btn btn-sec" onclick="ltLoad()">새로고침</button>
           <button class="btn btn-sec" onclick="ltRecard()" title="카드 이미지가 없는 레터만 골라 카드만 새로 만듭니다 (문구 그대로 · Claude 비용 없음)">🖼 카드 없는 레터 카드 만들기</button>
+          <button class="btn btn-sec" onclick="ltTipFill()" title="검수 대기·승인 레터 중 회원용 활용 문구가 없는 것만 채웁니다 (레터 문구·카드는 그대로)">💬 활용 문구 채우기</button><!-- ★ [2026-10-20] -->
           <button class="btn btn-sec" onclick="ltBackfill()" title="2026-06-01 이후 게시된 콘텐츠 중 레터가 없는 것을 생성 대기열에 올립니다">📥 기존 콘텐츠 레터 만들기</button>
         </div>
         <div id="lt-list"><div style="color:#7A8299;padding:30px;text-align:center">불러오는 중…</div></div>
@@ -28448,6 +28449,11 @@ const LT_TRACK={closing:'클로징',tax:'택스',master:'마스터',medical:'메
 const LT_ST={review:'검수 대기',approved:'승인 · 회원 노출',queued:'생성 대기',generating:'생성 중',failed:'실패',excluded:'제외'};
 const ltN=n=>Number(n||0).toLocaleString('ko-KR');
 const ltD=ms=>{if(!ms)return'-';const k=new Date(ms+9*3600e3);return `${k.getUTCMonth()+1}.${k.getUTCDate()}`;};
+/* ★ [2026-10-20] 게시 예정일 — 오늘(KST)부터 3일 안에 게시되는데 승인 전이면 「곧 게시」로 묶는다 */
+const ltToday=()=>new Date(Date.now()+9*3600e3).toISOString().slice(0,10);
+const ltPlus3=()=>new Date(Date.now()+9*3600e3+3*86400e3).toISOString().slice(0,10);
+const ltSoon=x=>!!x.pubDate&&x.pubDate>=ltToday()&&x.pubDate<=ltPlus3()&&x.status!=='approved'&&x.status!=='excluded';
+const ltPD=d=>{if(!d)return'';const[y,m,dd]=d.split('-').map(Number);return `${m}.${dd}`;};
 async function ltApi(data){const r=(await httpsCallable(functions,'letterAdmin',{timeout:300000})(data)).data||{};if(r.ok===false)throw new Error(r.message||'처리 실패');return r;}
 function ltView(v){
   document.querySelectorAll('#lt-views .lt-tab').forEach(t=>t.classList.toggle('on',t.dataset.v===v));
@@ -28462,15 +28468,20 @@ async function ltLoad(){
 }
 function ltStTab(s){_ltSt=s;_ltOpen='';_ltSel.clear();ltRender();}
 function ltRender(){
-  const cnt=s=>_lt.filter(x=>s==='busy'?(x.status==='queued'||x.status==='generating'):s==='all'?true:x.status===s).length;
-  const tabs=[['review','📝 검수 대기'],['approved','✅ 승인'],['busy','⏳ 생성 중'],['failed','⚠️ 실패'],['excluded','🚫 제외'],['all','전체']];
-  $('lt-st').innerHTML=tabs.map(([k,l])=>`<span class="lt-tab${_ltSt===k?' on':''}${(k==='failed'||k==='review')&&cnt(k)?' warn':''}" onclick="ltStTab('${k}')">${l}<b>${cnt(k)}</b></span>`).join('');
+  const inSt=(x,s)=>s==='busy'?(x.status==='queued'||x.status==='generating'):s==='all'?true:s==='soon'?ltSoon(x):s==='changed'?(x.sourceChanged&&x.status!=='excluded'):x.status===s;   /* ★ [2026-10-20] soon·changed */
+  const cnt=s=>_lt.filter(x=>inSt(x,s)).length;
+  const tabs=[['soon','⏰ 3일 내 게시 · 미승인'],['review','📝 검수 대기'],['approved','✅ 승인'],['changed','🔁 원문 변경'],['busy','⏳ 생성 중'],['failed','⚠️ 실패'],['excluded','🚫 제외'],['all','전체']];
+  $('lt-st').innerHTML=tabs.filter(([k])=>!((k==='soon'||k==='changed')&&!cnt(k)&&_ltSt!==k)).map(([k,l])=>`<span class="lt-tab${_ltSt===k?' on':''}${(k==='failed'||k==='review'||k==='soon'||k==='changed')&&cnt(k)?' warn':''}" onclick="ltStTab('${k}')">${l}<b>${cnt(k)}</b></span>`).join('');
   const tr=$('lt-track').value,q=($('lt-q').value||'').trim().toLowerCase();
-  const rows=_lt.filter(x=>(_ltSt==='all'||(_ltSt==='busy'?(x.status==='queued'||x.status==='generating'):x.status===_ltSt))&&(!tr||x.track===tr)&&(!q||String(x.sourceTitle||'').toLowerCase().includes(q)));
+  const rows=_lt.filter(x=>inSt(x,_ltSt)&&(!tr||x.track===tr)&&(!q||String(x.sourceTitle||'').toLowerCase().includes(q)));
+  /* ★ [2026-10-20] 검수 대기·곧 게시는 게시 예정일이 가까운 순서(앞으로 게시될 것 먼저), 나머지는 기존 순서 */
+  if(_ltSt==='review'||_ltSt==='soon'){const t=ltToday();rows.sort((a,b)=>{const fa=a.pubDate&&a.pubDate>=t,fb=b.pubDate&&b.pubDate>=t;if(fa&&fb)return a.pubDate<b.pubDate?-1:a.pubDate>b.pubDate?1:0;if(fa!==fb)return fa?-1:1;return b.sourceAt-a.sourceAt;});}
   $('lt-all').checked=false;
   if(!rows.length){$('lt-list').innerHTML='<div style="color:#7A8299;padding:30px;text-align:center;background:#fff;border:1px solid #E3E6EE;border-radius:10px">해당하는 레터가 없습니다.</div>';return;}
   $('lt-list').innerHTML=rows.map(x=>{
-    const flags=(x.flags||[]).map(f=>`<span class="lt-flag">${esc(f.msg)}</span>`).join('');
+    const flags=(x.sourceChanged?'<span class="lt-flag" style="color:#B71C1C;background:#FDECEA">🔁 원문이 바뀌었습니다 — 다시 생성 권장</span>':'')+(x.flags||[]).map(f=>`<span class="lt-flag">${esc(f.msg)}</span>`).join('');   /* ★ [2026-10-20] 원문 변경 */
+    const tipLine=x.tip&&x.tip.who?`<div class="lt-sub" style="color:#33415c">💬 ${esc(x.tip.who)} — “${esc(x.tip.say||'')}”</div>`:'';   /* ★ [2026-10-20] 회원용 활용 문구 */
+    const pub=x.pubDate?`<span style="color:${ltSoon(x)?'#B85C00;font-weight:700':'#7a8299'}">게시${x.pubDate>=ltToday()?' 예정':''} ${ltPD(x.pubDate)}</span>`:`<span style="color:#7a8299">게시 ${ltD(x.sourceAt)}</span>`;
     const acts=[`<button class="btn btn-sec" onclick="ltToggle('${x.key}')">${_ltOpen===x.key?'닫기':'열기·수정'}</button>`];
     if(x.status==='review'||x.status==='approved'||x.status==='excluded')acts.push(`<button class="btn btn-sec" onclick="ltPreview('${x.key}')" title="고객이 보는 화면을 새 탭에서 엽니다">👁 미리보기</button>`);
     if(x.status==='review')acts.push(`<button class="btn" onclick="ltAct('approve','${x.key}')">승인</button>`);
@@ -28481,8 +28492,8 @@ function ltRender(){
     return `<div class="lt-item${_ltOpen===x.key?' open':''}" id="lt-i-${x.key}"><div class="lt-line">
       <input type="checkbox" ${_ltSel.has(x.key)?'checked':''} onchange="ltSel('${x.key}',this.checked)" aria-label="선택">
       ${x.cardUrl?`<img class="lt-card" src="${esc(x.cardUrl)}" alt="" loading="lazy">`:'<div class="lt-card none">카드 없음</div>'}
-      <div style="min-width:0"><div class="lt-meta"><span class="lt-st ${x.status}">${LT_ST[x.status]||x.status}</span><span class="lt-badge">${LT_TRACK[x.track]||''}</span>${x.aud?`<span class="lt-badge">${esc(x.aud)}</span>`:''}<span style="color:#7a8299">게시 ${ltD(x.sourceAt)}</span></div>
-        <div class="lt-title">${esc(x.sourceTitle||x.key)}</div>${why}<div>${flags}</div></div>
+      <div style="min-width:0"><div class="lt-meta"><span class="lt-st ${x.status}">${LT_ST[x.status]||x.status}</span><span class="lt-badge">${LT_TRACK[x.track]||''}</span>${x.aud?`<span class="lt-badge">${esc(x.aud)}</span>`:''}${pub}</div>
+        <div class="lt-title">${esc(x.sourceTitle||x.key)}</div>${tipLine}${why}<div>${flags}</div></div>
       <div class="lt-acts">${acts.join('')}</div></div>
       ${_ltOpen===x.key?'<div class="lt-edit" id="lt-edit">불러오는 중…</div>':''}</div>`;
   }).join('');
@@ -28536,6 +28547,8 @@ async function ltEditLoad(key){
         <div style="font-size:12.5px;color:#4a5573;line-height:1.8">원문: <a href="${esc(r.sourceUrl||'#')}" target="_blank" rel="noopener">${esc(r.sourceTitle||'')}</a><br>
         ${LT_TRACK[r.track]||''} · 게시 ${ltD(r.sourceAt)} · 생성 ${ltD(r.generatedAt)}${r.retried?' · 자동 재작성 1회':''}${r.editedByAdmin?' · 관리자 수정됨':''}${r.approvedAt?' · 승인 '+ltD(r.approvedAt):''}</div>
       </div>
+      <div class="lt-sec" style="margin-top:0;border-top:0;padding-top:0">💬 회원용 활용 문구 <span style="font-weight:500;color:#7A8299;font-size:12px">— 발행 안내 알림톡·회원 안내에 쓰입니다. 고객 화면에는 나가지 않습니다</span></div>
+      <div class="lt-g2" style="margin-bottom:6px"><label class="lt-f">누구에게 (「~ 고객께」)<input data-tip="who" value="${esc((r.tip&&r.tip.who)||'')}" placeholder="예) 노후 준비가 막연한 자영업 고객께"></label><label class="lt-f">건넬 한마디 (40자 안팎)<input data-tip="say" value="${esc((r.tip&&r.tip.say)||'')}" placeholder="예) 가게를 닫는 날 노후도 멈추지 않도록, 지금 점검해 보세요"></label></div>
       <div class="lt-g2">${LT_F.map(fld).join('')}</div>
       <div class="lt-sec">한눈에 이해 (3단계)</div>${flow}
       <div class="lt-sec">오해와 사실</div>${myths}
@@ -28559,8 +28572,10 @@ async function ltSave(key,approve){
   const ch=(L.cardHead||'').split('\n');
   if(ch.length!==2||ch.some(s=>s.trim().length>15)){if(!confirm('카톡 카드 제목은 2줄 · 한 줄 14자 안팎이 권장입니다. 그대로 저장할까요?'))return;}
   if(/자비아|jarvia|javia|이너서클|한국\s*fp\s*센터|kfpc|마이파트너/i.test(JSON.stringify(L))){toast('고객 레터에는 브랜드명을 쓸 수 없습니다','error');return;}
+  /* ★ [2026-10-20] 회원용 활용 문구 — 서버가 저장할 때 다시 검사한다 */
+  const tip={who:((box.querySelector('[data-tip=who]')||{}).value||'').trim(),say:((box.querySelector('[data-tip=say]')||{}).value||'').trim()};
   try{
-    const r=await ltApi({action:'save',key,letter:L});
+    const r=await ltApi({action:'save',key,letter:L,tip});
     if(approve)await ltApi({action:'approve',keys:[key]});
     toast(approve?'저장하고 승인했습니다':(r.cardUrl?'저장했습니다 · 카드 이미지를 새로 만들었습니다':'저장했습니다'),'success');
     if(approve)_ltOpen='';await ltLoad();
@@ -28627,6 +28642,26 @@ async function ltRecard(){
   finally{_ltRecardBusy=false;await ltLoad();}
 }
 window.ltRecard=ltRecard;
+/* ★ [2026-10-20] 회원용 활용 문구 채우기 — 서버가 2분씩 끊어 처리하므로 남은 건이 없거나 진전이 없을 때까지 이어서 부른다 */
+let _ltTipBusy=false;
+async function ltTipFill(){
+  if(_ltTipBusy)return;
+  const n=_lt.filter(x=>(x.status==='review'||x.status==='approved')&&!(x.tip&&x.tip.who&&x.tip.say)).length;
+  if(!n){toast('활용 문구가 없는 레터가 없습니다','success');return;}
+  if(!confirm(`검수 대기·승인 레터 중 회원용 활용 문구가 없는 ${n}건을 채웁니다.\n레터 문구·카드는 바뀌지 않습니다. 건당 Claude 호출 1회(소액)가 듭니다.`))return;
+  _ltTipBusy=true;let total=0,fail=0,lastErr='';
+  try{
+    for(let round=0;round<30;round++){
+      toast(`활용 문구 만드는 중… ${total}건 완료`);
+      const r=await ltApi({action:'tipfill'});
+      total+=r.done||0;fail=r.failed||0;if(r.errors&&r.errors.length)lastErr=r.errors[0];
+      if(!r.remaining||!r.done)break;
+    }
+    toast(`활용 문구 ${total}건을 채웠습니다`+(fail?` · 실패 ${fail}건${lastErr?' ('+lastErr+')':''}`:''),fail?'warning':'success');
+  }catch(e){toast('활용 문구 채우기 실패: '+e.message,'error');}
+  finally{_ltTipBusy=false;await ltLoad();}
+}
+window.ltTipFill=ltTipFill;
 /* 관리자 미리보기 — letter.html?adm=키 (관리자 로그인 상태에서 승인 전 레터도 고객 화면 그대로) */
 function ltPreview(key){window.open('letter.html?adm='+encodeURIComponent(key),'_blank');}
 window.ltPreview=ltPreview;window.ltLoad=ltLoad;window.ltView=ltView;window.ltStTab=ltStTab;window.ltRender=ltRender;window.ltSel=ltSel;window.ltCheckAll=ltCheckAll;window.ltToggle=ltToggle;window.ltAct=ltAct;window.ltBulk=ltBulk;window.ltBackfill=ltBackfill;window.ltSave=ltSave;window.ltMembers=ltMembers;window.ltSortBy=ltSortBy;window.ltMembersRender=ltMembersRender;window.ltCsv=ltCsv;
