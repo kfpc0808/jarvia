@@ -4903,7 +4903,7 @@ body.jv-card-lock #notice-ticker{display:none!important}
       <div style="max-width:1120px">
         <div style="background:linear-gradient(135deg,#0C2147,#1B3A6B);border-radius:12px;padding:16px 18px">
           <h3 style="font-size:16px;font-weight:800;margin:0 0 6px;color:#E3C58B">🖼 카톡 공유 이미지</h3>
-          <p style="font-size:12.5px;line-height:1.7;margin:0;color:#D8DEE9">고객에게 링크를 보낼 때 카톡에 보이는 그림 전체입니다.<br><b style="color:#fff">✏️ 수정하기</b>가 있는 4가지는 내 이미지로 바꿀 수 있고, 바꾸지 않으면 <b style="color:#fff">전용 카드</b>가 자동으로 나갑니다.</p>
+          <p style="font-size:12.5px;line-height:1.7;margin:0;color:#D8DEE9">고객에게 링크를 보낼 때 카톡에 보이는 그림 전체입니다.<br><b style="color:#fff">✏️ 수정하기</b>가 있는 5가지는 내 이미지로 바꿀 수 있고, 바꾸지 않으면 <b style="color:#fff">전용 카드</b>가 자동으로 나갑니다.</p>
         </div>
         <div id="ksh-list"></div>
         <div style="margin-top:16px;background:#F6F7FA;border:1px solid #E3E6EC;border-radius:10px;padding:12px 14px;font-size:12px;color:#5A6484;line-height:1.7">
@@ -18695,6 +18695,30 @@ window.jvRptNewPop=async function(){
     jvPopQ(25,function(){return rptNpShow(n,items,k,day);});
   }catch(e){console.warn('[rpt-newpop]',e&&e.message);}
 };
+/* ★ [2026-10-20] 화면을 보고 있는 중에 새 신청이 들어온 경우 — report_subscriber_meta.lastSubscribedAt 변화(_fcrMatWatch 가 감지)로 부른다.
+   · 리포트 알림톡 창이 열려 있으면 팝업 없이 목록만 새로 불러온다
+   · 아니면 아직 띄우지 않은 신청자가 있을 때 팝업 (날짜와 무관하게 새 subId 기준) */
+let _rptNpLiveBusy=false;
+window.jvRptNewPopLive=async function(){
+  if(_rptNpLiveBusy||!me||!meData||!window.rptAllowed())return;
+  _rptNpLiveBusy=true;
+  try{
+    const md=$('mdl-rpt');
+    if(md&&!md.classList.contains('hidden')&&_rpt&&!_rpt.guideOnly){
+      try{await rptLoadAll();_rpt.loading=false;rptRender();toast('🎉 새 신청자가 들어왔습니다','success');}catch(_e){}
+      return;
+    }
+    const r=await httpsCallable(functions,'reportPendingNew')({});
+    const d=(r&&r.data)||{};const items=Array.isArray(d.items)?d.items:[];const n=Number(d.count)||0;
+    if(!n||!items.length)return;
+    const k='jv_rpt_newpop_'+me.uid,day=_jvKstDay();let st={};
+    try{st=JSON.parse(localStorage.getItem(k)||'{}')||{};}catch(_e){st={};}
+    const seen=Array.isArray(st.ids)?st.ids:[];
+    if(!items.some(x=>seen.indexOf(x.subId)<0))return;
+    jvPopQ(25,function(){return rptNpShow(n,items,k,day);});
+  }catch(e){console.warn('[rpt-newpop-live]',e&&e.message);}
+  finally{_rptNpLiveBusy=false;}
+};
 function rptNpShow(n,items,k,day){
   try{localStorage.setItem(k,JSON.stringify({d:day,ids:items.map(x=>x.subId)}));}catch(_e){}
   let m=$('mdl-rpt-np');
@@ -19086,13 +19110,82 @@ function rptSubUrl(){
   const id=(window.meData&&meData.loginId)||'';
   return id?(JV_CUST+'/sub.html?fc='+encodeURIComponent(id)):'';   /* ★ [2026-10-18] 고객용 주소 mypb.kr */
 }
+/* ★ [2026-10-20] 보내는 주소 = 카톡 미리보기용(ogProxy t=sub → 누르면 sub.html). 「고객 화면 보기」는 sub.html 을 바로 연다(rptSubUrl) */
+function rptSubShareUrl(){
+  const id=(window.meData&&meData.loginId)||'';
+  return id?(JV_CUST+'/briefing?t=sub&fc='+encodeURIComponent(id)):'';
+}
+/* ★ [2026-10-20] 링크와 함께 복사되는 문구 — 회원이 고칠 수 있다(fc_share_profiles.subShareText, sub.html 미리보기 띠의 「링크 복사」도 같은 값). 비우면 기본 문구 */
+function rptSubTxtDef(){
+  /* 이름·직함은 카톡 미리보기 제목(ogProxy)과 같은 기본 프로필(consultants) 값 우선 — 불러오기 전에는 회원 정보 */
+  const w=_rptSubWho||{};
+  const n=w.name||(window.meData&&meData.name)||'',t=w.title||(window.meData&&meData.title)||'컨설턴트';
+  return '안녕하세요, '+(n?n+' '+t:'담당 컨설턴트')+'입니다.\n경제 소식과 세금·연금 정보, 한 주의 좋은 책까지 꼭 필요한 것만 골라 카카오톡으로 보내드리고 있습니다.\n아래 링크에서 이름과 번호만 남기시면 바로 받아보실 수 있습니다.';
+}
+let _rptSubTxt=null,_rptSubTxtP=null,_rptSubWho=null;
+function rptSubTxtLoad(force){
+  if(!me||!meData||!meData.loginId)return Promise.resolve();
+  if(_rptSubTxtP&&!force)return _rptSubTxtP;
+  _rptSubTxtP=(async()=>{
+    try{
+      let s=await getDoc(doc(db,'fc_share_profiles',meData.loginId));
+      if(!s.exists()&&me.uid!==meData.loginId)s=await getDoc(doc(db,'fc_share_profiles',me.uid));
+      _rptSubTxt=s.exists()?String(s.data().subShareText||''):'';
+    }catch(_e){if(_rptSubTxt==null)_rptSubTxt='';}
+    try{const c=await getDoc(doc(db,'consultants',meData.loginId));if(c.exists()){const x=c.data()||{};_rptSubWho={name:String(x.name||'').trim(),title:String(x.title||'').trim()};}}catch(_e){}
+    rptSubTxtPaint();
+  })();
+  return _rptSubTxtP;
+}
+function rptSubTxt(){return (_rptSubTxt&&_rptSubTxt.trim())?_rptSubTxt.trim():rptSubTxtDef();}
+function rptSubTxtPaint(){const v=$('rpt-subtxt-v');if(v)v.textContent=rptSubTxt();try{if(typeof _kshPaintSubTxt==='function')_kshPaintSubTxt();}catch(_e){}}
+async function rptSubTxtSave(v){
+  v=String(v||'').replace(/\r/g,'').trim().slice(0,500);
+  if(v===rptSubTxtDef())v='';   /* 기본 문구 그대로면 저장하지 않는다 — 나중에 이름·직함을 바꾸면 기본 문구도 따라 바뀌게 */
+  const data={subShareText:v,updatedAt:serverTimestamp()};
+  await setDoc(doc(db,'fc_share_profiles',meData.loginId),data,{merge:true});
+  if(me.uid!==meData.loginId)await setDoc(doc(db,'fc_share_profiles',me.uid),data,{merge:true});
+  _rptSubTxt=v;
+}
+window.rptSubTxtLoad=rptSubTxtLoad;window.rptSubTxt=rptSubTxt;window.rptSubTxtDef=rptSubTxtDef;window.rptSubTxtSave=rptSubTxtSave;window.rptSubShareUrl=rptSubShareUrl;
+/* 리포트 알림톡 신청 링크 상자 — 문구 수정 칸 열기·저장·기본 문구 */
+/* 고치는 중에 알림톡 화면이 다시 그려져도(고객 선택 등) 입력 중인 문구가 유지되게 상태를 둔다 */
+let _rptSubEd=null;
+window.rptSubTxtEdit=function(){
+  const w=$('rpt-subtxt');if(!w)return;
+  if(_rptSubEd==null)_rptSubEd=rptSubTxt();
+  w.innerHTML=rptSubTxtEditor();
+  try{$('rpt-subtxt-ta').focus();}catch(_e){}
+};
+function rptSubTxtEditor(){
+  return '<textarea id="rpt-subtxt-ta" maxlength="500" rows="5" oninput="rptSubTxtDraft(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #E0C36B;border-radius:7px;padding:8px 10px;font-size:12.5px;line-height:1.6;font-family:inherit;resize:vertical">'+rptE(_rptSubEd==null?rptSubTxt():_rptSubEd)+'</textarea>'
+    +'<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button type="button" class="btn btn-sm" style="flex:1;min-width:90px;background:#8A6410;color:#fff;border:0" onclick="rptSubTxtDone(1)">저장</button>'
+    +'<button type="button" class="btn btn-sm btn-sec" style="flex:1;min-width:90px" onclick="rptSubTxtDone(2)">기본 문구로</button>'
+    +'<button type="button" class="btn btn-sm btn-sec" style="flex:1;min-width:90px" onclick="rptSubTxtDone(0)">취소</button></div>'
+    +'<div style="font-size:11px;color:#8A7A55;margin-top:5px">링크는 문구 아래에 자동으로 붙습니다.</div>';
+}
+window.rptSubTxtDraft=function(v){_rptSubEd=v;};
+window.rptSubTxtDone=async function(mode){
+  const w=$('rpt-subtxt');if(!w)return;
+  if(mode){
+    try{await rptSubTxtSave(mode===2?'':(($('rpt-subtxt-ta')||{}).value||''));toast(mode===2?'기본 문구로 되돌렸습니다':'문구를 저장했습니다','success');}
+    catch(e){toast('저장 실패: '+((e&&e.message)||e),'error');return;}
+  }
+  _rptSubEd=null;
+  w.innerHTML=rptSubTxtView();
+};
+function rptSubTxtView(){
+  return '<div id="rpt-subtxt-v" style="font-size:12px;color:#5A4A2A;background:#fff;border:1px solid #EADBB0;border-radius:7px;padding:8px 10px;line-height:1.65;white-space:pre-wrap;word-break:break-all">'+rptE(rptSubTxt())+'</div>'
+    +'<button type="button" onclick="rptSubTxtEdit()" style="margin-top:6px;border:0;background:none;padding:0;font-size:12px;font-weight:700;color:#8A6410;cursor:pointer;font-family:inherit">✏️ 문구 수정</button>';
+}
 function rptSubCopy(){
-  const u=rptSubUrl();
+  const u=rptSubShareUrl();
   if(!u){toast('로그인 후 이용할 수 있습니다','warning');return;}
-  const done=()=>toast('링크를 복사했습니다 — 카톡이나 문자에 붙여넣어 보내세요','success');
+  const body=rptSubTxt()+'\n'+u;
+  const done=()=>toast('문구와 링크를 복사했습니다 — 카톡이나 문자에 붙여넣어 보내세요','success');
   if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(u).then(done).catch(()=>rptSubCopyFb(u,done));
-  }else rptSubCopyFb(u,done);
+    navigator.clipboard.writeText(body).then(done).catch(()=>rptSubCopyFb(body,done));
+  }else rptSubCopyFb(body,done);
 }
 function rptSubCopyFb(u,done){
   const t=document.createElement('textarea');
@@ -19115,16 +19208,23 @@ function rptSubOpen(){
 }
 /* compact=true 는 안내·가이드 안에 들어가는 축약형 */
 function rptSubBox(compact){
-  const u=rptSubUrl();
+  const u=rptSubShareUrl();   /* ★ [2026-10-20] 보내는 주소(카톡 미리보기 카드가 붙는 주소) */
   if(!u)return '';
+  if(_rptSubTxt==null)rptSubTxtLoad();   /* 저장해 둔 문구 — 불러오면 화면의 문구 칸을 고친다 */
   return '<div style="border:1px solid #E0C36B;background:#FBF7EE;border-radius:10px;padding:'+(compact?'12px 13px':'14px 16px')+';margin-top:'+(compact?'10px':'0')+'">'
     +'<div style="font-size:'+(compact?'13px':'14px')+';font-weight:800;color:#8A6410">🔗 고객에게 보낼 신청 링크</div>'
     +'<div style="font-size:12.5px;color:#6B5A38;line-height:1.7;margin-top:4px">고객에게 이 링크를 보내면 바로 신청할 수 있습니다. 오늘 자 리포트를 먼저 보고 이름·연락처만 남기면 됩니다.</div>'
     +'<div style="font-size:11.5px;color:#8A7A55;background:#fff;border:1px dashed #E0C36B;border-radius:7px;padding:8px 10px;margin-top:9px;word-break:break-all">'+rptE(u)+'</div>'
+    /* ★ [2026-10-20] 함께 복사되는 문구 — 상자 본판에서만 고칠 수 있다(축약형은 보기만) */
+    +'<div style="font-size:12px;font-weight:800;color:#8A6410;margin-top:10px">함께 복사되는 문구</div>'
+    +(compact?'<div style="font-size:11.5px;color:#5A4A2A;background:#fff;border:1px solid #EADBB0;border-radius:7px;padding:8px 10px;margin-top:5px;line-height:1.6;white-space:pre-wrap;word-break:break-all">'+rptE(rptSubTxt())+'</div>'
+      :'<div id="rpt-subtxt" style="margin-top:5px">'+(_rptSubEd!=null?rptSubTxtEditor():rptSubTxtView())+'</div>')
     +'<div style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap">'
-    +'<button type="button" class="btn btn-sm" style="flex:1;min-width:110px;background:#8A6410;color:#fff;border:0" onclick="rptSubCopy()">링크 복사</button>'
+    +'<button type="button" class="btn btn-sm" style="flex:1;min-width:110px;background:#8A6410;color:#fff;border:0" onclick="rptSubCopy()">문구와 링크 복사</button>'
     +'<button type="button" class="btn btn-sm btn-sec" style="flex:1;min-width:110px" onclick="rptSubOpen()">고객 화면 보기</button></div>'
     +'<div style="font-size:11px;color:#8A7A55;margin-top:7px;line-height:1.6">「고객 화면 보기」에서 고객이 보는 모습을 확인하고, 사진을 눌러 이 페이지 전용 사진으로 바꿀 수 있습니다.</div>'
+    /* ★ [2026-10-20] 카톡 미리보기 이미지 바꾸기 — 마이페이지 「🖼 카톡 공유 이미지」의 신청 링크 칸으로 */
+    +(compact?'':'<button type="button" onclick="closeM(\'mdl-rpt\');kshGo(\'sub\')" style="margin-top:6px;border:0;background:none;padding:0;font-size:12px;font-weight:700;color:#8A6410;cursor:pointer;font-family:inherit">🖼 카톡 미리보기 이미지 바꾸기 ›</button>')
     +'</div>';
 }
 window.rptSubCopy=rptSubCopy;window.rptSubOpen=rptSubOpen;window.rptSubBox=rptSubBox;window.rptSubUrl=rptSubUrl;
@@ -19132,7 +19232,7 @@ window.rptSubCopy=rptSubCopy;window.rptSubOpen=rptSubOpen;window.rptSubBox=rptSu
 function rptStatBar(){
   const on=rptOnList().length,off=rptOffList().length,nw=Object.values(_rpt.matched).filter(m=>m.newFlag).length;
   /* ★ [2026-10-20] 새 신청 = 기존 고객 새 신청 + 등록 대기 중인 목록 밖 신청자. 목록 밖 신청자가 있으면 눌러서 박스로 이동 */
-  const pend=_rpt.unmatched.filter(u=>u.canHandoff).length;
+  const pend=_rpt.unmatched.filter(u=>u.canHandoff&&u.reportOptIn).length;
   return '<div class="rpt-stat"><div><b>'+on+'</b><span>카톡 받는 고객</span></div><div'+(pend?' class="rpt-stat-go" onclick="rptUnmGo()" title="눌러서 새 신청자 보기"':'')+'><b style="color:var(--warning)">'+(nw+pend)+'</b><span>새 신청 (확인 전)</span></div><div><b style="color:var(--text-lt)">'+off+'</b><span>미신청 고객</span></div></div>'
     /* ★ [2026-10-20] 목록 밖 신청자 박스 — 접지 않고 항상 펼쳐 둔다(버튼을 못 찾는 문제) */
     +(_rpt.unmatched.length?'<div class="rpt-unm" id="rpt-unm-box"><div class="rpt-unm-hd">🎉 내 고객 목록에 없는 새 신청자 '+_rpt.unmatched.length+'명 <span class="rpt-unm-tag">등록해야 목록에 나타납니다</span></div><div><div class="rpt-unm-ds">고객이 리포트를 공유받고 직접 신청했습니다. 「고객 등록」을 누르면 이름·연락처가 등록 화면에 자동으로 채워지고, 등록해야 「카톡 받는 고객」 목록에 나타납니다.</div>'
@@ -19494,8 +19594,9 @@ window.rptHandoff=async function(subId,mode,cid){
   if(!d.phone){toast('인계할 번호가 없습니다','error');return;}
   /* 등록 창구는 fc.html 고객입력(개별등록). 값은 sessionStorage 로 1회 전달 → fc.html 이 읽고 즉시 삭제 */
   /* ★ [2026-10-20] remain — 등록 후 팝업의 「남은 새 신청자 N명」 표시용(이번 신청자 제외) */
-  let _remain=0;try{if(isNew)_remain=Math.max(0,((_rpt&&_rpt.unmatched)||[]).filter(u=>u.canHandoff&&u.subId!==subId).length);}catch(_e){}
-  try{sessionStorage.setItem('jv_rpt_handoff',JSON.stringify({name:d.name||'',phone:d.phone,cid:isNew?'':cid,remain:_remain,ts:Date.now()}));}catch(_e){}
+  /* optIn — 리포트 수신 동의 고객만 「카톡 받는 고객」에 나타나므로 등록 후 팝업 문구를 가른다 */
+  let _remain=0,_optIn=true;try{if(isNew){const _ul=((_rpt&&_rpt.unmatched)||[]);_remain=Math.max(0,_ul.filter(u=>u.canHandoff&&u.reportOptIn&&u.subId!==subId).length);const _me=_ul.filter(u=>u.subId===subId)[0];_optIn=!_me||_me.reportOptIn===true;}}catch(_e){}
+  try{sessionStorage.setItem('jv_rpt_handoff',JSON.stringify({name:d.name||'',phone:d.phone,cid:isNew?'':cid,remain:_remain,optIn:_optIn,ts:Date.now()}));}catch(_e){}
   const lid=(meData&&meData.loginId)||'';
   closeM('mdl-rpt');
   toast((isNew?'신규 고객 정보':'신청 번호')+'를 받았습니다. 고객입력 화면으로 이동합니다…','success');
@@ -20214,6 +20315,7 @@ const KSH_DEF={
   card:{ic:'🪪',nm:'소개카드',img:'cardShareImageUrl',where:'소개카드 링크에만 적용됩니다.'},
   daily:{ic:'📰',nm:'고객 데일리 리포트',img:'shareImageUrl',t:'shareTitle',d:'shareDesc',where:'고객 데일리 리포트 링크에만 적용됩니다. 전용 카드는 홀수 날 네이비 · 짝수 날 아이보리로 번갈아 나갑니다.',tph:'비우면 「이름 컨설턴트의 N월 N일 리포트」',dph:'비우면 「아침 5분, 꼭 알아야 할 소식만 정리했습니다」'},
   ch:{ic:'📱',nm:'내 채널',img:'channelShareImageUrl',t:'channelShareTitle',d:'channelShareDesc',where:'내 채널 링크에만 적용됩니다.',tph:'비우면 「이름 직함의 자산관리 채널」',dph:'비우면 「회사 · 데일리리포트 · 추천 콘텐츠 · 무료 재무진단」'},
+  sub:{ic:'🔗',nm:'카톡 받기 신청 링크',img:'subShareImageUrl',txt:'subShareText',where:'리포트 알림톡의 「고객에게 보낼 신청 링크」로 보내는 링크에만 적용됩니다. (제목은 「내 이름 직함이 드리는 품격 있는 정보, 카톡으로 받기」로 자동)'},   /* ★ [2026-10-20] */
   sig:{ic:'📡',nm:'실시간 자료실 공유',img:'sigShareImageUrl',where:'실시간 자료실에서 「고객에게 공유」로 보내는 링크에만 적용됩니다. (제목은 보내는 자료 제목으로 자동)'}
 };
 /* 고정 이미지(바꿀 수 없음) — img 가 있으면 실제 이미지, 없으면 매번 바뀌는 카드라 견본 그림(ph) */
@@ -20235,6 +20337,7 @@ function _kshYmd(add){return new Date(Date.now()+9*3600000+(add||0)*86400000).to
 function _kshAutoImgs(k){   /* 전용 카드 미리보기 — 서버가 지금 고객에게 보내는 것과 같은 카드 */
   const lid=encodeURIComponent((meData&&meData.loginId)||''),nc='&_='+Date.now();
   if(k==='card')return [KSH_SC+'?v=v2&k=card&fc='+lid+'&iv=i3'+nc];
+  if(k==='sub')return ['https://jarvia.co.kr/sub_link_share_v1.png'];   /* ★ [2026-10-20] 신청 링크 전용 카드(고정 그림 — 이름은 미리보기 제목에 들어감) · ogProxy SUB_IMAGE 와 같은 주소 */
   if(k==='daily')return [KSH_SC+'?v=v2&k=d&fc='+lid+'&d='+_kshYmd(0)+'&dv=d3'+nc,KSH_SC+'?v=v2&k=d&fc='+lid+'&d='+_kshYmd(1)+'&dv=d3'+nc];
   return [KSH_SC+'?v=v2&k='+k+'&fc='+lid+'&cv=c1'+nc];
 }
@@ -20305,21 +20408,26 @@ function _kshEditor(k){   /* 「✏️ 수정하기」로 열리는 수정 칸 *
   const pics='<div class="ksh-pics'+(imgs.length>1?' two':'')+'">'+imgs.map(_kshImg).join('')+'</div>'
     +(imgs.length>1?'<div class="ksh-sub">왼쪽 오늘 · 오른쪽 내일 (처음엔 카드를 만드느라 몇 초 걸릴 수 있습니다)</div>':'');
   const note=mine?'<div class="ksh-note">지금은 <b>내가 넣은 이미지</b>가 나갑니다. 되돌리면 전용 카드가 나갑니다.</div>'
-    :'<div class="ksh-note">지금은 <b>전용 카드</b>가 나갑니다. 카드 속 사진은 <b>기본 프로필 사진</b>입니다 · <a href="javascript:void(0)" onclick="kshPhoto()">사진 바꾸기</a>'+(k==='card'?' · <a href="javascript:void(0)" onclick="jvcbGoEdit()">카드 내용(소개·신뢰 지표) 수정</a>':'')+'</div>';
+    :(k==='sub'?'<div class="ksh-note">지금은 <b>전용 카드</b>가 나갑니다. 미리보기 제목에 <b>내 이름·직함</b>이 자동으로 들어갑니다.</div>'   /* ★ [2026-10-20] 신청 링크 카드에는 사진이 없다 */
+    :'<div class="ksh-note">지금은 <b>전용 카드</b>가 나갑니다. 카드 속 사진은 <b>기본 프로필 사진</b>입니다 · <a href="javascript:void(0)" onclick="kshPhoto()">사진 바꾸기</a>'+(k==='card'?' · <a href="javascript:void(0)" onclick="jvcbGoEdit()">카드 내용(소개·신뢰 지표) 수정</a>':'')+'</div>');
   const tv=_ksh['_draft_'+f.t]!=null?_ksh['_draft_'+f.t]:(_ksh[f.t]||''),dv=_ksh['_draft_'+f.d]!=null?_ksh['_draft_'+f.d]:(_ksh[f.d]||'');
   const td=f.t?'<div class="ksh-fd"><label>미리보기 제목</label><input id="ksh-t-'+k+'" maxlength="50" value="'+_kshE(tv)+'" placeholder="'+_kshE(f.tph)+'"></div>'
     +'<div class="ksh-fd"><label>미리보기 설명</label><input id="ksh-d-'+k+'" maxlength="80" value="'+_kshE(dv)+'" placeholder="'+_kshE(f.dph)+'"></div>'
     +'<button type="button" class="ksh-s" onclick="kshSave(\''+k+'\')">제목·설명 저장</button>':'';
+  /* ★ [2026-10-20] 신청 링크 — 「문구와 링크 복사」에 함께 나가는 문구 (리포트 알림톡 신청 링크 상자와 같은 값) */
+  const tx=f.txt?'<div class="ksh-fd"><label>링크와 함께 복사되는 문구 <span style="font-weight:400;color:#8B93AE">(링크는 문구 아래에 자동으로 붙습니다)</span></label>'
+    +'<textarea id="ksh-tx-'+k+'" maxlength="500" rows="5" style="width:100%;padding:9px 11px;border:1px solid #D1D5DB;border-radius:8px;font-size:13px;line-height:1.6;box-sizing:border-box;font-family:inherit;background:#fff;resize:vertical">'+_kshE(_ksh['_draft_'+f.txt]!=null?_ksh['_draft_'+f.txt]:((_ksh[f.txt]||'').trim()||rptSubTxtDef()))+'</textarea></div>'
+    +'<div class="ksh-bt"><button type="button" class="ksh-p" onclick="kshSaveTxt(\''+k+'\')">문구 저장</button><button type="button" class="ksh-g" onclick="kshSaveTxt(\''+k+'\',1)">↺ 기본 문구로</button></div>':'';
   return '<div class="ksh-ed" id="ksh-ed-'+k+'"><div class="ksh-edh"><b>'+f.ic+' '+f.nm+' 수정</b><button type="button" class="ksh-x" onclick="kshToggle(\''+k+'\')">닫기 ✕</button></div>'
     +pics+'<div class="ksh-where">✅ '+f.where+'</div>'+note
     +'<div class="ksh-bt"><label class="ksh-p">🖼 '+(mine?'다른 이미지로 바꾸기':'내 이미지로 바꾸기')+'<input type="file" accept="image/jpeg,image/png" style="display:none" onchange="kshPick(\''+k+'\',this)"></label>'
     +(mine?'<button type="button" class="ksh-g" onclick="kshReset(\''+k+'\')">↺ 전용 카드로 되돌리기</button>':'')+'</div>'
-    +'<div class="ksh-prog" id="ksh-prog-'+k+'"></div>'+td+'</div>';
+    +'<div class="ksh-prog" id="ksh-prog-'+k+'"></div>'+td+tx+'</div>';
 }
 function _kshRender(){
   const box=$('ksh-list');if(!box)return;
   /* 저장 전 입력 중인 제목·설명은 다시 그려도 유지 */
-  Object.keys(KSH_DEF).forEach(k=>{const f=KSH_DEF[k];if(!f.t)return;const ti=$('ksh-t-'+k),di=$('ksh-d-'+k);if(ti)_ksh['_draft_'+f.t]=ti.value;if(di)_ksh['_draft_'+f.d]=di.value;});
+  Object.keys(KSH_DEF).forEach(k=>{const f=KSH_DEF[k];if(f.txt){const xi=$('ksh-tx-'+k);if(xi)_ksh['_draft_'+f.txt]=xi.value;}if(!f.t)return;const ti=$('ksh-t-'+k),di=$('ksh-d-'+k);if(ti)_ksh['_draft_'+f.t]=ti.value;if(di)_ksh['_draft_'+f.d]=di.value;});
   const keys=Object.keys(KSH_DEF);
   let ed='';
   const tiles=keys.map((k,i)=>{
@@ -20358,6 +20466,7 @@ window.kshLoad=async function(){
   }catch(e){console.warn('ksh load',e);_ksh={};}
   /* 예전 JARVIA 기본 이미지(v2)는 회원 이미지로 보지 않는다 — 서버(ogProxy)와 같은 규칙 */
   Object.values(KSH_DEF).forEach(f=>{if(/client_report_share_v2\.png/.test(String(_ksh[f.img]||'')))_ksh[f.img]='';});
+  _rptSubTxt=String(_ksh.subShareText||'');rptSubTxtLoad();   /* ★ [2026-10-20] 신청 링크 복사 문구 — 방금 불러온 값이 기준 (이름·직함도 함께 준비) */
   _kshRender();
   _kshDynLoad();   /* 고정 이미지 중 매번 바뀌는 것의 최신본 */
 };
@@ -20394,6 +20503,20 @@ window.kshSave=async function(k){
     toast(KSH_DONE,'success');
   }catch(e){toast('저장 실패: '+(e.message||e),'error');}
 };
+/* ★ [2026-10-20] 신청 링크 복사 문구 저장 — 리포트 알림톡 신청 링크 상자와 같은 저장(rptSubTxtSave) */
+window.kshSaveTxt=async function(k,reset){
+  const f=KSH_DEF[k];if(!f||!f.txt||!me||!meData)return;
+  const v=reset?'':((($('ksh-tx-'+k)||{}).value)||'');
+  try{
+    await rptSubTxtSave(v);
+    _ksh[f.txt]=_rptSubTxt||'';delete _ksh['_draft_'+f.txt];   /* rptSubTxtSave 가 정리한 저장값 그대로 */
+    if(reset)_kshRender();
+    rptSubTxtPaint();
+    toast(reset?'기본 문구로 되돌렸습니다':'문구를 저장했습니다','success');
+  }catch(e){toast('저장 실패: '+(e.message||e),'error');}
+};
+/* 다른 곳(리포트 알림톡)에서 문구를 바꾼 뒤 이 탭을 다시 열 때를 위해 — 불러온 값으로 맞춘다(입력 중이 아니면) */
+function _kshPaintSubTxt(){try{if(_rptSubTxt!=null&&_ksh&&_ksh['_draft_subShareText']==null)_ksh.subShareText=_rptSubTxt;}catch(_e){}}
 window.kshPhoto=function(){if(typeof window.jvcbPhotoTap==='function')window.jvcbPhotoTap();};
 /* 다른 메뉴의 「🖼 공유 이미지」 → 이 탭으로, 해당 칸의 수정 칸을 연 채로 (열려 있는 공유 창은 닫는다) */
 window.kshGo=function(k){
@@ -22131,13 +22254,18 @@ function _fcrKnockSubscribe(){
   }catch(e){ console.warn('[fcr-knock] 구독 시작 실패:', e.message); }
 }
 /* ★ [2026-10-07] 만기 등록 요청 실시간 감지 — report_subscriber_meta/{uid}.maturityLastAt 변경 시 목록 재조회 → 팝업 */
-let _fcrMatWatchUnsub = null, _fcrMatLastAt = null;
+let _fcrMatWatchUnsub = null, _fcrMatLastAt = null, _fcrSubLastAt = null;   /* ★ [2026-10-20] _fcrSubLastAt — 리포트 카톡 받기 새 신청(lastSubscribedAt) */
 function _fcrMatWatch(){
   if(_fcrMatWatchUnsub){ try{ _fcrMatWatchUnsub(); }catch(e){} _fcrMatWatchUnsub = null; }
-  _fcrMatLastAt = null;
+  _fcrMatLastAt = null; _fcrSubLastAt = null;
   if(!me || !me.uid) return;
   try{
     _fcrMatWatchUnsub = onSnapshot(doc(db, 'report_subscriber_meta', me.uid), s => {
+      /* ★ [2026-10-20] 같은 문서의 lastSubscribedAt — 새 신청이 들어오면 즉시 팝업(jvRptNewPopLive). 첫 수신은 기준값만 */
+      const sv = s.exists() ? s.data().lastSubscribedAt : null;
+      const sms = (sv && sv.toMillis) ? sv.toMillis() : 0;
+      if(_fcrSubLastAt === null) _fcrSubLastAt = sms;
+      else if(sms && sms !== _fcrSubLastAt){ _fcrSubLastAt = sms; try{ window.jvRptNewPopLive(); }catch(_e){} }
       const v = s.exists() ? s.data().maturityLastAt : null;
       const ms = (v && v.toMillis) ? v.toMillis() : 0;
       if(_fcrMatLastAt === null){ _fcrMatLastAt = ms; return; }   /* 첫 수신은 기준값만 기록 */

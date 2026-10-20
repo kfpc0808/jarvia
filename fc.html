@@ -8384,10 +8384,10 @@ if(d.phone)vmIfPhoneSet(d.phone);
 try{const r=document.querySelector('#vmIfRels [data-vmif-chip="고객"]');if(r)vmIfChip(r,true);}catch(_e){}
 try{if(n)n.dispatchEvent(new Event('input'));}catch(_e){}
 toast('리포트 알림톡 신청 고객 정보가 채워졌어요 — 확인 후 「새 고객으로 등록」을 누르세요');
-window._vmRptFrom={remain:Math.max(0,Number(d.remain)||0)};   /* ★ [2026-10-20] 등록 완료 후 알림톡 화면 복귀 팝업용 */
+window._vmRptFrom={remain:Math.max(0,Number(d.remain)||0),optIn:d.optIn!==false};   /* ★ [2026-10-20] 등록 완료 후 알림톡 화면 복귀 팝업용 */
 }
 /* ★ [2026-10-20] 리포트 알림톡 신청자를 등록한 직후 — 알림톡 화면으로 돌아갈지 묻는다 (일반 등록에는 뜨지 않음) */
-function vmRptDonePop(nm,remain){
+function vmRptDonePop(nm,remain,optIn){
 let m=document.getElementById('vmRptDone');
 if(!m){m=document.createElement('div');m.id='vmRptDone';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
 m.style.cssText='position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);padding:16px';
@@ -8395,12 +8395,17 @@ document.body.appendChild(m);}
 const e=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 m.innerHTML='<div style="background:#fff;border-radius:14px;max-width:400px;width:100%;padding:24px 22px 16px;box-shadow:0 10px 30px rgba(0,0,0,.2)">'
 +'<div style="font-size:18px;font-weight:800;color:#1B2430;margin-bottom:8px">✅ '+e(nm||'고객')+' 고객이 등록되었습니다</div>'
-+'<div style="font-size:14px;color:#5C6678;line-height:1.7;margin-bottom:16px">이제 카톡 받는 고객 목록에 나타납니다.<br>리포트 알림톡 화면으로 돌아가 바로 보내실 수 있습니다.'
++'<div style="font-size:14px;color:#5C6678;line-height:1.7;margin-bottom:16px">'+(optIn?'이제 카톡 받는 고객 목록에 나타납니다.<br>리포트 알림톡 화면으로 돌아가 바로 보내실 수 있습니다.':'고객 목록에 등록되었습니다.<br>이 고객은 리포트 수신을 신청하지 않아 「카톡 받는 고객」에는 나타나지 않습니다.')
 +(remain>0?'<br><b style="color:#B45309">남은 새 신청자 '+remain+'명</b>':'')+'</div>'
 +'<button type="button" id="vmRptDoneGo" style="width:100%;height:48px;background:#15294A;color:#fff;border:0;border-radius:11px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:6px">리포트 알림톡 화면으로 가기</button>'
 +'<button type="button" id="vmRptDoneStay" style="width:100%;background:none;border:0;font-size:13px;color:#8A93A8;padding:8px;cursor:pointer">여기 머물기</button></div>';
 m.style.display='flex';
-document.getElementById('vmRptDoneGo').onclick=function(){location.href='index.html?rpt=daily';};
+/* ★ [2026-10-20] 드라이브 저장(고유번호 포함)이 끝난 뒤 이동 — 끝나기 전에 넘어가면 알림톡 화면이 옛 백업을 읽는다. 최대 10초 */
+document.getElementById('vmRptDoneGo').onclick=function(){
+  const b=this;if(b.disabled)return;b.disabled=true;b.textContent='저장 마무리 중…';
+  const go=function(){location.href='index.html?rpt=daily';};
+  Promise.race([Promise.resolve(window.__vmGdPushP),new Promise(function(r){setTimeout(r,10000);})]).then(go,go);
+};
 document.getElementById('vmRptDoneStay').onclick=function(){m.style.display='none';};
 }
 /* ★ [2026-09-12] 리포트 알림톡의 「연락처 갱신」·「직접 수정」으로 넘어온 경우 —
@@ -8516,7 +8521,7 @@ if(!ok){sv.disabled=false;sv.textContent='＋ 새 고객으로 등록';toast(nm2
 vmClose();
 try{if(window.__mpcShowDetail)window.__mpcShowDetail(id);}catch(_e){}
 toast('✓ '+nm2+' 님을 새 고객으로 등록했어요');
-if(window._vmRptFrom){const _r=window._vmRptFrom;window._vmRptFrom=null;try{vmRptDonePop(nm2,_r.remain);}catch(_e){}}   /* ★ [2026-10-20] */
+if(window._vmRptFrom){const _r=window._vmRptFrom;window._vmRptFrom=null;try{vmRptDonePop(nm2,_r.remain,_r.optIn);}catch(_e){}}   /* ★ [2026-10-20] */
 });
 }
 /* ── ① 입력 ── */
@@ -13358,10 +13363,15 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
                 function(){toast("서버 반영이 지연됐어요 — 고객 지도를 다시 열면 자동으로 맞춰져요","warn");after();});
       }catch(_e3){after();}
     };
+    /* ★ [2026-10-20] 드라이브 백업은 서버 고유번호(fccId)를 받은 뒤 한 번 — 종전에는 fccId 없이 올라가
+       다른 화면(리포트 알림톡 등)이 드라이브를 내려받으면 연락처가 서버 고객과 짝지어지지 않아 「전화번호 없음」이 됐다.
+       서버 응답을 기다리는 동안 창을 닫아도 기기 기록이 지워지지 않게 '백업 미완료' 표시는 먼저 남긴다 */
     var done=function(){
-      customers.push(o);custPut(o);mpcGdPush();
+      customers.push(o);custPut(o);try{localStorage.setItem("mpc_dirty","1");}catch(_e1){}
       try{mpcRenderList();mpcRenderFilter();if(typeof map!=="undefined"&&map)mpcDrawMarkers(false);}catch(_e2){}
-      syncFcc(function(){custPut(o);if(cb)cb(true,o.name,o.id);});
+      syncFcc(function(){custPut(o);
+        window.__vmGdPushP=mpcGdPushAwait().then(function(st){if(st==="fail")mpcGdPush();return st;},function(){mpcGdPush();return "fail";});   /* 실패하면 기존 재시도 백업으로 */
+        if(cb)cb(true,o.name,o.id);});
     };
     if(o.addr.length>=4)mpcGeocode(o.addr).then(function(g){if(g.ok){o.lat=g.lat;o.lng=g.lng;o.geoApprox=g.approx?1:0;o.addr=mpcFixSido(o.addr,g.matched);}done();});   /* ★ [2026-07-24] 추정 좌표 표시 · 시/도 누락 자동 보정 */
     else done();

@@ -275,6 +275,14 @@ function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';cle
 const FCID=(new URLSearchParams(location.search).get('fc')||'').trim();
 let FC_DATA=null;
 let IS_OWNER=false;   /* 컨설턴트 본인이 로그인한 상태로 자기 링크를 열었는가 */
+let SUB_TXT='';      /* ★ [2026-10-20] 회원이 정한 「링크와 함께 복사되는 문구」(fc_share_profiles.subShareText) — 비면 기본 문구 */
+/* ★ [2026-10-20] 보내는 주소 = 카톡 미리보기 카드가 붙는 주소(ogProxy t=sub → 이 페이지) */
+const shareUrl=()=>JV_CUST+'/briefing?t=sub&fc='+encodeURIComponent(FCID);
+/* index.html rptSubTxtDef 와 같은 기본 문구 */
+function subTxtDef(fc){
+  const n=(fc&&fc.name)||'', t=(fc&&fc.title)||'컨설턴트';
+  return '안녕하세요, '+(n?n+' '+t:'담당 컨설턴트')+'입니다.\n경제 소식과 세금·연금 정보, 한 주의 좋은 책까지 꼭 필요한 것만 골라 카카오톡으로 보내드리고 있습니다.\n아래 링크에서 이름과 번호만 남기시면 바로 받아보실 수 있습니다.';
+}
 const subPhoto=(fc)=>(fc&&(fc.subPhotoUrl||fc.photoUrl))||'';
 
 function consentLines(n){
@@ -366,10 +374,12 @@ async function init(){
   try{
     /* consultants 문서 ID 가 로그인 ID 인 경우가 대부분이지만, 등록되지 않은 회원도 있다.
        client-daily.html 과 같이 users 에서 loginId 로 한 번 더 찾는다. */
-    const [fcSnap,uSnap]=await Promise.allSettled([
+    const [fcSnap,uSnap,spSnap]=await Promise.allSettled([
       getDoc(doc(db,'consultants',FCID)),
       getDocs(query(collection(db,'users'),where('loginId','==',FCID),limit(1))),
+      getDoc(doc(db,'fc_share_profiles',FCID)),   /* ★ [2026-10-20] 복사 문구 */
     ]);
+    if(spSnap.status==='fulfilled'&&spSnap.value.exists())SUB_TXT=String(spSnap.value.data().subShareText||'').trim();
     if(fcSnap.status==='fulfilled'&&fcSnap.value.exists())fc=fcSnap.value.data();
     if(uSnap.status==='fulfilled'&&!uSnap.value.empty)userDoc=uSnap.value.docs[0].data();
     /* ★ [2026-09-14] 컨센서스는 서명 키가 있어야 열린다(회원 전용·열람권).
@@ -451,7 +461,7 @@ function render(fc,daily,mcKey){
   <div class="pvbar">
     <div class="t"><b>내 화면 미리보기</b><span>고객에게는 이렇게 보입니다 · 이 띠는 고객에게 보이지 않습니다</span></div>
     <button type="button" class="ghost" onclick="subBack()">← 알림톡으로 돌아가기</button>
-    <button type="button" id="copyBtn">링크 복사</button>
+    <button type="button" id="copyBtn">문구와 링크 복사</button>
   </div>` : '';
 
   $('root').innerHTML=`${pvbar}
@@ -686,7 +696,7 @@ function pickPhoto(){
 /* 지인 전달 — 기본 공유창(카톡·문자·메일)을 먼저 띄우고, 안 되는 기기에서만 복사로 떨어진다.
    카카오 공유 SDK 는 앱 키·도메인 등록이 필요하고 인앱 브라우저에서 자주 실패한다. */
 async function shareLink(){
-  const url=JV_CUST+'/sub.html?fc='+encodeURIComponent(FCID);   /* ★ [2026-10-18] 고객용 주소 mypb.kr */
+  const url=shareUrl();   /* ★ [2026-10-20] 카톡 미리보기 카드가 붙는 주소 (누르면 이 페이지) */
   const n=(FC_DATA&&FC_DATA.name)||'담당 컨설턴트';
   /* 고객이 지인에게 건네는 말투 — 컨설턴트가 보내는 문구를 그대로 쓰면 광고로 읽힌다.
      붙여넣은 뒤 공유자가 고칠 수 있으니 짧고 정중하게만 둔다. */
@@ -711,12 +721,13 @@ async function shareLink(){
   }else fallback(body,done);
 }
 
+/* ★ [2026-10-20] 컨설턴트 본인 — 문구와 링크를 함께 복사 (리포트 알림톡 「문구와 링크 복사」와 같은 내용) */
 function copyLink(){
-  const url=JV_CUST+'/sub.html?fc='+encodeURIComponent(FCID);
-  const done=()=>toast('링크를 복사했습니다 — 카톡이나 문자에 붙여넣으세요');
+  const body=(SUB_TXT||subTxtDef(FC_DATA))+'\n'+shareUrl();
+  const done=()=>toast('문구와 링크를 복사했습니다 — 카톡이나 문자에 붙여넣으세요');
   if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(url).then(done).catch(()=>fallback(url,done));
-  }else fallback(url,done);
+    navigator.clipboard.writeText(body).then(done).catch(()=>fallback(body,done));
+  }else fallback(body,done);
 }
 function fallback(url,done){
   const t=document.createElement('textarea');
