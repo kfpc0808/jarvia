@@ -8110,7 +8110,7 @@ function vmExCard(k,icon,ic,tc,label,text){
     +'<div style="display:flex;align-items:center;gap:6px"><i class="ti '+icon+'" style="font-size:13px;color:'+ic+'"></i><span style="font-size:10.5px;color:'+tc+';font-weight:700">'+label+'</span></div>'
     +'<div style="font-size:12px;color:#3A4457;line-height:1.6;margin-top:5px">'+_aiEsc(text)+'</div></div>';}
 /* ═══ ★ [2026-09-10] 고객입력 3모드 + 개별등록 폼 ═══ */
-const VM_MODES=['bulk','form','voice','edit'];   /* ★ [2026-09-12] edit: 등록된 고객을 찾아 수정 */
+const VM_MODES=['bulk','form','voice','edit','names'];   /* ★ [2026-09-12] edit: 등록된 고객을 찾아 수정 · ★ [2026-10-21] names: 이름만 여러 명 등록 */
 function vmModeInit(){
 /* 리포트 알림톡 인계(?rpt=1) → 개별등록으로, 그 외엔 마지막 선택(기본 자연어) */
 try{if((new URLSearchParams(location.search).get('rpt')||'')==='1')return 'form';}catch(_e){}
@@ -8120,14 +8120,15 @@ return 'voice';
 function vmSetMode(m){
 if(VM_MODES.indexOf(m)<0)m='voice';
 try{localStorage.setItem('jv_vm_mode',m);}catch(_e){}
-const show={bulk:'vmModeBulk',form:'vmModeForm',voice:'vmModeVoice',edit:'vmModeEdit'};
+const show={bulk:'vmModeBulk',form:'vmModeForm',voice:'vmModeVoice',edit:'vmModeEdit',names:'vmModeNames'};
 VM_MODES.forEach(k=>{const el=vmEl(show[k]);if(el)el.style.display=(k===m)?'':'none';});
 document.querySelectorAll('#vmModeBar [data-vmmode]').forEach(b=>{const on=b.getAttribute('data-vmmode')===m;b.style.background=on?'#15294A':'#fff';b.style.color=on?'#fff':'#3A4457';b.style.borderColor=on?'#15294A':'#E1E5EC';});
 const nb=vmEl('vmNew'),ab=vmEl('vmAi'),fb=vmEl('vmIfSave');
 if(nb)nb.style.display=(m==='voice')?'':'none';
 if(ab)ab.style.display=(m==='voice')?'':'none';
 if(fb)fb.style.display=(m==='form')?'':'none';
-const foot=fb&&fb.parentElement;if(foot)foot.style.display=(m==='bulk')?'none':'flex';
+const foot=fb&&fb.parentElement;if(foot)foot.style.display=(m==='bulk'||m==='names')?'none':'flex';   /* ★ [2026-10-21] 이름만 탭은 카드 안 저장 버튼을 쓴다 */
+if(m==='names'){try{localStorage.setItem('jv_vm_names_seen','1');}catch(_e){}const nw=vmEl('vmNmNew');if(nw)nw.style.display='none';try{vmNmFocusFirst();}catch(_e){}}   /* ★ [2026-10-21] NEW 표시는 한 번 열면 끈다 */
 if(m==='form'){try{vmIfPrefillFromHandoff();}catch(_e){}const n=vmEl('vmIfName');if(n&&!n.value)setTimeout(()=>{try{n.focus();}catch(_e){}},50);}
 if(m==='edit'){setTimeout(()=>{try{const k=vmEl('vmEdKw');if(k)k.focus();}catch(_e){}},60);try{vmEdRender();}catch(_e){}}   /* ★ [2026-09-12] 고객수정 탭 */
 }
@@ -8524,6 +8525,219 @@ toast('✓ '+nm2+' 님을 새 고객으로 등록했어요');
 if(window._vmRptFrom){const _r=window._vmRptFrom;window._vmRptFrom=null;try{vmRptDonePop(nm2,_r.remain,_r.optIn);}catch(_e){}}   /* ★ [2026-10-20] */
 });
 }
+/* ═══ ★ [2026-10-21] 「✍️ 이름만」 등록 탭 ═══
+   이름만 여러 명(1~5,000명) 한 번에 등록 → 고객관리에서 고객별 데일리 리포트·모닝 컨센서스 링크를 바로 보낼 수 있게 한다.
+   · 칸 배치: 폰 2칸 / PC 4칸, 마지막 칸을 채우면 한 줄씩 자동 추가
+   · 자동 이동: 완성된 한글 3글자(남궁·황보 등 두 글자 성은 4글자)에서 입력이 0.55초 멈추면 다음 칸으로.
+     한글은 마지막 글자를 치는 중에도 글자 수가 먼저 차므로(이수기→이수김) 즉시 이동하지 않고 멈춤을 기다린다.
+     빈 칸에서 시작한 입력만 자동 이동(앞 칸을 고칠 때 튀지 않게). 두 글자 이름은 키보드 「다음」(엔터).
+   · 동명이인: 저장 시 고객 목록 동기화 후 1회 팝업 — 이미 등록된 이름·입력 칸끼리 겹치는 이름을 모아
+     「같은 분(건너뛰기)」 또는 「다른 분 → 지역·회사 등으로 구분해 이름 고치기」. 겹침이 남으면 저장 잠금
+     (단체등록 저장은 이름이 열쇠라 같은 이름이 남으면 두 사람이 한 명으로 합쳐진다).
+   · 저장: 기존 단체등록(붙여넣기와 같은 경로) 엔진 그대로 — window.__mpcNamesImport. 저장 경로를 새로 만들지 않는다. */
+const VM_NM_SUR2=['남궁','황보','제갈','선우','독고','사공','서문','동방','어금','망절'];
+const VM_NM_MAX=50;   /* ★ 한 번에 50명 — 입력 중 기기 고장 시 손실·화면 부담을 줄인다. 더 많으면 저장 후 이어서, 또는 📊 단체등록 */
+let vmNmDraft=[],vmNmTimer=null,vmNmHitCache={},vmNmFullTold=false;
+/* ★ 입력 중인 이름 자동 보관 — 칠 때마다 이 기기에 저장, 폰 꺼짐·새로고침·창 닫기 후 다시 열면 복원.
+   회원 계정별 키(ccVaultId)라 같은 기기에서 다른 회원과 섞이지 않는다. 계정을 모르면 보관하지 않는다.
+   등록이 끝난 이름은 다음에 열 때 vmNmHtml 에서 자동으로 빠진다. */
+function vmNmStoreKey(){try{const v=ccVaultId();return v?('jv_vm_names_draft:'+v):'';}catch(_e){return '';}}
+function vmNmStoreLoad(){const k=vmNmStoreKey();if(!k)return [];try{const a=JSON.parse(localStorage.getItem(k)||'[]');return Array.isArray(a)?a.map(x=>String(x||'')).slice(0,VM_NM_MAX):[];}catch(_e){return [];}}
+function vmNmStoreSave(arr){const k=vmNmStoreKey();if(!k)return;try{const a=(arr||[]).map(x=>String(x||'').trim());while(a.length&&!a[a.length-1])a.pop();if(a.length)localStorage.setItem(k,JSON.stringify(a));else localStorage.removeItem(k);}catch(_e){}}
+function vmNmHitC(nm){const k=vmNmKey(nm);if(!(k in vmNmHitCache))vmNmHitCache[k]=window.__mpcNamesHit?window.__mpcNamesHit(nm):null;return vmNmHitCache[k];}   /* 입력 중 「동명」 표시용 — 이름별 1회만 대조 */
+function vmNmSeen(){try{return localStorage.getItem('jv_vm_names_seen')==='1';}catch(_e){return true;}}
+function vmModeBtn(k,ic,label,isNew){
+  return '<button type="button" data-vmmode="'+k+'" style="position:relative;min-width:0;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:8px 0 7px;font-size:10.5px;font-weight:800;font-family:inherit;cursor:pointer;line-height:1.25;white-space:nowrap">'
+    +'<span style="display:block;font-size:16px;line-height:1.2;margin-bottom:2px">'+ic+'</span>'+label
+    +(isNew?'<span id="vmNmNew" style="position:absolute;top:-6px;right:-3px;background:#C0392B;color:#fff;font-size:8px;font-weight:800;border-radius:6px;padding:1px 4px;line-height:1.4">NEW</span>':'')
+    +'</button>';}
+function vmNmCols(){return vmIsMobile()?2:4;}
+function vmNmClean(v){
+  let s=String(v==null?'':v).replace(/[​-‍﻿]/g,'').trim();
+  s=s.replace(/^(\d{1,4}\s*[.)\]]|[-•·*▪◦]+)\s*/,'').trim();   /* 명단 번호·글머리표 */
+  s=s.replace(/\s*(고객님|님)$/,'').trim();
+  return s.slice(0,30);
+}
+function vmNmKey(v){return String(v||'').replace(/\s+/g,'');}   /* fc 쪽 mpcNameNorm 과 같은 기준 */
+function vmNmCell(v){
+  return '<div style="position:relative;min-width:0"><input type="text" class="vmNmIn" maxlength="30" value="'+_aiEsc(v||'')+'" placeholder="이름" enterkeyhint="next" autocomplete="off" autocapitalize="off" spellcheck="false" style="width:100%;border:1px solid #D8DCE5;border-radius:9px;padding:10px 34px 10px 10px;font-size:16px;color:#1B2430;background:#fff;font-family:inherit;outline:0;box-sizing:border-box">'
+    +'<span class="vmNmTag" style="position:absolute;right:7px;top:50%;transform:translateY(-50%);font-size:9.5px;font-weight:800;color:#B3261E;pointer-events:none"></span></div>';}
+function vmNmHtml(){
+  const cols=vmNmCols();
+  vmNmHitCache={};vmNmFullTold=false;
+  if(!(vmNmDraft||[]).some(v=>String(v||'').trim()))vmNmDraft=vmNmStoreLoad();   /* 기기에 보관된 입력 복원 */
+  let d=(vmNmDraft||[]).map(v=>String(v||'').trim()).filter(v=>v&&!(window.__mpcNamesHit&&window.__mpcNamesHit(v))).slice(0,VM_NM_MAX);   /* 지난번에 저장된 이름은 다시 보이지 않게 */
+  vmNmDraft=d.slice();vmNmStoreSave(d);
+  const n=Math.min(VM_NM_MAX,Math.max(cols*(cols===2?5:3),Math.ceil((d.length+1)/cols)*cols));
+  let cells='';for(let i=0;i<n;i++)cells+=vmNmCell(d[i]||'');
+  return '<div style="background:#fff;border:1.5px solid #C9A96E;border-radius:13px;padding:12px 13px">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><div style="font-size:12.5px;font-weight:800;color:#1B2430">✍️ 이름만 빠르게 등록</div><span id="vmNmCnt" style="font-size:10.5px;font-weight:800;color:#8A6D2F;background:#FBF6EA;border:1px solid #E8DDBF;border-radius:8px;padding:2px 7px;white-space:nowrap">0명</span></div>'
+    +'<div style="font-size:11px;color:#8A8578;line-height:1.65;margin-top:4px">한 칸에 한 명씩 적어주세요. 세 글자를 치고 잠깐 멈추면 다음 칸으로 넘어갑니다. 명단을 복사해 붙여넣으면 칸마다 나눠 담깁니다.<br><b style="color:#1B2430">등록 후 고객관리에서 고객별로 데일리 리포트·모닝 컨센서스를 보낼 수 있어요.</b></div>'
+    +'<div id="vmNmGrid" style="display:grid;grid-template-columns:repeat('+cols+',minmax(0,1fr));gap:6px;margin-top:10px">'+cells+'</div>'
+    +'<div style="font-size:10.5px;color:#8A93A8;margin-top:8px;line-height:1.55">· 두 글자 이름은 키보드 「다음」(엔터)으로 넘어갑니다 · 칸은 자동으로 늘어납니다 · 한 번에 '+VM_NM_MAX+'명까지 (더 많으면 저장 후 이어서, 또는 📊 단체등록)<br>· 입력 중인 이름은 이 기기에 자동 보관돼요 — 창을 닫거나 폰이 꺼져도 다시 열면 그대로 있어요</div>'
+    +'<button type="button" id="vmNmSave" disabled style="width:100%;margin-top:10px;border:0;background:#15294A;color:#fff;border-radius:11px;padding:12px 4px;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer;opacity:.45">이름을 입력해 주세요</button>'
+    +'</div>';}
+function vmNmInputs(){return Array.prototype.slice.call(document.querySelectorAll('#vmNmGrid .vmNmIn'));}
+function vmNmFocusFirst(){setTimeout(()=>{try{const a=vmNmInputs();const e=a.find(x=>!x.value.trim())||a[0];if(e&&!vmIsMobile())e.focus();}catch(_e){}},60);}   /* 폰은 키보드가 화면을 가리므로 자동 포커스하지 않는다 */
+function vmNmAddRow(){const g=vmEl('vmNmGrid');if(!g)return;const cols=vmNmCols();if(vmNmInputs().length>=VM_NM_MAX)return;const t=document.createElement('div');t.innerHTML=Array(cols+1).join(vmNmCell(''));while(t.firstChild){const c=t.firstChild;g.appendChild(c);const i=c.querySelector&&c.querySelector('.vmNmIn');if(i)vmNmWireIn(i);}}
+function vmNmEnsureTail(){const a=vmNmInputs();if(a.length&&a[a.length-1].value.trim()){if(a.length>=VM_NM_MAX)vmNmFullToast();else vmNmAddRow();}}
+function vmNmFullToast(){if(vmNmFullTold)return;vmNmFullTold=true;try{toast(VM_NM_MAX+'명까지 입력했어요 — 저장한 뒤 이어서 입력해 주세요','warn');}catch(_e){}}
+function vmNmNext(el){let a=vmNmInputs(),i=a.indexOf(el);if(i<0)return;if(i===a.length-1){if(a.length>=VM_NM_MAX){vmNmFullToast();return;}vmNmAddRow();a=vmNmInputs();}const n=a[i+1];if(n){try{n.focus();n.setSelectionRange(n.value.length,n.value.length);}catch(_e){}}}
+function vmNmTarget(v){return VM_NM_SUR2.indexOf(String(v).slice(0,2))>=0?4:3;}
+function vmNmSplit(t){
+  let parts=String(t||'').replace(/\r/g,'').split(/[\n,;\t、，]+/);
+  if(parts.length===1){const sp=parts[0].trim().split(/\s+/);if(sp.length>1&&sp.every(x=>/^[가-힣]{2,5}$/.test(x)))parts=sp;}   /* "홍길동 김민수" 처럼 공백으로만 나열한 한글 명단 */
+  return parts.map(vmNmClean).filter(Boolean);
+}
+function vmNmFill(el,list){   /* 붙여넣은 명단을 현재 칸부터 나눠 담는다 — 현재 칸 다음부터는 빈 칸만 채워 이미 적은 이름을 덮어쓰지 않는다 */
+  let a=vmNmInputs(),i=a.indexOf(el);if(i<0)i=0;
+  let j=i,put=0;
+  for(let k=0;k<list.length;k++){a=vmNmInputs();if(k>0){j++;while(true){while(j>=a.length&&a.length<VM_NM_MAX){vmNmAddRow();a=vmNmInputs();}if(j>=a.length||!a[j].value.trim())break;j++;}}if(!a[j])break;a[j].value=list[k];put++;}
+  vmNmEnsureTail();vmNmRefresh();
+  const rest=list.length-put;
+  try{if(rest>0){vmNmFullTold=true;toast(put+'명을 담았어요. 한 번에 '+VM_NM_MAX+'명까지라 나머지 '+rest+'명은 저장 후 다시 붙여넣거나, 많을 때는 📊 단체등록을 이용해 주세요','warn');}
+    else toast(put+'명을 칸에 나눠 담았어요','info');}catch(_e){}
+}
+function vmNmCollect(){return vmNmInputs().map((el,i)=>({el:el,i:i,name:vmNmClean(el.value)})).filter(x=>x.name);}
+function vmNmRefresh(){
+  const list=vmNmCollect(),by={};
+  list.forEach(x=>{const k=vmNmKey(x.name);(by[k]=by[k]||[]).push(x);});
+  vmNmDraft=vmNmInputs().map(el=>el.value);vmNmStoreSave(vmNmDraft);   /* 칠 때마다 기기에 보관 */
+  vmNmInputs().forEach(el=>{const w=el.parentNode,t=w&&w.querySelector('.vmNmTag');const nm=vmNmClean(el.value);let tag='';
+    if(nm){if(vmNmHitC(nm))tag='동명';else if((by[vmNmKey(nm)]||[]).length>1)tag='겹침';}
+    if(t)t.textContent=tag;el.style.borderColor=tag?'#E09B95':'#D8DCE5';el.style.background=tag?'#FDF4F3':'#fff';});
+  const n=list.length,c=vmEl('vmNmCnt'),b=vmEl('vmNmSave');
+  if(c)c.textContent=n.toLocaleString()+'명';
+  if(b&&!b.getAttribute('data-busy')){b.disabled=!n;b.style.opacity=n?'1':'.45';b.textContent=n?(n.toLocaleString()+'명 저장'):'이름을 입력해 주세요';}
+}
+function vmNmWireIn(el){
+  if(!el||el.getAttribute('data-w')==='1')return;el.setAttribute('data-w','1');
+  el.addEventListener('focus',()=>{el.setAttribute('data-fresh',el.value.trim()?'0':'1');});
+  el.addEventListener('input',()=>{
+    if(vmNmTimer){clearTimeout(vmNmTimer);vmNmTimer=null;}
+    const v=el.value;
+    if(/[\n,;\t、，]/.test(v)){const l=vmNmSplit(v);
+      if(l.length>1){el.value='';vmNmFill(el,l);return;}
+      el.value=l[0]||'';vmNmEnsureTail();vmNmRefresh();if(l.length===1)vmNmNext(el);return;}   /* 쉼표·엔터로 한 명을 끝낸 경우 → 다음 칸 */
+    vmNmEnsureTail();vmNmRefresh();
+    const s=v.trim();
+    if(el.getAttribute('data-fresh')==='1'&&/^[가-힣]+$/.test(s)&&s.length===vmNmTarget(s)){
+      vmNmTimer=setTimeout(()=>{vmNmTimer=null;if(document.activeElement===el&&el.value.trim()===s){el.setAttribute('data-fresh','0');vmNmNext(el);}},550);}
+  });
+  el.addEventListener('paste',e=>{let t='';try{t=(e.clipboardData||window.clipboardData).getData('text')||'';}catch(_e){}
+    const l=vmNmSplit(t);if(l.length>1){e.preventDefault();vmNmFill(el,l);}});
+  el.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();if(vmNmTimer){clearTimeout(vmNmTimer);vmNmTimer=null;}setTimeout(()=>vmNmNext(el),e.isComposing?30:0);return;}
+    if(e.key==='Backspace'&&!el.value){const a=vmNmInputs(),i=a.indexOf(el);if(i>0){e.preventDefault();const p=a[i-1];try{p.focus();p.setSelectionRange(p.value.length,p.value.length);}catch(_e){}}}
+  });
+  el.addEventListener('blur',()=>{const c=vmNmClean(el.value);if(c!==el.value.trim()){el.value=c;vmNmRefresh();}});
+}
+function vmNmWire(){
+  vmNmInputs().forEach(vmNmWireIn);vmNmRefresh();
+  const b=vmEl('vmNmSave');if(b)b.onclick=vmNmSave;
+}
+function vmNmBusy(on,label){const b=vmEl('vmNmSave');if(!b)return;if(on){b.setAttribute('data-busy','1');b.disabled=true;b.style.opacity='.6';b.textContent=label||'확인 중…';}else{b.removeAttribute('data-busy');vmNmRefresh();}}
+function vmNmSave(){
+  const list=vmNmCollect();
+  if(!list.length){toast('이름을 입력해 주세요','warn');return;}
+  if(list.length>VM_NM_MAX){toast('한 번에 '+VM_NM_MAX.toLocaleString()+'명까지 등록할 수 있어요','warn');return;}
+  if(!window.__mpcNamesReady||!window.__mpcNamesImport){toast('저장 모듈을 불러오지 못했어요 — 새로고침 후 다시 시도해주세요','warn');return;}
+  vmNmBusy(true,'고객 목록을 확인하는 중…');
+  const g0=vmGen;   /* 확인 중에 창을 닫으면 늦게 온 결과로 팝업을 띄우지 않는다 */
+  /* 기존 고객과 대조하기 전에 기기·드라이브 고객 목록을 먼저 맞춘다 (단체등록과 같은 절차) */
+  window.__mpcNamesReady(()=>{
+    if(g0!==vmGen)return;
+    vmNmHitCache={};   /* 동기화로 고객 목록이 바뀌었을 수 있다 */
+    vmNmBusy(false);
+    const by={},order=[];
+    vmNmCollect().forEach(x=>{const k=vmNmKey(x.name);if(!by[k]){by[k]={name:x.name,cells:[],hit:null};order.push(k);}by[k].cells.push(x);});
+    order.forEach(k=>{by[k].hit=window.__mpcNamesHit?window.__mpcNamesHit(by[k].name):null;});
+    const groups=order.map(k=>by[k]);
+    const conf=groups.filter(g=>g.hit||g.cells.length>1);
+    if(!conf.length){vmNmGo(groups.map(g=>g.name));return;}
+    vmNmDupPop(groups,conf);
+  });
+}
+function vmNmGo(names){
+  if(!names.length){toast('새로 등록할 고객이 없어요','info');return;}
+  vmNmDraft=[];
+  vmClose();
+  setTimeout(()=>{try{window.__mpcNamesImport(names);}catch(_e){toast('등록을 시작하지 못했어요 — 새로고침 후 다시 시도해주세요','warn');}},120);
+}
+/* 동명이인 팝업 — 저장 시 1회. 같은 분은 건너뛰고, 다른 분은 지역·회사 등으로 구분한 이름을 직접 입력받는다 */
+function vmNmDupPop(groups,conf){
+  const old=document.getElementById('vmNmDupOv');if(old)old.remove();
+  const ov=document.createElement('div');ov.id='vmNmDupOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:9700;background:rgba(15,27,51,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  const st={};   /* key → {pick:'same'|'diff'|'', names:[...]} */
+  conf.forEach(g=>{const k=vmNmKey(g.name);st[k]={pick:'',names:g.cells.map(()=>g.name),drop:g.cells.map(()=>false)};});
+  const okNames=groups.filter(g=>!(g.hit||g.cells.length>1)).map(g=>g.name);
+  const btnS=on=>'flex:1;border:1.5px solid '+(on?'#15294A':'#E1E5EC')+';background:'+(on?'#15294A':'#fff')+';color:'+(on?'#fff':'#3A4457')+';border-radius:9px;padding:9px 2px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer';
+  const render=()=>{
+    const items=conf.map(g=>{const k=vmNmKey(g.name),s=st[k],multi=g.cells.length>1;
+      const pill=g.hit?'<span style="font-size:9.5px;font-weight:800;border-radius:7px;padding:1px 6px;background:#FDECEC;color:#B3261E">이미 등록됨</span>':'';
+      const pill2=multi?'<span style="font-size:9.5px;font-weight:800;border-radius:7px;padding:1px 6px;background:#FDF2E3;color:#8B5A0F">입력 칸 '+g.cells.length+'곳</span>':'';
+      const info=g.hit?'<div style="font-size:10.5px;color:#5B6478;background:#F6F7F9;border-radius:8px;padding:6px 8px;margin-top:6px;line-height:1.55">기존 고객: '+_aiEsc(vmIfDupInfo(g.hit))+'</div>':'';
+      const sameL=g.hit?'같은 분 · 건너뛰기':'같은 분 · 1명만';
+      let body='';
+      if(s.pick==='diff'){
+        body+='<div style="font-size:10.5px;color:#8B5A0F;background:#FDF2E3;border-radius:8px;padding:7px 9px;margin-top:8px;line-height:1.55">지역·회사 등으로 구분해서 이름을 입력해 주세요<br>예) '+_aiEsc(g.name)+'(강남) · '+_aiEsc(g.name)+'(삼성전자)<br><span style="color:#8A6D2F">입력한 이름은 고객이 받는 알림톡에도 그대로 보입니다.</span></div>';
+        s.names.forEach((v,j)=>{if(s.drop[j])return;
+          body+='<div style="display:flex;gap:5px;align-items:center;margin-top:7px"><input type="text" data-nmk="'+_aiEsc(k)+'" data-nmj="'+j+'" maxlength="30" value="'+_aiEsc(v)+'" autocomplete="off" style="flex:1;min-width:0;border:2px solid #C9A96E;border-radius:9px;padding:8px 9px;font-size:16px;font-weight:700;color:#1B2430;font-family:inherit;outline:0;box-sizing:border-box">'
+            +(s.names.length>1?'<button type="button" data-nmdrop="'+_aiEsc(k)+'|'+j+'" title="이 칸 빼기" style="flex-shrink:0;border:1px solid #E1E5EC;background:#fff;color:#8A93A8;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">빼기</button>':'')
+            +'</div><div data-nmerr="'+_aiEsc(k)+'|'+j+'" style="font-size:10.5px;color:#B3261E;font-weight:700;margin-top:3px;min-height:0"></div>';});
+      }else if(s.pick==='same'){
+        body='<div style="font-size:10.5px;color:#0F6E56;font-weight:700;margin-top:7px">'+(g.hit?'✓ 건너뜁니다 — 기존 고객 정보는 그대로 둡니다':'✓ 1명으로 등록합니다')+'</div>';
+      }
+      return '<div style="border:1px solid #E1E5EC;border-radius:12px;padding:10px;margin-top:9px">'
+        +'<div style="font-size:13px;font-weight:800;color:#1B2430;display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+_aiEsc(g.name)+pill+pill2+'</div>'+info
+        +'<div style="display:flex;gap:5px;margin-top:8px"><button type="button" data-nmpick="'+_aiEsc(k)+'|same" style="'+btnS(s.pick==='same')+'">'+sameL+'</button><button type="button" data-nmpick="'+_aiEsc(k)+'|diff" style="'+btnS(s.pick==='diff')+'">다른 분</button></div>'
+        +body+'</div>';}).join('');
+    ov.innerHTML='<div style="background:#fff;border-radius:16px;max-width:440px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25);overflow:hidden">'
+      +'<div style="padding:15px 14px 4px"><div style="font-size:14.5px;font-weight:800;color:#15294A">같은 이름이 '+conf.length+'건 있어요</div>'
+      +'<div style="font-size:11.5px;color:#5B6478;margin-top:4px;line-height:1.6">같은 분인지, 다른 분인지 골라주세요. <b>다른 분이면 지역·회사 등으로 구분해서 이름을 입력해 주세요.</b> 모두 고르면 저장할 수 있어요.</div></div>'
+      +'<div style="flex:1;overflow-y:auto;padding:0 14px 6px">'+items+'</div>'
+      +'<div style="padding:10px 14px 14px;border-top:1px solid #EEF0F4;display:flex;flex-direction:column;gap:6px">'
+      +'<button type="button" id="vmNmDupGo" style="border:0;background:#15294A;color:#fff;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer"></button>'
+      +'<button type="button" id="vmNmDupBack" style="border:1px solid #E1E5EC;background:#fff;color:#5C6678;border-radius:11px;padding:10px 0;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer">돌아가서 고치기</button></div></div>';
+    wire();check();
+  };
+  /* 최종 이름 목록 + 오류 판정: 다른 분으로 고른 이름은 기존 고객·다른 등록 이름과 겹치면 안 된다 */
+  const build=()=>{
+    const out=okNames.slice(),errs={};let undecided=0;
+    conf.forEach(g=>{const k=vmNmKey(g.name),s=st[k];
+      if(!s.pick){undecided++;return;}
+      if(s.pick==='same'){if(!g.hit)out.push(g.name);return;}
+      s.names.forEach((v,j)=>{if(s.drop[j])return;const nm=vmNmClean(v);if(!nm){errs[k+'|'+j]='이름을 입력해 주세요';return;}out.push({nm:nm,id:k+'|'+j});});});
+    const seen={};
+    out.forEach(x=>{const nm=typeof x==='string'?x:x.nm,kk=vmNmKey(nm);(seen[kk]=seen[kk]||[]).push(x);});
+    out.forEach(x=>{if(typeof x==='string')return;const kk=vmNmKey(x.nm);
+      if(window.__mpcNamesHit&&window.__mpcNamesHit(x.nm))errs[x.id]='이미 등록된 이름이에요 — 지역·회사 등으로 구분해 주세요';
+      else if(seen[kk].length>1)errs[x.id]='다른 칸과 이름이 같아요 — 지역·회사 등으로 구분해 주세요';});
+    return {names:out.map(x=>typeof x==='string'?x:x.nm),errs:errs,undecided:undecided};
+  };
+  const check=()=>{
+    const r=build();
+    ov.querySelectorAll('[data-nmerr]').forEach(e=>{e.textContent=r.errs[e.getAttribute('data-nmerr')]||'';});
+    const nErr=Object.keys(r.errs).length,b=ov.querySelector('#vmNmDupGo');if(!b)return r;
+    const lock=r.undecided||nErr;
+    b.disabled=!!lock;b.style.opacity=lock?'.45':'1';
+    b.textContent=r.undecided?('아직 '+r.undecided+'건을 고르지 않았어요'):(nErr?'겹치는 이름을 고쳐주세요':(r.names.length?(r.names.length.toLocaleString()+'명 저장'):'새로 등록할 고객이 없어요 — 닫기'));
+    return r;
+  };
+  const wire=()=>{
+    ov.querySelectorAll('[data-nmpick]').forEach(b=>{b.onclick=()=>{const p=b.getAttribute('data-nmpick').split('|');st[p[0]].pick=p[1];render();
+      if(p[1]==='diff')setTimeout(()=>{const i=ov.querySelector('input[data-nmk="'+p[0]+'"]');if(i){try{i.focus();i.setSelectionRange(i.value.length,i.value.length);}catch(_e){}}},40);};});
+    ov.querySelectorAll('[data-nmdrop]').forEach(b=>{b.onclick=()=>{const p=b.getAttribute('data-nmdrop').split('|');const s=st[p[0]];s.drop[+p[1]]=true;if(s.drop.every(Boolean)){s.pick='same';s.drop=s.drop.map(()=>false);}render();};});
+    ov.querySelectorAll('input[data-nmk]').forEach(i=>{i.oninput=()=>{st[i.getAttribute('data-nmk')].names[+i.getAttribute('data-nmj')]=i.value;check();};});
+    ov.querySelector('#vmNmDupBack').onclick=()=>{
+      /* 팝업에서 고친 이름을 입력 칸에도 되돌려 놓는다 — 다시 저장할 때 같은 질문을 반복하지 않게 */
+      conf.forEach(g=>{const s=st[vmNmKey(g.name)];if(s.pick!=='diff')return;g.cells.forEach((c,j)=>{if(c.el&&!s.drop[j])c.el.value=s.names[j];else if(c.el&&s.drop[j])c.el.value='';});});
+      ov.remove();vmNmRefresh();};
+    ov.querySelector('#vmNmDupGo').onclick=()=>{const r=check();if(r.undecided||Object.keys(r.errs).length)return;ov.remove();if(!r.names.length){toast('새로 등록할 고객이 없어요','info');return;}vmNmGo(r.names);};
+  };
+  document.body.appendChild(ov);render();
+}
 /* ── ① 입력 ── */
 function vmRenderInput(){
   vmGen++;vmBusy=false;vmCfExtra=[];   /* 입력 화면 복귀(취소·다시 말하기) = 진행 중이던 요청 무효화 · 직접 채우기 상태 초기화 (2026-07-20) */
@@ -8542,12 +8756,16 @@ function vmRenderInput(){
       +'<div style="font-size:11.5px;color:#7A5209;line-height:1.6;font-weight:700">주소는 시/도부터 말해주세요 <span style="font-weight:400;color:#8A6B2E">(예: 서울 ○○구·경기 ○○시)</span><br>시/도가 없으면 고객 지도에 표시되지 않을 수 있어요</div>'
     +'</div>'
     /* ★ [2026-09-10] 입력 방식 3모드 — 단체등록(엑셀) · 개별등록(항목 폼) · 자연어입력(말하기/타이핑). 마지막 선택을 기억 */
-    +'<div id="vmModeBar" style="display:flex;gap:6px;margin-bottom:10px">'
-    +'<button type="button" data-vmmode="bulk" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">📊 단체등록</button>'
-    +'<button type="button" data-vmmode="form" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">👤 개별등록</button>'
-    +'<button type="button" data-vmmode="voice" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">🎙 자연어</button>'
-    +'<button type="button" data-vmmode="edit" style="flex:1;border:1.5px solid #E1E5EC;background:#fff;color:#3A4457;border-radius:11px;padding:12px 2px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">✏️ 고객수정</button>'   /* ★ [2026-09-12] 등록된 고객 찾아 수정 */
+    /* ★ [2026-10-21] 「✍️ 이름만」 탭 추가 → 5개. 폰에서 한 줄에 들어가도록 아이콘 위·글자 아래 배치 (기능·순서 외 기존 4개는 모양만 변경) */
+    +'<div id="vmModeBar" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-bottom:10px">'
+    +vmModeBtn('names','✍️','이름만',!vmNmSeen())
+    +vmModeBtn('bulk','📊','단체등록')
+    +vmModeBtn('form','👤','개별등록')
+    +vmModeBtn('voice','🎙','자연어')
+    +vmModeBtn('edit','✏️','고객수정')   /* ★ [2026-09-12] 등록된 고객 찾아 수정 */
     +'</div>'
+    /* ── ★ [2026-10-21] 이름만 등록 ── */
+    +'<div id="vmModeNames" style="display:none">'+vmNmHtml()+'</div>'
     /* ── 단체등록 ── */
     +'<div id="vmModeBulk">'
     /* ★ [2026-07-24] 1순위 = 엑셀 파일 첨부. 여러 명을 한 번에 넣을 때가 가장 흔하다 */
@@ -8593,6 +8811,7 @@ function vmRenderInput(){
     +vmFoot(vmBtn('vmNew','＋ 신규 고객')+vmBtn('vmAi','✨ 정리해서 보여주기',1)+'<button type="button" id="vmIfSave" style="flex:1;display:none;border:1px solid #15294A;background:#15294A;color:#fff;border-radius:11px;padding:12px 4px;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">＋ 새 고객으로 등록</button>');
     vmWire();
     vmIfWire();
+    vmNmWire();   /* ★ [2026-10-21] 이름만 등록 */
     vmSetMode(vmModeInit());
   try{if(window.mpcRosterMeterRefresh)window.mpcRosterMeterRefresh();}catch(_e){}   /* ★ [2026-07-25] 음성 입력 화면 글자수 게이지 */
   const gb=vmEl('vmGuideBtn');if(gb)gb.onclick=vmRenderGuide;
@@ -13202,6 +13421,20 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
   window.__mpcExcelOpen=function(){mpcXlsxPick();};   /* ★ [2026-08-29] 동기화 대기를 파일 선택 뒤로 옮김 — 조작 권한 만료로 파일창이 안 열리던 문제 */
   window.__mpcPasteOpen=function(){_mpcInputReady(function(){mpcPasteOpen();});};   /* ★ [2026-08-26] 자체 토스트 제거 — 호출부(고객입력 화면)의 안내 토스트와 중복 표시되던 문제 */
   window.__mpcTplDown=function(){mpcDownloadTemplate();};
+  /* ★ [2026-10-21] 고객입력 「✍️ 이름만」 탭 브리지 — 저장은 붙여넣기 단체등록과 같은 경로(mpcXlsxImport)로 보낸다.
+     ① __mpcNamesReady: 기기 로드 → 드라이브 동기화까지 마친 뒤 콜백 (기존 고객과 대조하기 전 필수)
+     ② __mpcNamesHit: 이름(공백 무시)으로 기존 고객 1명 — 동명이인 팝업 표시용 최소 항목만 넘긴다
+     ③ __mpcNamesImport: 이름 목록을 '이름' 열 하나짜리 표로 만들어 드라이브 게이트 → 단체등록 엔진 */
+  window.__mpcNamesReady=function(cb){_mpcInputReady(function(){try{cb&&cb();}catch(_e){}});};
+  window.__mpcNamesHit=function(name){try{var c=mpcFindByName(name);if(!c)return null;
+    return {phone:c.phone||"",company:c.company||"",title:c.title||"",birthDate:c.birthDate||"",addr:c.addr||"",createdAt:c.createdAt||0};}catch(_e){return null;}};
+  window.__mpcNamesImport=function(names){
+    var rows=(names||[]).map(function(n){return {"이름":String(n||"").trim()};}).filter(function(r){return r["이름"];});
+    if(!rows.length)return;
+    /* 진행 화면이 지도 오버레이(#mpOverlay, 고객입력에서는 숨김) 안에 있으면 보이지 않는다 — 엑셀 업로드(mpcXlsxHandle)와 같이 body 로 옮긴다 */
+    try{var pg=$("mpcXlsxProg");if(pg&&pg.parentNode!==document.body)document.body.appendChild(pg);}catch(_e){}
+    mpcGated(function(){mpcXlsxSrcName="이름만 입력";mpcXlsxImport(rows);});
+  };
   window.__vmSaveMeeting=function(custId,note,next,nextContact,cb){try{   /* ★ 🎙 음성 미팅 기록 저장 (2026-07-18): id 지정 — 동명이인 안전, 다음연락일 갱신 지원 */
     var c=null;for(var i=0;i<customers.length;i++)if(customers[i].id===custId){c=customers[i];break;}
     if(!c){if(cb)cb(false);return;}
