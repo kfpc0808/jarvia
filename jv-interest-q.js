@@ -311,6 +311,12 @@ function pick(ans){
 var HOW=[['phone','전화'],['kakao','카카오톡'],['visit','방문']];
 var WHEN=[['am','오전'],['pm','오후'],['eve','저녁']];
 var OFF_DAYS=14;   /* 상담 제안 「괜찮아요」 후 쉬는 기간 */
+/* ★ 자동 표시 — 리포트를 연 뒤 30초가 지나면 질문 창을 한 번 띄운다(종전 「오늘의 선택」 규칙)
+   · 고객 1명당 하루 1문항 — 오늘 이미 답했으면(다른 화면 포함) 띄우지 않는다
+   · 이 기기에서 하루 한 번만 자동으로 띄운다(데일리·컨센서스 합산)
+   · 동의 팝업 등 다른 창이 떠 있거나 화면을 보고 있지 않으면 끝날 때까지 기다렸다 띄운다(최대 3분)
+   · 자동으로 뜬 창을 답 없이 3번 연속 닫으면 7일 동안 자동으로 띄우지 않는다(버튼은 그대로) */
+var AUTO_MS=30000, AUTO_WAIT_MS=180000, AUTO_SKIP_MAX=3, AUTO_SNOOZE_DAYS=7;
 
 function mount(ad){
   var st={ans:{},today:false,reqAt:0,loaded:false,loading:null,open:false,cur:null,pending:null,busy:false,here:false};
@@ -360,7 +366,7 @@ function mount(ad){
     var f=isFire(r[0],v);
     Promise.resolve(ad.call('clientInterestSave',Object.assign({src:'iq',q:r[0],v:v,f:f,s:r[1],g:CATS[catOf(r[0])][1],ver:VER,nv:'q-notice',ca:0},meta()))).then(function(res){
       st.busy=false; res=res||{};
-      if(res.success){st.ans[r[0]]={v:v,d:kstYmd(),f:f};st.today=true;st.here=true;return v<0?renderDone():renderResult(r,v,f);}
+      if(res.success){st.ans[r[0]]={v:v,d:kstYmd(),f:f};st.today=true;st.here=true;if(v>=0)lsSet('iq_auto_skip','0');return v<0?renderDone():renderResult(r,v,f);}
       if(res.already){st.today=true;return renderDone();}
       /* 방금 동의해 서버에 동의 기록이 아직 닿지 않았으면 한 번 더 보낸다 — 동의 팝업을 다시 띄우지 않는다 */
       if(res.needConsent&&ad.consented()&&!retry){st.busy=true;return setTimeout(function(){commit(r,v,true);},1500);}
@@ -444,11 +450,17 @@ function mount(ad){
   function close(){
     var s=document.getElementById('ciSheet');if(s)s.classList.remove('on');
     var b=document.getElementById('ciSheetBg');if(b)b.classList.remove('on');
-    st.open=false;
+    /* 자동으로 뜬 창을 답 없이 닫음 — 3번 연속이면 7일 쉰다 */
+    if(st.open&&st.auto&&!st.here){
+      var n=(parseInt(lsGet('iq_auto_skip'),10)||0)+1;
+      if(n>=AUTO_SKIP_MAX){lsSet('iq_auto_snooze',kstYmd(Date.now()+AUTO_SNOOZE_DAYS*86400000));n=0;}
+      lsSet('iq_auto_skip',''+n);
+    }
+    st.open=false; st.auto=false;
   }
-  function open(){
+  function open(auto){
     var s=document.getElementById('ciSheet'); if(!s)return;
-    st.open=true;
+    st.open=true; st.auto=auto===true;
     var b=document.getElementById('ciSheetBg'); if(b)b.classList.add('on');
     s.classList.add('on'); setCat('');
     body().innerHTML='<div class="ciLoad">잠시만 기다려 주세요…</div>';
@@ -466,10 +478,43 @@ function mount(ad){
     load().then(function(){
       if(st.today&&!st.here){btn.style.display='none';return;}
       btn.style.display='flex';
+      autoArm();
     });
   }
-  window.ciOpen=open; window.ciClose=close; window.ciResume=resume;
-  return {open:open,close:close,resume:resume,card:card};
+  /* 화면 가운데가 다른 고정 창(동의 팝업·시트·오버레이)에 덮여 있는지 */
+  function covered(){
+    try{
+      var el=document.elementFromPoint(window.innerWidth/2,window.innerHeight/2);
+      while(el&&el!==document.body&&el!==document.documentElement){
+        var pos=getComputedStyle(el).position;
+        if(pos==='fixed')return true;
+        el=el.parentElement;
+      }
+    }catch(e){}
+    return false;
+  }
+  function autoOk(){
+    if(st.open||st.today||st.auto)return false;
+    if(lsGet('iq_auto_day')===kstYmd())return false;      /* 이 기기에서 오늘 이미 자동으로 띄움 */
+    if(lsGet('iq_auto_snooze')>=kstYmd())return false;    /* 3번 연속 닫음 — 쉬는 중 */
+    if(ad.autoBlocked&&ad.autoBlocked())return false;      /* 화면별 추가 조건(잠금 화면 등) */
+    return true;
+  }
+  function autoArm(){
+    if(st.autoT||!autoOk())return;
+    var t0=Date.now();
+    st.autoT=setTimeout(function tick(){
+      if(!autoOk())return;
+      if(document.visibilityState==='hidden'||covered()){
+        if(Date.now()-t0<AUTO_MS+AUTO_WAIT_MS)setTimeout(tick,5000);   /* 다른 창이 닫히면 띄운다 */
+        return;
+      }
+      lsSet('iq_auto_day',kstYmd());
+      open(true);
+    },AUTO_MS);
+  }
+  window.ciOpen=function(){open(false);}; window.ciClose=close; window.ciResume=resume;
+  return {open:function(){open(false);},close:close,resume:resume,card:card};
 }
 
 window.JVIQ={ver:VER,notice:NOTICE,cats:CATS,catOrder:CAT_ORDER,q:Q,by:BY,offer:OFFER,
