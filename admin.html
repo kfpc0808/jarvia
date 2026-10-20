@@ -1257,6 +1257,12 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
         #p-letters .lt-tw{overflow-x:auto;border:1px solid #E3E6EE;border-radius:12px}
         #p-letters .lt-kpi{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
         #p-letters .lt-kpi>div{background:#fff;border:1px solid #E3E6EE;border-radius:12px;padding:12px 14px}
+        #p-letters .lt-prog{background:#fff;border:1px solid #CBD3E6;border-radius:10px;padding:10px 14px;margin:-4px 0 12px}   /* ★ [2026-10-20] 활용 문구 채우기 진행 표시 */
+        #p-letters .lt-prog.ok{border-color:#BFE3D2;background:#EEF8F3}#p-letters .lt-prog.warn{border-color:#F3D9B5;background:#FFF8EE}
+        #p-letters .lt-prog-t{font-size:13px;font-weight:700;color:#1b2440;margin-bottom:6px}
+        #p-letters .lt-prog-bar{height:8px;background:#EEF1F8;border-radius:5px;overflow:hidden}
+        #p-letters .lt-prog-bar i{display:block;height:100%;background:#1F3A6B;border-radius:5px;transition:width .3s}
+        #p-letters .lt-prog.ok .lt-prog-bar i{background:#0A7B61}
         #p-letters .lt-kpi .l{font-size:12px;color:#7A8299}#p-letters .lt-kpi .v{font-size:20px;font-weight:800;margin-top:2px}
         @media(max-width:1100px){#p-letters .lt-kpi{grid-template-columns:repeat(3,minmax(0,1fr))}#p-letters .lt-g2{grid-template-columns:1fr}}
         @media(max-width:700px){#p-letters .lt-line{grid-template-columns:22px minmax(0,1fr)}#p-letters .lt-card{display:none}#p-letters .lt-acts{grid-column:1/-1}}
@@ -1282,6 +1288,7 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
           <button class="btn btn-sec" onclick="ltTipFill()" title="검수 대기·승인 레터 중 회원용 활용 문구가 없는 것만 채웁니다 (레터 문구·카드는 그대로)">💬 활용 문구 채우기</button><!-- ★ [2026-10-20] -->
           <button class="btn btn-sec" onclick="ltBackfill()" title="2026-06-01 이후 게시된 콘텐츠 중 레터가 없는 것을 생성 대기열에 올립니다">📥 기존 콘텐츠 레터 만들기</button>
         </div>
+        <div id="lt-prog" class="lt-prog" hidden></div><!-- ★ [2026-10-20] 활용 문구 채우기 진행 표시 -->
         <div id="lt-list"><div style="color:#7A8299;padding:30px;text-align:center">불러오는 중…</div></div>
       </div>
       <div id="lt-v-members" style="display:none">
@@ -28647,24 +28654,30 @@ async function ltRecard(){
   finally{_ltRecardBusy=false;await ltLoad();}
 }
 window.ltRecard=ltRecard;
-/* ★ [2026-10-20] 회원용 활용 문구 채우기 — 서버가 2분씩 끊어 처리하므로 남은 건이 없거나 진전이 없을 때까지 이어서 부른다 */
+/* ★ [2026-10-20] 회원용 활용 문구 채우기 — 확인 창 없이 바로 시작하고, 5건씩 나눠 보내 진행 막대·건수를 화면에 계속 보여 준다.
+   끝나거나 실패해도 결과 문구가 남는다. 다시 누르면 아직 없는 것만 이어서 채운다. */
 let _ltTipBusy=false;
+function ltProg(msg,cur,total,state){
+  const b=$('lt-prog');if(!b)return;
+  b.hidden=false;b.className='lt-prog'+(state?' '+state:'');
+  const pct=total?Math.round(cur/total*100):0;
+  b.innerHTML=`<div class="lt-prog-t">${esc(msg)}</div><div class="lt-prog-bar"><i style="width:${pct}%"></i></div>`;
+}
 async function ltTipFill(){
-  if(_ltTipBusy)return;
-  const n=_lt.filter(x=>(x.status==='review'||x.status==='approved')&&!(x.tip&&x.tip.who&&x.tip.say)).length;
-  if(!n){toast('활용 문구가 없는 레터가 없습니다','success');return;}
-  if(!confirm(`검수 대기·승인 레터 중 회원용 활용 문구가 없는 ${n}건을 채웁니다.\n레터 문구·카드는 바뀌지 않습니다. 건당 Claude 호출 1회(소액)가 듭니다.`))return;
-  _ltTipBusy=true;let total=0,fail=0,lastErr='';
+  if(_ltTipBusy){toast('활용 문구를 만드는 중입니다 — 진행 막대를 확인해 주세요','warning');return;}
+  const targets=_lt.filter(x=>(x.status==='review'||x.status==='approved')&&!(x.tip&&x.tip.who&&x.tip.say)).map(x=>x.key);
+  if(!targets.length){ltProg('활용 문구가 없는 레터가 없습니다 — 모두 채워져 있습니다.',1,1,'ok');return;}
+  _ltTipBusy=true;let done=0,fail=0,lastErr='';
+  ltProg(`💬 활용 문구 만드는 중… 0 / ${targets.length}건 (창을 닫지 마세요)`,0,targets.length);
   try{
-    for(let round=0;round<30;round++){
-      toast(`활용 문구 만드는 중… ${total}건 완료`);
-      const r=await ltApi({action:'tipfill'});
-      total+=r.done||0;fail=r.failed||0;if(r.errors&&r.errors.length)lastErr=r.errors[0];
-      if(!r.remaining||!r.done)break;
+    for(let i=0;i<targets.length;i+=5){
+      const keys=targets.slice(i,i+5);
+      try{const r=await ltApi({action:'tipfill',keys});done+=r.done||0;fail+=r.failed||0;if(r.errors&&r.errors.length)lastErr=r.errors[0];}
+      catch(e){fail+=keys.length;lastErr=e.message||'오류';}
+      ltProg(`💬 활용 문구 만드는 중… ${done+fail} / ${targets.length}건${fail?` · 실패 ${fail}건`:''} (창을 닫지 마세요)`,done+fail,targets.length);
     }
-    toast(`활용 문구 ${total}건을 채웠습니다`+(fail?` · 실패 ${fail}건${lastErr?' ('+lastErr+')':''}`:''),fail?'warning':'success');
-  }catch(e){toast('활용 문구 채우기 실패: '+e.message,'error');}
-  finally{_ltTipBusy=false;await ltLoad();}
+    ltProg(`✅ 완료 — 활용 문구 ${done}건을 채웠습니다${fail?` · 실패 ${fail}건 (${lastErr}) — 다시 누르면 실패한 것만 이어서 채웁니다`:''}`,1,1,fail?'warn':'ok');
+  }finally{_ltTipBusy=false;await ltLoad();}
 }
 window.ltTipFill=ltTipFill;
 /* 관리자 미리보기 — letter.html?adm=키 (관리자 로그인 상태에서 승인 전 레터도 고객 화면 그대로) */
