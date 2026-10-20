@@ -248,7 +248,7 @@ var OFFER={
              talk:'자녀 질문에 「{a}」라고 하셔서, 자녀 보험과 목돈 준비를 함께 점검해 드리려고 연락드렸습니다.'},
   biz:      {t:'대표님 퇴직금과 보장 설계를 점검해 드릴까요?', topic:'대표 퇴직금·보장 점검', field:'corporate',
              talk:'「{a}」라고 답해 주셔서, 대표님 퇴직금과 보장 설계를 점검해 드리려고 연락드렸습니다.'},
-  consult:  {t:'편한 방법과 시간을 알려주시면 담당 컨설턴트가 연락드리겠습니다.', topic:'상담 일정 잡기', field:'other',
+  consult:  {t:'상담을 원하시면 담당 컨설턴트가 편하신 때에 연락드리겠습니다.', topic:'상담 일정 잡기', field:'other',
              talk:'상담을 받아보고 싶다고 하셔서, 편하신 시간에 맞춰 연락드렸습니다.'}
 };
 /* 신호 → 제안 (없으면 분야 기본값) */
@@ -308,8 +308,6 @@ function pick(ans){
      meta.nv : 이 기기에서 동의할 때 본 동의 문구 버전 — 새 문구로 동의하지 않은 기기는 'q-notice'(질문 화면 안내만 봄)
      meta.ca : 이 기기에서 동의한 시각(ms) — 서버는 철회 뒤에 다시 동의한 기기의 저장만 받는다
    화면 요소: #ciSheet · #ciSheetBg · #ciBody · #ciCat (각 페이지에 이미 있음) */
-var HOW=[['phone','전화'],['kakao','카카오톡'],['visit','방문']];
-var WHEN=[['am','오전'],['pm','오후'],['eve','저녁']];
 var OFF_DAYS=14;   /* 상담 제안 「괜찮아요」 후 쉬는 기간 */
 /* ★ 자동 표시 — 리포트를 연 뒤 30초가 지나면 질문 창을 한 번 띄운다(종전 「오늘의 선택」 규칙)
    · 고객 1명당 하루 1문항 — 오늘 이미 답했으면(다른 화면 포함) 띄우지 않는다
@@ -376,52 +374,52 @@ function mount(ad){
   }
   function renderResult(r,v,f){
     var a=ansText(r[0],v), oid=offerId(r[0],v), o=OFFER[oid];
-    var head='<div class="ciMineL">나의 응답</div><div class="ciMine">'+esc(a)+'</div>'
-      +'<div class="ciSent" style="margin:0 0 13px">✓ 담당 컨설턴트에게 전달했습니다</div>';
+    /* 전달 사실은 처음 동의 때 안내했으므로 답변 뒤에는 따로 알리지 않는다 */
+    var head='<div class="ciMineL">나의 응답</div><div class="ciMine">'+esc(a)+'</div>';
     if(!(f&&o&&offerOk())){
       body().innerHTML=head+'<button type="button" class="ciMain" data-close>확인</button>'
         +'<div class="ciSkip" style="cursor:default">내일 새 질문으로 찾아뵐게요</div>';
       body().querySelector('[data-close]').onclick=close; return;
     }
-    var pill=function(list,name){return '<div class="ciPills" data-name="'+name+'">'+list.map(function(x){return '<button type="button" class="ciPill" data-val="'+x[0]+'">'+x[1]+'</button>';}).join('')+'</div>';};
+    /* 상담 요청 — 이름·연락처만 받는다. 연락 방법·시간은 담당 컨설턴트가 정한다 */
     body().innerHTML=head
-      +'<div class="ciOffer"><b>'+esc(o.t)+'</b><span>요청하시면 담당 컨설턴트가 이 주제로 연락드립니다.</span></div>'
-      +'<div class="ciPickL">편한 방법</div>'+pill(HOW,'how')
-      +'<div class="ciPickL">편한 시간</div>'+pill(WHEN,'when')
+      +'<div class="ciOffer"><b>'+esc(o.t)+'</b><span>이름과 연락처를 남겨 주시면 담당 컨설턴트가 연락드립니다.</span></div>'
+      +'<label class="ciPickL" for="ciReqName">이름</label>'
+      +'<input class="ciIn" id="ciReqName" type="text" maxlength="20" autocomplete="name" placeholder="홍길동">'
+      +'<label class="ciPickL" for="ciReqPhone">연락처</label>'
+      +'<input class="ciIn" id="ciReqPhone" type="tel" inputmode="numeric" maxlength="13" autocomplete="tel" placeholder="010-0000-0000">'
+      +'<label class="ciAgree"><input type="checkbox" id="ciReqAgree"><span><b>[필수] 개인정보 수집·이용 동의</b><br>이름·연락처는 담당 컨설턴트의 상담 연락에만 쓰이며, 연락처는 30일이 지나면 자동으로 삭제됩니다. 동의하지 않으시면 상담 요청을 보낼 수 없습니다.</span></label>'
       +'<div class="ciPickE" data-err></div>'
       +'<button type="button" class="ciMain" data-req>상담 요청하기</button>'
       +'<button type="button" class="ciSkip" data-no>괜찮아요 · 내일 새 질문으로 찾아뵐게요</button>';
-    var sel={how:'',when:''};
-    body().querySelectorAll('.ciPills').forEach(function(g){
-      var name=g.getAttribute('data-name');
-      g.querySelectorAll('.ciPill').forEach(function(b){b.onclick=function(){
-        g.querySelectorAll('.ciPill').forEach(function(x){x.classList.remove('on');});
-        b.classList.add('on'); sel[name]=b.getAttribute('data-val');
-      };});
-    });
     body().querySelector('[data-no]').onclick=function(){
       var d=new Date(Date.now()+9*3600000+OFF_DAYS*86400000);
       lsSet('iq_offer_off',''+d.getUTCFullYear()+String(d.getUTCMonth()+1).padStart(2,'0')+String(d.getUTCDate()).padStart(2,'0'));
       close();
     };
     body().querySelector('[data-req]').onclick=function(){
-      var err=body().querySelector('[data-err]');
-      if(!sel.how||!sel.when){if(err)err.textContent='편한 방법과 시간을 골라 주세요';return;}
-      if(st.busy)return; st.busy=true; this.disabled=true; this.textContent='전달하는 중…';
-      Promise.resolve(ad.call('clientInterestRequest',{q:r[0],v:v,how:sel.how,when:sel.when,
+      var err=body().querySelector('[data-err]'), btn=this;
+      var nm=String((document.getElementById('ciReqName')||{}).value||'').trim();
+      var ph=String((document.getElementById('ciReqPhone')||{}).value||'').replace(/\D/g,'');
+      var ok=!!(document.getElementById('ciReqAgree')||{}).checked;
+      if(!nm||nm.length>20){if(err)err.textContent='이름을 적어 주세요';return;}
+      if(!/^01\d{8,9}$/.test(ph)){if(err)err.textContent='연락처를 정확히 적어 주세요 (예: 010-1234-5678)';return;}
+      if(!ok){if(err)err.textContent='개인정보 수집·이용에 동의해 주세요';return;}
+      if(err)err.textContent='';
+      if(st.busy)return; st.busy=true; btn.disabled=true; btn.textContent='전달하는 중…';
+      Promise.resolve(ad.call('clientInterestRequest',{q:r[0],v:v,name:nm,phone:ph,agree:true,
         topic:o.topic,field:o.field,qt:r[2].slice(0,80),at:a.slice(0,40),s:r[1]})).then(function(res){
         st.busy=false; res=res||{};
-        if(res.success){st.reqAt=Date.now();return renderRequested(sel.how,!!res.dup);}
+        if(res.success){st.reqAt=Date.now();return renderRequested(!!res.dup);}
         renderErr();
       }).catch(function(){st.busy=false;renderErr();});
     };
   }
-  function renderRequested(how,dup){
-    var msg={phone:'편하신 시간에 전화로 연락드리겠습니다.',kakao:'편하신 시간에 카카오톡으로 연락드리겠습니다.',visit:'방문 일정을 잡으려고 먼저 연락드리겠습니다.'}[how]||'편하신 시간에 연락드리겠습니다.';
+  function renderRequested(dup){
     setCat('');
     body().innerHTML='<div class="ciDoneT">'+(dup?'이미 요청하신 상담이 있습니다':'상담 요청을 전달했습니다')+'</div>'
       +'<div class="ciSentBox"><div class="ciSentL">담당 컨설턴트가 연락드립니다</div><span class="ciOffTx">'
-      +(dup?'먼저 남기신 요청으로 곧 연락드리겠습니다.':esc(msg))+'</span></div>'
+      +(dup?'먼저 남기신 요청으로 곧 연락드리겠습니다.':'남겨 주신 연락처로 전화나 카카오톡으로 연락드리겠습니다.')+'</span></div>'
       +'<button type="button" class="ciSkip" data-close>닫기</button>';
     body().querySelector('[data-close]').onclick=close;
   }
