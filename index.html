@@ -9638,6 +9638,9 @@ async function upPicksSync(){
     if(p.fav)continue;
     let cid=p.cid;
     if(!cid){const t=_upNorm(p.title);const c=t&&(allContents||[]).find(x=>x.contentId&&_upNorm(x.title)===t&&near(cDate(x),p.date));if(c)cid=c.contentId;}
+    /* ★ [2026-10-21] 제목이 게시 때 바뀐 경우 — 같은 날짜·같은 분류 콘텐츠가 딱 1건일 때만 연결(오연결 방지) */
+    if(!cid&&p.date&&p.category){const cat=x=>x.type==='case_report'?'클로징리포트':x.type==='master_guide'?'마스터가이드':x.type==='medical_weekly'?'병의원 컨설팅':x.type==='tax_weekly'?'택스컨설팅위클리':'';
+      const cands=(allContents||[]).filter(x=>x.contentId&&cat(x)===p.category&&cDate(x)===p.date);if(cands.length===1)cid=cands[0].contentId;}
     if(!cid)continue;
     p.cid=cid;p.fav=true;changed=true;
     if(await upFavAdd(cid))added++;
@@ -14630,9 +14633,11 @@ function _lmsContentId(id){
 }
 
 async function loadFavorites(){
+  try{await upPicksSync();}catch(_e){}   /* ★ [2026-10-21] 게시된 찜은 먼저 진짜 즐겨찾기로 옮김 → 임시 카드가 실제 카드로 자동 교체 */
+  const _pend=await upPendingPicks();   /* ★ [2026-10-21] 아직 게시 전인 찜 → 「게시예정」 임시 카드 */
   const snap=await getDocs(query(collection(db,'favorites'),where('userId','==',me.uid)));
   const favs=snap.docs.map(d=>d.data());
-  if(!favs.length){$('fav-grid').innerHTML='';$('no-fav').classList.remove('hidden');return;}
+  if(!favs.length){$('fav-grid').innerHTML='';if(_pend.length){$('no-fav').classList.add('hidden');upPendingAppend(_pend);}else $('no-fav').classList.remove('hidden');return;}
   const items=[];
   /* ★ allContents(=contents + case_reports + master_guides 병합본) 우선 조회 → 클로징·마스터가이드 즐겨찾기 누락 해결 */
   for(const f of favs){
@@ -14641,13 +14646,49 @@ async function loadFavorites(){
     const d=await getDoc(doc(db,'contents',f.contentId));if(d.exists())items.push(d.data());
   }
   /* ★ 조회 결과 0건이면 안내문 재표시 (백지 방지) */
-  if(!items.length){$('fav-grid').innerHTML='';$('no-fav').classList.remove('hidden');return;}
+  if(!items.length){$('fav-grid').innerHTML='';if(_pend.length){$('no-fav').classList.add('hidden');upPendingAppend(_pend);}else $('no-fav').classList.remove('hidden');return;}
   $('no-fav').classList.add('hidden');
   $('fav-grid').innerHTML=items.map(c=>cardHTML(c)).join('');
   /* ★ [2026-10-17] 즐겨찾기 탭 카드에 ★ 해제 버튼 (카드 하단 오른쪽) — 누르면 목록에서 빠지고 3초간 「되돌리기」 */
   try{[...$('fav-grid').children].forEach((card,i)=>{const c=items[i];if(!c||!c.contentId)return;
     const ft=card.querySelector('.card-foot')||card;const b=document.createElement('button');b.type='button';b.className='fav-x';b.textContent='★';b.title='즐겨찾기 해제';b.setAttribute('aria-label','즐겨찾기 해제');
     b.onclick=ev=>{ev.stopPropagation();favQuickRemove(c.contentId,card);};ft.appendChild(b);});}catch(_e){}
+  upPendingAppend(_pend);   /* ★ [2026-10-21] 실제 즐겨찾기 뒤에 게시예정 임시 카드 */
+}
+/* ★ [2026-10-21] 즐겨찾기 탭 「게시예정」 임시 카드
+   · 대상: upcoming_picks 중 아직 즐겨찾기로 옮겨지지 않은 찜(fav:false) — favorites 컬렉션에는 넣지 않음(큐레이션 등 영향 없음)
+   · 썸네일: 이미지 없이 CSS로 그림(분류 색 + 게시예정일 + 제목)
+   · 게시되면 upPicksSync가 진짜 즐겨찾기로 옮기고, 다음 표시 때 실제 썸네일 카드로 바뀜 */
+async function upPendingPicks(){
+  if(!me)return [];
+  let picks=[];try{picks=await upPicksLoad(true);}catch(_e){}
+  return (picks||[]).filter(p=>!p.fav&&!(p.cid&&myFavSet.has(p.cid))).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+}
+function upPendingAppend(list){
+  const box=$('fav-grid');if(!box||!list||!list.length)return;
+  const pal={'클로징리포트':['#8a6d1a','#C9A96E'],'택스컨설팅위클리':['#0f2545','#1a3a6b'],'마스터가이드':['#2c3a7a','#4f63b8'],'병의원 컨설팅':['#0F2440','#B91C1C'],'메디컬':['#0F2440','#B91C1C']};
+  list.forEach(p=>{
+    const cl=pal[p.category]||['#1B3A5C','#2E86AB'];
+    const md=(p.date||'').slice(5).replace('-','/').replace(/^0/,'').replace('/0','/');
+    const el=document.createElement('div');el.className='card up-pend';
+    el.innerHTML=`<div class="card-thumb up-pend-thumb" style="background:linear-gradient(135deg,${cl[0]},${cl[1]})"><span class="up-pend-badge">${esc(md)} 게시예정</span><span class="up-pend-cat">${esc(p.category||'')}${p.field?' · '+esc(p.field):''}</span><span class="up-pend-title">${esc(p.title||'')}</span></div><div class="card-body"><h3>${esc(p.title||'')}</h3><div class="card-foot"><div><span class="up-pend-tag">게시예정</span></div></div></div>`;
+    el.onclick=()=>toast(md+' 게시 예정이에요 — 게시되면 이 자리에서 바로 열 수 있어요','info');
+    const b=document.createElement('button');b.type='button';b.className='fav-x';b.textContent='★';b.title='찜 해제';b.setAttribute('aria-label','찜 해제');
+    b.onclick=ev=>{ev.stopPropagation();upPendingRemove(p.k,el);};
+    el.querySelector('.card-foot').appendChild(b);
+    box.appendChild(el);
+  });
+}
+async function upPendingRemove(k,card){
+  if(!me)return;
+  await upPicksLoad();
+  const i=_upPicks.findIndex(x=>x.k===k);if(i<0){card.remove();return;}
+  const rm=_upPicks.splice(i,1)[0];
+  if(!(await upPicksSave())){toast('해제하지 못했어요 — 잠시 후 다시 시도해 주세요','error');await upPicksLoad(true);return;}
+  card.remove();if(!$('fav-grid').children.length)$('no-fav').classList.remove('hidden');
+  const _mm=window.JvMemo&&JvMemo.ready();if(_mm)JvMemo.remove('up:'+k,rm&&rm.mid);
+  if(window._upDraw)try{window._upDraw();}catch(_e){}
+  toast(_mm?'찜을 해제했어요 — 이지메모에서도 지워요':'찜을 해제했어요');
 }
 async function _favDel(cid){
   const snap=await getDocs(query(collection(db,'favorites'),where('userId','==',me.uid),where('contentId','==',cid)));
@@ -26273,6 +26314,13 @@ window.goMorningRead=goMorningRead;
 .up-pick:active{transform:scale(.92)}
 .fav-x{width:28px;height:28px;border-radius:50%;border:1.5px solid #E0C36B;background:#FBF3DD;color:#B8860B;font-size:15px;line-height:1;cursor:pointer;flex-shrink:0;padding:0;margin-left:auto;font-family:var(--font)}   /* ★ [2026-10-17] 즐겨찾기 탭 ★ 해제 */
 .fav-x:active{transform:scale(.9)}
+.up-pend-thumb{flex-direction:column;align-items:flex-start;justify-content:center;gap:6px;padding:14px 16px;box-sizing:border-box;color:#fff;text-align:left}   /* ★ [2026-10-21] 즐겨찾기 게시예정 임시 카드 */
+.up-pend-thumb>span{position:relative;z-index:1;max-width:100%}
+.up-pend-badge{position:absolute!important;top:8px;right:8px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(255,255,255,.92);color:#14304F;white-space:nowrap}
+.up-pend-cat{font-size:11px;font-weight:600;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.up-pend-title{font-size:14px;font-weight:700;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:keep-all;overflow-wrap:anywhere}
+.up-pend-tag{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;color:#8a6d1a;background:#FBF3DD;border:1px dashed #C9A96E}
+.card.up-pend{border-style:dashed}
 #favUndo{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:100000;background:#14304F;color:#fff;border:1px solid #C9A96E;border-radius:22px;padding:11px 16px;font-size:14px;font-weight:600;display:none;align-items:center;gap:12px;width:max-content;max-width:calc(100vw - 32px);box-shadow:0 10px 26px rgba(20,48,79,.35);font-family:var(--font)}
 #favUndo.on{display:flex}#favUndo a{color:#E2C994;font-weight:800;cursor:pointer;white-space:nowrap}
 body.jv-card-lock #emFab,body:has(.modal:not(.hidden):not(#mdl-detail):not(#mdl-viewer)) #emFab,body:has(#mob-menu.open) #emFab{display:none!important}   /* 카드 미등록 잠금·팝업·삼선 메뉴가 열려 있으면 숨김 — 콘텐츠 상세·보기 화면(mdl-detail·mdl-viewer)에서는 보임(「이 콘텐츠 담기」) */
