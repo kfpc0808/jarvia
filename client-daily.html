@@ -2248,9 +2248,57 @@ async function cdGatePass(){
         if(k){keyParam=k;return cdGatePass();}
       }catch(_e){}
     }
+    /* ★ [2026-10-23] 미지정 링크인데 오늘 리포트가 아직 없음(생성 전·주말·공휴일) → 잠금 대신 준비 중 안내 */
+    if(!dateParam&&await cdShowWaitIfNoReport(today))return false;
     await cdShowLocked(dateParam?'expired':'nokey');
     return false;
   }catch(e){ console.warn('[gate] 오류 — 페일오픈:',e&&e.message); return true; }
+}
+/* ★ [2026-10-23] 오늘 리포트 준비 중 안내 — 미지정 링크(fc만)를 리포트 생성 전에 연 경우.
+   오늘 문서가 열람 가능한 상태면 false(종전 잠금 화면). 조회 실패도 false(종전 동작 유지).
+   화면을 켜 두면 리포트 생성 즉시 새로고침해 오늘자로 열린다. */
+const CD_READY_ST=['published'];   /* 본문 로드(2-1)와 같은 기준 — published 만 화면에 열린다 */
+async function cdShowWaitIfNoReport(today){
+  let ready=false;
+  try{
+    const s=await getDoc(doc(db,'client_daily_reports',today));
+    ready=s.exists()&&CD_READY_ST.includes(String((s.data()||{}).status||''));
+  }catch(e){ console.warn('[gate] 오늘 리포트 확인 실패 — 종전 잠금:',e&&e.message); return false; }
+  if(ready)return false;
+  window._cdLockedView=true;   /* 자동 팝업(오늘의 선택 등) 억제 */
+  const f=await _cdLoadLockFc();
+  const nm=(f&&f.name)||'담당 컨설턴트', co=(f&&f.company)||'';
+  const k=new Date(Date.now()+9*3600000), dow=k.getUTCDay(), hr=k.getUTCHours();
+  const T=(dow===0||dow===6)
+    ? ['주말에는 리포트가 발행되지 않아요','월요일 오전 8시 이후<br>이 링크로 다시 열어 주세요.']
+    : (hr>=10
+      ? ['오늘은 리포트가 발행되지 않았어요','다음 영업일 오전 8시 이후<br>이 링크로 다시 열어 주세요.']
+      : ['오늘 리포트를 준비하고 있어요','오전 8시 이후 이 링크로 다시 열어 주세요.<br>화면을 켜 두시면 준비되는 대로 자동으로 열립니다.']);
+  try{document.getElementById('mainContent').style.display='none';}catch(_e){}
+  try{document.getElementById('errorState').style.display='none';}catch(_e){}
+  const el=document.getElementById('loadingState');if(!el)return true;
+  el.style.display='flex';
+  el.innerHTML='<div style="max-width:340px;width:100%;margin:0 auto;padding:0 20px;box-sizing:border-box">'
+    +'<div style="background:var(--bg-card);border:1.5px solid #C9A05C;border-radius:18px;padding:26px 20px 20px;text-align:center;box-shadow:0 6px 24px rgba(150,112,31,.12)">'
+    +'<div style="font-size:34px">☕</div>'
+    +'<div style="margin-top:12px;font-size:18px;font-weight:800;color:var(--ink);word-break:keep-all">'+T[0]+'</div>'
+    +'<div style="margin-top:8px;font-size:13.5px;color:var(--ink-lt);line-height:1.75;word-break:keep-all">'+T[1]+'</div>'
+    +'<div style="margin-top:18px;display:flex;align-items:center;gap:10px;background:#FAF7EF;border-radius:12px;padding:11px 12px;text-align:left">'
+    +'<div style="width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">'+esc(nm.slice(0,1))+'</div>'
+    +'<div style="min-width:0"><div style="font-size:13.5px;font-weight:700;color:var(--ink)">'+esc(nm)+'</div>'+(co?'<div style="font-size:11px;color:var(--ink-sub)">'+esc(co)+'</div>':'')+'</div></div>'
+    +'</div></div>';
+  /* 생성되는 순간 새로고침 — 1회만 */
+  try{
+    let done=false;
+    const un=onSnapshot(doc(db,'client_daily_reports',today),sn=>{
+      if(done)return;
+      if(sn.exists()&&CD_READY_ST.includes(String((sn.data()||{}).status||''))){
+        done=true;try{un();}catch(_e){}
+        setTimeout(()=>location.reload(),2000);
+      }
+    },()=>{});
+  }catch(_e){}
+  return true;
 }
 /* ── 잠금 화면 ── */
 let _cdLockFc=null;
