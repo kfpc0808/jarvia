@@ -18163,24 +18163,47 @@ window.JV_GIFT_SVG=JV_GIFT_SVG;
 function jvGiftClose(){const d=document.getElementById('jvg-dim');if(d)d.remove();}
 function jvGiftShow(html,center){jvGiftClose();const d=document.createElement('div');d.id='jvg-dim';d.className='jvg-dim'+(center?' center':'');d.innerHTML=`<div class="jvg-sheet" role="dialog" aria-modal="true">${html}</div>`;d.addEventListener('click',e=>{if(e.target===d)jvGiftClose();});document.body.appendChild(d);}
 window.jvGiftClose=jvGiftClose;
+/* ★ [2026-10-22] 선물 서버 미리 깨우기 — 실측: 잠든 상태 첫 클릭 3.2초 / 깨어 있으면 0.3초
+   사전 요청(OPTIONS)만 보냄 → 함수 인스턴스만 켜지고 선물 생성 코드는 실행 안 됨 (비용 없음)
+   로그인 직후 1회 + 탭으로 돌아올 때 · 10분 간격 제한 */
+let _jvGiftWarmAt=0;
+function jvGiftWarm(){
+  if(!me)return;
+  const now=Date.now();if(now-_jvGiftWarmAt<10*60000)return;_jvGiftWarmAt=now;
+  try{fetch(JV_FN+'/giftCreate',{method:'OPTIONS',mode:'cors'}).catch(function(){});}catch(_){}
+}
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')jvGiftWarm();});
 
 /* ── 보내는 사람: 선물하기 ── */
 window.jvGiftShare=async function(cid){
   if(!me||!meData){openM('mdl-login-prompt');return;}
   const c=allContents.find(x=>x.contentId===cid);if(!c)return;
   const img=c.thumbAutoCard||c.thumbAuto||'';
-  jvGiftShow(`<div class="jvg-grip"></div><div class="jvg-h">${JV_GIFT_SVG('#C9A45C',22)}동료에게 선물하기<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div><div style="padding:30px 0;text-align:center;color:#7A8299;font-size:13px">선물 링크를 준비하고 있어요…</div>`);
+  window._jvGiftCur=null;   /* ★ [2026-10-22] 이전 선물 링크로 잘못 공유되지 않게 */
+  const hd=`<div class="jvg-grip"></div><div class="jvg-h">${JV_GIFT_SVG('#C9A45C',22)}동료에게 선물하기<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div>`;
+  const dt=c.createdAt?' · '+fdate(c.createdAt):'';
+  /* ★ [2026-10-22] 화면 먼저 — 콘텐츠 정보는 바로 보여 주고, 공유 버튼만 링크가 준비되면 활성화 */
+  jvGiftShow(`${hd}
+    <div class="jvg-item">${img?`<img src="${esc(img)}" alt="">`:''}<div><div class="jvg-ser" id="jvg-ser">${esc(dt.replace(/^ · /,''))}</div><div class="jvg-tt" id="jvg-tt">${esc(c.title||'')}</div></div></div>
+    <div id="jvg-pt-slot"><div style="background:#F6F7FA;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#7A8299;margin-bottom:12px;min-height:150px;box-sizing:border-box;display:flex;align-items:center;justify-content:center">선물 링크를 준비하고 있어요…</div></div>
+    <div class="jvg-note"><span style="color:#2E7D32;font-weight:800">✓</span><span>받는 분은 무료 가입 후 이 콘텐츠를 <b style="color:#1A2238">끝까지</b> 볼 수 있어요 (선물 열람: 한 달 1편, 총 5편)</span></div>
+    <div class="jvg-btns"><button class="jvg-kk" id="jvg-kk" disabled style="opacity:.55;cursor:wait">링크 준비 중…</button><button class="jvg-cp" id="jvg-cp" disabled style="opacity:.55;cursor:wait">🔗 링크 복사</button></div>`);
+  const sheet=document.getElementById('jvg-dim');
+  const alive=()=>!!sheet&&document.getElementById('jvg-dim')===sheet;   /* 기다리는 사이 닫았거나 다른 선물을 열었으면 손대지 않음 */
   let j;
-  try{j=await jvGiftApi('giftCreate',{contentId:cid});}catch(e){jvGiftClose();toast('선물 링크를 만들지 못했습니다: '+e.message,'error');return;}
+  try{j=await jvGiftApi('giftCreate',{contentId:cid});}catch(e){if(alive()){jvGiftClose();toast('선물 링크를 만들지 못했습니다: '+e.message,'error');}return;}
+  if(!alive())return;
   if(!j.ok){jvGiftClose();toast(j.error||'선물할 수 없는 콘텐츠입니다','warning');return;}
   window._jvGiftCur={giftId:j.giftId,url:j.url,title:j.title||c.title,series:j.series||'',thumb:j.thumb||c.thumbAuto||img,name:j.senderName||meData.name||''};
   const pt=j.hasReferral?`<div class="jvg-pt"><div class="lb">추천 포인트</div><div style="display:flex;align-items:baseline;gap:6px"><span class="big">50,000</span><span style="font-size:16px;font-weight:800;color:#C9A45C">P</span><span style="font-size:12px;color:#AEB6CC">최대 · 🔥 한정기간 특별프로모션</span></div><div class="jvg-talk">💬 고객 알림톡 <b style="color:#fff">${fmt(50000/JV_TALK_P)}회</b> 보낼 수 있어요</div><div class="jvg-two"><div><div class="s">받는 분이 가입하면</div><div class="v">10,000P</div><div class="t">알림톡 ${fmt(10000/JV_TALK_P)}회</div></div><div><div class="s">멤버십 전환 시 추가</div><div class="v">40,000P</div><div class="t">알림톡 ${fmt(40000/JV_TALK_P)}회</div></div></div></div>`
     :`<div style="background:#F6F7FA;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#5A6484;margin-bottom:12px">이 계정은 추천 포인트 적립 대상이 아니에요(총판·단체 소속 등). 선물은 그대로 보낼 수 있습니다.</div>`;
-  jvGiftShow(`<div class="jvg-grip"></div><div class="jvg-h">${JV_GIFT_SVG('#C9A45C',22)}동료에게 선물하기<button class="jvg-x" onclick="jvGiftClose()" aria-label="닫기">×</button></div>
-    <div class="jvg-item">${img?`<img src="${esc(img)}" alt="">`:''}<div><div class="jvg-ser">${esc(j.series||'')}${c.createdAt?' · '+fdate(c.createdAt):''}</div><div class="jvg-tt">${esc(j.title||c.title||'')}</div></div></div>
-    ${pt}
-    <div class="jvg-note"><span style="color:#2E7D32;font-weight:800">✓</span><span>받는 분은 무료 가입 후 이 콘텐츠를 <b style="color:#1A2238">끝까지</b> 볼 수 있어요 (선물 열람: 한 달 1편, 총 5편)</span></div>
-    <div class="jvg-btns"><button class="jvg-kk" onclick="jvGiftKakao()">💬 카카오톡으로 선물</button><button class="jvg-cp" onclick="jvGiftCopy()">🔗 링크 복사</button></div>`);
+  const $s=id=>document.getElementById(id);
+  if($s('jvg-ser'))$s('jvg-ser').textContent=(j.series||'')+dt;
+  if($s('jvg-tt'))$s('jvg-tt').textContent=j.title||c.title||'';
+  if($s('jvg-pt-slot'))$s('jvg-pt-slot').innerHTML=pt;
+  const kk=$s('jvg-kk'),cp=$s('jvg-cp');
+  if(kk){kk.disabled=false;kk.style.opacity='';kk.style.cursor='';kk.textContent='💬 카카오톡으로 선물';kk.onclick=function(){jvGiftKakao();};}
+  if(cp){cp.disabled=false;cp.style.opacity='';cp.style.cursor='';cp.onclick=function(){jvGiftCopy();};}
   try{logSvc('content_gift');}catch(_){}
 };
 /* 실제로 보낸 순간 기록(카톡/링크) — 관리자 「콘텐츠 선물 현황」 집계용, 실패해도 공유는 그대로 */
@@ -18254,7 +18277,7 @@ window.jvGiftDoOpen=async function(g){
 (function jvGiftWatch(){
   let tries=0,loaded='';
   const tick=()=>{
-    if(me&&loaded!==me.uid){loaded=me.uid;jvGiftLoad();}
+    if(me&&loaded!==me.uid){loaded=me.uid;jvGiftLoad();jvGiftWarm();}   /* ★ [2026-10-22] 선물 서버 미리 깨우기 */
     const g=localStorage.getItem('jarvia_gift');
     if(g&&me&&meData&&allContents&&allContents.length){jvGiftPrompt(g);return;}
     if(++tries<400)setTimeout(tick,1500);
