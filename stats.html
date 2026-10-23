@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>통계 한눈에 · JARVIA</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<!-- ═══════════════════════════════════════════════════════════════
+     통계 한눈에 (stats.html)  [2026-10-24 신설]
+     · 데이터: Firestore stat_cards (statCornerCards.js 가 공식 원자료로 계산·저장)
+     · 이용 대상: 실시간 자료실과 같은 정규회원 + 자비아(기간제) — firestore.rules stat_cards 와 같은 목록 유지
+     · 숫자는 저장값만 표시. 고객 맞춤(나이·성별 등)은 카드 안 matrix 에서 고르기만 함(새 숫자를 만들지 않음)
+     · 화면: 홈(주제 19) → 주제 상세 → 크게 보여주기
+     ═══════════════════════════════════════════════════════════════ -->
+<style>
+:root{--font:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',sans-serif;--ink:#141B2A;--lt:#6B7585;--line:#E6EAF0;--nv:#1B3A5C;--nv2:#15294A;--gd:#B08A3A;--bg:#F4F6F9;--gr:#177A56;--sh:0 1px 2px rgba(20,27,42,.04),0 4px 14px rgba(20,27,42,.06)}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--font);-webkit-text-size-adjust:100%}
+body{overflow-x:hidden}
+button{font-family:inherit}
+.top{position:sticky;top:0;z-index:20;background:var(--nv2);color:#fff;box-shadow:0 2px 10px rgba(15,36,64,.18)}
+.top-in{max-width:980px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:10px}
+.back{color:#DCE6F2;text-decoration:none;font-size:14px;font-weight:700;white-space:nowrap;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:6px 10px;background:transparent;cursor:pointer}
+.ttl{flex:1;min-width:0}
+.ttl b{display:block;font-size:17px;font-weight:900;letter-spacing:-.02em}
+.ttl span{display:block;font-size:11.5px;color:#C9D6E6;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cust{background:#fff;border-bottom:1px solid var(--line)}
+.cust-in{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cust-lb{font-size:13px;font-weight:800;color:var(--nv)}
+.seg{display:inline-flex;border:1px solid #CBD5E1;border-radius:9px;overflow:hidden}
+.seg button{border:none;background:#fff;padding:7px 12px;font-size:13px;font-weight:700;color:#475569;cursor:pointer}
+.seg button.on{background:var(--nv);color:#fff}
+.age{width:72px;border:1px solid #CBD5E1;border-radius:9px;padding:7px 9px;font-size:14px;font-weight:700;font-family:inherit}
+.cust-clear{border:none;background:none;color:var(--lt);font-size:12.5px;text-decoration:underline;cursor:pointer;padding:4px}
+.cust-hint{font-size:12px;color:var(--lt);flex-basis:100%}
+.wrap{max-width:980px;margin:0 auto;padding:16px 16px 60px}
+.srch{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:var(--sh)}
+.srch input{flex:1;min-width:0;border:none;outline:none;font-size:15px;font-family:inherit}
+.hint{font-size:12px;color:var(--lt);margin:8px 2px 0;line-height:1.55}
+.grp{margin-top:22px}
+.grp h2{font-size:16px;font-weight:900;margin:0 0 10px;letter-spacing:-.02em;color:var(--nv)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.tile{display:block;text-align:left;width:100%;border:1px solid var(--line);background:#fff;border-radius:14px;padding:13px 14px;cursor:pointer;box-shadow:var(--sh);transition:.15s;min-width:0}
+.tile:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(20,27,42,.1)}
+.tile .tp{font-size:12px;font-weight:800;color:var(--gd)}
+.tile .tt{font-size:15px;font-weight:800;margin-top:3px;letter-spacing:-.02em}
+.tile .tv{font-size:20px;font-weight:900;color:var(--nv);margin-top:6px;letter-spacing:-.02em;word-break:keep-all}
+.tile .ty{font-size:11px;color:var(--lt);margin-top:3px}
+.fav .tile{border-color:#F5D9A8;background:#FFFBF2}
+.empty{padding:30px 10px;text-align:center;color:var(--lt);font-size:14px}
+/* 상세 */
+.dt{display:none}
+.dt.on{display:block}
+.crumb{border:none;background:none;color:var(--nv);font-size:14px;font-weight:700;cursor:pointer;padding:4px 0;margin-bottom:6px}
+.hero{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--sh)}
+.hero .tp{font-size:12.5px;font-weight:800;color:var(--gd)}
+.hero h1{font-size:21px;font-weight:900;margin:3px 0 0;letter-spacing:-.025em;word-break:keep-all}
+.pbox{margin-top:14px;background:linear-gradient(135deg,#15294A,#1E3A66);color:#fff;border-radius:14px;padding:16px}
+.pbox .who{font-size:12.5px;color:#C9D6E6;font-weight:700}
+.pbox .big{font-size:38px;font-weight:900;letter-spacing:-.03em;margin-top:4px;word-break:keep-all;line-height:1.15}
+.pbox .sent{font-size:15px;font-weight:700;margin-top:6px;line-height:1.55;word-break:keep-all}
+.pbox .note{font-size:11.5px;color:#A9B8CC;margin-top:8px;line-height:1.5}
+.nat{margin-top:12px;font-size:15px;font-weight:700;line-height:1.6;color:var(--nv);word-break:keep-all}
+.hl{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.hl li{font-size:13.5px;line-height:1.55;padding-left:14px;position:relative;color:#334155;word-break:keep-all}
+.hl li:before{content:'';position:absolute;left:2px;top:9px;width:5px;height:5px;border-radius:50%;background:var(--gd)}
+.cond{margin-top:12px;background:#F8FAFC;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6;color:#475569}
+.srcs{margin-top:8px;font-size:12px;color:var(--lt);line-height:1.7}
+.srcs a{color:var(--nv)}
+.acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn{border:none;border-radius:11px;padding:12px 16px;font-size:14.5px;font-weight:800;cursor:pointer;flex:1;min-width:140px}
+.btn.p{background:var(--nv);color:#fff}
+.btn.o{background:#fff;color:var(--nv);border:1.5px solid var(--nv)}
+.sec{margin-top:14px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:var(--sh)}
+.sec h3{margin:0 0 8px;font-size:14.5px;font-weight:900;color:var(--nv)}
+.q{display:flex;gap:9px;align-items:flex-start;font-size:14.5px;line-height:1.6;padding:6px 0;word-break:keep-all}
+.q b{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:#EAF1FB;color:var(--nv);font-size:12px;display:inline-flex;align-items:center;justify-content:center;margin-top:2px}
+.chk{display:inline-block;background:#E9F6F0;color:var(--gr);font-weight:800;font-size:12.5px;border-radius:14px;padding:5px 11px;margin:3px 4px 0 0}
+.ap{background:#FFF8E6;border:1px solid #F5D9A8;border-radius:12px;padding:12px 13px;font-size:14px;line-height:1.7;color:#3D2E10;white-space:pre-wrap;word-break:keep-all}
+.tbl-w{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:280px}
+th,td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;white-space:nowrap}
+th{font-size:12px;color:var(--lt);font-weight:800;background:#F8FAFC}
+tr.me td{background:#FFF6DD;font-weight:800}
+.sel{border:1px solid #CBD5E1;border-radius:9px;padding:7px 9px;font-size:14px;font-family:inherit;max-width:100%}
+/* 크게 보여주기 */
+.show{position:fixed;inset:0;z-index:100;background:#0F1F38;color:#fff;display:none;flex-direction:column;align-items:center;justify-content:center;padding:28px 22px;text-align:center}
+.show.on{display:flex}
+.show .s-who{font-size:17px;color:#C9D6E6;font-weight:700}
+.show .s-big{font-size:clamp(46px,12vw,110px);font-weight:900;letter-spacing:-.03em;line-height:1.1;margin-top:10px;word-break:keep-all}
+.show .s-sent{font-size:clamp(17px,3.6vw,30px);font-weight:700;margin-top:16px;line-height:1.5;max-width:900px;word-break:keep-all}
+.show .s-src{font-size:13px;color:#A9B8CC;margin-top:22px;line-height:1.6;max-width:760px}
+.show .s-x{position:absolute;top:14px;right:14px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;border-radius:10px;padding:8px 14px;font-size:15px;font-weight:700;cursor:pointer}
+.gate{max-width:440px;margin:60px auto;background:#fff;border-radius:16px;padding:26px 22px;text-align:center;box-shadow:var(--sh)}
+.gate h2{margin:0 0 8px;font-size:18px}
+.gate p{margin:0 0 16px;color:var(--lt);font-size:14px;line-height:1.6}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#141B2A;color:#fff;border-radius:10px;padding:11px 18px;font-size:14px;font-weight:700;z-index:200;display:none;max-width:90vw}
+.loading{padding:40px 0;text-align:center;color:var(--lt)}
+@media(max-width:600px){
+  .grid{grid-template-columns:1fr 1fr;gap:8px}
+  .tile{padding:11px 11px}
+  .tile .tt{font-size:14px}
+  .tile .tv{font-size:17px}
+  .hero h1{font-size:19px}
+  .pbox .big{font-size:32px}
+  .btn{min-width:0}
+}
+</style>
+</head>
+<body>
+<div class="top"><div class="top-in">
+  <button type="button" class="back" onclick="goBack()">← 자비아</button>
+  <div class="ttl"><b>🧮 통계 한눈에</b><span>상담에 바로 쓰는 공식 통계 · 출처·기준연도 함께 표시</span></div>
+</div></div>
+<div class="cust" id="custBar" style="display:none"><div class="cust-in">
+  <span class="cust-lb">고객 맞춤</span>
+  <span class="seg" id="sexSeg"><button type="button" data-v="M">남</button><button type="button" data-v="F">여</button></span>
+  <input class="age" id="ageIn" type="number" inputmode="numeric" min="0" max="100" placeholder="나이">
+  <span style="font-size:13px;color:var(--lt)">세</span>
+  <button type="button" class="cust-clear" onclick="setCust(null,null)">지우기</button>
+  <span class="cust-hint" id="custHint">고객 나이·성별을 넣으면 그 고객에 맞는 숫자로 바뀌어요. (저장되지 않아요)</span>
+</div></div>
+<div class="wrap" id="app"><div class="loading">불러오는 중…</div></div>
+<div class="show" id="show" role="dialog" aria-modal="true">
+  <button type="button" class="s-x" onclick="closeShow()">닫기 ✕</button>
+  <div class="s-who" id="sWho"></div>
+  <div class="s-big" id="sBig"></div>
+  <div class="s-sent" id="sSent"></div>
+  <div class="s-src" id="sSrc"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import{getAuth,onAuthStateChanged,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getFirestore,collection,getDocs,doc,getDoc,setDoc,serverTimestamp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+const FC={apiKey:"AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg",authDomain:"jarvia-platform.firebaseapp.com",projectId:"jarvia-platform",storageBucket:"jarvia-platform.firebasestorage.app",messagingSenderId:"388025068900",appId:"1:388025068900:web:09ba8e12e9e9e2ec49de71"};
+const app=initializeApp(FC);
+const auth=getAuth(app);
+setPersistence(auth,browserLocalPersistence).catch(()=>{});
+const db=getFirestore(app,'javia-db');
+
+/* 이용 대상 — firestore.rules stat_cards 와 같은 목록 (실시간 자료실 + 자비아 기간제) */
+const STAT_ROLES=['admin','branch_manager','inner_circle','con_homepage','jarvia_member','jarvia_inner','free_user'];
+const GROUPS=['큰 병','흔한 병·수술','돌봄·의료비','노후·수명','가정·돈'];
+const ORDER=['cancer','dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth','ltc','lifeHealth','deathRank','pension','retire','aging','privEdu','cpi','debt','asset','inherit'];
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const comma=n=>(n==null||isNaN(n))?'-':Number(n).toLocaleString('ko-KR');
+const r1=n=>(n==null||isNaN(n))?null:Math.round(n*10)/10;
+const people=n=>n==null?'-':(n>=10000?comma(r1(n/10000))+'만 명':comma(Math.round(n))+'명');
+const man=v=>{if(v==null)return'-';const n=Math.round(v);if(Math.abs(n)>=10000){const e=Math.floor(n/10000),r=n%10000;return r?comma(e)+'억 '+comma(r)+'만원':comma(e)+'억원';}return comma(n)+'만원';};
+const lsGet=k=>{try{return localStorage.getItem(k);}catch(_){return null;}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,v);}catch(_){}};
+function toast(t){const el=$('toast');el.textContent=t;el.style.display='block';clearTimeout(toast._t);toast._t=setTimeout(()=>el.style.display='none',2200);}
+window.goBack=function(){if(location.hash&&location.hash.length>1){location.hash='';return;}location.href='./index.html';};
+
+let CARDS={},me=null,myName='',cust={sex:null,age:null};
+
+/* ─── 고객 맞춤 입력 (화면에만 유지, 저장 안 함) ─── */
+window.setCust=function(sex,age){
+  cust={sex:sex,age:(age===''||age==null||isNaN(age))?null:Math.max(0,Math.min(110,Math.floor(Number(age))))};
+  document.querySelectorAll('#sexSeg button').forEach(b=>b.classList.toggle('on',b.dataset.v===cust.sex));
+  if($('ageIn').value!==(cust.age==null?'':String(cust.age)))$('ageIn').value=cust.age==null?'':cust.age;
+  render();
+};
+document.querySelectorAll('#sexSeg button').forEach(b=>b.addEventListener('click',()=>setCust(cust.sex===b.dataset.v?null:b.dataset.v,cust.age)));
+$('ageIn').addEventListener('input',e=>setCust(cust.sex,e.target.value));
+const sexKo=s=>s==='M'?'남성':s==='F'?'여성':'';
+const custLabel=()=>[cust.age!=null?cust.age+'세':'',sexKo(cust.sex)].filter(Boolean).join(' ');
+
+/* ─── 카드별 고객 맞춤 숫자 — 저장된 matrix 에서 고르기만 한다 ─── */
+const age5=a=>a<1?0:a<5?1:Math.min(100,Math.floor(a/5)*5);
+const band10=a=>a<1?'0세':a<10?'1-9세':a>=80?'80세 이상':(Math.floor(a/10)*10)+'-'+(Math.floor(a/10)*10+9)+'세';
+const firstNum=s=>{const m=String(s).match(/\d+/);return m?Number(m[0]):null;};
+function pickBand(obj,a){                      // 키 이름의 첫 숫자로 나이대 찾기 (예: '50~59세', '50-54세', '85세이상')
+  let best=null,bn=-1;for(const k of Object.keys(obj||{})){const n=firstNum(k);if(n!=null&&n<=a&&n>bn){best=k;bn=n;}}return best;
+}
+const P={
+  lifeHealth(c){
+    if(cust.age==null)return null;const sk=cust.sex||'T';const a=age5(cust.age);const m=c.matrix&&c.matrix[sk]&&c.matrix[sk][a];if(!m)return null;
+    return{who:`${a}세 ${sk==='T'?'남녀 평균':sexKo(sk)} 기준`,big:`${m.liveTo}세`,sent:`평균 ${m.liveTo}세까지 살고, 그중 약 ${m.sickYears}년은 질병을 가지고 지냅니다.`,
+      note:`앞으로 남은 기간 ${m.lifeLeft}년 중 질병 없이 지내는 기간 ${m.healthyLeft}년 · 나이는 5세 단위로 맞춰요`};
+  },
+  deathRank(c){
+    if(cust.age==null&&!cust.sex)return null;const sk=cust.sex||'T';const b=cust.age==null?'전체':band10(cust.age);const l=c.matrix&&c.matrix[sk]&&c.matrix[sk][b];if(!l||!l.length)return null;
+    return{who:`${b} ${sk==='T'?'남녀 전체':sexKo(sk)}`,big:l[0].cause,sent:l.map(x=>`${x.rank}위 ${x.cause} (10만 명당 ${comma(x.rate)}명)`).join(' · '),note:''};
+  },
+  cancer(c){
+    if(cust.age==null)return null;const sk=cust.sex||'T';const inc=c.matrix&&c.matrix.incidence&&c.matrix.incidence[sk];const k=pickBand(inc,cust.age);if(!k)return null;const v=inc[k];if(!v||!v.ratePer100k)return null;
+    const oneIn=Math.round(100000/v.ratePer100k);
+    return{who:`${k} ${sk==='T'?'남녀 전체':sexKo(sk)}`,big:`${comma(v.ratePer100k)}명`,sent:`인구 10만 명당 한 해 ${comma(v.ratePer100k)}명이 새로 암 진단을 받습니다 (약 ${comma(oneIn)}명 중 1명).`,
+      note:'많이 발생하는 암: '+(v.top3||[]).map(x=>`${x.name} ${comma(x.rate)}명`).join(' · ')+' (10만 명당)'};
+  },
+  pension(c){
+    if(cust.age==null||cust.age<65)return null;const arr=(c.matrix&&c.matrix.byAge)||[];let best=null,bn=-1;
+    for(const x of arr){const n=firstNum(x.age);if(n!=null&&/~|이상/.test(x.age)&&!/인구/.test(x.age)&&n<=cust.age&&n>bn){best=x;bn=n;}}
+    if(!best)return null;return{who:`${best.age}`,big:`월 ${best.monthlyMan}만원`,sent:`${best.age}가 받는 연금은 월평균 ${best.monthlyMan}만원입니다 (수급률 ${best.rate}%).`,note:'모든 연금(기초·국민·직역·퇴직·개인·주택·농지) 합산'};
+  },
+  retire(c){
+    if(!cust.sex)return null;const v=c.matrix&&c.matrix.bySex&&c.matrix.bySex[cust.sex];if(v==null)return null;
+    return{who:`${sexKo(cust.sex)} · 55~64세 응답자`,big:`${v}세`,sent:`가장 오래 일한 직장을 평균 ${v}세에 그만둡니다.`,note:''};
+  },
+  debt(c){return hh(c,'debt');},
+  asset(c){return hh(c,'asset');},
+};
+['dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth'].forEach(id=>{P[id]=function(c){
+  if(cust.age==null||!cust.sex)return null;const ds=(c.matrix&&c.matrix.diseases)||[];const rows=[];
+  for(const d of ds){const t=d.bySexAge&&d.bySexAge[cust.sex];const k=pickBand(t,cust.age);if(k&&t[k])rows.push({d,k,v:t[k]});}
+  if(!rows.length)return null;const f=rows[0];
+  return{who:`${f.k} ${sexKo(cust.sex)}`,big:people(f.v.patients),sent:rows.map(x=>`${x.d.label}: 같은 연령대·성별 진료 환자 ${people(x.v.patients)}, 1인당 연간 진료비 약 ${x.v.costPerPatientMan}만원`).join(' / '),note:'건강보험 진료비(공단부담+본인부담), 비급여 제외'};
+};});
+function hhCode(a){return a<30?'B1601':a<40?'B1602':a<50?'B1603':a<60?'B1604':'B1605';}
+function hh(c,kind){
+  if(cust.age==null)return null;const arr=(c.matrix&&c.matrix.byAge)||[];const x=arr.find(r=>r.code===hhCode(cust.age));if(!x)return null;
+  if(kind==='debt')return{who:`가구주 ${x.age} 가구 평균`,big:man(x.debt),sent:`가구주가 ${x.age}인 가구는 평균 부채 ${man(x.debt)}, 한 해 원리금 상환 ${man(x.repay)}입니다.`,note:'부채 없는 가구 포함 평균'};
+  return{who:`가구주 ${x.age} 가구 평균`,big:man(x.net),sent:`가구주가 ${x.age}인 가구는 평균 순자산 ${man(x.net)}, 연 소득 ${man(x.income)}, 저축성·보장성 보험 ${man(x.insurance)}입니다.`,note:'평균값은 일부 고자산 가구 영향으로 중앙값보다 높아요'};
+}
+
+/* ─── 대표 숫자 표기 ─── */
+function bigOf(c){
+  const v=c.value,u=c.unit||'';
+  if(typeof v!=='number')return esc(v);
+  if(u==='명')return people(v);
+  if(u==='만원')return Math.abs(v)>=10000?man(v):comma(v)+'만원';   /* 1만 만원 미만은 소수 그대로 (예: 73.7만원) */
+  return comma(v)+u;
+}
+const sentence=h=>/다$/.test(String(h))?h+'.':h+'입니다.';   /* '…지낸다' 처럼 끝나는 문장은 '입니다'를 붙이지 않음 */
+const yearTxt=y=>/년|월/.test(String(y))?String(y):String(y)+'년';
+
+/* ─── 화면 ─── */
+function homeHtml(){
+  const q=(window._q||'').trim();
+  const list=ORDER.map(id=>CARDS[id]).filter(Boolean);
+  const hit=c=>!q||[c.topic,c.title,c.headline,c.group].join(' ').includes(q);
+  let favs=[];try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');favs=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(x=>x[0]).filter(id=>CARDS[id]).slice(0,3);}catch(_){}
+  const tile=c=>`<button type="button" class="tile" onclick="openCard('${c.id}')"><div class="tp">${esc(c.topic)}</div><div class="tt">${esc(c.title)}</div><div class="tv">${bigOf(c)}</div><div class="ty">${esc(yearTxt(c.baseYear))} 기준</div></button>`;
+  let h=`<div class="srch"><span>🔍</span><input id="q" type="search" placeholder="주제 검색 (예: 치매, 연금, 상속)" value="${esc(q)}" autocomplete="off"></div>
+    <p class="hint">통계청·심평원·국세청 등 공식 기관 자료를 그대로 가져와 매월 확인해요. 통계는 평균값이라 고객 개인의 위험을 뜻하지 않아요 — "이런 통계가 있어요"로 안내해 주세요.</p>`;
+  if(!q&&favs.length)h+=`<div class="grp fav"><h2>⭐ 자주 보는 통계</h2><div class="grid">${favs.map(id=>tile(CARDS[id])).join('')}</div></div>`;
+  let any=false;
+  for(const g of GROUPS){const cs=list.filter(c=>c.group===g&&hit(c));if(!cs.length)continue;any=true;h+=`<div class="grp"><h2>${esc(g)}</h2><div class="grid">${cs.map(tile).join('')}</div></div>`;}
+  if(!any)h+=`<div class="empty">"${esc(q)}"에 맞는 통계가 없어요.</div>`;
+  return h;
+}
+function tableHtml(c){
+  const m=c.matrix||{};let rows=[],head=[],meKey=null;
+  if(c.id==='lifeHealth'){const sk=cust.sex||'T';head=['나이','살 나이(평균)','남은 기간','질병 있는 기간'];meKey=cust.age!=null?String(age5(cust.age)):null;
+    rows=Object.keys(m[sk]||{}).map(Number).sort((a,b)=>a-b).filter(a=>a<=85).map(a=>{const x=m[sk][a];return{k:String(a),c:[a+'세',x.liveTo+'세',x.lifeLeft+'년',x.sickYears==null?'-':x.sickYears+'년']};});}
+  else if(c.id==='deathRank'){const sk=cust.sex||'T';head=['연령대','1위','2위','3위'];meKey=cust.age!=null?band10(cust.age):'전체';
+    const bands=['전체','0세','1-9세','10-19세','20-29세','30-39세','40-49세','50-59세','60-69세','70-79세','80세 이상'];
+    rows=bands.filter(b=>m[sk]&&m[sk][b]).map(b=>({k:b,c:[b,...[0,1,2].map(i=>m[sk][b][i]?m[sk][b][i].cause:'-')]}));}
+  else if(c.id==='cancer'){const sv=m.survivalByType||{};head=['암 종류','5년 생존율(전체)','남','여'];
+    rows=Object.entries(sv).filter(([,v])=>v&&v.T!=null).sort((a,b)=>b[1].T-a[1].T).map(([k,v])=>({k,c:[k.replace(/\(.*\)/,''),v.T+'%',v.M==null?'-':v.M+'%',v.F==null?'-':v.F+'%']}));}
+  else if(m.diseases){head=['질병','진료 환자','1인당 진료비','입원 1인당'];rows=m.diseases.map(d=>({k:d.cd,c:[d.label,people(d.patients),d.costPerPatientMan+'만원',d.inpatCostPerPatientMan==null?'-':d.inpatCostPerPatientMan+'만원']}));}
+  else if(c.id==='ltc'){head=['구분','인원'];rows=(m.grades||[]).map(g=>({k:g.grade,c:[g.grade,people(g.value)]}));}
+  else if(c.id==='pension'){head=['연령','월평균 수급액','수급률'];rows=(m.byAge||[]).map(x=>({k:x.age,c:[x.age,x.monthlyMan+'만원',x.rate+'%']}));}
+  else if(c.id==='debt'||c.id==='asset'){meKey=cust.age!=null?hhCode(cust.age):null;head=c.id==='debt'?['가구주 연령','평균 부채','연 원리금상환']:['가구주 연령','순자산','연 소득','보험(저축·보장)'];
+    rows=(m.byAge||[]).map(x=>({k:x.code,c:c.id==='debt'?[x.age,man(x.debt),man(x.repay)]:[x.age,man(x.net),man(x.income),man(x.insurance)]}));}
+  else if(c.id==='aging'){const sg=(m.single&&m.single.regions)||[];
+    const opts=sg.filter(r=>/^\d{2}$|^\d{4}$/.test(r.code)).map(r=>`<option value="${esc(r.code)}">${esc(r.name)}</option>`).join('');
+    const el=(m.elder||[]).map(x=>`<tr><td>${esc(x.year)}년</td><td>${x.share}%</td></tr>`).join('');
+    return `<div class="sec"><h3>65세 이상 인구 비율</h3><div class="tbl-w"><table><tr><th>연도</th><th>65세 이상</th></tr>${el}</table></div>
+      <h3 style="margin-top:14px">우리 지역 1인 가구 비율 (${esc(m.single&&m.single.year)}년)</h3><select class="sel" onchange="pickRegion(this.value)"><option value="">지역 선택</option>${opts}</select> <b id="regV" style="color:var(--nv);font-size:16px;margin-left:6px"></b></div>`;}
+  else if(c.id==='privEdu'){const b=m.byLevel||{};head=['학교급','월평균'];rows=Object.entries(b).map(([k,v])=>({k,c:[k,v==null?'-':v+'만원']}));}
+  else if(c.id==='inherit'){head=['자산 종류','비중'];rows=(m.assets||[]).map(a=>({k:a.asset,c:[a.asset,a.share==null?'-':a.share+'%']}));}
+  else if(c.id==='retire'){const b=m.bySex||{};head=['구분','평균 나이'];rows=[['T','전체'],['M','남자'],['F','여자']].map(([k,n])=>({k,c:[n,b[k]==null?'-':b[k]+'세']}));meKey=cust.sex;}
+  if(!rows.length)return'';
+  return `<div class="sec"><h3>자세히 보기</h3><div class="tbl-w"><table><tr>${head.map(x=>`<th>${esc(x)}</th>`).join('')}</tr>${rows.map(r=>`<tr class="${meKey!=null&&r.k===meKey?'me':''}">${r.c.map(x=>`<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</table></div></div>`;
+}
+window.pickRegion=function(code){const c=CARDS.aging;const r=((c.matrix.single||{}).regions||[]).find(x=>x.code===code);$('regV').textContent=r?r.share+'%':'';};
+function detailHtml(c){
+  const p=P[c.id]?P[c.id](c):null;
+  const need=P[c.id]&&!p?`<div class="pbox" style="background:#EEF3F9;color:var(--nv)"><div class="who" style="color:var(--nv)">고객 맞춤 숫자</div><div class="sent" style="font-size:13.5px">위의 「고객 맞춤」에 ${['retire'].includes(c.id)?'성별을':['pension'].includes(c.id)?'나이(65세 이상)를':['deathRank'].includes(c.id)?'나이 또는 성별을':['dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth'].includes(c.id)?'나이와 성별을':'나이를'} 넣으면 이 고객에게 맞는 숫자를 보여드려요.</div></div>`:'';
+  const pb=p?`<div class="pbox"><div class="who">${esc(p.who)}</div><div class="big">${esc(p.big)}</div><div class="sent">${esc(p.sent)}</div>${p.note?`<div class="note">${esc(p.note)}</div>`:''}</div>`:need;
+  const src=(c.sources||[]).map(s=>`${esc(s.org)} 「${esc(s.name)}」 ${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener">원자료</a>`:''}`).join('<br>');
+  const ap=String(c.approach||'').replace(/\{consultant\}/g,myName||'저');
+  return `<button type="button" class="crumb" onclick="location.hash=''">← 통계 홈</button>
+  <div class="hero"><div class="tp">${esc(c.group)} · ${esc(c.topic)}</div><h1>${esc(c.title)}</h1>
+    ${pb}
+    <div class="nat">전국: ${esc(sentence(c.headline))} <span style="font-size:12px;color:var(--lt);font-weight:600">(${esc(yearTxt(c.baseYear))} 기준)</span></div>
+    <ul class="hl">${(c.highlights||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
+    <div class="cond"><b>해석 조건</b> · ${esc(c.condition)}</div>
+    <div class="srcs">출처 · ${src}</div>
+    <div class="acts"><button type="button" class="btn p" onclick="openShow('${c.id}')">🖥 크게 보여주기</button><button type="button" class="btn o" onclick="copyAp('${c.id}')">📋 어프로치 문구 복사</button></div>
+  </div>
+  <div class="sec"><h3>💬 고객에게 던질 질문</h3>${(c.questions||[]).map((q,i)=>`<div class="q"><b>${i+1}</b><span>${esc(q)}</span></div>`).join('')}
+    <h3 style="margin-top:12px">🔗 이어지는 점검</h3><div>${(c.checks||[]).map(x=>`<span class="chk">${esc(x)}</span>`).join('')}</div></div>
+  <div class="sec"><h3>✉️ 어프로치 문구 <span style="font-size:12px;color:var(--lt);font-weight:600">· 숫자는 전국 통계 기준</span></h3><div class="ap" id="ap">${esc(ap)}</div>
+    <div class="acts"><button type="button" class="btn p" onclick="copyAp('${c.id}')">문구 복사</button></div></div>
+  ${tableHtml(c)}`;
+}
+function render(){
+  const app=$('app');if(!app||!Object.keys(CARDS).length)return;
+  const id=(location.hash.match(/card=([A-Za-z]+)/)||[])[1];
+  if(id&&CARDS[id]){app.innerHTML=detailHtml(CARDS[id]);}
+  else{app.innerHTML=homeHtml();const qi=$('q');if(qi){qi.addEventListener('input',e=>{window._q=e.target.value;const pos=e.target.selectionStart;render();const n=$('q');if(n){n.focus();try{n.setSelectionRange(pos,pos);}catch(_){}}});}}
+}
+window.openCard=function(id){
+  try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');m[id]=(m[id]||0)+1;lsSet('jv_stat_views',JSON.stringify(m));}catch(_){}
+  location.hash='card='+id;window.scrollTo(0,0);
+};
+window.addEventListener('hashchange',()=>{render();window.scrollTo(0,0);});
+window.copyAp=async function(id){
+  const c=CARDS[id];const t=String(c.approach||'').replace(/\{consultant\}/g,myName||'저');
+  try{await navigator.clipboard.writeText(t);toast('문구를 복사했어요. 카톡에 붙여넣어 보내세요.');}
+  catch(_){const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('문구를 복사했어요.');}catch(__){toast('복사가 안 돼요. 문구를 길게 눌러 복사해 주세요.');}ta.remove();}
+};
+window.openShow=function(id){
+  const c=CARDS[id];const p=P[id]?P[id](c):null;
+  $('sWho').textContent=p?p.who:(c.topic+' · 전국');
+  $('sBig').textContent=p?p.big:String(bigOf(c)).replace(/&[a-z#0-9]+;/g,'');
+  $('sSent').textContent=p?p.sent:sentence(c.headline);
+  $('sSrc').textContent=(c.sources||[]).map(s=>s.org).filter((v,i,a)=>a.indexOf(v)===i).join(' · ')+' · '+yearTxt(c.baseYear)+' 기준 · '+c.condition;
+  $('show').classList.add('on');
+  try{if(document.documentElement.requestFullscreen&&window.innerWidth<900)document.documentElement.requestFullscreen().catch(()=>{});}catch(_){}
+};
+window.closeShow=function(){$('show').classList.remove('on');try{if(document.fullscreenElement)document.exitFullscreen();}catch(_){}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeShow();});
+
+function gate(t,d){$('app').innerHTML=`<div class="gate"><h2>${esc(t)}</h2><p>${esc(d)}</p><button type="button" class="btn p" onclick="location.href='./index.html'">자비아로 가기</button></div>`;}
+
+onAuthStateChanged(auth,async u=>{
+  if(!u){gate('로그인이 필요해요','자비아에 로그인한 뒤 「통계 한눈에」를 다시 눌러 주세요.');return;}
+  me=u;
+  let role='',realRole='';
+  const isAdm=/@javia-admin\.internal$/.test(u.email||'');
+  try{const s=await getDoc(doc(db,'users',u.uid));if(s.exists()){const d=s.data();role=d.role||'';realRole=d.realRole||'';myName=d.name||'';}}catch(_){}
+  if(!isAdm&&!STAT_ROLES.includes(role)&&!STAT_ROLES.includes(realRole)){gate('정규회원 전용 기능이에요','「통계 한눈에」는 실시간 자료실과 같은 정규회원 서비스예요.');return;}
+  try{
+    const snap=await getDocs(collection(db,'stat_cards'));
+    snap.forEach(d=>{const c=d.data();if(c&&c.status==='active')CARDS[d.id]=c;});
+  }catch(e){console.error(e);gate('통계를 불러오지 못했어요','잠시 후 다시 열어 주세요. 계속되면 고객센터로 알려 주세요.');return;}
+  if(!Object.keys(CARDS).length){gate('준비 중이에요','통계 카드가 아직 준비되지 않았어요.');return;}
+  $('custBar').style.display='block';
+  /* 고객 상세 화면 등에서 ?age=&sex= 로 넘어오면 바로 맞춤 */
+  const qs=new URLSearchParams(location.search);
+  if(qs.get('age')||qs.get('sex'))setCust(['M','F'].includes(qs.get('sex'))?qs.get('sex'):null,qs.get('age'));else render();
+});
+</script>
+</body>
+</html>
