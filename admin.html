@@ -294,6 +294,7 @@ input::placeholder,textarea::placeholder{color:#AEB6C4;font-weight:400;opacity:1
         <a class="sn" data-p="p-contents" onclick="goPanel(this)">📁 콘텐츠관리</a>
         <a class="sn" data-p="p-cats" onclick="goPanel(this)">🏷 카테고리관리</a>
         <a class="sn" data-p="p-biz-signals" onclick="goPanel(this)">📡 실시간자료실 관리</a>
+        <a class="sn" data-p="p-statcorner" onclick="goPanel(this);scLoad()">🧮 상담용 통계</a><!-- ★ [2026-10-24] 수집·계산·카드 갱신 현황 (statCorner.js · statCornerCards.js) -->
         <a class="sn" data-p="p-reviews" onclick="goPanel(this)">✍️ 노하우&후기</a>
         <a class="sn" data-p="p-guide" onclick="goPanel(this)">📖 가이드관리</a>
         <a class="sn" data-p="p-video-guide" onclick="goPanel(this)">🎬 영상가이드관리</a>
@@ -1214,6 +1215,37 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
         <button class="btn btn-sec" onclick="gfCsv()">⬇ 엑셀(CSV)</button>
       </div>
       <div id="gf-body"><div style="color:#7A8299;padding:30px;text-align:center">불러오는 중…</div></div>
+    </div>
+    <div id="p-statcorner" class="panel hidden"><!-- ★ [2026-10-24] 상담용 통계 — stat_meta/sync(수집)·stat_meta/cards(계산)·stat_cards(카드) 보기 전용 -->
+      <style>
+        #p-statcorner .sc-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+        #p-statcorner .sc-c{background:#fff;border:1px solid #E3E6EE;border-radius:12px;padding:12px 14px;min-width:0}
+        #p-statcorner .sc-c span{display:block;font-size:12px;color:#6b7590;font-weight:700}
+        #p-statcorner .sc-c b{display:block;font-size:18px;color:#1b2440;margin-top:4px;word-break:keep-all}
+        #p-statcorner .sc-c em{display:block;font-style:normal;font-size:11.5px;color:#8A94A6;margin-top:2px}
+        #p-statcorner .sc-c.bad b{color:#C62828}
+        #p-statcorner h3{font-size:15px;margin:18px 0 8px;color:#1b2440}
+        #p-statcorner .sc-tw{overflow-x:auto;-webkit-overflow-scrolling:touch;background:#fff;border:1px solid #E3E6EE;border-radius:12px}
+        #p-statcorner table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px}
+        #p-statcorner th{background:#F6F8FB;color:#556079;font-weight:800;text-align:left;padding:8px 10px;white-space:nowrap}
+        #p-statcorner td{border-top:1px solid #EEF1F5;padding:7px 10px;vertical-align:top}
+        #p-statcorner .pill{display:inline-block;font-size:11px;font-weight:800;border-radius:6px;padding:1px 7px;white-space:nowrap}
+        #p-statcorner .ok{background:#E8F5E9;color:#2E7D32}#p-statcorner .ng{background:#FFEBEE;color:#C62828}
+        #p-statcorner .up{background:#FFF3E0;color:#B45309}#p-statcorner .hold{background:#ECEFF1;color:#546E7A}
+        #p-statcorner .sc-note{font-size:12px;color:#6b7590;line-height:1.6;margin-top:6px}
+        @media(max-width:768px){#p-statcorner .sc-sum{grid-template-columns:1fr 1fr}}
+      </style>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <h2 style="margin:0">🧮 상담용 통계</h2>
+        <button class="btn btn-sm" onclick="scLoad()">새로고침</button>
+        <span style="font-size:12px;color:#6b7590">매월 5일 06:00 자동 수집 → 카드 자동 계산 · 보기 전용(실행은 PowerShell 명령)</span>
+      </div>
+      <div class="sc-sum" id="sc-sum"></div>
+      <h3>수집 결과 (원자료)</h3>
+      <div class="sc-tw"><table><thead><tr><th>자료</th><th>결과</th><th>행 수</th><th>최신 시점</th><th>이번에 바뀜</th><th>오류</th></tr></thead><tbody id="sc-src"></tbody></table></div>
+      <h3>카드 (회원 화면)</h3>
+      <div class="sc-tw"><table><thead><tr><th>분류</th><th>주제</th><th>대표값</th><th>기준시점</th><th>숫자 바뀐 날</th><th>이전</th><th>상태</th></tr></thead><tbody id="sc-cards"></tbody></table></div>
+      <div class="sc-note">· 「숫자 바뀐 날」 30일 이내 카드는 회원 화면에 <b>갱신</b> 배지가 붙습니다. · 보류 카드(교통사고)는 자료 뜻 확인 전이라 계산하지 않습니다(statCornerCards.js HOLD).</div>
     </div>
     <div id="p-letters" class="panel hidden"><!-- ★ [2026-10-11] 일반회원 고객 레터 — 검수·승인·회원별 이용현황 (functions/customerLetter.js letterAdmin) -->
       <style>
@@ -28724,6 +28756,39 @@ async function ltTipFill(){
   }finally{_ltTipBusy=false;await ltLoad();}
 }
 window.ltTipFill=ltTipFill;
+/* ═══ ★ [2026-10-24] 🧮 상담용 통계 — 수집·계산·카드 갱신 현황 (보기 전용) ═══ */
+const SC_HOLD=['autoAcc'];   /* statCornerCards.js HOLD 와 같게 */
+const scTs=t=>{if(!t)return null;const d=t.toDate?t.toDate():new Date(t);return isNaN(d)?null:d;};
+const scDt=t=>{const d=scTs(t);if(!d)return'-';const p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());};
+const scVal=(v,u)=>v==null?'-':(typeof v==='number'?v.toLocaleString('ko-KR'):String(v))+(u||'');
+async function scLoad(){
+  $('sc-sum').innerHTML='<div class="sc-c"><span>불러오는 중…</span></div>';
+  try{
+    const [sy,cm,cs]=await Promise.all([getDoc(doc(db,'stat_meta','sync')),getDoc(doc(db,'stat_meta','cards')),getDocs(collection(db,'stat_cards'))]);
+    const S=sy.exists()?sy.data():{},C=cm.exists()?cm.data():{};
+    const cards=cs.docs.map(d=>({id:d.id,...d.data()}));
+    const now=Date.now(),upd=cards.filter(c=>{const d=scTs(c.dataChangedAt);return d&&now-d.getTime()<30*86400000;}).length;
+    const failC=(C.failed||[]).length,failS=(S.failed||[]).length;
+    $('sc-sum').innerHTML=
+      '<div class="sc-c'+(failS?' bad':'')+'"><span>마지막 수집</span><b>'+scDt(S.lastRunAt)+'</b><em>'+esc(S.by==='schedule'?'자동(매월 5일)':S.by==='manual'?'수동 실행':(S.by||'-'))+' · 성공 '+(S.okCount??'-')+'/'+(S.total??'-')+(S.total&&S.total<30?' (일부 소스만 실행)':'')+'</em></div>'
+      +'<div class="sc-c'+(failC?' bad':'')+'"><span>마지막 카드 계산</span><b>'+scDt(C.lastBuildAt)+'</b><em>'+esc(String(C.by||'-'))+' · 실패 '+failC+'장</em></div>'
+      +'<div class="sc-c"><span>회원 화면 카드</span><b>'+cards.filter(c=>c.status==='active').length+'장</b><em>보류 '+SC_HOLD.length+'장 (계산 안 함)</em></div>'
+      +'<div class="sc-c"><span>최근 30일 숫자 바뀐 카드</span><b>'+upd+'장</b><em>회원 화면 「갱신」 배지</em></div>';
+    const res=(S.results||[]).slice().sort((a,b)=>(a.ok===b.ok?0:a.ok?1:-1));
+    $('sc-src').innerHTML=res.length?res.map(r=>'<tr><td>'+esc(r.id)+'</td><td><span class="pill '+(r.ok?'ok':'ng')+'">'+(r.ok?'성공':'실패')+'</span></td><td>'+(r.rows||0).toLocaleString('ko-KR')+'</td><td>'+esc(r.latest||'-')+'</td><td>'+(r.changed?'<span class="pill up">바뀜</span>':'-')+'</td><td style="color:#C62828;max-width:320px">'+esc(r.error||'')+'</td></tr>').join('')
+      :'<tr><td colspan="6" style="color:#8A94A6">수집 기록이 없습니다.</td></tr>';
+    const failIds=(C.failed||[]).map(f=>f.id);
+    const ord=c=>{const d=scTs(c.dataChangedAt);return d?-d.getTime():0;};
+    cards.sort((a,b)=>ord(a)-ord(b)||String(a.group).localeCompare(String(b.group),'ko'));
+    $('sc-cards').innerHTML=cards.map(c=>{
+      const d=scTs(c.dataChangedAt),recent=d&&now-d.getTime()<30*86400000;
+      const st=SC_HOLD.includes(c.id)?'<span class="pill hold">보류</span>':failIds.includes(c.id)?'<span class="pill ng">계산 실패(기존 값)</span>':c.status==='active'?'<span class="pill ok">게시</span>':'<span class="pill hold">'+esc(c.status||'-')+'</span>';
+      return '<tr><td>'+esc(c.group||'')+'</td><td><b>'+esc(c.topic||c.id)+'</b><div style="font-size:11.5px;color:#8A94A6">'+esc(c.id)+'</div></td><td>'+scVal(c.value,c.unit)+'</td><td>'+esc(c.baseYear||'-')+'</td><td>'+(d?(recent?'<span class="pill up">'+scDt(c.dataChangedAt).slice(0,10)+'</span>':scDt(c.dataChangedAt).slice(0,10)):'-')+'</td><td style="font-size:12px;color:#6b7590">'+(c.prevBaseYear!=null?esc(String(c.prevBaseYear))+' · '+scVal(c.prevValue,c.unit):'-')+'</td><td>'+st+'</td></tr>';
+    }).join('')+SC_HOLD.filter(id=>!cards.some(c=>c.id===id)).map(id=>'<tr><td>-</td><td><b>'+esc(id)+'</b></td><td colspan="4" style="color:#8A94A6">자료 뜻 확인 전 — 계산·게시하지 않음</td><td><span class="pill hold">보류</span></td></tr>').join('');
+  }catch(e){console.error(e);$('sc-sum').innerHTML='<div class="sc-c bad"><span>불러오기 실패</span><b>'+esc(e.message||'')+'</b></div>';}
+}
+window.scLoad=scLoad;
+
 /* 관리자 미리보기 — letter.html?adm=키 (관리자 로그인 상태에서 승인 전 레터도 고객 화면 그대로) */
 function ltPreview(key){window.open('letter.html?adm='+encodeURIComponent(key),'_blank');}
 window.ltPreview=ltPreview;window.ltLoad=ltLoad;window.ltView=ltView;window.ltStTab=ltStTab;window.ltRender=ltRender;window.ltSel=ltSel;window.ltCheckAll=ltCheckAll;window.ltToggle=ltToggle;window.ltAct=ltAct;window.ltBulk=ltBulk;window.ltBackfill=ltBackfill;window.ltSave=ltSave;window.ltMembers=ltMembers;window.ltSortBy=ltSortBy;window.ltMembersRender=ltMembersRender;window.ltCsv=ltCsv;
