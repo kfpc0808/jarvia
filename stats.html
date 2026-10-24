@@ -59,6 +59,12 @@ button{font-family:inherit}
 .tabs .tb span{font-size:11px;color:var(--lt);font-weight:700}
 .tabs .tb.on{background:var(--nv);border-color:var(--nv);color:#fff}
 .tabs .tb.on span{color:#C9D6E6}
+.upd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 0;background:#FFF8E6;border:1px solid #F5D9A8;border-radius:10px;padding:8px 11px;font-size:12.5px;color:#7A5A12;font-weight:700;line-height:1.5}   /* ★ [2026-10-24] 갱신 안내 */
+.upd button{border:none;background:#B08A3A;color:#fff;border-radius:7px;padding:4px 10px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
+.updb{display:inline-block;margin-left:5px;background:#B08A3A;color:#fff;border-radius:5px;padding:0 5px;font-size:10px;font-weight:800;vertical-align:1px}
+.updd{margin-top:8px;font-size:12.5px;font-weight:700;color:#7A5A12;background:#FFF8E6;border:1px solid #F5D9A8;border-radius:9px;padding:6px 10px;display:inline-block}
+.tabs .tb.upd-t{border-color:#D9B464;color:#7A5A12}
+.tabs .tb.upd-t.on{background:#B08A3A;border-color:#B08A3A;color:#fff}
 .myhint{font-size:12.5px;color:#8A6418;font-weight:700;margin:8px 2px 0;line-height:1.55}
 .empty{padding:30px 10px;text-align:center;color:var(--lt);font-size:14px}
 /* 상세 */
@@ -203,6 +209,11 @@ function toast(t){const el=$('toast');el.textContent=t;el.style.display='block';
 window.goBack=function(){if(location.hash&&location.hash.length>1){location.hash='';return;}location.href='./index.html';};
 
 let CARDS={},me=null,myName='',cust={sex:null,age:null};
+let PUB=null;   /* ★ [2026-10-24] stat_meta/public — 최근 확인 날짜 */
+const UPD_DAYS=30;
+const tms=t=>t&&typeof t.toMillis==='function'?t.toMillis():(t&&t.seconds?t.seconds*1000:0);
+const isUpd=c=>{const m=tms(c.dataChangedAt);return !!m&&Date.now()-m<UPD_DAYS*86400000;};
+const mdTxt=ms=>{const d=new Date(ms);return (d.getMonth()+1)+'월 '+d.getDate()+'일';};
 
 /* ─── 고객 맞춤 입력 (화면에만 유지, 저장 안 함) ─── */
 window.setCust=function(sex,age){
@@ -285,25 +296,35 @@ function homeHtml(){
   return `<div class="srch"><span>🔍</span><input id="q" type="search" placeholder="주제 검색 (예: 치매, 연금, 상속)" value="${esc(q)}" autocomplete="off"></div>
     <p class="hint">통계청·심평원·국세청 등 공식 기관 자료를 그대로 가져와 매월 확인해요. 통계는 평균값이라 고객 개인의 위험을 뜻하지 않아요 — "이런 통계가 있어요"로 안내해 주세요.</p>`
     +(cl?`<p class="myhint">고객 맞춤(${esc(cl)}) — 금색 테두리 통계는 이 고객 기준 숫자, 나머지는 전국 통계예요.</p>`:'')
+    +updHtml()
     +tabsHtml()
     +`<div id="homeList">${homeListHtml()}</div>`;
 }
+/* ★ [2026-10-24] 갱신 안내 — 최근 확인 날짜 + 최근 30일 숫자가 바뀐 통계 */
+function updHtml(){
+  const n=Object.values(CARDS).filter(isUpd).length;const ck=PUB?tms(PUB.checkedAt):0;
+  if(!ck&&!n)return'';
+  return `<div class="upd">🔄 ${ck?'최근 확인 '+mdTxt(ck):'통계 갱신'} · 최근 ${UPD_DAYS}일 새로 바뀐 통계 ${n}건${n?' <button type="button" onclick="pickTab(\'__upd\')">보기</button>':''}</div>`;
+}
+window.pickTab=function(g){window._g=g;const gt=$('gTabs');if(gt)gt.querySelectorAll('.tb').forEach(x=>x.classList.toggle('on',(x.getAttribute('data-g')||'')===g));const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();};
 /* ★ [2026-10-24] 분류 탭 — 가로로 밀어 고르기 (페이지는 가로로 넘치지 않음) */
 function tabsHtml(){
   const gs=GROUPS.filter(g=>Object.values(CARDS).some(c=>c.group===g));
   const t=window._g||'';
-  return `<div class="tabs" id="gTabs">${['',...gs].map(g=>`<button type="button" class="tb${g===t?' on':''}" data-g="${esc(g)}">${g?esc(g):'전체'} <span>${g?Object.values(CARDS).filter(c=>c.group===g).length:Object.keys(CARDS).length}</span></button>`).join('')}</div>`;
+  const un=Object.values(CARDS).filter(isUpd).length;   /* ★ [2026-10-24] 갱신 탭 */
+  return `<div class="tabs" id="gTabs">${['',...gs].map(g=>`<button type="button" class="tb${g===t?' on':''}" data-g="${esc(g)}">${g?esc(g):'전체'} <span>${g?Object.values(CARDS).filter(c=>c.group===g).length:Object.keys(CARDS).length}</span></button>`).join('')}${un?`<button type="button" class="tb upd-t${t==='__upd'?' on':''}" data-g="__upd">🔄 갱신 <span>${un}</span></button>`:''}</div>`;
 }
 function homeListHtml(){
   const q=(window._q||'').trim();
   const list=[...ORDER.map(id=>CARDS[id]).filter(Boolean),...Object.values(CARDS).filter(c=>!ORDER.includes(c.id))];   /* ★ [2026-10-24] 순서표에 없는 새 카드도 표시 */
   const tab=window._g||'';
-  const hit=c=>(!tab||c.group===tab)&&(!q||[c.topic,c.title,c.headline,c.group].join(' ').includes(q));
+  const hit=c=>(!tab||(tab==='__upd'?isUpd(c):c.group===tab))&&(!q||[c.topic,c.title,c.headline,c.group].join(' ').includes(q));   /* ★ [2026-10-24] __upd: 갱신만 */
   let favs=[];try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');favs=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(x=>x[0]).filter(id=>CARDS[id]).slice(0,3);}catch(_){}
   const custOn=cust.sex||cust.age!=null;
   const tile=c=>{   /* ★ [2026-10-24] 고객 맞춤을 넣으면 맞춤 숫자가 있는 통계는 타일 숫자도 바뀐다 */
     const p=custOn&&P[c.id]?P[c.id](c):null;
-    return `<button type="button" class="tile${p?' my':''}" onclick="openCard('${c.id}')"><div class="tp">${esc(c.topic)}</div><div class="tt">${esc(c.title)}</div><div class="tv">${p?esc(p.big):bigOf(c)}</div><div class="ty">${p?`<b>${esc(p.who)}</b>`:esc(yearTxt(c.baseYear))+' 기준'+(custOn?' · 전국':'')}</div></button>`;
+    const u=isUpd(c),py=u&&c.prevBaseYear&&String(c.prevBaseYear)!==String(c.baseYear)?yearTxt(c.prevBaseYear)+' → ':'';   /* ★ [2026-10-24] 갱신 배지 */
+    return `<button type="button" class="tile${p?' my':''}" onclick="openCard('${c.id}')"><div class="tp">${esc(c.topic)}${u?'<span class="updb">갱신</span>':''}</div><div class="tt">${esc(c.title)}</div><div class="tv">${p?esc(p.big):bigOf(c)}</div><div class="ty">${p?`<b>${esc(p.who)}</b>`:esc(py+yearTxt(c.baseYear))+' 기준'+(custOn?' · 전국':'')}</div></button>`;
   };
   let h='';
   if(!q&&!tab&&favs.length)h+=`<div class="grp fav"><h2>⭐ 자주 보는 통계</h2><div class="grid">${favs.map(id=>tile(CARDS[id])).join('')}</div></div>`;
@@ -354,6 +375,7 @@ function detailHtml(c){
   const ap=String(c.approach||'').replace(/\{consultant\}/g,myName||'저');
   return `<button type="button" class="crumb" onclick="location.hash=''">← 통계 홈</button>
   <div class="hero"><div class="tp">${esc(c.group)} · ${esc(c.topic)}</div><h1>${esc(c.title)}</h1>
+    ${isUpd(c)?`<div class="updd">🔄 ${mdTxt(tms(c.dataChangedAt))} 새 통계로 바뀌었어요${c.prevBaseYear&&String(c.prevBaseYear)!==String(c.baseYear)?` (${esc(yearTxt(c.prevBaseYear))} → ${esc(yearTxt(c.baseYear))})`:''}</div>`:''}
     ${pb}
     <div class="nat">전국: ${esc(sentence(c.headline))} <span style="font-size:12px;color:var(--lt);font-weight:600">(${esc(yearTxt(c.baseYear))} 기준)</span></div>
     <ul class="hl">${(c.highlights||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
@@ -372,7 +394,7 @@ function render(){
   const id=(location.hash.match(/card=([A-Za-z]+)/)||[])[1];
   if(id&&CARDS[id]){app.innerHTML=detailHtml(CARDS[id]);}
   else{app.innerHTML=homeHtml();const qi=$('q');if(qi){qi.addEventListener('input',e=>{window._q=e.target.value;const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();});}
-    const gt=$('gTabs');if(gt)gt.addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b)return;window._g=b.getAttribute('data-g')||'';gt.querySelectorAll('.tb').forEach(x=>x.classList.toggle('on',x===b));const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();});}   /* ★ [2026-10-24] 분류 탭 */
+    const gt=$('gTabs');if(gt)gt.addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b)return;window.pickTab(b.getAttribute('data-g')||'');});}   /* ★ [2026-10-24] pickTab 으로 통일 */   /* ★ [2026-10-24] 분류 탭 */
 }
 window.openCard=function(id){
   try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');m[id]=(m[id]||0)+1;lsSet('jv_stat_views',JSON.stringify(m));}catch(_){}
@@ -479,7 +501,8 @@ onAuthStateChanged(auth,async u=>{
     snap.forEach(d=>{const c=d.data();if(c&&c.status==='active')CARDS[d.id]=c;});
   }catch(e){console.error(e);gate('통계를 불러오지 못했어요','잠시 후 다시 열어 주세요. 계속되면 고객센터로 알려 주세요.');return;}
   if(!Object.keys(CARDS).length){gate('준비 중이에요','통계 카드가 아직 준비되지 않았어요.');return;}
-  Object.values(CARDS).forEach(c=>{if(!P[c.id]&&isDz(c))P[c.id]=PD;});   /* ★ [2026-10-24] 질병 카드 고객 맞춤 자동 연결 */
+  Object.values(CARDS).forEach(c=>{if(!P[c.id]&&isDz(c))P[c.id]=PD;});
+  try{const ps=await getDoc(doc(db,'stat_meta','public'));if(ps.exists())PUB=ps.data();}catch(_){}   /* ★ [2026-10-24] 최근 확인 날짜 (없어도 화면은 그대로) */   /* ★ [2026-10-24] 질병 카드 고객 맞춤 자동 연결 */
   $('custBar').style.display='block';
   /* 고객 상세 화면 등에서 ?age=&sex= 로 넘어오면 바로 맞춤 */
   const qs=new URLSearchParams(location.search);
