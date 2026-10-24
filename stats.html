@@ -12,6 +12,7 @@
      · 이용 대상: 실시간 자료실과 같은 정규회원 + 자비아(기간제) — firestore.rules stat_cards 와 같은 목록 유지
      · 숫자는 저장값만 표시. 고객 맞춤(나이·성별 등)은 카드 안 matrix 에서 고르기만 함(새 숫자를 만들지 않음)
      · 화면: 홈(주제 19) → 주제 상세 → 크게 보여주기
+     · ★ [2026-10-24] 2차 확대 39개 주제 + 분류 탭. 질병 카드(matrix.diseases)는 고객 맞춤 규칙이 모두 같아 자동 연결
      · ★ [2026-10-24] 고객에게 보내기: createStatShare(서버)가 보낸 시점 값 고정 → mypb.kr/briefing?t=sx 링크 복사 → 고객 화면 stat-view.html
      ═══════════════════════════════════════════════════════════════ -->
 <style>
@@ -52,6 +53,12 @@ button{font-family:inherit}
 .tile.my{border:1.5px solid #D9B464;background:#FFFCF3}   /* ★ [2026-10-24] 고객 맞춤 숫자가 있는 통계 */
 .tile.my .tv{color:#8A6418}
 .tile .ty b{color:#8A6418}
+.tabs{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:12px 0 0;padding:2px 0 6px;scrollbar-width:none}   /* ★ [2026-10-24] 분류 탭 */
+.tabs::-webkit-scrollbar{display:none}
+.tabs .tb{flex:0 0 auto;border:1px solid #CBD5E1;background:#fff;color:#334155;border-radius:20px;padding:7px 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.tabs .tb span{font-size:11px;color:var(--lt);font-weight:700}
+.tabs .tb.on{background:var(--nv);border-color:var(--nv);color:#fff}
+.tabs .tb.on span{color:#C9D6E6}
 .myhint{font-size:12.5px;color:#8A6418;font-weight:700;margin:8px 2px 0;line-height:1.55}
 .empty{padding:30px 10px;text-align:center;color:var(--lt);font-size:14px}
 /* 상세 */
@@ -181,8 +188,9 @@ const db=getFirestore(app,'javia-db');
 
 /* 이용 대상 — firestore.rules stat_cards 와 같은 목록 (실시간 자료실 + 자비아 기간제) */
 const STAT_ROLES=['admin','branch_manager','inner_circle','con_homepage','jarvia_member','jarvia_inner','free_user'];
-const GROUPS=['큰 병','흔한 병·수술','돌봄·의료비','노후·수명','가정·돈'];
-const ORDER=['cancer','dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth','ltc','lifeHealth','deathRank','pension','retire','aging','privEdu','cpi','debt','asset','inherit'];
+const GROUPS=['큰 병','흔한 병·수술','마음·신경','여성·남성','아이','돌봄·의료비','노후·수명','가정·돈','생활·사고'];   /* ★ [2026-10-24] 분류 4개 추가 */
+const ORDER=['cancer','dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth','ltc','lifeHealth','deathRank','pension','retire','aging','privEdu','cpi','debt','asset','inherit',
+  'spineShoulder','eye','liver','lung','gout','shingles','hearing','depression','anxiety','sleep','parkinson','thyroid','womb','osteo','prostate','infertility','kids','rates','fx','autoAcc'];   /* ★ [2026-10-24] 2차 20종 */
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const comma=n=>(n==null||isNaN(n))?'-':Number(n).toLocaleString('ko-KR');
@@ -243,12 +251,14 @@ const P={
   debt(c){return hh(c,'debt');},
   asset(c){return hh(c,'asset');},
 };
-['dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth'].forEach(id=>{P[id]=function(c){
+/* ★ [2026-10-24] 질병 카드 공통 규칙(PD) — 카드를 불러온 뒤 matrix.diseases 가 있는 카드에 자동 연결 */
+const PD=function(c){
   if(cust.age==null||!cust.sex)return null;const ds=(c.matrix&&c.matrix.diseases)||[];const rows=[];
   for(const d of ds){const t=d.bySexAge&&d.bySexAge[cust.sex];const k=pickBand(t,cust.age);if(k&&t[k])rows.push({d,k,v:t[k]});}
   if(!rows.length)return null;const f=rows[0];
   return{who:`${f.k} ${sexKo(cust.sex)}`,big:people(f.v.patients),sent:rows.map(x=>`${x.d.label}: 같은 연령대·성별 진료 환자 ${people(x.v.patients)}, 1인당 연간 진료비 약 ${x.v.costPerPatientMan}만원`).join(' / '),note:'건강보험 진료비(공단부담+본인부담), 비급여 제외'};
-};});
+};
+const isDz=c=>!!(c&&c.matrix&&Array.isArray(c.matrix.diseases));
 function hhCode(a){return a<30?'B1601':a<40?'B1602':a<50?'B1603':a<60?'B1604':'B1605';}
 function hh(c,kind){
   if(cust.age==null)return null;const arr=(c.matrix&&c.matrix.byAge)||[];const x=arr.find(r=>r.code===hhCode(cust.age));if(!x)return null;
@@ -275,12 +285,20 @@ function homeHtml(){
   return `<div class="srch"><span>🔍</span><input id="q" type="search" placeholder="주제 검색 (예: 치매, 연금, 상속)" value="${esc(q)}" autocomplete="off"></div>
     <p class="hint">통계청·심평원·국세청 등 공식 기관 자료를 그대로 가져와 매월 확인해요. 통계는 평균값이라 고객 개인의 위험을 뜻하지 않아요 — "이런 통계가 있어요"로 안내해 주세요.</p>`
     +(cl?`<p class="myhint">고객 맞춤(${esc(cl)}) — 금색 테두리 통계는 이 고객 기준 숫자, 나머지는 전국 통계예요.</p>`:'')
+    +tabsHtml()
     +`<div id="homeList">${homeListHtml()}</div>`;
+}
+/* ★ [2026-10-24] 분류 탭 — 가로로 밀어 고르기 (페이지는 가로로 넘치지 않음) */
+function tabsHtml(){
+  const gs=GROUPS.filter(g=>Object.values(CARDS).some(c=>c.group===g));
+  const t=window._g||'';
+  return `<div class="tabs" id="gTabs">${['',...gs].map(g=>`<button type="button" class="tb${g===t?' on':''}" data-g="${esc(g)}">${g?esc(g):'전체'} <span>${g?Object.values(CARDS).filter(c=>c.group===g).length:Object.keys(CARDS).length}</span></button>`).join('')}</div>`;
 }
 function homeListHtml(){
   const q=(window._q||'').trim();
-  const list=ORDER.map(id=>CARDS[id]).filter(Boolean);
-  const hit=c=>!q||[c.topic,c.title,c.headline,c.group].join(' ').includes(q);
+  const list=[...ORDER.map(id=>CARDS[id]).filter(Boolean),...Object.values(CARDS).filter(c=>!ORDER.includes(c.id))];   /* ★ [2026-10-24] 순서표에 없는 새 카드도 표시 */
+  const tab=window._g||'';
+  const hit=c=>(!tab||c.group===tab)&&(!q||[c.topic,c.title,c.headline,c.group].join(' ').includes(q));
   let favs=[];try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');favs=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(x=>x[0]).filter(id=>CARDS[id]).slice(0,3);}catch(_){}
   const custOn=cust.sex||cust.age!=null;
   const tile=c=>{   /* ★ [2026-10-24] 고객 맞춤을 넣으면 맞춤 숫자가 있는 통계는 타일 숫자도 바뀐다 */
@@ -288,10 +306,10 @@ function homeListHtml(){
     return `<button type="button" class="tile${p?' my':''}" onclick="openCard('${c.id}')"><div class="tp">${esc(c.topic)}</div><div class="tt">${esc(c.title)}</div><div class="tv">${p?esc(p.big):bigOf(c)}</div><div class="ty">${p?`<b>${esc(p.who)}</b>`:esc(yearTxt(c.baseYear))+' 기준'+(custOn?' · 전국':'')}</div></button>`;
   };
   let h='';
-  if(!q&&favs.length)h+=`<div class="grp fav"><h2>⭐ 자주 보는 통계</h2><div class="grid">${favs.map(id=>tile(CARDS[id])).join('')}</div></div>`;
+  if(!q&&!tab&&favs.length)h+=`<div class="grp fav"><h2>⭐ 자주 보는 통계</h2><div class="grid">${favs.map(id=>tile(CARDS[id])).join('')}</div></div>`;
   let any=false;
-  for(const g of GROUPS){const cs=list.filter(c=>c.group===g&&hit(c));if(!cs.length)continue;any=true;h+=`<div class="grp"><h2>${esc(g)}</h2><div class="grid">${cs.map(tile).join('')}</div></div>`;}
-  if(!any)h+=`<div class="empty">"${esc(q)}"에 맞는 통계가 없어요.</div>`;
+  for(const g of [...GROUPS,...[...new Set(list.map(c=>c.group))].filter(g=>!GROUPS.includes(g))]){const cs=list.filter(c=>c.group===g&&hit(c));if(!cs.length)continue;any=true;h+=`<div class="grp"><h2>${esc(g)}</h2><div class="grid">${cs.map(tile).join('')}</div></div>`;}
+  if(!any)h+=`<div class="empty">${q?`"${esc(q)}"에 맞는 통계가 없어요.`:'이 분류에는 아직 통계가 없어요.'}</div>`;
   return h;
 }
 function tableHtml(c){
@@ -315,6 +333,12 @@ function tableHtml(c){
       <h3 style="margin-top:14px">우리 지역 1인 가구 비율 (${esc(m.single&&m.single.year)}년)</h3><select class="sel" onchange="pickRegion(this.value)"><option value="">지역 선택</option>${opts}</select> <b id="regV" style="color:var(--nv);font-size:16px;margin-left:6px"></b></div>`;}
   else if(c.id==='privEdu'){const b=m.byLevel||{};head=['학교급','월평균'];rows=Object.entries(b).map(([k,v])=>({k,c:[k,v==null?'-':v+'만원']}));}
   else if(c.id==='inherit'){head=['자산 종류','비중'];rows=(m.assets||[]).map(a=>({k:a.asset,c:[a.asset,a.share==null?'-':a.share+'%']}));}
+  else if(c.id==='rates'||c.id==='fx'){   /* ★ [2026-10-24] 최근 13개월 */
+    const sr=m.series||{};const keys=c.id==='rates'?[['base','기준금리'],['dep','정기예금'],['hh','가계대출'],['mort','주담대']]:[['usd','달러'],['jpy','엔(100)'],['eur','유로'],['cny','위안']];
+    const ps=[...new Set(keys.flatMap(([k])=>(sr[k]||[]).map(x=>x.p)))].sort().reverse();
+    const val=(k,p)=>{const x=(sr[k]||[]).find(e=>e.p===p);return x?(c.id==='rates'?x.v+'%':comma(r1(x.v))+'원'):'-';};
+    head=['월',...keys.map(([,n])=>n)];rows=ps.map(p=>({k:p,c:[p.slice(0,4)+'.'+p.slice(4,6),...keys.map(([k])=>val(k,p))]}));}
+  else if(c.id==='autoAcc'){head=['구분','피해자'];rows=Object.entries(m.byType||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({k,c:[k,people(v)]}));if(m.impaired)rows.push({k:'imp',c:['장해가 남은 피해자',people(m.impaired)]});}
   else if(c.id==='retire'){const b=m.bySex||{};head=['구분','평균 나이'];rows=[['T','전체'],['M','남자'],['F','여자']].map(([k,n])=>({k,c:[n,b[k]==null?'-':b[k]+'세']}));meKey=cust.sex;}
   if(!rows.length)return'';
   return `<div class="sec"><h3>자세히 보기</h3><div class="tbl-w"><table><tr>${head.map(x=>`<th>${esc(x)}</th>`).join('')}</tr>${rows.map(r=>`<tr class="${meKey!=null&&r.k===meKey?'me':''}">${r.c.map(x=>`<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</table></div></div>`;
@@ -322,9 +346,10 @@ function tableHtml(c){
 window.pickRegion=function(code){const c=CARDS.aging;const r=((c.matrix.single||{}).regions||[]).find(x=>x.code===code);$('regV').textContent=r?r.share+'%':'';};
 function detailHtml(c){
   const p=P[c.id]?P[c.id](c):null;
-  const need=P[c.id]&&!p?`<div class="pbox" style="background:#EEF3F9;color:var(--nv)"><div class="who" style="color:var(--nv)">고객 맞춤 숫자</div><div class="sent" style="font-size:13.5px">위의 「고객 맞춤」에 ${['retire'].includes(c.id)?'성별을':['pension'].includes(c.id)?'나이(65세 이상)를':['deathRank'].includes(c.id)?'나이 또는 성별을':['dementia','stroke','heart','dmHtn','jointSpine','cataract','teeth'].includes(c.id)?'나이와 성별을':'나이를'} 넣으면 이 고객에게 맞는 숫자를 보여드려요.</div></div>`:'';
+  const need=P[c.id]&&!p?`<div class="pbox" style="background:#EEF3F9;color:var(--nv)"><div class="who" style="color:var(--nv)">고객 맞춤 숫자</div><div class="sent" style="font-size:13.5px">위의 「고객 맞춤」에 ${['retire'].includes(c.id)?'성별을':['pension'].includes(c.id)?'나이(65세 이상)를':['deathRank'].includes(c.id)?'나이 또는 성별을':isDz(c)?'나이와 성별을':'나이를'} 넣으면 이 고객에게 맞는 숫자를 보여드려요.</div></div>`:'';
+  const dzNo=!p&&isDz(c)&&cust.sex&&cust.age!=null?`<div class="pbox" style="background:#F1F5F9;color:var(--nv)"><div class="sent" style="font-size:13.5px">이 질환은 ${esc(sexKo(cust.sex))}·${esc(cust.age)}세 연령대의 진료 자료가 없어요(예: 성별이 정해진 질환). 아래 전국 숫자로 안내해 주세요.</div></div>`:'';   /* ★ [2026-10-24] */
   const noP=!P[c.id]&&(cust.sex||cust.age!=null)?`<div class="pbox" style="background:#F1F5F9;color:var(--nv)"><div class="sent" style="font-size:13.5px">이 통계는 나이·성별 구분이 없는 전국 통계예요. 아래 「전국」 숫자로 안내해 주세요.</div></div>`:'';   /* ★ [2026-10-24] */
-  const pb=p?`<div class="pbox"><div class="who">${esc(p.who)}</div><div class="big">${esc(p.big)}</div><div class="sent">${esc(p.sent)}</div>${p.note?`<div class="note">${esc(p.note)}</div>`:''}</div>`:(need||noP);
+  const pb=p?`<div class="pbox"><div class="who">${esc(p.who)}</div><div class="big">${esc(p.big)}</div><div class="sent">${esc(p.sent)}</div>${p.note?`<div class="note">${esc(p.note)}</div>`:''}</div>`:(dzNo||need||noP);
   const src=(c.sources||[]).map(s=>`${esc(s.org)} 「${esc(s.name)}」 ${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener">원자료</a>`:''}`).join('<br>');
   const ap=String(c.approach||'').replace(/\{consultant\}/g,myName||'저');
   return `<button type="button" class="crumb" onclick="location.hash=''">← 통계 홈</button>
@@ -346,7 +371,8 @@ function render(){
   const app=$('app');if(!app||!Object.keys(CARDS).length)return;
   const id=(location.hash.match(/card=([A-Za-z]+)/)||[])[1];
   if(id&&CARDS[id]){app.innerHTML=detailHtml(CARDS[id]);}
-  else{app.innerHTML=homeHtml();const qi=$('q');if(qi){qi.addEventListener('input',e=>{window._q=e.target.value;const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();});}}
+  else{app.innerHTML=homeHtml();const qi=$('q');if(qi){qi.addEventListener('input',e=>{window._q=e.target.value;const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();});}
+    const gt=$('gTabs');if(gt)gt.addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b)return;window._g=b.getAttribute('data-g')||'';gt.querySelectorAll('.tb').forEach(x=>x.classList.toggle('on',x===b));const hl=$('homeList');if(hl)hl.innerHTML=homeListHtml();});}   /* ★ [2026-10-24] 분류 탭 */
 }
 window.openCard=function(id){
   try{const m=JSON.parse(lsGet('jv_stat_views')||'{}');m[id]=(m[id]||0)+1;lsSet('jv_stat_views',JSON.stringify(m));}catch(_){}
@@ -453,6 +479,7 @@ onAuthStateChanged(auth,async u=>{
     snap.forEach(d=>{const c=d.data();if(c&&c.status==='active')CARDS[d.id]=c;});
   }catch(e){console.error(e);gate('통계를 불러오지 못했어요','잠시 후 다시 열어 주세요. 계속되면 고객센터로 알려 주세요.');return;}
   if(!Object.keys(CARDS).length){gate('준비 중이에요','통계 카드가 아직 준비되지 않았어요.');return;}
+  Object.values(CARDS).forEach(c=>{if(!P[c.id]&&isDz(c))P[c.id]=PD;});   /* ★ [2026-10-24] 질병 카드 고객 맞춤 자동 연결 */
   $('custBar').style.display='block';
   /* 고객 상세 화면 등에서 ?age=&sex= 로 넘어오면 바로 맞춤 */
   const qs=new URLSearchParams(location.search);
