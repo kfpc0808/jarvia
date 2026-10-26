@@ -8739,6 +8739,7 @@ async function doRegister(e){
   if(!$('rg-terms').checked||!$('rg-privacy').checked)return toast('약관에 모두 동의해야 합니다.','error');
   if($('rg-sms-verified').value!=='Y')return toast('연락처 인증을 완료해주세요.','error');
   if(_rgEdu===null){try{$('rg-edu-box').scrollIntoView({behavior:'smooth',block:'center'});}catch(_){}return toast('무료교육 알림받기를 확인해 주세요.','error');}   /* ★ [2026-09-28] */
+  if(!(window.jvRefundAsk&&await window.jvRefundAsk()))return;   /* ★ [2026-10-26] 등록비 환불 불가 안내 — 동의해야 가입 진행 (닫으면 중단) */
   let _suCred=null,_suIdLock=false,_suPhLock=false,_suDone=false;   /* ★ [2026-08-14] 가입 진행 추적 — 미완료 시 전체 회수용 */
   _rgSubmitting=true;
   const _rgBtn=e.target&&e.target.querySelector?e.target.querySelector('button[type="submit"]'):null;
@@ -8820,6 +8821,7 @@ async function doRegister(e){
         referralPoints:0,
         ...(isGroupRef&&{monthlyFee:0,groupMasterId:groupMasterUid}),
         agreedTermsAt:serverTimestamp(),agreedPrivacyAt:serverTimestamp(),
+        agreedRefundAt:serverTimestamp(),refundNoticeVer:'2026-10-26',   /* ★ [2026-10-26] 등록비 환불 불가 안내 동의 기록 */
         lastLoginAt:serverTimestamp(),
         createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
       });
@@ -22441,13 +22443,13 @@ async function loadReferrals(){
   // 추천 포인트 지급 내역 조회
   let rewards=[];
   try{const rsnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid),where('type','==','referral_reward'),orderBy('createdAt','desc')));rewards=rsnap.docs.map(d=>d.data());}catch(e){}
-  // 총판이면 차하위 무제한 재귀 조회 (안전장치: 최대 10단계, 순환 방지)
+  // 총판이면 산하 조회 — ★ [2026-10-26] 수수료 정책: 직접(1단계)+간접 2단계 = 3단계까지만 표시 (4단계 이하는 성명 등 표시 안 함)
   let indirectRefs=[];
   if(isDist&&directRefs.length){
     const seenIds=new Set(directRefs.map(r=>r._uid));
     let currentLayer=directRefs.slice();
     let depth=2;
-    const MAX_DEPTH=10;
+    const MAX_DEPTH=3;   /* ★ [2026-10-26] 10 → 3 */
     while(currentLayer.length&&depth<=MAX_DEPTH){
       const parentCodes=currentLayer.map(r=>r.referralCode).filter(Boolean);
       if(!parentCodes.length)break;
@@ -28251,6 +28253,63 @@ body.fg-on .jm-progs .jm-prog,body.fg-on .jm-quick .jm-qbtn{position:relative}
       Kakao.Share.sendScrap({requestUrl:PROPOSAL_URL});   /* 링크 붙여넣기와 같은 미리보기 카드 (제안서 페이지의 og 정보 사용) */
     }catch(e){window.proposalCopy();}
   };
+})();
+</script>
+<!-- ═══ ★ [2026-10-26] 회원가입 전 등록비 환불 불가 안내·동의 팝업 — doRegister 에서 jvRefundAsk() 호출, 동의 시 true ═══ -->
+<style>
+#jvRf{position:fixed;inset:0;z-index:100500;background:rgba(9,18,32,.62);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;padding:18px;font-family:var(--font);word-break:keep-all}
+#jvRf.on{display:flex}
+#jvRf .bx{width:440px;max-width:100%;max-height:calc(100vh - 36px);max-height:calc(100dvh - 36px);overflow:auto;background:#fff;border-radius:22px;box-shadow:0 24px 60px rgba(9,18,32,.35)}
+#jvRf .hd{position:relative;padding:28px 26px 24px;background:linear-gradient(150deg,#1B355A,#0F2440 60%,#0B1A2E);color:#fff;overflow:hidden}
+#jvRf .hd:after{content:"";position:absolute;right:-60px;top:-70px;width:200px;height:200px;border-radius:50%;border:1px solid rgba(217,178,106,.35);pointer-events:none}
+#jvRf .x{position:absolute;right:10px;top:10px;z-index:1;width:44px;height:44px;border:0;background:none;color:rgba(255,255,255,.85);font-size:28px;line-height:1;cursor:pointer;font-family:inherit}
+#jvRf .x:hover{color:#fff}
+#jvRf .mk{width:44px;height:44px;border-radius:13px;border:1.5px solid #D9B26A;display:flex;align-items:center;justify-content:center;color:#D9B26A;font-weight:800;font-size:22px;margin-bottom:16px}
+#jvRf .ey{font-size:12px;font-weight:600;letter-spacing:.14em;color:#D9B26A;margin-bottom:8px}
+#jvRf h2{margin:0;font-size:21px;line-height:1.45;font-weight:700;letter-spacing:-.02em;color:#fff}
+#jvRf .bd{padding:22px 26px 6px;color:#2A3342}
+#jvRf .lead{margin:0 0 16px;font-size:14.5px;line-height:1.75}
+#jvRf .lead b{color:#13253F}
+#jvRf .cd{border:1px solid #EFE5CF;background:#FBF8F1;border-radius:14px;padding:16px 16px 6px;margin-bottom:16px}
+#jvRf .cd h3{margin:0 0 10px;font-size:13px;font-weight:700;color:#8A6418}
+#jvRf .li{display:flex;gap:10px;margin-bottom:10px;font-size:13.5px;line-height:1.6;color:#3A4456}
+#jvRf .li i{flex-shrink:0;width:6px;height:6px;border-radius:3px;background:#D9B26A;margin-top:9px}
+#jvRf .pol{border-left:3px solid #13253F;padding:2px 0 2px 12px;margin:0 0 18px;font-size:14px;line-height:1.7;color:#13253F;font-weight:600}
+#jvRf .pol small{display:block;font-weight:400;color:#6B7586;font-size:12.5px;margin-top:4px}
+#jvRf .ck{display:flex;gap:10px;align-items:flex-start;padding:14px;border:1.5px solid #D9DEE6;border-radius:12px;cursor:pointer;font-size:14px;line-height:1.55;color:#1B2433;margin:0 0 6px;user-select:none}
+#jvRf .ck.on{border-color:#13253F;background:#F5F7FA}
+#jvRf .ck .b{flex-shrink:0;width:22px;height:22px;border-radius:6px;border:1.5px solid #B9C3D2;display:flex;align-items:center;justify-content:center;margin-top:1px}
+#jvRf .ck.on .b{background:#13253F;border-color:#13253F}
+#jvRf .ck.on .b:after{content:"";width:6px;height:11px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+#jvRf .nt{font-size:11.5px;color:#8A93A3;margin:8px 2px 0;line-height:1.6}
+#jvRf .ft{padding:16px 26px 24px}
+#jvRf .go{width:100%;height:50px;border-radius:12px;border:0;background:#13253F;color:#fff;font:700 15px var(--font);cursor:pointer}
+#jvRf .go:disabled{background:#C9D1DC;cursor:default}
+</style>
+<div id="jvRf" role="dialog" aria-modal="true" aria-labelledby="jvRf-t"><div class="bx">
+  <div class="hd"><button type="button" class="x" aria-label="닫기" onclick="jvRefundDone(false)">×</button><div class="mk">J</div><div class="ey">BEFORE YOU JOIN</div><h2 id="jvRf-t">가입에 앞서<br>한 가지 양해를 구합니다</h2></div>
+  <div class="bd">
+    <p class="lead">자비아를 찾아 주셔서 진심으로 감사드립니다.<br>자비아는 <b>가입하신 순간부터</b> 모든 자료와 기능이 바로 열리는 디지털 서비스입니다.</p>
+    <div class="cd"><h3>가입 직후부터 이용하실 수 있는 것</h3>
+      <div class="li"><i></i>하루에도 수많은 콘텐츠와 자료를 열람·학습</div>
+      <div class="li"><i></i>콘텐츠 구성과 각 프로그램의 작동 방식 확인</div>
+      <div class="li"><i></i>화면 저장·캡처 등 자료 활용</div></div>
+    <p class="pol">이러한 특성상, 등록비는 결제 후 환불이 어려운 점 너그러운 양해를 부탁드립니다.<small>충분히 살펴보신 뒤 가입을 결정해 주시기 바랍니다.</small></p>
+    <div class="ck" id="jvRf-ck" role="checkbox" aria-checked="false" tabindex="0"><span class="b"></span><span>위 내용을 확인하였으며, 등록비 환불 불가에 동의합니다.</span></div>
+    <p class="nt">동의하신 일시는 회원 정보와 함께 안전하게 기록됩니다.</p>
+  </div>
+  <div class="ft"><button type="button" class="go" id="jvRf-go" disabled onclick="jvRefundDone(true)">동의하고 가입 계속</button></div>
+</div></div>
+<script>
+(function(){
+  var res=null;
+  function setCk(on){var c=document.getElementById('jvRf-ck'),g=document.getElementById('jvRf-go');if(!c||!g)return;c.classList.toggle('on',on);c.setAttribute('aria-checked',on?'true':'false');g.disabled=!on;}
+  document.addEventListener('click',function(e){var c=e.target.closest&&e.target.closest('#jvRf-ck');if(c)setCk(!c.classList.contains('on'));});
+  document.addEventListener('keydown',function(e){var w=document.getElementById('jvRf');if(!w||!w.classList.contains('on'))return;
+    if(e.key==='Escape')window.jvRefundDone(false);
+    else if((e.key===' '||e.key==='Enter')&&document.activeElement&&document.activeElement.id==='jvRf-ck'){e.preventDefault();setCk(!document.activeElement.classList.contains('on'));}});
+  window.jvRefundAsk=function(){return new Promise(function(ok){var w=document.getElementById('jvRf');if(!w){ok(false);return;}res=ok;setCk(false);w.classList.add('on');var bx=w.querySelector('.bx');if(bx)bx.scrollTop=0;});};
+  window.jvRefundDone=function(v){var w=document.getElementById('jvRf');if(w)w.classList.remove('on');var r=res;res=null;if(r)r(!!v);};
 })();
 </script>
 </body>
