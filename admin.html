@@ -25554,7 +25554,13 @@ async function ibrpApprove(id) {
   try {
     const cur = await getDocs(query(collection(db, 'brochureReports'), where('uid', '==', r.uid)));
     const b = writeBatch(db);
-    cur.docs.forEach(d => { const v = d.data() || {}; if (d.id !== id && v.status === 'published') b.update(d.ref, { status: d.id === r.replaces ? 'replaced' : 'archived', unpublishedAt: serverTimestamp(), updatedAt: serverTimestamp() }); });
+    /* ★ [2026-10-27] 표지 게시는 최대 2개 — 수정본이면 원글만 'replaced', 나머지는 최근에 건 1개만 두고 가장 오래 건 글을 지난글로 */
+    const ms = t => (t && t.toMillis) ? t.toMillis() : 0;
+    const pubs = cur.docs.filter(d => d.id !== id && (d.data() || {}).status === 'published');
+    pubs.filter(d => d.id === r.replaces).forEach(d => b.update(d.ref, { status: 'replaced', unpublishedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+    pubs.filter(d => d.id !== r.replaces)
+      .sort((x, y) => { const p = x.data() || {}, q = y.data() || {}; return Math.max(ms(q.coverAt), ms(q.approvedAt)) - Math.max(ms(p.coverAt), ms(p.approvedAt)); })
+      .slice(1).forEach(d => b.update(d.ref, { status: 'archived', unpublishedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
     b.update(doc(db, 'brochureReports', id), { status: 'published', approvedAt: serverTimestamp(), approvedBy: (auth.currentUser && auth.currentUser.email) || '', rejectReason: deleteField(), updatedAt: serverTimestamp() });
     await b.commit();
     toast('승인했습니다. 브로슈어 표지에 게시되었습니다.', 'success');
