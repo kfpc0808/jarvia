@@ -3488,6 +3488,7 @@ body.jv-card-lock #mob-menu > #mob-card-reg.mcr.mcr.on{display:flex!important}
 
     <div id="wd-bank-box" style="display:none;background:#F7F8FA;border-radius:10px;padding:13px 15px;margin-bottom:12px">
       <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:var(--text)">🏦 송금 계좌</p>
+      <p id="wd-bank-amt" style="display:none;margin:0 0 4px;font-size:14px;font-weight:700;color:#B91C1C"></p>
       <p style="margin:0;font-size:13px;color:#5F6E78;line-height:1.7">국민은행 378801-01-062695<br>예금주 (주)한국FP센터</p>
       <button class="btn btn-sm" style="width:100%;margin-top:9px" onclick="wdCopyAccount()">계좌번호 복사</button>
       <p style="margin:8px 0 0;font-size:12px;color:#9099AD;line-height:1.6">입금자명은 가입하신 성함으로 부탁드립니다. 송금하시거나 카드를 등록해 결제를 완료하신 후 탈퇴가 진행됩니다.</p>
@@ -9058,14 +9059,20 @@ async function openWithdraw(){
     if(!res.data||!res.data.success)throw new Error((res.data&&res.data.error)||'조회 실패');
     const q=res.data.quote;_wdQuote=q;
     const body=$('wd-quote-body');
+    /* ★ [2026-10-28] 담당자 합의 금액 — 서버가 72시간 이내 합의 금액을 q.agreed 로 내려주면 그 금액이 결제 금액 */
+    const _ag=q.agreed||null,_agExp=_ag&&_ag.expiresAt?new Date(_ag.expiresAt):null;
+    const _agUntil=_agExp?(_agExp.getMonth()+1)+'/'+_agExp.getDate()+' '+String(_agExp.getHours()).padStart(2,'0')+':'+String(_agExp.getMinutes()).padStart(2,'0'):'';
+    const _agHead=_ag?'<div style="background:#fff;border:1.5px solid #F59E0B;border-radius:8px;padding:10px 12px;margin-bottom:8px;text-align:center"><div style="font-size:12px;color:#92400E">담당자와 협의한 정산 금액</div><div style="font-size:22px;font-weight:800;color:#B45309;margin:2px 0">'+wdWon(_ag.amount)+'</div>'+(_agUntil?'<div style="font-size:11.5px;color:#92400E">'+_agUntil+'까지 유효 · 이후에는 자동 계산 금액으로 돌아갑니다</div>':'')+'</div>':'';
+    if($('wd-bank-amt')){$('wd-bank-amt').style.display=q.amount>0?'block':'none';$('wd-bank-amt').textContent='송금하실 금액 '+wdWon(q.amount);}
     if(!q.billable||q.amount<=0){
-      if(body)body.innerHTML='정산할 이용료가 없습니다. 바로 탈퇴를 진행하실 수 있습니다.';
+      if(body)body.innerHTML=_agHead+'정산할 이용료가 없습니다. 바로 탈퇴를 진행하실 수 있습니다.';
       if($('wd-confirm-msg'))$('wd-confirm-msg').textContent='정말 탈퇴하시겠습니까?';
       if($('wd-confirm-btn'))$('wd-confirm-btn').textContent='탈퇴하기';
       if(q.hasCard&&$('wd-card-box')){$('wd-card-disp').textContent=((q.cardName||'')+' '+(q.cardMasked||'')).trim()||'등록 카드';$('wd-card-box').style.display='block';}
     }else{
-      const rows=q.months.filter(m=>m.amount>0).map(m=>'<div style="display:flex;justify-content:space-between"><span>'+m.ym+' ('+m.days+'일)</span><span>'+wdWon(m.amount)+'</span></div>').join('');
-      if(body)body.innerHTML='<div style="display:flex;justify-content:space-between"><span>이용 기간</span><span>'+q.periodStart+' ~ '+q.periodEnd+'</span></div>'
+      const rows=_ag?'':q.months.filter(m=>m.amount>0).map(m=>'<div style="display:flex;justify-content:space-between"><span>'+m.ym+' ('+m.days+'일)</span><span>'+wdWon(m.amount)+'</span></div>').join('');
+      if(body&&_ag)body.innerHTML=_agHead+'<div style="font-size:12px;color:#A16207;line-height:1.7">참고 · 이용 기간 '+q.periodStart+' ~ '+q.periodEnd+' / 월 이용료 '+wdWon(q.monthlyFee)+' / 자동 계산 금액 '+wdWon(q.calcAmount)+'</div>';
+      else if(body)body.innerHTML='<div style="display:flex;justify-content:space-between"><span>이용 기간</span><span>'+q.periodStart+' ~ '+q.periodEnd+'</span></div>'
         +'<div style="display:flex;justify-content:space-between"><span>월 이용료</span><span>'+wdWon(q.monthlyFee)+'</span></div>'
         +rows
         +'<div style="display:flex;justify-content:space-between;border-top:1px solid #FDE68A;margin-top:6px;padding-top:6px;font-weight:700"><span>결제 예정 금액</span><span>'+wdWon(q.amount)+'</span></div>';
@@ -9093,9 +9100,15 @@ async function doWithdraw(){
     await reauthenticateWithCredential(me,credential);
     // 2) 정산 결제 + 서버 탈퇴 처리 (결제 성공 시에만 탈퇴 진행)
     const fn=httpsCallable(functions,'payWithdrawalSettlement');
-    const res=await fn({});
+    const res=await fn(_wdQuote?{expectAmount:_wdQuote.amount}:{});   /* ★ [2026-10-28] 화면 금액과 다르면 서버가 결제 거부 */
     const d=res.data||{};
     if(!d.success){
+      if(d.stage==='quote_changed'){   /* ★ [2026-10-28] 합의 금액 만료 등으로 금액이 바뀐 경우 — 새 금액 다시 표시 */
+        toast('정산 금액이 변경되었습니다. 바뀐 금액을 확인하신 뒤 다시 진행해 주세요.','error');
+        btn.disabled=false;btn.textContent=label;
+        openWithdraw();
+        return;
+      }
       if(d.stage==='payment'){
         wdShowBank();
         toast('결제에 실패했습니다. 송금 또는 카드 등록 후 다시 시도해 주세요.','error');
