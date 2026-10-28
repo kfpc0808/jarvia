@@ -3486,12 +3486,33 @@ body.jv-card-lock #mob-menu > #mob-card-reg.mcr.mcr.on{display:flex!important}
       <p style="margin:6px 0 0;font-size:12px;color:#B91C1C;line-height:1.7">탈퇴 완료와 동시에 정기결제가 중지되고, 등록된 카드 정보는 자동으로 삭제됩니다.</p>
     </div>
 
+    <!-- ★ [2026-10-28] 카드 미등록 회원 — 결제 방법 선택(카드번호 입력 결제 / 송금) -->
+    <div id="wd-pay-pick" style="display:none;margin-bottom:12px">
+      <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:var(--text)">결제 방법</p>
+      <div style="display:flex;gap:8px">
+        <button type="button" id="wd-pick-card" class="btn btn-sm" style="flex:1;min-width:0;padding:10px 6px" onclick="wdPayMode('card')">💳 카드로 결제</button>
+        <button type="button" id="wd-pick-remit" class="btn btn-sm" style="flex:1;min-width:0;padding:10px 6px" onclick="wdPayMode('remit')">🏦 송금으로 진행</button>
+      </div>
+    </div>
+    <div id="wd-newcard-box" style="display:none;background:#F7F8FA;border-radius:10px;padding:13px 15px;margin-bottom:12px">
+      <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:var(--text)">💳 결제할 카드</p>
+      <div class="fg" style="margin-bottom:8px"><label style="font-size:12px;color:var(--text-lt)">카드번호</label><input id="wdc-num" inputmode="numeric" maxlength="19" placeholder="카드번호 15~16자리" autocomplete="cc-number" style="width:100%;box-sizing:border-box;letter-spacing:1px" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <div class="fg" style="flex:1;min-width:0"><label style="font-size:12px;color:var(--text-lt)">유효기간 월</label><input id="wdc-mm" inputmode="numeric" maxlength="2" placeholder="MM" style="width:100%;box-sizing:border-box;text-align:center" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+        <div class="fg" style="flex:1;min-width:0"><label style="font-size:12px;color:var(--text-lt)">유효기간 년</label><input id="wdc-yy" inputmode="numeric" maxlength="2" placeholder="YY" style="width:100%;box-sizing:border-box;text-align:center" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+        <div class="fg" style="flex:1;min-width:0"><label style="font-size:12px;color:var(--text-lt);white-space:nowrap">비번 앞 2자리</label><input id="wdc-pw" type="password" inputmode="numeric" maxlength="2" placeholder="••" style="width:100%;box-sizing:border-box;text-align:center" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      </div>
+      <div class="fg" style="margin-bottom:8px"><label style="font-size:12px;color:var(--text-lt)">생년월일 6자리 (법인카드는 사업자번호 10자리)</label><input id="wdc-id" inputmode="numeric" maxlength="10" placeholder="예: 850315" style="width:100%;box-sizing:border-box" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:#5F6E78;cursor:pointer;line-height:1.6"><input type="checkbox" id="wdc-agree" style="margin-top:3px"> <span>(필수) 위 카드로 정산 금액을 결제하는 데 동의합니다. 카드 정보는 탈퇴와 함께 삭제됩니다.</span></label>
+    </div>
+
     <div id="wd-bank-box" style="display:none;background:#F7F8FA;border-radius:10px;padding:13px 15px;margin-bottom:12px">
       <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:var(--text)">🏦 송금 계좌</p>
       <p id="wd-bank-amt" style="display:none;margin:0 0 4px;font-size:14px;font-weight:700;color:#B91C1C"></p>
       <p style="margin:0;font-size:13px;color:#5F6E78;line-height:1.7">국민은행 378801-01-062695<br>예금주 (주)한국FP센터</p>
       <button class="btn btn-sm" style="width:100%;margin-top:9px" onclick="wdCopyAccount()">계좌번호 복사</button>
       <p style="margin:8px 0 0;font-size:12px;color:#9099AD;line-height:1.6">입금자명은 가입하신 성함으로 부탁드립니다. 송금하시거나 카드를 등록해 결제를 완료하신 후 탈퇴가 진행됩니다.</p>
+      <div id="wd-remit-area" style="display:none;margin-top:10px;padding-top:10px;border-top:1px dashed #D5DAE1"></div>
     </div>
 
     <div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:14px 16px;margin-bottom:14px">
@@ -9040,17 +9061,55 @@ async function doChangePw(){
 
 // ── 회원 탈퇴/해지 ──
 // [2026-09] 후불제 정산: 견적 조회(getWithdrawalQuote) → 등록카드 결제 후 탈퇴(payWithdrawalSettlement)
-let _wdQuote=null;
+let _wdQuote=null,_wdMode='';   /* ★ [2026-10-28] _wdMode: ''(기본) · 'card'(카드번호 입력 결제) · 'remit'(송금) · 'remitOk'(송금 확인 완료) */
+const _WD_KAKAO_CHAT='https://pf.kakao.com/_xmVjSX/chat';
 function wdWon(n){return (n||0).toLocaleString('ko-KR')+'원';}
 function wdCopyAccount(){try{navigator.clipboard.writeText('378801-01-062695');toast('계좌번호가 복사되었습니다.','success');}catch(_e){toast('복사에 실패했습니다.','error');}}
 function wdShowBank(){const b=$('wd-bank-box');if(b)b.style.display='block';const c=$('wd-card-box');if(c)c.style.display='none';}
+function _wdDt(iso){const d=iso?new Date(iso):null;return d&&!isNaN(d)?(d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'):'';}
+function _wdShow(id,on){const e=$(id);if(e)e.style.display=on?'block':'none';}
+/* ★ [2026-10-28] 카드 미등록 회원 결제 방법 전환 — 카드: 카드번호 입력칸 / 송금: 계좌 + 「○○원 송금하겠습니다」 */
+function wdPayMode(mode){
+  const q=_wdQuote;if(!q)return;_wdMode=mode;
+  const pc=$('wd-pick-card'),pr=$('wd-pick-remit');
+  [[pc,mode==='card'],[pr,mode==='remit']].forEach(([b,on])=>{if(!b)return;b.style.background=on?'#1B3A5C':'#fff';b.style.color=on?'#fff':'#1B3A5C';b.style.borderColor='#1B3A5C';});
+  _wdShow('wd-newcard-box',mode==='card');_wdShow('wd-bank-box',mode==='remit');
+  const btn=$('wd-confirm-btn'),msg=$('wd-confirm-msg'),ra=$('wd-remit-area');
+  if(mode==='card'){
+    if(msg)msg.textContent=wdWon(q.amount)+' 결제 후 탈퇴를 진행합니다. 계속하시겠습니까?';
+    if(btn){btn.textContent='결제하고 탈퇴하기';btn.disabled=false;}
+  }else{
+    const rq=q.remitReq;
+    if(ra){ra.style.display='block';ra.innerHTML=(rq
+      ?'<p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#15803D">✅ '+wdWon(rq.amount)+' 송금 요청 완료'+(rq.at?' ('+_wdDt(rq.at)+')':'')+'</p>'
+      :'<button type="button" class="btn btn-sm" style="width:100%;background:#1B3A5C;color:#fff;border-color:#1B3A5C" onclick="wdRemitReq()">'+wdWon(q.amount)+' 송금하겠습니다</button>')
+      +'<p style="margin:8px 0 6px;font-size:12px;color:#5F6E78;line-height:1.7">송금하신 뒤 카카오톡 고객센터에 「송금했습니다」라고 남겨 주세요. 본사에서 입금을 확인하면 이 화면에 「즉시 탈퇴」 버튼이 생깁니다.</p>'
+      +'<a href="'+_WD_KAKAO_CHAT+'" target="_blank" rel="noopener" class="btn btn-sm" style="display:block;text-align:center;background:#FEE500;color:#191919;border-color:#FEE500;text-decoration:none">카카오톡 고객센터 열기</a>';}
+    if(msg)msg.textContent=rq?'본사에서 입금을 확인하면 탈퇴를 진행하실 수 있습니다.':'송금하실 경우 위의 「송금하겠습니다」를 눌러 주세요.';
+    if(btn){btn.textContent='송금 확인 대기 중';btn.disabled=true;}
+  }
+}
+/* ★ [2026-10-28] 회원 「○○원 송금하겠습니다」 — users.wdRemitReq 기록 (본사 확인용 표시, 탈퇴 허용은 본사 「탈퇴 가능」 처리로만) */
+async function wdRemitReq(){
+  const q=_wdQuote;if(!q||!me)return;
+  if(!confirm(wdWon(q.amount)+'을 송금하시겠습니까?\n\n송금하신 뒤 카카오톡 고객센터에 알려 주시면 본사에서 확인 후 탈퇴를 도와드립니다.'))return;
+  try{
+    await updateDoc(doc(db,'users',me.uid),{wdRemitReq:{amount:q.amount,at:serverTimestamp()}});
+    q.remitReq={amount:q.amount,at:new Date().toISOString()};
+    toast('송금 요청이 접수되었습니다. 송금 후 카카오톡 고객센터에 알려 주세요.','success');
+    wdPayMode('remit');
+  }catch(e){console.error('[송금요청]',e);toast('요청 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.','error');}
+}
+window.wdPayMode=wdPayMode;window.wdRemitReq=wdRemitReq;window.wdCopyAccount=wdCopyAccount;
 
 async function openWithdraw(){
   if($('wd-pw'))$('wd-pw').value='';
-  _wdQuote=null;
+  _wdQuote=null;_wdMode='';
   if($('wd-quote-body'))$('wd-quote-body').textContent='불러오는 중…';
   if($('wd-card-box'))$('wd-card-box').style.display='none';
   if($('wd-bank-box'))$('wd-bank-box').style.display='none';
+  ['wd-pay-pick','wd-newcard-box','wd-remit-area'].forEach(id=>_wdShow(id,false));   /* ★ [2026-10-28] */
+  ['wdc-num','wdc-mm','wdc-yy','wdc-pw','wdc-id'].forEach(id=>{if($(id))$(id).value='';});if($('wdc-agree'))$('wdc-agree').checked=false;
   if($('wd-confirm-btn'))$('wd-confirm-btn').disabled=true;
   openM('mdl-withdraw');
   try{
@@ -9064,7 +9123,12 @@ async function openWithdraw(){
     const _agUntil=_agExp?(_agExp.getMonth()+1)+'/'+_agExp.getDate()+' '+String(_agExp.getHours()).padStart(2,'0')+':'+String(_agExp.getMinutes()).padStart(2,'0'):'';
     const _agHead=_ag?'<div style="background:#fff;border:1.5px solid #F59E0B;border-radius:8px;padding:10px 12px;margin-bottom:8px;text-align:center"><div style="font-size:12px;color:#92400E">담당자와 협의한 정산 금액</div><div style="font-size:22px;font-weight:800;color:#B45309;margin:2px 0">'+wdWon(_ag.amount)+'</div>'+(_agUntil?'<div style="font-size:11.5px;color:#92400E">'+_agUntil+'까지 유효 · 이후에는 자동 계산 금액으로 돌아갑니다</div>':'')+'</div>':'';
     if($('wd-bank-amt')){$('wd-bank-amt').style.display=q.amount>0?'block':'none';$('wd-bank-amt').textContent='송금하실 금액 '+wdWon(q.amount);}
-    if(!q.billable||q.amount<=0){
+    if(q.remitOk){   /* ★ [2026-10-28] 본사 송금 확인 완료 — 결제 없이 즉시 탈퇴 */
+      _wdMode='remitOk';
+      if(body)body.innerHTML='<div style="background:#fff;border:1.5px solid #16A34A;border-radius:8px;padding:10px 12px;text-align:center"><div style="font-size:12px;color:#15803D">송금 확인 완료</div><div style="font-size:22px;font-weight:800;color:#15803D;margin:2px 0">'+wdWon(q.remitOk.amount)+'</div><div style="font-size:11.5px;color:#15803D">본사에서 입금을 확인했습니다. 추가 결제 없이 바로 탈퇴하실 수 있습니다.</div></div>';
+      if($('wd-confirm-msg'))$('wd-confirm-msg').textContent='아래 버튼을 누르면 바로 탈퇴됩니다.';
+      if($('wd-confirm-btn'))$('wd-confirm-btn').textContent='즉시 탈퇴';
+    }else if(!q.billable||q.amount<=0){
       if(body)body.innerHTML=_agHead+'정산할 이용료가 없습니다. 바로 탈퇴를 진행하실 수 있습니다.';
       if($('wd-confirm-msg'))$('wd-confirm-msg').textContent='정말 탈퇴하시겠습니까?';
       if($('wd-confirm-btn'))$('wd-confirm-btn').textContent='탈퇴하기';
@@ -9079,7 +9143,7 @@ async function openWithdraw(){
       if($('wd-confirm-msg'))$('wd-confirm-msg').textContent=wdWon(q.amount)+' 결제 후 탈퇴를 진행합니다. 계속하시겠습니까?';
       if($('wd-confirm-btn'))$('wd-confirm-btn').textContent='결제하고 탈퇴하기';
       if(q.hasCard){$('wd-card-disp').textContent=((q.cardName||'')+' '+(q.cardMasked||'')).trim()||'등록 카드';$('wd-card-box').style.display='block';}
-      else wdShowBank();
+      else{_wdShow('wd-pay-pick',true);if($('wd-confirm-btn'))$('wd-confirm-btn').disabled=false;wdPayMode(q.remitReq?'remit':'card');return;}   /* ★ [2026-10-28] 카드 미등록 — 카드번호 입력 결제(기본) / 송금 선택 */
     }
     if($('wd-confirm-btn'))$('wd-confirm-btn').disabled=false;
   }catch(err){
@@ -9090,31 +9154,59 @@ async function openWithdraw(){
 
 async function doWithdraw(){
   if(!me){toast('로그인이 필요합니다.','error');return;}
+  if(_wdMode==='remit')return toast('본사에서 입금을 확인한 뒤 탈퇴하실 수 있습니다.','error');   /* ★ [2026-10-28] */
+  /* ★ [2026-10-28] 카드 미등록 회원 — 탈퇴 화면에서 입력한 카드로 결제 (입력값 먼저 검사) */
+  const _newCard=_wdMode==='card'&&!!_wdQuote&&!_wdQuote.hasCard&&_wdQuote.amount>0;
+  let _nc=null;
+  if(_newCard){
+    _nc={cardNum:($('wdc-num').value||'').replace(/[^0-9]/g,''),expMonth:($('wdc-mm').value||'').replace(/[^0-9]/g,''),expYear:($('wdc-yy').value||'').replace(/[^0-9]/g,''),cardPwd:($('wdc-pw').value||'').replace(/[^0-9]/g,''),idNum:($('wdc-id').value||'').replace(/[^0-9]/g,'')};
+    if(_nc.cardNum.length<15||_nc.cardNum.length>16)return toast('카드번호를 정확히 입력해 주세요.','warning');
+    const _mm=parseInt(_nc.expMonth,10);
+    if(_nc.expMonth.length!==2||_nc.expYear.length!==2||!(_mm>=1&&_mm<=12))return toast('유효기간(MM/YY)을 확인해 주세요.','warning');
+    if(_nc.idNum.length!==6&&_nc.idNum.length!==10)return toast('생년월일 6자리(법인카드는 사업자번호 10자리)를 입력해 주세요.','warning');
+    if(!$('wdc-agree').checked)return toast('결제 동의에 체크해 주세요.','warning');
+  }
   const pw=$('wd-pw').value;
   if(!pw)return toast('본인 확인을 위해 비밀번호를 입력하세요.','error');
   const btn=$('wd-confirm-btn');const label=btn.textContent;
   btn.disabled=true;btn.textContent='처리 중...';
+  let _keyIssued=false;
+  const _dropNewCard=async()=>{if(!_keyIssued)return;_keyIssued=false;try{await httpsCallable(functions,'innopayDeleteBillKey')({});}catch(_e){console.warn('[탈퇴] 입력 카드 정리 실패',_e);}};
   try{
     // 1) 본인 재인증
     const credential=EmailAuthProvider.credential(me.email,pw);
     await reauthenticateWithCredential(me,credential);
+    // 1-1) ★ [2026-10-28] 입력한 카드 확인(빌링키 발급) — 실패 시 탈퇴 진행 안 함
+    if(_newCard){
+      const ir=await httpsCallable(functions,'innopayIssueBillKey')(Object.assign({buyerName:(meData&&meData.name)||'',buyerEmail:(meData&&meData.email)||me.email||'',buyerHp:(meData&&meData.phone)||''},_nc));
+      if(!(ir.data&&ir.data.success)){toast((ir.data&&ir.data.error)||'카드 확인에 실패했습니다. 카드 정보를 확인해 주세요.','error');btn.disabled=false;btn.textContent=label;return;}
+      _keyIssued=true;
+    }
     // 2) 정산 결제 + 서버 탈퇴 처리 (결제 성공 시에만 탈퇴 진행)
     const fn=httpsCallable(functions,'payWithdrawalSettlement');
     const res=await fn(_wdQuote?{expectAmount:_wdQuote.amount}:{});   /* ★ [2026-10-28] 화면 금액과 다르면 서버가 결제 거부 */
     const d=res.data||{};
     if(!d.success){
       if(d.stage==='quote_changed'){   /* ★ [2026-10-28] 합의 금액 만료 등으로 금액이 바뀐 경우 — 새 금액 다시 표시 */
+        await _dropNewCard();
         toast('정산 금액이 변경되었습니다. 바뀐 금액을 확인하신 뒤 다시 진행해 주세요.','error');
         btn.disabled=false;btn.textContent=label;
         openWithdraw();
         return;
       }
       if(d.stage==='payment'){
+        if(_newCard){   /* ★ [2026-10-28] 입력 카드 결제 실패 — 카드 정보 삭제, 카드 입력칸 유지 */
+          await _dropNewCard();
+          toast('결제에 실패했습니다'+(d.error?' ('+d.error+')':'')+'. 카드 정보를 확인하시거나 송금으로 진행해 주세요.','error');
+          btn.disabled=false;btn.textContent=label;
+          return;
+        }
         wdShowBank();
         toast('결제에 실패했습니다. 송금 또는 카드 등록 후 다시 시도해 주세요.','error');
         btn.disabled=false;btn.textContent=label;
         return;
       }
+      if(d.stage!=='withdraw')await _dropNewCard();   /* 결제 전 오류 — 입력 카드 정리 (결제 후 탈퇴 단계 오류는 기록 보존) */
       throw new Error(d.error||'처리 실패');
     }
     // 3) 로그아웃 후 안내
@@ -9124,6 +9216,7 @@ async function doWithdraw(){
     toast('탈퇴가 완료되었습니다. 그동안 이용해 주셔서 감사합니다.','success');
     setTimeout(function(){window.location.href='index.html';},1500);
   }catch(err){
+    await _dropNewCard();
     if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential')toast('비밀번호가 올바르지 않습니다.','error');
     else toast('탈퇴 처리 실패: '+(err.message||'오류'),'error');
     btn.disabled=false;btn.textContent=label;

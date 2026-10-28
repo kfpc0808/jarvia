@@ -11251,14 +11251,22 @@ async function _wdaBox(uid,m){
   const box=$('wda-'+uid);if(!box)return;
   if(m.role!=='jarvia_member'||m.status==='withdrawn'){box.innerHTML='';return;}
   let ag=null;try{const g=await getDoc(doc(db,'withdrawal_agreements',uid));if(g.exists())ag=g.data();}catch(e){console.warn('[탈퇴합의] 조회:',e);}
+  const used=!!(ag&&ag.usedAt);
   let st='<span style="color:#64748B">입력된 합의 금액 없음 — 회원 탈퇴 화면에는 자동 계산 금액이 표시됩니다.</span>';
-  if(ag){
+  if(ag&&ag.amount!=null&&ag.setAt){
     const at=ag.setAt&&ag.setAt.toDate?ag.setAt.toDate():null,exp=at?new Date(at.getTime()+_WDA_MS):null;
     const head='합의 <b>'+fmt(ag.amount||0)+'원</b>'+(ag.memo?' · '+esc(ag.memo):'')+(ag.setByName?' · '+esc(ag.setByName):'');
-    if(ag.usedAt)st='<span style="color:#475569">'+head+' — <b>탈퇴 완료(사용됨)</b></span>';
+    if(used)st='<span style="color:#475569">'+head+' — <b>탈퇴 완료(사용됨)</b></span>';
     else if(exp&&Date.now()<exp.getTime())st='<span style="color:#15803D">'+head+' — <b>'+_wdaFmt(exp)+'까지 유효</b> (회원 탈퇴 화면에 이 금액이 표시됩니다)</span>';
     else st='<span style="color:#B91C1C">'+head+' — <b>만료 · 다시 입력 필요</b> (지금은 자동 계산 금액이 표시됩니다)</span>';
   }
+  /* ★ [2026-10-28] 송금 탈퇴 — 회원 「○○원 송금하겠습니다」(users.wdRemitReq) → 본사 입금 확인 후 「탈퇴 가능」(remitOk*) → 회원 즉시 탈퇴 */
+  const rq=m.wdRemitReq||null,rqAt=rq&&rq.at&&rq.at.toDate?rq.at.toDate():null;
+  const okAt=ag&&ag.remitOkAt&&ag.remitOkAt.toDate?ag.remitOkAt.toDate():null;
+  let rm='<span style="color:#64748B">송금 요청 없음</span>';
+  if(rq)rm='회원 송금 요청 <b>'+fmt(rq.amount||0)+'원</b>'+(rqAt?' ('+_wdaFmt(rqAt)+')':'');
+  if(okAt&&!used)rm+=' — <b style="color:#15803D">탈퇴 가능 처리됨 '+fmt(ag.remitOkAmount||0)+'원 ('+_wdaFmt(okAt)+(ag.remitOkByName?' · '+esc(ag.remitOkByName):'')+')</b> · 회원이 탈퇴 화면에서 「즉시 탈퇴」를 누르면 완료됩니다';
+  else if(okAt&&used)rm+=' — <b style="color:#475569">송금 확인 후 탈퇴 완료</b>';
   box.innerHTML='<h3>탈퇴 합의 금액 <span style="font-size:11px;background:#FDECEA;color:#C0392B;padding:2px 8px;border-radius:10px;margin-left:4px;font-weight:600">관리자 전용</span></h3>'
     +'<div style="margin:12px 0 16px;padding:14px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px">'
     +'<div style="font-size:13px;color:#92400E;margin-bottom:6px">자동 계산 금액: <b id="wda-calc-'+uid+'">불러오는 중…</b></div>'
@@ -11266,27 +11274,53 @@ async function _wdaBox(uid,m){
     +'<div class="fr" style="align-items:end;gap:8px;flex-wrap:wrap"><div class="fg" style="max-width:160px"><label>합의 금액(원)</label><input id="wda-amt-'+uid+'" type="number" min="0" step="1000" placeholder="예: 50000"></div>'
     +'<div class="fg" style="flex:1;min-width:180px"><label>메모 (관리자만 보임)</label><input id="wda-memo-'+uid+'" maxlength="100" placeholder="예: 10/28 통화, 2개월분 → 5만원 합의"></div></div>'
     +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm btn-success" onclick="wdaSave(\''+uid+'\')">합의 금액 저장</button>'
-    +(ag&&!ag.usedAt?'<button class="btn btn-sm btn-danger" onclick="wdaDel(\''+uid+'\')">합의 금액 삭제</button>':'')+'</div>'
-    +'<p style="margin:8px 0 0;font-size:12px;color:#999">⚠️ 저장한 때부터 3일(72시간) 동안만 유효합니다. 그 안에 회원이 탈퇴하지 않으면 자동 계산 금액으로 돌아가며, 다시 입력해야 합니다. 이 금액은 총판 수수료 대상이 아닙니다.</p></div>';
+    +(ag&&ag.amount!=null&&!used?'<button class="btn btn-sm btn-danger" onclick="wdaDel(\''+uid+'\')">합의 금액 삭제</button>':'')+'</div>'
+    +'<p style="margin:8px 0 0;font-size:12px;color:#999">⚠️ 저장한 때부터 3일(72시간) 동안만 유효합니다. 그 안에 회원이 탈퇴하지 않으면 자동 계산 금액으로 돌아가며, 다시 입력해야 합니다. 이 금액은 총판 수수료 대상이 아닙니다.</p>'
+    +'<div style="margin-top:12px;padding-top:12px;border-top:1px dashed #FCD34D">'
+    +'<div style="font-size:13px;font-weight:700;color:#92400E;margin-bottom:6px">🏦 송금 탈퇴</div>'
+    +'<div style="font-size:13px;line-height:1.7;margin-bottom:8px;word-break:keep-all">'+rm+'</div>'
+    +(used?'':(okAt
+      ?'<button class="btn btn-sm btn-danger" onclick="wdaRemitCancel(\''+uid+'\')">탈퇴 가능 취소</button>'
+      :'<div class="fr" style="align-items:end;gap:8px;flex-wrap:wrap"><div class="fg" style="max-width:160px"><label>입금 확인 금액(원)</label><input id="wda-rmt-'+uid+'" type="number" min="0" step="1000" value="'+(rq&&rq.amount!=null?Number(rq.amount):'')+'"></div>'
+       +'<button class="btn btn-sm btn-success" onclick="wdaRemitOk(\''+uid+'\')">송금 확인 · 탈퇴 가능 처리</button></div>'))
+    +'<p style="margin:8px 0 0;font-size:12px;color:#999">입금을 확인한 뒤 누르세요. 회원이 탈퇴 화면에 다시 들어오면 「즉시 탈퇴」 버튼이 생기며, 결제 없이 탈퇴됩니다. 기한 없이 유지되고 언제든 취소할 수 있습니다.</p></div>'
+    +'</div>';
   try{const r=(await httpsCallable(functions,'getWithdrawalQuote')({targetUid:uid})).data;const c=$('wda-calc-'+uid);if(c)c.textContent=(r&&r.success)?fmt(r.quote.calcAmount!=null?r.quote.calcAmount:r.quote.amount)+'원':'조회 실패';}
   catch(e){const c=$('wda-calc-'+uid);if(c)c.textContent='조회 실패';}
 }
+async function _wdaReload(uid){const ud=(await getDoc(doc(db,'users',uid))).data()||{};_wdaBox(uid,ud);}
+const _wdaWho=()=>{const em=(auth.currentUser&&auth.currentUser.email)||'';return {em,nm:em.split('@')[0]};};
 window.wdaSave=async function(uid){
   const v=String(($('wda-amt-'+uid)||{}).value||'').trim(),amt=parseInt(v,10);
   if(!v||!Number.isFinite(amt)||amt<0)return toast('합의 금액을 숫자로 입력하세요.','error');
   const memo=String(($('wda-memo-'+uid)||{}).value||'').trim();
   if(!confirm('탈퇴 합의 금액을 '+fmt(amt)+'원으로 저장할까요?\n\n저장한 때부터 3일(72시간) 동안 회원 탈퇴 화면에 이 금액이 표시되고, 이 금액으로 결제됩니다.'))return;
   try{
-    const ud=(await getDoc(doc(db,'users',uid))).data()||{};
-    const em=(auth.currentUser&&auth.currentUser.email)||'';
-    await setDoc(doc(db,'withdrawal_agreements',uid),{amount:amt,memo,loginId:ud.loginId||'',name:ud.name||'',setBy:em,setByName:em.split('@')[0],setAt:serverTimestamp()});
+    const ud=(await getDoc(doc(db,'users',uid))).data()||{};const w=_wdaWho();
+    await setDoc(doc(db,'withdrawal_agreements',uid),{amount:amt,memo,loginId:ud.loginId||'',name:ud.name||'',setBy:w.em,setByName:w.nm,setAt:serverTimestamp(),usedAt:deleteField()},{merge:true});
     toast('탈퇴 합의 금액을 저장했습니다 (3일 유효).','success');_wdaBox(uid,ud);
   }catch(e){console.error('[탈퇴합의]',e);toast('저장 실패: '+e.message,'error');}
 };
 window.wdaDel=async function(uid){
   if(!confirm('탈퇴 합의 금액을 삭제할까요?\n회원 탈퇴 화면에는 자동 계산 금액이 다시 표시됩니다.'))return;
-  try{await deleteDoc(doc(db,'withdrawal_agreements',uid));toast('합의 금액을 삭제했습니다.','success');const ud=(await getDoc(doc(db,'users',uid))).data()||{};_wdaBox(uid,ud);}
+  try{await updateDoc(doc(db,'withdrawal_agreements',uid),{amount:deleteField(),memo:deleteField(),setAt:deleteField(),setBy:deleteField(),setByName:deleteField()});toast('합의 금액을 삭제했습니다.','success');_wdaReload(uid);}
   catch(e){console.error('[탈퇴합의]',e);toast('삭제 실패: '+e.message,'error');}
+};
+window.wdaRemitOk=async function(uid){
+  const v=String(($('wda-rmt-'+uid)||{}).value||'').trim(),amt=parseInt(v,10);
+  if(!v||!Number.isFinite(amt)||amt<0)return toast('입금 확인 금액을 숫자로 입력하세요.','error');
+  try{
+    const ud=(await getDoc(doc(db,'users',uid))).data()||{};
+    if(!confirm((ud.name||'')+' ('+(ud.loginId||'')+')\n\n입금 '+fmt(amt)+'원을 확인하셨나요?\n「탈퇴 가능」으로 처리하면 회원이 탈퇴 화면에서 결제 없이 즉시 탈퇴할 수 있습니다.'))return;
+    const w=_wdaWho();
+    await setDoc(doc(db,'withdrawal_agreements',uid),{remitOkAmount:amt,remitOkAt:serverTimestamp(),remitOkBy:w.em,remitOkByName:w.nm,loginId:ud.loginId||'',name:ud.name||'',usedAt:deleteField()},{merge:true});
+    toast('탈퇴 가능으로 처리했습니다. 회원에게 탈퇴 화면에서 「즉시 탈퇴」를 누르도록 안내해 주세요.','success');_wdaBox(uid,ud);
+  }catch(e){console.error('[송금탈퇴]',e);toast('처리 실패: '+e.message,'error');}
+};
+window.wdaRemitCancel=async function(uid){
+  if(!confirm('「탈퇴 가능」 처리를 취소할까요?\n회원 탈퇴 화면의 「즉시 탈퇴」 버튼이 사라집니다.'))return;
+  try{await updateDoc(doc(db,'withdrawal_agreements',uid),{remitOkAmount:deleteField(),remitOkAt:deleteField(),remitOkBy:deleteField(),remitOkByName:deleteField()});toast('탈퇴 가능 처리를 취소했습니다.','success');_wdaReload(uid);}
+  catch(e){console.error('[송금탈퇴]',e);toast('취소 실패: '+e.message,'error');}
 };
 async function _rgvMemberBox(uid,m){
   const box=$('mref-'+uid);if(!box)return;
