@@ -12065,6 +12065,7 @@ function zsPreview(){
   const line=filled.slice().sort((a,b)=>a.date<b.date?-1:1).map(s=>zsMd(s.date)+'('+zsWeekday(s.date)+')').join(' · ');
   p.textContent='ZOOM 설명회 '+mon+'· 4주 완성 · 참가비 무료 / '+line+(def?(' · '+def):'')+' · 매주 60분';
 }
+var _zsPrev=null;   /* ★ [2026-10-28] settings/zoom_seminar_prev (지난달 일정 보관본) */
 async function loadZoomSeminar(){
   try{
     const s=await getDoc(doc(db,'settings','zoom_seminar'));
@@ -12080,6 +12081,8 @@ async function loadZoomSeminar(){
     if($('zs-zoom-id'))$('zs-zoom-id').value=d.zoomId||'';
     if($('zs-zoom-pw'))$('zs-zoom-pw').value=d.zoomPw||'';
     if($('zs-auto-notify'))$('zs-auto-notify').checked=d.autoNotify===true;
+    /* ★ [2026-10-28] 지난달 보관 일정 — 남은 회차 수동 발송 버튼용 */
+    try{const p=await getDoc(doc(db,'settings','zoom_seminar_prev'));_zsPrev=p.exists()?(p.data()||null):null;}catch(_e){_zsPrev=null;}
     zsRenderNotifyBtns();
   }catch(e){toast('불러오기 실패: '+e.message,'error');}
   zsLoadApps();
@@ -12096,6 +12099,15 @@ async function zsSave(){
     const uniq=new Set(dates.filter(Boolean));
     if(uniq.size!==4)return toast('같은 날짜가 중복 입력되었습니다.','error');
   }
+  /* ★ [2026-10-28] 대상 월이 바뀌면 기존 일정을 지난달 보관본(settings/zoom_seminar_prev)으로 복사
+     → 다음 달을 미리 저장해도 이번 달 남은 회차 알림톡(전일·당일·수동)이 계속 발송된다. 보관 실패 시 저장 중단 */
+  try{
+    const _cur=await getDoc(doc(db,'settings','zoom_seminar'));const _od=_cur.exists()?(_cur.data()||{}):{};
+    if(_od.monthKey&&_od.monthKey!==mk&&Array.isArray(_od.sessions)&&_od.sessions.length){
+      const _arch=Object.assign({},_od,{archivedAt:serverTimestamp(),archivedBy:admUser?.uid||''});
+      await setDoc(doc(db,'settings','zoom_seminar_prev'),_arch);_zsPrev=_arch;
+    }
+  }catch(e){return toast('지난달 일정 보관 실패 — 저장을 중단했습니다: '+e.message,'error');}
   try{
     const sorted=_zsSess.filter(s=>s.date).slice().sort((a,b)=>a.date<b.date?-1:1);
     await setDoc(doc(db,'settings','zoom_seminar'),{
@@ -12121,8 +12133,19 @@ function zsRenderNotifyBtns(){
   const box=$('zs-notify-btns');if(!box)return;
   const mk=($('zs-month')?.value||'').trim();
   const ss=_zsSess.filter(s=>/^\d{4}-\d{2}-\d{2}$/.test(s.date)).slice().sort((a,b)=>a.date<b.date?-1:1);
-  if(!mk||!ss.length){box.innerHTML='<span style="font-size:13px;color:#999">대상 월과 회차 날짜를 저장하면 버튼이 표시됩니다.</span>';return;}
-  box.innerHTML=ss.map((s,i)=>`<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">${i+1}주차 ${esc(zsMd(s.date))}(${esc(zsWeekday(s.date))})</b><button class="btn btn-sm btn-sec" onclick="zsNotifyNow('${esc(mk)}',${i+1},'prev',this)">전일안내</button><button class="btn btn-sm" onclick="zsNotifyNow('${esc(mk)}',${i+1},'day',this)">접속안내(링크)</button></div>`).join('');
+  let html;
+  if(!mk||!ss.length){html='<span style="font-size:13px;color:#999">대상 월과 회차 날짜를 저장하면 버튼이 표시됩니다.</span>';}
+  else html=ss.map((s,i)=>`<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">${i+1}주차 ${esc(zsMd(s.date))}(${esc(zsWeekday(s.date))})</b><button class="btn btn-sm btn-sec" onclick="zsNotifyNow('${esc(mk)}',${i+1},'prev',this)">전일안내</button><button class="btn btn-sm" onclick="zsNotifyNow('${esc(mk)}',${i+1},'day',this)">접속안내(링크)</button></div>`).join('');
+  /* ★ [2026-10-28] 지난달 보관본에 아직 지나지 않은 회차가 있으면 그 회차 버튼도 표시 (회차 번호는 서버와 같은 날짜순) */
+  const pm=String((_zsPrev&&_zsPrev.monthKey)||'');
+  if(pm&&pm!==mk){
+    const today=new Date(Date.now()+9*3600*1000).toISOString().slice(0,10);
+    const ps=(Array.isArray(_zsPrev.sessions)?_zsPrev.sessions:[]).filter(s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s.date||''))).slice().sort((a,b)=>a.date<b.date?-1:1);
+    const left=ps.map((s,i)=>({s,no:i+1})).filter(x=>x.s.date>=today);
+    if(left.length)html+=`<div style="flex-basis:100%;font-size:12px;font-weight:700;color:#9A3412;margin-top:4px">지난달(${esc(pm)}) 남은 회차</div>`
+      +left.map(x=>`<div style="border:1px solid #FDBA74;background:#FFF7ED;border-radius:8px;padding:8px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">${esc(pm.split('-')[1].replace(/^0/,''))}월 ${x.no}주차 ${esc(zsMd(x.s.date))}(${esc(zsWeekday(x.s.date))})</b><button class="btn btn-sm btn-sec" onclick="zsNotifyNow('${esc(pm)}',${x.no},'prev',this)">전일안내</button><button class="btn btn-sm" onclick="zsNotifyNow('${esc(pm)}',${x.no},'day',this)">접속안내(링크)</button></div>`).join('');
+  }
+  box.innerHTML=html;
 }
 async function zsNotifyNow(monthKey,sessionNo,type,btn){
   if(!confirm(`${monthKey} ${sessionNo}주차 신청자에게 「${ZS_NOTIFY_LABEL[type]}」 알림톡을 지금 발송합니다.\n이미 받은 사람은 제외됩니다.\n진행하시겠습니까?`))return;
