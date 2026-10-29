@@ -28389,14 +28389,14 @@ function stcCustBox(c){
   const nl=(cn.rows||[]).map((r,i)=>(rn.rows&&rn.rows[i])||(x.numbers&&x.numbers.rows&&x.numbers.rows[i]&&x.numbers.rows[i].label)||r.label||'');
   const tl=rn.total||(x.numbers&&x.numbers.total&&x.numbers.total.label)||(cn.total&&cn.total.label)||'';
   const f=(id,lab,val,rows)=>`<label>${lab}</label>`+(rows?`<textarea id="stc-cu-${id}" rows="${rows}">${esc(val||'')}</textarea>`:`<input id="stc-cu-${id}" value="${esc(val||'')}">`);
-  const pv=c.status==='published'?`https://mypb.kr/story.html?s=${encodeURIComponent(c.id)}&fc=gildong&x=cd,bz&pv=1`:'';   /* pv=1: 미리보기 — 상담 신청 접수 안 됨 */
+  const pv=u?`${location.origin}/story.html?s=${encodeURIComponent(c.id)}&fc=gildong&x=cd,bz&pv=1`:'';   /* pv=1: 미리보기 — 상담 신청 접수 안 됨 · ★ [2026-10-30] 게시 전·점검 필요도 관리자 토큰으로 미리보기 (mypb.kr 은 X-Frame-Options 로 창 안에 안 떠서 지금 주소로) */
   return `<div class="stc-box stc-form"><h4>고객용 「오늘의 이야기」 ${st}</h4>
     ${c.custStale&&u?'<div class="stc-note" style="color:#c62828;font-weight:700">⚠ 회원 카드(HTML)가 수정되어 고객용 화면을 보류 중입니다 — 아래 문안이 수정 내용과 맞는지 확인 후 「고객용 저장」 또는 「고객용 다시 생성」을 눌러 주세요.</div>':''}
     ${c.lawWatch&&c.lawWatch.changed&&u?'<div class="stc-note" style="color:#c62828;font-weight:700">⚠ 법령 개정이 감지되어 고객용 화면을 보류 중입니다 — 위 「작업」의 카드 「다시 생성」을 하거나, 내용 확인 후 「법령 개정 감지」 탭에서 확인 처리하면 다시 보입니다.</div>':''}
     ${c.custStep&&(run||Date.now()-(c.custStepAt||0)<3600000)?`<div class="stc-note" style="font-weight:700;color:${run?'#1F3A6B':'#33415c'}">${run?'⏳ ':''}<span id="stc-cs-${c.id}">${esc(c.custStep)}</span></div>`:''}
     ${c.custError&&c.custState==='failed'?`<div class="stc-note" style="color:#c62828">생성 실패: ${esc(c.custError)}</div>`:''}
     ${notes?`<details${v.status==='fail'?' open':''}><summary style="cursor:pointer;font-weight:700">검수 지적 (${(v.notes||[]).length})</summary>${notes}</details>`:''}
-    ${pv?`<details style="margin:6px 0"><summary style="cursor:pointer;font-weight:700">고객 화면 미리보기 (홍길동 기준)</summary><iframe src="${esc(pv)}" style="width:100%;height:640px;border:1px solid #e3e6ee;border-radius:8px;margin-top:6px" sandbox="allow-scripts allow-same-origin allow-popups" loading="lazy" title="고객 화면 미리보기"></iframe><a href="${esc(pv)}" target="_blank" rel="noopener" style="font-size:12px">새 창으로 열기 ↗</a></details>`:'<div style="font-size:11.5px;color:#7a8299">미리보기는 게시된 카드만 볼 수 있습니다.</div>'}
+    ${pv?`<details style="margin:6px 0" data-pv="${esc(pv)}" ontoggle="stcPvOpen(this)"><summary style="cursor:pointer;font-weight:700">고객 화면 미리보기 (홍길동 기준)</summary><iframe style="width:100%;height:640px;border:1px solid #e3e6ee;border-radius:8px;margin-top:6px" sandbox="allow-scripts allow-same-origin allow-popups" title="고객 화면 미리보기"></iframe><a href="#" onclick="return stcPvWin(this)" style="font-size:12px">새 창으로 열기 ↗</a></details>`:'<div style="font-size:11.5px;color:#7a8299">고객용 문안이 없어 미리볼 수 없습니다.</div>'}
     <details${u&&v.status!=='fail'?'':' open'}><summary style="cursor:pointer;font-weight:700">문안 수정</summary>
     ${f('hook','제목 (질문형, 40자 이내)',x.hook)}${f('lead','도입 2문장 (**강조 구절**)',x.lead,3)}${f('aud','대상 한 줄',x.audienceLine)}
     ${[0,1,2].map(i=>f('pt'+i,`핵심 ${i+1} 제목`,(pts[i]||{}).title)+f('pb'+i,`핵심 ${i+1} 내용`,(pts[i]||{}).body,3)+f('pl'+i,`핵심 ${i+1} 법령 (카드에 있는 조문만, 없으면 비움)`,(pts[i]||{}).law)).join('')}
@@ -28410,6 +28410,18 @@ function stcCustBox(c){
     <div style="font-size:11.5px;color:#7a8299;margin-top:4px">금액은 카드 숫자에서 자동으로 채워집니다. 카드에 없는 숫자·법령, 판매 표현은 저장되지 않습니다. 이전 고객용은 보관됩니다.</div>
   </div>`;
 }
+/* ★ [2026-10-30] 고객 화면 미리보기 — 펼칠 때마다 관리자 토큰을 붙여 최신 문안으로 연다 (토큰은 #at= 로만 전달, story.html 이 읽고 바로 지움) */
+async function stcPvUrl(base){const u=auth.currentUser;if(!u)throw new Error('로그인이 필요합니다');return base+'&t='+Date.now()+'#at='+encodeURIComponent(await u.getIdToken());}   /* t: 다시 펼칠 때 같은 주소로 보여 새로 안 불러오는 것 방지 */
+async function stcPvOpen(det){
+  if(!det.open)return;const f=det.querySelector('iframe');if(!f)return;
+  try{f.src=await stcPvUrl(det.dataset.pv);}catch(e){toast('미리보기 실패: '+e.message,'error');}
+}
+function stcPvWin(a){
+  const w=window.open('about:blank','_blank');   /* 팝업 차단을 피하려고 창부터 연다 */
+  stcPvUrl(a.closest('details').dataset.pv).then(url=>{if(w)w.location.href=url;}).catch(e=>{if(w)w.close();toast('미리보기 실패: '+e.message,'error');});
+  return false;
+}
+window.stcPvOpen=stcPvOpen;window.stcPvWin=stcPvWin;
 async function stcCustSave(id){
   const c=_stc.cards.find(x=>x.id===id)||{},cn=(c.sections&&c.sections.numbers)||{};
   const g=k=>{const e=$('stc-cu-'+k);return e?String(e.value||'').trim():'';};
