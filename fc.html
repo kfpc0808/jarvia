@@ -28,7 +28,14 @@
 <meta name="theme-color" content="#1B3A6B">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css">
 <title>금융 컨설턴트 채널</title>
-<script>window.JV_CUST="https://mypb.kr";</script>   <!-- ★ [2026-10-18] 고객에게 가는 링크의 주소(중립 도메인) — 바꿀 때는 이 한 줄만 -->
+<script>window.JV_CUST="https://mypb.kr";</script>
+<script>/* ★ [2026-10-30] 생년월일 서버 월일 보관 — 서버(fc_clients)에는 월일(birthMmdd)만, 출생연도는 드라이브에만.
+   fcbMd: 생년월일·월일 → 'MMDD' / fcbK: 서버 문서 색인 열쇠(옛 연도 있으면 이름|YYYY-MM-DD, 월일만 있으면 이름|mmMMDD)
+   fcbLook: 드라이브 고객 → 서버 색인 조회(fccId 우선 → 이름|생년월일 → 이름|mm월일) */
+window.fcbMd=function(b,m){m=String(m||'');if(/^\d{4}$/.test(m))return m;b=String(b||'');return /^\d{4}-\d{2}-\d{2}$/.test(b)?b.slice(5,7)+b.slice(8,10):'';};
+window.fcbK=function(n,b,m){n=String(n||'');b=String(b||'');if(b.length===10)return n+'|'+b;var md=window.fcbMd('',m);return n+'|'+(md?'mm'+md:'');};
+window.fcbLook=function(ix,c,nm){if(!ix||!c)return null;if(c.fccId&&ix.__byId&&ix.__byId[c.fccId])return ix.__byId[c.fccId];var n=(nm!=null)?String(nm):String(c.name||'');var b=String(c.birthDate||'');var md=window.fcbMd(b,c.birthMmdd);if(b.length===10&&ix[n+'|'+b])return ix[n+'|'+b];if(md&&ix[n+'|mm'+md])return ix[n+'|mm'+md];if(!b&&!md&&ix[n+'|'])return ix[n+'|'];return null;};
+</script>   <!-- ★ [2026-10-18] 고객에게 가는 링크의 주소(중립 도메인) — 바꿀 때는 이 한 줄만 -->
 <meta name="description" content="담당 컨설턴트 채널 — 데일리리포트, 추천 콘텐츠, 무료 재무진단 신청">   <!-- ★ [2026-10-18] 고객 화면 브랜드 비노출 -->
 
 <!-- Open Graph (FC별 동적 갱신은 카톡 공유 SDK에서 처리) -->
@@ -1295,7 +1302,7 @@ a{color:inherit;text-decoration:none}
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getAuth,onAuthStateChanged,signInAnonymously,setPersistence,browserLocalPersistence}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,orderBy,limit,startAfter,getDocs,addDoc,onSnapshot,serverTimestamp,increment,getCountFromServer,writeBatch}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,orderBy,limit,startAfter,getDocs,addDoc,onSnapshot,serverTimestamp,increment,getCountFromServer,writeBatch,deleteField}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getStorage,ref as storageRef,getBlob,deleteObject,uploadBytes,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
@@ -1475,10 +1482,9 @@ function opCollectEvents(Y,M){
   const mm=String(M).padStart(2,'0');
   const ev=[];
   (opClientsCache||[]).forEach(c=>{
-    if(!c.birthDate||c.birthDate.length!==10)return;
-    const bm=(c.birthMmdd&&c.birthMmdd.length===4)?c.birthMmdd:(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));
+    const bm=window.fcbMd(c.birthDate,c.birthMmdd);if(!bm)return;   /* ★ [2026-10-30] 서버는 월일(birthMmdd)만 보관 */
     if(bm.slice(0,2)===mm)ev.push({d:parseInt(bm.slice(2,4),10),k:'생일',bg:'#E1F5EE',fg:'#085041',n:c.name,sub:'',prod:'',cid:c.id});
-    const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd(c.birthDate);
+    const sg=(c.sangryeongMmdd&&c.sangryeongMmdd.length===4)?c.sangryeongMmdd:opSangMmdd('2000-'+bm.slice(0,2)+'-'+bm.slice(2));   /* ★ [2026-10-30] 월일로 계산 */
     if(sg.slice(0,2)===mm)ev.push({d:parseInt(sg.slice(2,4),10),k:'상령일',bg:'#FAEEDA',fg:'#633806',n:c.name,sub:'보험나이 +1',prod:'',cid:c.id});
     (c.contracts||[]).forEach(ct=>{
       if(!ct||!ct.maturityDate||String(ct.maturityDate).length!==10)return;
@@ -1764,7 +1770,7 @@ function opRenderFind(){
   const hits=opClientsCache.filter(c=>(c.name||'').includes(kw)).slice(0,8);
   if(!hits.length){box.style.display='none';box.innerHTML='';return;}
   box.style.display='flex';
-  box.innerHTML=hits.map(c=>'<span style="display:inline-flex;align-items:center;gap:3px"><button type="button" data-opedit="'+opEsc(c.id)+'" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #CBD5E1;border-radius:14px;padding:5px 12px;cursor:pointer">'+opEsc(c.name)+' <span style="font-weight:400;color:#9CA3AF">'+opEsc((c.birthDate||'').slice(2))+'</span></button><button type="button" data-opcopy="'+opEsc(c.id)+'" title="링크 복사" style="font-size:13px;color:#0F6E56;background:#fff;border:1px solid #9FE1CB;border-radius:14px;padding:5px 9px;cursor:pointer">🔗</button></span>').join('');
+  box.innerHTML=hits.map(c=>'<span style="display:inline-flex;align-items:center;gap:3px"><button type="button" data-opedit="'+opEsc(c.id)+'" style="font-size:12px;font-weight:700;color:#1B3A5C;background:#fff;border:1px solid #CBD5E1;border-radius:14px;padding:5px 12px;cursor:pointer">'+opEsc(c.name)+' <span style="font-weight:400;color:#9CA3AF">'+opEsc((c.birthDate||'').slice(2)||((window.fcbMd('',c.birthMmdd))?(c.birthMmdd.slice(0,2)+'/'+c.birthMmdd.slice(2)):''))+'</span></button><button type="button" data-opcopy="'+opEsc(c.id)+'" title="링크 복사" style="font-size:13px;color:#0F6E56;background:#fff;border:1px solid #9FE1CB;border-radius:14px;padding:5px 9px;cursor:pointer">🔗</button></span>').join('');
 }
 function opEnterEdit(id){
   const c=(opClientsCache||[]).find(x=>x.id===id);
@@ -1821,7 +1827,7 @@ async function opSaveAll(){
     const data={
       fcAuthUid:currentUser.uid,
       fcLoginId:loginId,
-      name:s.name,birthDate:s.birthDate||'',contracts:s.contracts,
+      name:s.name,contracts:s.contracts,   /* ★ [2026-10-30] 출생연도는 서버에 저장하지 않음 */
       birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',
       sangryeongMmdd:s.birthDate?opSangMmdd(s.birthDate):'',
       createdAt:serverTimestamp(),updatedAt:serverTimestamp()
@@ -6429,8 +6435,9 @@ window.fccBridge={
     try{
       if(!isOwnerView||!fcUid)return null;
       const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',fcUid)));
-      const idx={};
-      snap.forEach(d=>{const x=d.data();if(!x.name)return;const k=x.name+'|'+(x.birthDate||'');if(!idx[k])idx[k]={id:d.id,contracts:[],status:x.status||'',rels:x.rels||[],needs:x.needs||[],nextContact:x.nextContact||'',keyman:!!x.keyman};/* ★ [2026-09-10] 서버 속성 · [2026-09-19] keyman 추가 */(x.contracts||[]).forEach(ct=>idx[k].contracts.push({product:ct.productName||'',expiry:ct.maturityDate||'',ptype:FCB_CODE2PT[ct.insType]||ct.insType||''}));});
+      const idx={},_bi={};
+      snap.forEach(d=>{const x=d.data();if(!x.name)return;const k=window.fcbK(x.name,x.birthDate,x.birthMmdd);if(!idx[k])idx[k]={id:d.id,contracts:[],status:x.status||'',rels:x.rels||[],needs:x.needs||[],nextContact:x.nextContact||'',keyman:!!x.keyman};/* ★ [2026-09-10] 서버 속성 · [2026-09-19] keyman 추가 */(x.contracts||[]).forEach(ct=>idx[k].contracts.push({product:ct.productName||'',expiry:ct.maturityDate||'',ptype:FCB_CODE2PT[ct.insType]||ct.insType||''}));_bi[d.id]=idx[k];});
+      Object.defineProperty(idx,'__byId',{value:_bi,enumerable:false});   /* ★ [2026-10-30] fccId 열쇠 — 연도 없는 서버 문서도 찾도록 */
       return idx;
     }catch(_e){return null;}
   },
@@ -6439,8 +6446,9 @@ window.fccBridge={
     try{
       if(!isOwnerView||!fcUid)return null;
       const snap=await getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',fcUid)));
-      const list=[],idx={};
-      snap.forEach(d=>{const x=d.data();const cts=(x.contracts||[]).map(ct=>({product:ct.productName||'',expiry:ct.maturityDate||'',ptype:FCB_CODE2PT[ct.insType]||ct.insType||'',yearly:!!ct.yearly,insurer:ct.insurer||'',premium:ct.premium||''}));list.push({id:d.id,name:x.name||'',birthDate:x.birthDate||'',mgTitle:x.mgTitle||'',keyman:!!x.keyman,contracts:cts});if(!x.name)return;const k=x.name+'|'+(x.birthDate||'');if(!idx[k]){idx[k]={id:d.id,mgTitle:x.mgTitle||'',keyman:!!x.keyman,contracts:[]};}cts.forEach(c2=>idx[k].contracts.push(c2));});   /* ★ [2026-09-19] keyman 반환 — 기기 편입 시 반영 */
+      const list=[],idx={},_bi={};
+      snap.forEach(d=>{const x=d.data();const cts=(x.contracts||[]).map(ct=>({product:ct.productName||'',expiry:ct.maturityDate||'',ptype:FCB_CODE2PT[ct.insType]||ct.insType||'',yearly:!!ct.yearly,insurer:ct.insurer||'',premium:ct.premium||''}));list.push({id:d.id,name:x.name||'',birthDate:x.birthDate||'',birthMmdd:window.fcbMd(x.birthDate,x.birthMmdd),mgTitle:x.mgTitle||'',keyman:!!x.keyman,contracts:cts});if(!x.name)return;const k=window.fcbK(x.name,x.birthDate,x.birthMmdd);if(!idx[k]){idx[k]={id:d.id,mgTitle:x.mgTitle||'',keyman:!!x.keyman,contracts:[]};}cts.forEach(c2=>idx[k].contracts.push(c2));_bi[d.id]=idx[k];});
+      Object.defineProperty(idx,'__byId',{value:_bi,enumerable:false});   /* ★ [2026-10-30] fccId 열쇠 */   /* ★ [2026-09-19] keyman 반환 — 기기 편입 시 반영 */
       return {list:list,idx:idx};
     }catch(_e){return null;}
   },
@@ -6453,7 +6461,7 @@ window.fccBridge={
       const byId={},byKey={};
       const nameAny={};
       const byName={};   /* ★ [2026-09-02] 이름 유일성 — 이름만으로 기존 문서를 찾는 색인 */
-      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=(x.name||'')+'|'+(x.birthDate||'');if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};const nk=String(x.name||'').replace(/\s+/g,'');if(nk){if(!byName[nk])byName[nk]={id:d.id,contracts:x.contracts||[],n:0};byName[nk].n++;}});
+      snap.forEach(d=>{const x=d.data();byId[d.id]={contracts:x.contracts||[]};if(x.name)nameAny[x.name]=1;const k=window.fcbK(x.name,x.birthDate,x.birthMmdd);if(!byKey[k])byKey[k]={id:d.id,contracts:x.contracts||[]};const nk=String(x.name||'').replace(/\s+/g,'');if(nk){if(!byName[nk])byName[nk]={id:d.id,contracts:x.contracts||[],n:0};byName[nk].n++;}});
       const outIds=[];
       /* ★ [2026-08-29] writeBatch 200건 묶음 — 기존에는 건당 await updateDoc/setDoc 순차 호출이라
          2,000명이면 왕복 2,000회(수 분)였고, 함수 전체가 try/catch 하나여서 한 건만 실패해도
@@ -6479,12 +6487,15 @@ window.fccBridge={
         let exId=null,exCt=[];
         if(s.fccId&&byId[s.fccId]){exId=s.fccId;exCt=byId[s.fccId].contracts;}
         if(!exId&&!s.forceCreate){const k=s.name+'|'+(s.birthDate||'');if(byKey[k]){exId=byKey[k].id;exCt=byKey[k].contracts;}}
+        if(!exId&&!s.forceCreate&&s.birthDate){const _md=window.fcbMd(s.birthDate);if(_md&&byKey[s.name+'|mm'+_md]){exId=byKey[s.name+'|mm'+_md].id;exCt=byKey[s.name+'|mm'+_md].contracts;}}   /* ★ [2026-10-30] 월일만 있는 서버 문서 */
         if(!exId&&s.prevBirthDate){const pk=s.name+'|'+s.prevBirthDate;if(byKey[pk]){exId=byKey[pk].id;exCt=byKey[pk].contracts;delete byKey[pk];}}
+        if(!exId&&s.prevBirthDate){const _pm=window.fcbMd(s.prevBirthDate),pk2=s.name+'|mm'+_pm;if(_pm&&byKey[pk2]){exId=byKey[pk2].id;exCt=byKey[pk2].contracts;delete byKey[pk2];}}   /* ★ [2026-10-30] */
         /* ★ [2026-09-02] 이름이 열쇠 — 생일이 달라도(한쪽이 비었어도) 같은 이름이면 같은 사람. 새 문서를 만들지 않고 갱신한다 */
         let _byNameOnly=false;
         if(!exId&&!s.forceCreate){const nk=String(s.name||'').replace(/\s+/g,'');if(nk&&byName[nk]&&byName[nk].n===1){exId=byName[nk].id;exCt=byName[nk].contracts;_byNameOnly=true;}}
         const inc=(s.contracts||[]);
-        const core={name:s.name,birthDate:s.birthDate||'',birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',sangryeongMmdd:s.birthDate?fccBridgeSang(s.birthDate):'',updatedAt:serverTimestamp()};
+        const core={name:s.name,birthMmdd:s.birthDate?(s.birthDate.slice(5,7)+s.birthDate.slice(8,10)):'',sangryeongMmdd:s.birthDate?fccBridgeSang(s.birthDate):'',updatedAt:serverTimestamp()};
+        if(!s.birthDate&&s.fccId&&window.__mpcAttrsOf){const _a=window.__mpcAttrsOf(s.fccId,'');if(_a&&_a.bmd){core.birthMmdd=_a.bmd;core.sangryeongMmdd=fccBridgeSang('2000-'+_a.bmd.slice(0,2)+'-'+_a.bmd.slice(2));}}   /* ★ [2026-10-30] 월일만 가진 카드(서버에서 불러온 고객) — 서버 월일 유지 */
       if(s.mgTitle!=null)core.mgTitle=String(s.mgTitle);
       /* ★ [2026-09-10] 서버 속성(관계·상태·관심항목·다음연락일) — 연락처·주소·메모는 여전히 드라이브에만.
          호출부가 넘긴 값 우선, 없으면 이 기기의 고객 목록(__mpcAttrsOf)에서 찾아 채운다. 둘 다 없으면 서버 값 유지
@@ -6504,6 +6515,7 @@ window.fccBridge={
         if(exId){
           if(s.replaceContracts){core.contracts=inc.slice(0,20);}
           else if(inc.length){const merged=(exCt||[]).slice();inc.forEach(ct=>{const i2=merged.findIndex(x=>x.productName===ct.productName);if(i2>=0){merged[i2]=Object.assign({},merged[i2],{maturityDate:ct.maturityDate||merged[i2].maturityDate,insType:ct.insType||merged[i2].insType,yearly:(ct.yearly!=null)?ct.yearly:merged[i2].yearly,insurer:(ct.insurer!=null&&ct.insurer!=='')?ct.insurer:(merged[i2].insurer||''),premium:(ct.premium!=null&&ct.premium!=='')?ct.premium:(merged[i2].premium||'')});}else merged.push(ct);});core.contracts=merged.slice(0,20);}
+          if(!s.attrsOnly&&!(_byNameOnly&&!s.birthDate))core.birthDate=deleteField();   /* ★ [2026-10-30] 서버에 남은 옛 출생연도 제거 — 월일만 보관 */
           _b.update(doc(db,'fc_clients',exId),core);_bn++;_ops.push({t:'update',ref:doc(db,'fc_clients',exId),data:core,name:s.name,idx:outIds.length});
           outIds.push(exId);
           if(_bn>=B_MAX)await _flush();
@@ -6524,6 +6536,22 @@ window.fccBridge={
       outIds.ok=_okN;outIds.fail=_failN;outIds.failed=failed;outIds.skip=skipped.length;outIds.skipped=skipped;   /* ★ 배열에 결과 부가 — 기존 호출부(배열 사용)와 호환 유지. failed: [{name,code}] */
       return outIds;
     }catch(e){console.warn('fccBridge.upsert',e);return null;}
+  },
+  /* ★ [2026-10-30] stripYear — 출생연도를 드라이브로 옮겨 담은 고객의 서버 문서에서 연도를 지운다(월일만 남김). list=[{id,birthDate}] */
+  stripYear:async function(list){
+    try{
+      if(!isOwnerView||!fcUid||!Array.isArray(list)||!list.length)return 0;
+      let n=0;
+      for(let i=0;i<list.length;i+=200){
+        const bb=writeBatch(db);let k=0;
+        list.slice(i,i+200).forEach(it=>{const b=String((it&&it.birthDate)||'');if(!it||!it.id||b.length!==10)return;
+          bb.update(doc(db,'fc_clients',it.id),{birthDate:deleteField(),birthMmdd:window.fcbMd(b),sangryeongMmdd:fccBridgeSang(b),updatedAt:serverTimestamp()});k++;});
+        if(!k)continue;
+        try{await bb.commit();n+=k;}catch(e){console.warn('fccBridge.stripYear',e);}
+      }
+      if(n)try{localStorage.setItem('fcc_changed_at',String(Date.now()));}catch(_e){}
+      return n;
+    }catch(e){console.warn('fccBridge.stripYear',e);return 0;}
   },
   /* ★ remove (2026-07-18): 지도(비모듈)에서 fc_clients 삭제 — 양방향 완전 삭제 동기 */
   remove:async function(id){
@@ -6688,8 +6716,8 @@ async function aiChkBuild(){
     const sub=[c.company,c.title].filter(Boolean).join(' ')||((c.rels&&c.rels[0])||'');
     /* ① 만기 — 카드 + 내고객관리 계약, 상품+만기 중복 제거 (리스트·지도 배지와 동일 규칙) */
     let cts=(c.contracts||[]).slice();
-    const key=nm+'|'+(c.birthDate||'');
-    if(fcc&&fcc[key]&&fcc[key].contracts)cts=cts.concat(fcc[key].contracts);
+    const _fv=window.fcbLook(fcc,c,nm);   /* ★ [2026-10-30] fccId 우선 조회 */
+    if(_fv&&_fv.contracts)cts=cts.concat(_fv.contracts);
     const seen={};let bx=null;
     cts.forEach(x=>{
       const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
@@ -6936,7 +6964,7 @@ async function aiChkSummary(nm){
   if(!c)return nm+' 님 정보를 이 기기에서 찾지 못했어요.\n내 고객 지도를 한 번 열면 드라이브 백업에서 복원됩니다.';
   const L=[];
   let cts=(c.contracts||[]).slice();
-  try{const fcc=await aiFccGet();const key=nm+'|'+(c.birthDate||'');if(fcc&&fcc[key]&&fcc[key].contracts)cts=cts.concat(fcc[key].contracts);}catch(_e){}
+  try{const fcc=await aiFccGet();const _fv=window.fcbLook(fcc,c,nm);if(_fv&&_fv.contracts)cts=cts.concat(_fv.contracts);}catch(_e){}
   const seen={};
   cts.forEach(x=>{const p=String((x&&x.product)||'');const ex=String((x&&(x.expiry||x.expireDate))||'').slice(0,10);
     if(!p||ex.length<10)return;const kk=p+'|'+ex;if(seen[kk])return;seen[kk]=1;
@@ -7320,18 +7348,18 @@ async function aiBuildContext(q){
   let hit=null;const hits=[];
   for(const c of (customers||[])){const nm=(c.name||'').trim();if(nm.length>=2&&q.indexOf(nm)>=0){hits.push(c);if(!hit||nm.length>(hit.name||'').length)hit=c;}}
       /* ★ [2026-09-10] 이 기기에 없는 고객이 질문에 등장하면 서버 정보로 임시 카드 구성 (연락처·메모는 없음) */
-      if(!hit&&fcc){Object.keys(fcc).forEach(k=>{const nm=k.split('|')[0];if(nm.length>=2&&q.indexOf(nm)>=0){const v=fcc[k]||{};const c={name:nm,birthDate:k.split('|')[1]||'',status:v.status||'',rels:v.rels||[],needs:v.needs||[],nextContact:v.nextContact||'',contracts:[],_serverOnly:true};hits.push(c);if(!hit||nm.length>(hit.name||'').length)hit=c;}});}
+      if(!hit&&fcc){Object.keys(fcc).forEach(k=>{const nm=k.split('|')[0];if(nm.length>=2&&q.indexOf(nm)>=0){const v=fcc[k]||{};const _kb=k.split('|')[1]||'';const c={name:nm,birthDate:(_kb.length===10?_kb:''),birthMmdd:(_kb.indexOf('mm')===0?_kb.slice(2):''),status:v.status||'',rels:v.rels||[],needs:v.needs||[],nextContact:v.nextContact||'',contracts:[],_serverOnly:true};hits.push(c);if(!hit||nm.length>(hit.name||'').length)hit=c;}});}
   /* ★ [2026-07-25] 전 고객 요약 명부 — 항상 첨부.
      소개자·회사·가족처럼 '다른 고객 카드에 답이 있는' 질문(예: 이규선이 소개한 고객)은
      주인공 1명만 봐서는 구조적으로 답할 수 없다. 키를 줄여 토큰을 아낀다(해석 규칙은 서버 프롬프트). */
   /* ★ [2026-07-25] 명부 1인분 변환 — 표시 글자수 계산과 실제 전달을 같은 함수로 뽑아 항상 일치시킨다 */
   const aiRosterOne=(c)=>{
-    const key=(c.name||'')+'|'+(c.birthDate||'');
-    let cts=(c.contracts||[]);if(fcc&&fcc[key])cts=cts.concat(fcc[key].contracts);
+    const _fv=window.fcbLook(fcc,c);   /* ★ [2026-10-30] fccId 우선 조회 */
+    let cts=(c.contracts||[]);if(_fv)cts=cts.concat(_fv.contracts);
     const o={n:c.name||''};
-    if(c.birthDate){o.b=c.birthDate;o.ag=aiAge(c.birthDate);}else if(c.birthUnknown)o.b='미확인';
+    if(c.birthDate){o.b=c.birthDate;o.ag=aiAge(c.birthDate);}else if(c.birthMmdd)o.b=c.birthMmdd.slice(0,2)+'-'+c.birthMmdd.slice(2)+'(연도 미보관)';else if(c.birthUnknown)o.b='미확인';
     /* ★ [2026-09-10] 상태·관계·관심·다음연락 — 로컬 값 우선, 비어 있으면 서버(fc_clients) 값 (다른 기기·동기화 전에도 조건 검색 가능) */
-      const _sv=(fcc&&fcc[key])||{};
+      const _sv=_fv||{};
       if(c.status||_sv.status)o.s=c.status||_sv.status;
       if(c.referrer)o.r=c.referrer;
     if(c.company)o.co=c.company;
@@ -7359,9 +7387,9 @@ async function aiBuildContext(q){
       let _rTotal=0,_rUsed=0,_rIn=0,_rCut=0;const _roster=[];
       /* ★ [2026-09-10] 이 기기에 없는 고객은 서버(fc_clients) 정보로 명부에 추가 — 이름·생일·계약·상태·관계·관심·다음연락 (연락처·주소·메모 없음) */
       const _rosterSrc=(customers||[]).slice();
-      if(fcc){const _have={};(customers||[]).forEach(c=>{_have[(c.name||'')+'|'+(c.birthDate||'')]=1;});
-        Object.keys(fcc).forEach(k=>{if(_have[k])return;const v=fcc[k]||{};const nm=k.split('|')[0],bd=k.split('|')[1]||'';if(!nm)return;
-          _rosterSrc.push({name:nm,birthDate:bd,birthUnknown:!bd,status:v.status||'',rels:v.rels||[],needs:v.needs||[],nextContact:v.nextContact||'',contracts:[],_serverOnly:true});});}
+      if(fcc){const _have={},_hid={};(customers||[]).forEach(c=>{_have[(c.name||'')+'|'+(c.birthDate||'')]=1;const _m=window.fcbMd(c.birthDate);if(_m)_have[(c.name||'')+'|mm'+_m]=1;if(c.fccId)_hid[c.fccId]=1;});   /* ★ [2026-10-30] 월일 열쇠·fccId 로도 '이 기기에 있음' 판정 */
+        Object.keys(fcc).forEach(k=>{if(_have[k])return;const v=fcc[k]||{};if(v.id&&_hid[v.id])return;const nm=k.split('|')[0],_kb=k.split('|')[1]||'';if(!nm)return;const bd=(_kb.length===10?_kb:''),bmd=(_kb.indexOf('mm')===0?_kb.slice(2):'');
+          _rosterSrc.push({name:nm,birthDate:bd,birthMmdd:bmd,birthUnknown:!bd&&!bmd,status:v.status||'',rels:v.rels||[],needs:v.needs||[],nextContact:v.nextContact||'',contracts:[],_serverOnly:true});});}
       _rosterSrc.forEach(c=>{
     const o=aiRosterOne(c);const len=JSON.stringify(o).length;
     _rTotal+=len;
@@ -7374,8 +7402,7 @@ async function aiBuildContext(q){
   if(_rCut>0)ctx.rosterNote='고객 '+(customers||[]).length+'명 중 '+_rIn+'명만 명부로 전달됨(6만 자 한도 초과 '+_rCut+'명 제외) — 전체 대상 질문에서 일부 누락 가능';
   try{if(window.aiRosterMeterRender)window.aiRosterMeterRender(ctx.rosterMeter);}catch(_e){}   /* 게이지 갱신 */
   if(hit){
-    const key=(hit.name||'')+'|'+(hit.birthDate||'');
-    const f=(fcc&&fcc[key])||null;
+    const f=window.fcbLook(fcc,hit);   /* ★ [2026-10-30] fccId 우선 조회 */
     const cts=[].concat((hit.contracts||[]).map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,insurer:x.insurer,premium:x.premium})),f?f.contracts.map(x=>({product:x.product,ptype:x.ptype,expiry:x.expiry,src:'내고객관리'})):[]);
     const seen={};const dedup=cts.filter(x=>{if(!x.product)return false;if(seen[x.product])return false;seen[x.product]=1;return true;}).slice(0,12).map(x=>{const dd=aiDday(x.expiry);return Object.assign({},x,dd!=null?{maturityDday:dd}:{});});
     /* ★ [2026-09-20] 이 고객이 직접 알려준 관심사 — "뭐에 관심 있어?" 질문에 추측 대신 본인 답으로 응답 */
@@ -7413,7 +7440,7 @@ async function aiBuildContext(q){
         const bd=aiDdayMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=60)up.push({name:c.name,event:'생일',dday:bd});   /* ★ [2026-08-07] 30→60일 — 익월 질문에 답할 수 있게 */
         const sg=aiDdayMmdd(aiSangMmdd(c.birthDate));if(sg!=null&&sg<=60)up.push({name:c.name,event:'상령일',dday:sg});
       }
-      let cts=(c.contracts||[]);const key=(c.name||'')+'|'+(c.birthDate||'');if(fcc&&fcc[key])cts=cts.concat(fcc[key].contracts);
+      let cts=(c.contracts||[]);const _fv=window.fcbLook(fcc,c);if(_fv)cts=cts.concat(_fv.contracts);
       cts.forEach(ct=>{const dd=aiDday(ct.expiry);if(dd!=null&&dd>=0&&dd<=60)up.push({name:c.name,event:'만기('+(ct.product||'')+')',dday:dd});});
       if(c.nextContact){const nc=aiDday(c.nextContact);if(nc!=null&&nc<=7)up.push({name:c.name,event:'연락 예정',dday:nc});}
     });
@@ -8315,6 +8342,7 @@ return '<div style="background:#fff;border:1.5px solid #C9A96E;border-radius:13p
 +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 8px">'
 +vmIfInput('vmIfBirth','생년월일','1974-05-02','inputmode="numeric" maxlength="10" data-vmcal="birth" autocomplete="off"')
 +'<div style="display:flex;align-items:flex-end;margin-bottom:9px"><label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#5B6478;cursor:pointer;padding-bottom:10px"><input type="checkbox" id="vmIfBu" style="width:15px;height:15px;accent-color:#15294A">생일 모름</label></div>'
++'<div style="grid-column:1/-1;margin:-4px 0 9px;padding:6px 9px;border-radius:7px;background:#EAF5EF;color:#0F6E56;font-size:11px;line-height:1.55">🔒 출생연도는 내 구글드라이브에만 저장돼요. 회사 서버에는 생일 월·일만 보관합니다(생일·상령일 알림용).</div>'
 +'</div>'
 +phone
 +vmIfInput('vmIfEmail','이메일','name@example.com','inputmode="email" maxlength="80"')
@@ -12351,7 +12379,7 @@ init();
       <div class="mp-fld"><span class="mp-lbl">생년월일 <span class="req">*</span></span><input class="mp-in" id="mpcBirth" type="date"></div>
         <div class="mp-fld" style="flex:1"><span class="mp-lbl">이메일</span><input class="mp-in" id="mpcEmail" type="email" placeholder="선택"></div>
       </div>
-      <div class="mp-fld" style="margin-top:8px"><label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#5C6678;margin-top:6px"><input type="checkbox" id="mpcBirthUnknown" style="width:15px;height:15px">아직 모름 (명함만 받은 가망고객 등 — 생일 알림·연동에서 제외돼요)</label></div>
+      <div class="mp-fld" style="margin-top:8px"><label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#5C6678;margin-top:6px"><input type="checkbox" id="mpcBirthUnknown" style="width:15px;height:15px">아직 모름 (명함만 받은 가망고객 등 — 생일 알림·연동에서 제외돼요)</label><div style="margin-top:6px;padding:6px 9px;border-radius:7px;background:#EAF5EF;color:#0F6E56;font-size:11px;line-height:1.55">🔒 출생연도는 내 구글드라이브에만 저장돼요. 회사 서버에는 생일 월·일만 보관합니다(생일·상령일 알림용).</div></div>
       <div class="mp-fld"><span class="mp-lbl" style="display:flex;align-items:center;gap:7px">주소① <span class="req">*</span> <select id="mpcAddrLabel" class="mp-in" style="width:auto;padding:3px 8px;font-size:11.5px"><option value="집">🏠 집</option><option value="직장">🏢 직장</option><option value="기타">📍 기타</option></select> <small style="color:#9099AD;font-weight:400">(지도 표시에 필요)</small></span><!-- ★ [2026-07-29] 주소 2개 1단계: 주소①에 이름표 -->
         <input class="mp-in" id="mpcAddr" type="text" placeholder="시/도부터 입력 — 예: 서울 강남구 테헤란로 123">
         <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
@@ -12434,7 +12462,7 @@ init();
       </div>
       <button class="mp-save" id="mpcSave">저장</button>
       <button type="button" id="mpcFormDel" style="display:none;width:100%;border:1px solid #E8B4B4;background:#FDF3F3;color:#A94442;border-radius:12px;padding:11px;font-size:12.5px;font-weight:700;margin-top:8px">🗑 이 고객 삭제</button>
-      <div class="mp-note">고객 정보는 <b>내 구글 드라이브에 무제한 저장</b>돼요 · 주소·메모·직업·상담기록까지 함께 저장되고 <b>회사 서버에는 남지 않습니다</b><br>다만 <b>이름·생년월일·계약(만기)·상태·관계·관심항목·다음 연락일</b>은 생일·만기 알림과 리포트 조건 발송을 위해 회사 서버에도 함께 보관됩니다 · <b>AI 비서가 한 번에 읽는 범위는 최대 6만 글자(A4 약 35장)</b>입니다</div>
+      <div class="mp-note">고객 정보는 <b>내 구글 드라이브에 무제한 저장</b>돼요 · 주소·메모·직업·상담기록·출생연도까지 함께 저장되고 <b>회사 서버에는 남지 않습니다</b><br>다만 <b>이름·생일(월·일)·계약(만기)·상태·관계·관심항목·다음 연락일</b>은 생일·만기 알림과 리포트 조건 발송을 위해 회사 서버에도 함께 보관됩니다 · <b>AI 비서가 한 번에 읽는 범위는 최대 6만 글자(A4 약 35장)</b>입니다</div>
       <div id="mpcRosterMeter" style="margin-top:8px"></div>
     </div>
   </div>
@@ -12499,7 +12527,7 @@ init();
       <div class="mp-hcard"><div class="mp-hic"><i class="ti ti-phone"></i></div><div><b>7. 연락·길안내</b><p>지도의 핀이나 아래 목록을 탭하면 상세가 열려요. <b>전화·문자·티맵 길안내</b>를 바로 누를 수 있어요.</p></div></div>
       <div class="mp-hcard"><div class="mp-hic"><i class="ti ti-current-location"></i></div><div><b>8. 내 주변 고객</b><p>지도의 <b>내 주변</b>을 누르면 현재 위치로 이동·확대돼요. 근처 고객을 찾아 방문 동선을 짤 수 있어요.</p></div></div>
       <div class="mp-hcard"><div class="mp-hic"><i class="ti ti-download"></i></div><div><b>9. 백업·복원</b><p><b>내보내기</b>로 좌표 포함 엑셀을 저장하거나, 위쪽 <b>연결</b>로 구글 로그인하면 자동으로 백업돼요. 폰을 바꿔도 복원됩니다.</p></div></div>
-      <div class="mp-hcard hl"><div class="mp-hic"><i class="ti ti-lock"></i></div><div><b>10. 안전하게 보관</b><p>고객 정보는 <b>내 기기와 내 구글드라이브에만</b> 저장돼요. 회사 서버에는 저장되지 않고, 다른 사람은 볼 수 없어요.</p></div></div>
+      <div class="mp-hcard hl"><div class="mp-hic"><i class="ti ti-lock"></i></div><div><b>10. 안전하게 보관</b><p>고객 정보는 <b>내 기기와 내 구글드라이브에</b> 암호화 저장돼요. 회사 서버에는 알림에 필요한 이름·생일(월·일)·만기만 두고, 연락처·주소·메모·출생연도는 저장하지 않아요. 다른 사람은 볼 수 없어요.</p></div></div>
       <button class="mp-mgo" id="mpcGuideDone" style="margin-top:4px">닫기</button>
     </div>
   </div>
@@ -13098,7 +13126,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       var byId={},byKey={};
       if(pd&&pd.list)pd.list.forEach(function(d){
         byId[d.id]=1;
-        var k=(d.name||"")+"|"+(d.birthDate||"");
+        var k=window.fcbK(d.name,d.birthDate,d.birthMmdd);   /* ★ [2026-10-30] 월일만 있는 문서는 '이름|mm월일' — 생일 없는 '이름|' 과 섞지 않음 */
         if(!byKey[k])byKey[k]=[];
         byKey[k].push(d.id);
       });
@@ -13123,11 +13151,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
       (customers||[]).forEach(function(c){
         if(delSet[c.id]||!c.name)return;
         keepKey[c.name+"|"+(c.birthDate||"")]=1;
+        var _km=window.fcbMd(c.birthDate);if(_km)keepKey[c.name+"|mm"+_km]=1;
         if(c.fccId)claimed[c.fccId]=1;   /* 남는 고객의 링크 문서는 절대 삭제 대상이 아니다 */
       });
       pend.forEach(function(c){
         if(!c.name){localOnly.push(c.id);return;}
         var k=c.name+"|"+(c.birthDate||"");
+        var _km2=window.fcbMd(c.birthDate);if(_km2&&!(byKey[k]||[]).some(function(f){return !claimed[f];}))k=c.name+"|mm"+_km2;   /* ★ [2026-10-30] */
         var cand=(byKey[k]||[]).filter(function(f){return !claimed[f];});
         if(!cand.length){localOnly.push(c.id);return;}   /* 서버에 대응 문서 없음 → 기기만 삭제해도 안전 */
         if(keepKey[k]){unresolved.push(c.id);return;}    /* 같은 이름·생일 고객이 남아 있음 → 판별 불가, 보류 */
@@ -13212,7 +13242,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
     var _fid="";
     try{
       _fid=c.fccId||"";
-      if(!_fid&&c.name&&mpcFccIdx){var _k=(c.name||"")+"|"+(c.birthDate||"");if(mpcFccIdx[_k])_fid=mpcFccIdx[_k].id;}
+      if(!_fid&&c.name&&mpcFccIdx){var _fv=window.fcbLook(mpcFccIdx,c);if(_fv)_fid=_fv.id;}
     }catch(_e){}
     var _rm=Promise.resolve(true);
     try{if(_fid&&window.fccBridge&&window.fccBridge.remove)_rm=window.fccBridge.remove(_fid);}catch(_e){}
@@ -13558,7 +13588,7 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
     };
     /* ★ [2026-09-10] fccBridge.upsert 가 서버 속성 4종을 채울 때 쓰는 로컬 고객 조회 (fccId → 이름 순) */
     window.__mpcAttrsOf=function(fccId,name){try{var c=null;if(fccId){for(var i=0;i<customers.length;i++){if(customers[i].fccId===fccId){c=customers[i];break;}}}
-      if(!c&&name)c=mpcFindByName(name);if(!c)return null;return {rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||"",keyman:!!c.keyman};}catch(_e){return null;}};   /* ★ [2026-09-19] keyman 추가 */
+      if(!c&&name)c=mpcFindByName(name);if(!c)return null;return {rels:c.rels||[],status:c.status||"",needs:c.needs||[],nextContact:c.nextContact||"",keyman:!!c.keyman,bmd:(!c.birthDate&&/^\d{4}$/.test(c.birthMmdd||""))?c.birthMmdd:""};}catch(_e){return null;}};   /* ★ [2026-09-19] keyman 추가 */
     window.__vmCreateCustomer=function(f,cb){try{
     f=f||{};
     var nm=String(f.name||"").trim().slice(0,30);
@@ -13862,7 +13892,7 @@ function mpcStatusRender(cur){
   });
 }
 function mpcStatusGet(){return mpcStatusVal||"";}
-function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb){_fdb.style.display=c?"block":"none";_fdb.onclick=c?function(){mpcDeleteCust(c,function(){closeCustForm(true);});}:null;}mpcRelsSel=c?(c.rels||[]).slice():[];mpcCoord=(c&&c.lat)?{lat:c.lat,lng:c.lng}:null;mpcCoordAddr=c?(c.addr||""):"";$("mpcTitle2").textContent=c?"고객 수정":"고객 추가";$("mpcName").value=c?(c.name||""):"";$("mpcCompany").value=c?(c.company||""):"";$("mpcTitleF").value=c?(c.title||""):"";$("mpcJobF").value=c?(c.job||""):"";   /* ★ [2026-07-25] 직업 로드 */$("mpcPhone").value=c?(c.phone||""):"";$("mpcAddr").value=c?(c.addr||""):"";if($("mpcAddrDetail"))$("mpcAddrDetail").value=c?(c.addrDetail||""):"";if($("mpcAddrLabel"))$("mpcAddrLabel").value=(c&&c.addrLabel)||"집";if($("mpcAddr2"))$("mpcAddr2").value=c?(c.addr2||""):"";if($("mpcAddr2Detail"))$("mpcAddr2Detail").value=c?(c.addr2Detail||""):"";if($("mpcAddr2Label"))$("mpcAddr2Label").value=(c&&c.addr2Label)||"직장";mpcCoord2=(c&&c.lat2)?{lat:c.lat2,lng:c.lng2}:null;var _a2s=$("mpcAddr2Stat");if(_a2s){_a2s.textContent=mpcCoord2?"✓ 좌표 확인됨 — 지도에 🏢 핀으로 표시돼요":"주소를 확인하면 지도에 🏢 핀이 표시됩니다";_a2s.style.color=mpcCoord2?"#2E8B6E":"#9099AD";}var _a2t=$("mpcAddr2Toggle"),_a2w=$("mpcAddr2Wrap");if(_a2t&&_a2w){var _a2has=!!(c&&c.addr2);_a2w.style.display=_a2has?"block":"none";_a2t.textContent=_a2has?"🏢 주소② 접기 ▴":"🏢 주소② 추가 (직장 등) ▾";_a2t.onclick=function(){var v=_a2w.style.display==="none";_a2w.style.display=v?"block":"none";_a2t.textContent=v?"🏢 주소② 접기 ▴":"🏢 주소② 추가 (직장 등) ▾";};}/* ★ [2026-07-29] 주소② 로드 */$("mpcMemo").value=c?(c.memo||""):"";if($("mpcMgTitle"))$("mpcMgTitle").value=c?(c.mgTitle||""):"";mpcMeetings=c&&c.meetings?c.meetings.slice():[];mpcFiles=c&&c.files?c.files.slice():[];mpcMtEditId=null;mpcMtPage=1;mpcMtOpen={};var _mab=$("mpcMtAdd");if(_mab)_mab.textContent="＋ 미팅 기록 추가";var _mcb=$("mpcMtCancel");if(_mcb)_mcb.style.display="none";mpcMtRender();mpcFileRender();var _mtd=$("mpcMtDate");if(_mtd)_mtd.value=mpcTodayStr();var _bi=$("mpcBirth"),_bu=$("mpcBirthUnknown");if(_bi)_bi.value=c&&c.birthDate?c.birthDate:"";if(_bu){_bu.checked=!!(c&&c.birthUnknown);if(_bi)_bi.disabled=_bu.checked;}mpcStatusRender((c&&c.status)||"");   /* ★ [2026-09-19] 상태 칩 — 옛 표기도 칩으로 살려 보존 */   /* ★ [2026-08-29] 목록에 없는 옛 상태값이 "미지정"으로 바뀌어 저장 시 지워지던 문제 방지 — 값을 임시 옵션으로 살려 보존 *//* ★ [2026-09-19] 키맨 로드 — 체크 상태에 따라 강조 */var _km=$("mpcKeyman"),_kmw=$("mpcKeymanWrap");if(_km){_km.checked=!!(c&&c.keyman);if(_kmw){var _kmS=function(){var on=!!_km.checked;_kmw.style.background=on?"#FBF6EA":"#fff";_kmw.style.borderColor=on?"#C9A96E":"#D8DCE5";_kmw.style.color=on?"#8A6D2F":"#5B6478";};_km.onchange=_kmS;_kmS();}}var _nc=$("mpcNextContact");if(_nc)_nc.value=c&&c.nextContact?c.nextContact:"";var _rf=$("mpcReferrer");if(_rf)_rf.value=c&&c.referrer?c.referrer:"";var _em=$("mpcEmail");if(_em)_em.value=c&&c.email?c.email:"";var _pc=$("mpcPrefCh");if(_pc)_pc.value=c&&c.prefChannel?c.prefChannel:"";var _pt=$("mpcPrefTime");if(_pt)_pt.value=c&&c.prefTime?c.prefTime:"";mpcNeedsSel=c&&c.needs?c.needs.slice():[];mpcFamily=c&&c.family?c.family.slice():[];mpcContracts=c&&c.contracts?c.contracts.slice():[];mpcCtRO=[];try{if(c&&c.birthDate&&mpcFccIdx){var _fk=(c.name||"")+"|"+c.birthDate;var _fx=mpcFccIdx[_fk];if(_fx&&_fx.contracts){var _lp={};mpcContracts.forEach(function(x){if(x.product)_lp[x.product]=1;});mpcCtRO=_fx.contracts.filter(function(x){return x.product&&!_lp[x.product];});}}}catch(_e){mpcCtRO=[];}mpcNeedsRender();mpcFamRender();mpcCtEditIdx=null;var _cab0=$("mpcCtAdd");if(_cab0)_cab0.textContent="＋ 계약 추가";var _ccb0=$("mpcCtCancel");if(_ccb0)_ccb0.style.display="none";mpcCtRender();var _sw=$("mpcSalesWrap"),_stg=$("mpcSalesToggle");if(_sw&&_stg){var _has=!!(c&&(c.nextContact||(c.needs&&c.needs.length)||c.referrer||(c.family&&c.family.length)||(c.contracts&&c.contracts.length)||c.prefChannel||c.prefTime));   /* ★ [2026-09-19] 상태·이메일은 밖으로 나왔으므로 펼침 조건에서 제외, 선호연락은 추가 */_sw.style.display=_has?"block":"none";_stg.textContent=_has?"💼 영업정보 접기 ▴":"💼 영업정보 더보기 ▾";}mpcExFList=(c&&c.extra)?Object.keys(c.extra).map(function(k){return {k:k,v:String(c.extra[k])};}):[];mpcExFRender();var _exb=$("mpcExFAdd");if(_exb)_exb.onclick=function(){if(mpcExFList.length>=40){alert("추가 정보는 최대 40개까지예요.");return;}mpcExFList.push({k:"",v:""});mpcExFRender();};/* ★ [2026-08-09] 고객이 공유한 보험 포트폴리오 — 읽기 전용 표(계약일 포함). 병합은 상담요청 화면에서만. */var _ipw=$("mpcInsPfWrap");if(!_ipw){_ipw=document.createElement("div");_ipw.id="mpcInsPfWrap";var _ipA=$("mpcSalesWrap");if(_ipA&&_ipA.parentNode)_ipA.parentNode.insertBefore(_ipw,_ipA);else{var _ipF=$("mpCustForm");if(_ipF)_ipF.appendChild(_ipw);}}var _ipf=(c&&c.insurancePortfolio)||[];if(_ipw){if(_ipf.length){var _pe=function(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");};var _th=function(t,g){return "<th style=\"padding:5px 7px;text-align:left;font-weight:700;color:"+(g?"#C9A96E":"#fff")+";white-space:nowrap\">"+t+"</th>";};var _td=function(v,x){return "<td style=\"padding:4px 7px;border-bottom:1px solid #EEF0F4;white-space:nowrap;"+(x||"")+"\">"+_pe(v)+"</td>";};var _iprows=_ipf.map(function(pp,ii){return "<tr style=\"background:"+(ii%2?"#FBFAF7":"#fff")+"\">"+_td(pp.company)+_td(pp.product)+_td(pp.policyNo,"background:#FFF8E7;color:#8a6a1f")+_td(pp.start||"-")+_td(pp.expiry||"해당없음")+_td(pp.status)+_td(pp.relation||"-")+_td(pp.insured||"본인")+_td(pp.premium||"-")+_td(pp.rider||"")+_td(pp.note||"")+"<td style=\"padding:4px 7px;border-bottom:1px solid #EEF0F4;white-space:nowrap\">"+(((typeof mpcContracts!=="undefined"?mpcContracts:[])||[]).some(function(x){return x.product&&x.product===pp.product;})?"<span style=\"font-size:9px;color:#0F6E56;background:#E1F5EE;border-radius:8px;padding:2px 7px;font-weight:700\">등록됨</span>":("<button type=\"button\" onclick=\"window.__mpcCtFromShared("+ii+")\" style=\"border:1px solid #15294A;background:#fff;color:#15294A;border-radius:7px;padding:3px 8px;font-size:9.5px;font-weight:700;cursor:pointer\">→ 계약 등록</button>"))+"</td></tr>";}).join("");_ipw.style.cssText="display:block;margin:10px 0";_ipw.innerHTML="<div style=\"font-size:11px;font-weight:800;color:#5F5E5A;margin-bottom:5px\">🛡️ 공유받은 보험 포트폴리오 "+_ipf.length+"건 <span style=\"font-weight:500;color:#9099AD\">· 고객 동의 원본(읽기 전용) · 알림이 필요한 계약은 [→ 계약 등록]</span></div>"+"<div style=\"overflow-x:auto;border:1px solid #E5E9F0;border-radius:8px\"><table style=\"border-collapse:collapse;font-size:10px;width:100%;min-width:720px\">"+"<tr style=\"background:#15294A\">"+_th("보험사")+_th("상품명")+_th("증권번호",1)+_th("계약일")+_th("만기일")+_th("상태")+_th("계약관계")+_th("피보험자")+_th("월보험료")+_th("특약")+_th("비고")+_th("")+"</tr>"+_iprows+"</table></div>";}else{_ipw.style.display="none";_ipw.innerHTML="";}}/* ★ [2026-07-28] extra 편집 로드 */mpcExtraWire();setTimeout(function(){mpcTaGrow($("mpcMemo"));},80);$("mpcAddrStat").textContent=mpcCoord?"✓ 좌표 확인됨":"주소를 확인하면 좌표가 생성됩니다";$("mpcAddrStat").style.color=mpcCoord?"#2E8B6E":"#9099AD";mpcRenderRels();if($("mpcPlaceKw"))$("mpcPlaceKw").value="";if($("mpcPickRes"))$("mpcPickRes").style.display="none";$("mpCustForm").classList.add("show");setTimeout(mpcInitPickMap,150);try{mpcRosterMeterRefresh();}catch(_e){}   try{var _lp1=$("mpcCtInsurer");if(_lp1&&_lp1.parentNode&&_lp1.parentNode.parentNode)_lp1.parentNode.parentNode.style.display="none";}catch(_e){}mpcCtRowDirty={};try{mpcCtRender();}catch(_e){}/* ★ 공유 표 생성 후 재렌더 — 계약 표를 공유 표 바로 아래로 재배치 */mpcSnapF0=mpcSnapF();mpcSnapC0=JSON.stringify(mpcContracts);window.onbeforeunload=function(){return mpcDirtyNow()?"저장하지 않은 변경이 있습니다":null;};}
+function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb){_fdb.style.display=c?"block":"none";_fdb.onclick=c?function(){mpcDeleteCust(c,function(){closeCustForm(true);});}:null;}mpcRelsSel=c?(c.rels||[]).slice():[];mpcCoord=(c&&c.lat)?{lat:c.lat,lng:c.lng}:null;mpcCoordAddr=c?(c.addr||""):"";$("mpcTitle2").textContent=c?"고객 수정":"고객 추가";$("mpcName").value=c?(c.name||""):"";$("mpcCompany").value=c?(c.company||""):"";$("mpcTitleF").value=c?(c.title||""):"";$("mpcJobF").value=c?(c.job||""):"";   /* ★ [2026-07-25] 직업 로드 */$("mpcPhone").value=c?(c.phone||""):"";$("mpcAddr").value=c?(c.addr||""):"";if($("mpcAddrDetail"))$("mpcAddrDetail").value=c?(c.addrDetail||""):"";if($("mpcAddrLabel"))$("mpcAddrLabel").value=(c&&c.addrLabel)||"집";if($("mpcAddr2"))$("mpcAddr2").value=c?(c.addr2||""):"";if($("mpcAddr2Detail"))$("mpcAddr2Detail").value=c?(c.addr2Detail||""):"";if($("mpcAddr2Label"))$("mpcAddr2Label").value=(c&&c.addr2Label)||"직장";mpcCoord2=(c&&c.lat2)?{lat:c.lat2,lng:c.lng2}:null;var _a2s=$("mpcAddr2Stat");if(_a2s){_a2s.textContent=mpcCoord2?"✓ 좌표 확인됨 — 지도에 🏢 핀으로 표시돼요":"주소를 확인하면 지도에 🏢 핀이 표시됩니다";_a2s.style.color=mpcCoord2?"#2E8B6E":"#9099AD";}var _a2t=$("mpcAddr2Toggle"),_a2w=$("mpcAddr2Wrap");if(_a2t&&_a2w){var _a2has=!!(c&&c.addr2);_a2w.style.display=_a2has?"block":"none";_a2t.textContent=_a2has?"🏢 주소② 접기 ▴":"🏢 주소② 추가 (직장 등) ▾";_a2t.onclick=function(){var v=_a2w.style.display==="none";_a2w.style.display=v?"block":"none";_a2t.textContent=v?"🏢 주소② 접기 ▴":"🏢 주소② 추가 (직장 등) ▾";};}/* ★ [2026-07-29] 주소② 로드 */$("mpcMemo").value=c?(c.memo||""):"";if($("mpcMgTitle"))$("mpcMgTitle").value=c?(c.mgTitle||""):"";mpcMeetings=c&&c.meetings?c.meetings.slice():[];mpcFiles=c&&c.files?c.files.slice():[];mpcMtEditId=null;mpcMtPage=1;mpcMtOpen={};var _mab=$("mpcMtAdd");if(_mab)_mab.textContent="＋ 미팅 기록 추가";var _mcb=$("mpcMtCancel");if(_mcb)_mcb.style.display="none";mpcMtRender();mpcFileRender();var _mtd=$("mpcMtDate");if(_mtd)_mtd.value=mpcTodayStr();var _bi=$("mpcBirth"),_bu=$("mpcBirthUnknown");if(_bi)_bi.value=c&&c.birthDate?c.birthDate:"";if(_bu){_bu.checked=!!(c&&c.birthUnknown);if(_bi)_bi.disabled=_bu.checked;}mpcStatusRender((c&&c.status)||"");   /* ★ [2026-09-19] 상태 칩 — 옛 표기도 칩으로 살려 보존 */   /* ★ [2026-08-29] 목록에 없는 옛 상태값이 "미지정"으로 바뀌어 저장 시 지워지던 문제 방지 — 값을 임시 옵션으로 살려 보존 *//* ★ [2026-09-19] 키맨 로드 — 체크 상태에 따라 강조 */var _km=$("mpcKeyman"),_kmw=$("mpcKeymanWrap");if(_km){_km.checked=!!(c&&c.keyman);if(_kmw){var _kmS=function(){var on=!!_km.checked;_kmw.style.background=on?"#FBF6EA":"#fff";_kmw.style.borderColor=on?"#C9A96E":"#D8DCE5";_kmw.style.color=on?"#8A6D2F":"#5B6478";};_km.onchange=_kmS;_kmS();}}var _nc=$("mpcNextContact");if(_nc)_nc.value=c&&c.nextContact?c.nextContact:"";var _rf=$("mpcReferrer");if(_rf)_rf.value=c&&c.referrer?c.referrer:"";var _em=$("mpcEmail");if(_em)_em.value=c&&c.email?c.email:"";var _pc=$("mpcPrefCh");if(_pc)_pc.value=c&&c.prefChannel?c.prefChannel:"";var _pt=$("mpcPrefTime");if(_pt)_pt.value=c&&c.prefTime?c.prefTime:"";mpcNeedsSel=c&&c.needs?c.needs.slice():[];mpcFamily=c&&c.family?c.family.slice():[];mpcContracts=c&&c.contracts?c.contracts.slice():[];mpcCtRO=[];try{if(c&&c.birthDate&&mpcFccIdx){var _fx=window.fcbLook(mpcFccIdx,c);   /* ★ [2026-10-30] fccId 우선 조회 */if(_fx&&_fx.contracts){var _lp={};mpcContracts.forEach(function(x){if(x.product)_lp[x.product]=1;});mpcCtRO=_fx.contracts.filter(function(x){return x.product&&!_lp[x.product];});}}}catch(_e){mpcCtRO=[];}mpcNeedsRender();mpcFamRender();mpcCtEditIdx=null;var _cab0=$("mpcCtAdd");if(_cab0)_cab0.textContent="＋ 계약 추가";var _ccb0=$("mpcCtCancel");if(_ccb0)_ccb0.style.display="none";mpcCtRender();var _sw=$("mpcSalesWrap"),_stg=$("mpcSalesToggle");if(_sw&&_stg){var _has=!!(c&&(c.nextContact||(c.needs&&c.needs.length)||c.referrer||(c.family&&c.family.length)||(c.contracts&&c.contracts.length)||c.prefChannel||c.prefTime));   /* ★ [2026-09-19] 상태·이메일은 밖으로 나왔으므로 펼침 조건에서 제외, 선호연락은 추가 */_sw.style.display=_has?"block":"none";_stg.textContent=_has?"💼 영업정보 접기 ▴":"💼 영업정보 더보기 ▾";}mpcExFList=(c&&c.extra)?Object.keys(c.extra).map(function(k){return {k:k,v:String(c.extra[k])};}):[];mpcExFRender();var _exb=$("mpcExFAdd");if(_exb)_exb.onclick=function(){if(mpcExFList.length>=40){alert("추가 정보는 최대 40개까지예요.");return;}mpcExFList.push({k:"",v:""});mpcExFRender();};/* ★ [2026-08-09] 고객이 공유한 보험 포트폴리오 — 읽기 전용 표(계약일 포함). 병합은 상담요청 화면에서만. */var _ipw=$("mpcInsPfWrap");if(!_ipw){_ipw=document.createElement("div");_ipw.id="mpcInsPfWrap";var _ipA=$("mpcSalesWrap");if(_ipA&&_ipA.parentNode)_ipA.parentNode.insertBefore(_ipw,_ipA);else{var _ipF=$("mpCustForm");if(_ipF)_ipF.appendChild(_ipw);}}var _ipf=(c&&c.insurancePortfolio)||[];if(_ipw){if(_ipf.length){var _pe=function(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");};var _th=function(t,g){return "<th style=\"padding:5px 7px;text-align:left;font-weight:700;color:"+(g?"#C9A96E":"#fff")+";white-space:nowrap\">"+t+"</th>";};var _td=function(v,x){return "<td style=\"padding:4px 7px;border-bottom:1px solid #EEF0F4;white-space:nowrap;"+(x||"")+"\">"+_pe(v)+"</td>";};var _iprows=_ipf.map(function(pp,ii){return "<tr style=\"background:"+(ii%2?"#FBFAF7":"#fff")+"\">"+_td(pp.company)+_td(pp.product)+_td(pp.policyNo,"background:#FFF8E7;color:#8a6a1f")+_td(pp.start||"-")+_td(pp.expiry||"해당없음")+_td(pp.status)+_td(pp.relation||"-")+_td(pp.insured||"본인")+_td(pp.premium||"-")+_td(pp.rider||"")+_td(pp.note||"")+"<td style=\"padding:4px 7px;border-bottom:1px solid #EEF0F4;white-space:nowrap\">"+(((typeof mpcContracts!=="undefined"?mpcContracts:[])||[]).some(function(x){return x.product&&x.product===pp.product;})?"<span style=\"font-size:9px;color:#0F6E56;background:#E1F5EE;border-radius:8px;padding:2px 7px;font-weight:700\">등록됨</span>":("<button type=\"button\" onclick=\"window.__mpcCtFromShared("+ii+")\" style=\"border:1px solid #15294A;background:#fff;color:#15294A;border-radius:7px;padding:3px 8px;font-size:9.5px;font-weight:700;cursor:pointer\">→ 계약 등록</button>"))+"</td></tr>";}).join("");_ipw.style.cssText="display:block;margin:10px 0";_ipw.innerHTML="<div style=\"font-size:11px;font-weight:800;color:#5F5E5A;margin-bottom:5px\">🛡️ 공유받은 보험 포트폴리오 "+_ipf.length+"건 <span style=\"font-weight:500;color:#9099AD\">· 고객 동의 원본(읽기 전용) · 알림이 필요한 계약은 [→ 계약 등록]</span></div>"+"<div style=\"overflow-x:auto;border:1px solid #E5E9F0;border-radius:8px\"><table style=\"border-collapse:collapse;font-size:10px;width:100%;min-width:720px\">"+"<tr style=\"background:#15294A\">"+_th("보험사")+_th("상품명")+_th("증권번호",1)+_th("계약일")+_th("만기일")+_th("상태")+_th("계약관계")+_th("피보험자")+_th("월보험료")+_th("특약")+_th("비고")+_th("")+"</tr>"+_iprows+"</table></div>";}else{_ipw.style.display="none";_ipw.innerHTML="";}}/* ★ [2026-07-28] extra 편집 로드 */mpcExtraWire();setTimeout(function(){mpcTaGrow($("mpcMemo"));},80);$("mpcAddrStat").textContent=mpcCoord?"✓ 좌표 확인됨":"주소를 확인하면 좌표가 생성됩니다";$("mpcAddrStat").style.color=mpcCoord?"#2E8B6E":"#9099AD";mpcRenderRels();if($("mpcPlaceKw"))$("mpcPlaceKw").value="";if($("mpcPickRes"))$("mpcPickRes").style.display="none";$("mpCustForm").classList.add("show");setTimeout(mpcInitPickMap,150);try{mpcRosterMeterRefresh();}catch(_e){}   try{var _lp1=$("mpcCtInsurer");if(_lp1&&_lp1.parentNode&&_lp1.parentNode.parentNode)_lp1.parentNode.parentNode.style.display="none";}catch(_e){}mpcCtRowDirty={};try{mpcCtRender();}catch(_e){}/* ★ 공유 표 생성 후 재렌더 — 계약 표를 공유 표 바로 아래로 재배치 */mpcSnapF0=mpcSnapF();mpcSnapC0=JSON.stringify(mpcContracts);window.onbeforeunload=function(){return mpcDirtyNow()?"저장하지 않은 변경이 있습니다":null;};}
   var mpcSnapF0='',mpcSnapC0='';
   function mpcSnapF(){try{return JSON.stringify([$("mpcName").value,$("mpcCompany").value,$("mpcTitleF").value,$("mpcJobF").value,$("mpcPhone").value,$("mpcAddr").value,($("mpcAddrDetail")||{}).value||'',($("mpcAddr2")||{}).value||'',$("mpcMemo").value,($("mpcMgTitle")||{}).value||'',($("mpcBirth")||{}).value||'',!!(($("mpcBirthUnknown")||{}).checked),mpcStatusGet(),!!(($("mpcKeyman")||{}).checked),($("mpcNextContact")||{}).value||'',($("mpcReferrer")||{}).value||'',($("mpcEmail")||{}).value||'',($("mpcPrefCh")||{}).value||'',($("mpcPrefTime")||{}).value||'',mpcRelsSel,mpcNeedsSel,mpcFamily,(typeof mpcExFCollect==='function')?mpcExFCollect():null,mpcMeetings.length]);}catch(_e){return '';}}
   function mpcDirtyNow(){
@@ -13985,7 +14015,8 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
     var link=function(c,d){c.fccId=d.id;byFcc[d.id]=1;if(!c.mgTitle&&d.mgTitle)c.mgTitle=d.mgTitle;if(!c.keyman&&d.keyman)c.keyman=true;/* ★ [2026-09-19] 서버의 키맨 수용 */custPut(c);};
     var create=function(d){
       var o={id:"c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),fccId:d.id,name:d.name,
-        birthDate:d.birthDate||"",birthUnknown:!d.birthDate,mgTitle:d.mgTitle||"",keyman:!!d.keyman,
+        birthDate:d.birthDate||"",birthUnknown:!d.birthDate,birthMmdd:(!d.birthDate&&d.birthMmdd)?d.birthMmdd:"",   /* ★ [2026-10-30] 월일 보존 — 다음 저장 때 서버 월일이 지워지지 않도록 */
+        mgTitle:d.mgTitle||"",keyman:!!d.keyman,
         company:"",title:"",phone:"",email:"",status:"",referrer:"",addr:"",lat:0,lng:0,
         rels:[],memo:"",meetings:[],files:[],family:[],needs:[],
         contracts:(d.contracts||[]).map(function(x){return {product:x.product||"",expiry:x.expiry||"",ptype:x.ptype||"",yearly:!!x.yearly,insurer:x.insurer||"",premium:x.premium||""};}),
@@ -14007,13 +14038,13 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
         if(dupLinked){byFcc[d.id]=1;continue;}
         /* ② 생일 없는 미링크 카드가 정확히 1명 → 승격 링크 (명함고객 승격) */
         var free=[];for(j=0;j<same.length;j++){c=same[j];if(!c.fccId&&!c.birthDate)free.push(c);}
-        if(free.length===1){if(d.birthDate){free[0].birthDate=d.birthDate;free[0].birthUnknown=false;}link(free[0],d);added++;continue;}
+        if(free.length===1){if(d.birthDate){free[0].birthDate=d.birthDate;free[0].birthUnknown=false;}else if(d.birthMmdd&&!free[0].birthMmdd)free[0].birthMmdd=d.birthMmdd;link(free[0],d);added++;continue;}
         /* ★ [2026-09-02] 이름이 열쇠 — 같은 이름의 카드가 기기에 있으면 새 카드를 만들지 않는다.
            미링크 카드가 있으면 그 카드에 연결하고, 전부 링크돼 있으면 서버 쪽 중복 문서다(건너뜀).
            기존 ③은 "문서 1건당 카드 1장"이라 서버에 같은 이름 문서가 2건이면 기기에도 카드가 2장 생겼다 — 3985명의 경로 중 하나. */
         if(same.length){
           var _unl=null;for(j=0;j<same.length;j++){if(!same[j].fccId){_unl=same[j];break;}}
-          if(_unl){if(d.birthDate&&!_unl.birthDate){_unl.birthDate=d.birthDate;_unl.birthUnknown=false;}link(_unl,d);added++;}
+          if(_unl){if(d.birthDate&&!_unl.birthDate){_unl.birthDate=d.birthDate;_unl.birthUnknown=false;}else if(!d.birthDate&&d.birthMmdd&&!_unl.birthDate&&!_unl.birthMmdd)_unl.birthMmdd=d.birthMmdd;link(_unl,d);added++;}
           else byFcc[d.id]=1;
           continue;
         }
@@ -14113,7 +14144,7 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
     /* 임박 일정 타일 */
     var tiles=[];
     var cts=(c.contracts||[]).slice();
-    if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    if(mpcFccIdx&&c.birthDate){var _fv=window.fcbLook(mpcFccIdx,c);if(_fv&&_fv.contracts)cts=cts.concat(_fv.contracts);}
     var _seen={};cts=cts.filter(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(_seen[k])return false;_seen[k]=1;return true;});
     var matBest=null;cts.forEach(function(ct){var dd=mpcDdayFromDate(String(ct.expiry||ct.expireDate||"").slice(0,10));if(dd!=null&&dd>=0&&(matBest==null||dd<matBest.d))matBest={d:dd,p:ct.product||""};});
     if(matBest)tiles.push({b:"D-"+matBest.d,s:"만기 · "+matBest.p,cls:matBest.d<=7?"due":(matBest.d<=30?"hot":"")});
@@ -14122,10 +14153,10 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
       if(sg!=null)tiles.push({b:"D-"+sg,s:"상령일 "+parseInt(sgm.slice(0,2),10)+"/"+parseInt(sgm.slice(2,4),10),cls:sg<=30?"hot":""});
       var bd=mpcDdayFromMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));
       var age=(function(b){var t=new Date();var a=t.getFullYear()-parseInt(b.slice(0,4),10);if((t.getMonth()+1)*100+t.getDate()<parseInt(b.slice(5,7),10)*100+parseInt(b.slice(8,10),10))a--;return a;})(c.birthDate);
-      tiles.push({b:parseInt(c.birthDate.slice(5,7),10)+"/"+parseInt(c.birthDate.slice(8,10),10),s:"🎂 생일 · 만 "+age+"세"+(bd!=null&&bd<=30?" · D-"+bd:""),cls:(bd!=null&&bd<=30)?"hot":""});
+      tiles.push({b:parseInt(c.birthDate.slice(5,7),10)+"/"+parseInt(c.birthDate.slice(8,10),10),s:"🎂 생일 · 만 "+age+"세"+(bd!=null&&bd<=30?" · D-"+bd:""),n:"🔒 연도는 내 드라이브에만",cls:(bd!=null&&bd<=30)?"hot":""});
     }
     if(c.nextContact){var nc=mpcDdayFromDate(c.nextContact);if(nc!=null)tiles.push({b:nc<0?"지남":"D-"+nc,s:"다음 연락 "+parseInt(c.nextContact.slice(5,7),10)+"/"+parseInt(c.nextContact.slice(8,10),10),cls:(nc!=null&&nc<=7)?"hot":""});}
-    var tileH=tiles.slice(0,4).map(function(t){var bg=t.cls==="due"?"background:#FBEAEA;border-color:#F2D7D7":(t.cls==="hot"?"background:#FFF8E7;border-color:#E0C36B":"background:#fff;border-color:#ECEEF2");var fg=t.cls==="due"?"#A23B3B":(t.cls==="hot"?"#8B6914":"#1B2430");return '<div style="border:1px solid;border-radius:12px;padding:8px 5px;text-align:center;'+bg+'"><b style="display:block;font-size:14px;font-weight:800;color:'+fg+'">'+esc(t.b)+'</b><span style="display:block;font-size:9px;font-weight:700;color:#8A93A8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.s)+'</span></div>';}).join("");
+    var tileH=tiles.slice(0,4).map(function(t){var bg=t.cls==="due"?"background:#FBEAEA;border-color:#F2D7D7":(t.cls==="hot"?"background:#FFF8E7;border-color:#E0C36B":"background:#fff;border-color:#ECEEF2");var fg=t.cls==="due"?"#A23B3B":(t.cls==="hot"?"#8B6914":"#1B2430");return '<div style="border:1px solid;border-radius:12px;padding:8px 5px;text-align:center;'+bg+'"><b style="display:block;font-size:14px;font-weight:800;color:'+fg+'">'+esc(t.b)+'</b><span style="display:block;font-size:9px;font-weight:700;color:#8A93A8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.s)+'</span>'+(t.n?'<span style="display:block;font-size:8.5px;font-weight:600;color:#0F6E56;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.n)+'</span>':'')+'</div>';}).join("");
     /* 계약 */
     var TB={실손:"#FBEAEA;color:#A23B3B",자동차:"#FFF3D9;color:#8B6914",보장성:"#E6F1FB;color:#185FA5",저축성:"#E1F5EE;color:#0F6E56",연금:"#EFEAFB;color:#5B3FA8"};
     var premSum=0,premAny=false;
@@ -14205,7 +14236,7 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
     var evs=[];
     if(c.birthDate&&!c.birthUnknown){var bd=mpcDdayFromMmdd(c.birthDate.slice(5,7)+c.birthDate.slice(8,10));if(bd!=null&&bd<=30)evs.push({d:bd,t:"🎂 D-"+bd});
       var sg=mpcDdayFromMmdd(mpcSangMmdd(c.birthDate));if(sg!=null&&sg<=30)evs.push({d:sg,t:"상령 D-"+sg});}
-    var cts=(c.contracts||[]);if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    var cts=(c.contracts||[]);if(mpcFccIdx&&c.birthDate){var _fv=window.fcbLook(mpcFccIdx,c);if(_fv&&_fv.contracts)cts=cts.concat(_fv.contracts);}
     var _seen={};cts=cts.filter(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(_seen[k])return false;_seen[k]=1;return true;});   /* ★ 중복 제거 (2026-07-18): 완전동기로 카드·자비아 계약이 동일 — 같은 계약 이중 집계로 만기 배지가 2번 뜨고 상령 배지가 밀려나던 문제 해소 */
     cts.forEach(function(ct){var ex=ct.expiry||ct.expireDate||"";var dd=mpcDdayFromDate(String(ex).slice(0,10));if(dd!=null&&dd>=0&&dd<=30)evs.push({d:dd,t:"만기 D-"+dd});});
     if(c.nextContact){var nc=mpcDdayFromDate(c.nextContact);if(nc!=null&&nc<=7)evs.push({d:nc,t:(nc<0?"연락 지남":"연락 D-"+nc)});}
@@ -14486,7 +14517,7 @@ function openCustForm(c){mpcEditId=c?c.id:null;var _fdb=$("mpcFormDel");if(_fdb)
   }
   function mpcDoSave(){try{var _pn2=$("mpcMtNote"),_pp2=$("mpcMtPlace");if((_pn2&&_pn2.value.trim())||(_pp2&&_pp2.value.trim())){mpcMtAddFn();}}catch(_e){}   /* ★ 입력칸에 남은 미팅 자동 등록 — 유실 방지 (2026-07-17 버그수정) */
     try{for(var _rk in mpcCtRowDirty){if(!mpcCtRowDirty[_rk])continue;var _rv=mpcCtRowRead(parseInt(_rk,10));if(_rv&&_rv.product)mpcContracts[parseInt(_rk,10)]=_rv;}mpcContracts=mpcContracts.filter(function(x){return x&&x.product;});mpcCtRowDirty={};}catch(_e){}   /* ★ [2026-08-09] 표의 미저장 행 흡수 — 행[저장] 없이 하단 저장해도 입력값 보존, 상품명 빈 행은 정리 */
-    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:(function(){var _v=$("mpcPhone").value.trim(),_p=mpcPhoneNorm(_v);return _p.flag?_v:_p.val;})(),/* ★ [2026-09-03] 연락처 표준 형식 저장 — 애매하면 입력 그대로 */addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:mpcStatusGet(),keyman:!!($("mpcKeyman")&&$("mpcKeyman").checked),/* ★ [2026-09-19] */nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};/* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}
+    var o={id:mpcEditId||("c_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)),name:$("mpcName").value.trim(),company:$("mpcCompany").value.trim(),title:$("mpcTitleF").value.trim(),job:$("mpcJobF").value.trim(),phone:(function(){var _v=$("mpcPhone").value.trim(),_p=mpcPhoneNorm(_v);return _p.flag?_v:_p.val;})(),/* ★ [2026-09-03] 연락처 표준 형식 저장 — 애매하면 입력 그대로 */addr:$("mpcAddr").value.trim(),addrDetail:mpcCleanDetail($("mpcAddr").value.trim(),$("mpcAddrDetail")?$("mpcAddrDetail").value.trim():""),addrLabel:($("mpcAddrLabel")?$("mpcAddrLabel").value:"집"),addr2:($("mpcAddr2")?$("mpcAddr2").value.trim():""),addr2Detail:($("mpcAddr2Detail")?$("mpcAddr2Detail").value.trim():""),addr2Label:($("mpcAddr2Label")?$("mpcAddr2Label").value:"직장"),lat2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lat:0,lng2:(mpcCoord2&&$("mpcAddr2")&&$("mpcAddr2").value.trim())?mpcCoord2.lng:0,/* ★ [2026-07-29 v2] 주소② 텍스트 삭제 시 좌표도 삭제 — 유령 핀 방지 */lat:mpcCoord?mpcCoord.lat:0,lng:mpcCoord?mpcCoord.lng:0,rels:mpcRelsSel.slice(),memo:$("mpcMemo").value.trim(),mgTitle:($("mpcMgTitle")?$("mpcMgTitle").value.trim():""),meetings:mpcMeetings.slice(),files:mpcFiles.slice(),birthDate:($("mpcBirth")&&!$("mpcBirthUnknown").checked)?$("mpcBirth").value:"",birthUnknown:!!($("mpcBirthUnknown")&&$("mpcBirthUnknown").checked),status:mpcStatusGet(),keyman:!!($("mpcKeyman")&&$("mpcKeyman").checked),/* ★ [2026-09-19] */nextContact:$("mpcNextContact")?$("mpcNextContact").value:"",needs:mpcNeedsSel.slice(),referrer:$("mpcReferrer")?$("mpcReferrer").value.trim():"",email:$("mpcEmail")?$("mpcEmail").value.trim():"",prefChannel:$("mpcPrefCh")?$("mpcPrefCh").value:"",prefTime:$("mpcPrefTime")?$("mpcPrefTime").value.trim():"",family:mpcFamily.slice(),contracts:mpcContracts.slice(),extra:mpcExFCollect(),createdAt:Date.now()};(function(){var _oc=null;for(var _j=0;_j<customers.length;_j++){if(customers[_j].id===o.id){_oc=customers[_j];break;}}if(!o.birthDate&&_oc&&!_oc.birthDate&&/^\d{4}$/.test(_oc.birthMmdd||""))o.birthMmdd=_oc.birthMmdd;})();   /* ★ [2026-10-30] 서버에서 불러온 월일 전용 카드 — 저장해도 월일 유지 *//* ★ [2026-07-28] extra 폼 수집 — o.extra가 항상 존재하므로 아래 승계는 건너뛰어 편집·삭제 결과가 그대로 반영됨 */if(!o.birthDate&&!o.birthUnknown){alert("생년월일을 입력해 주세요.\n아직 모르는 고객이면 '아직 모름'에 체크하면 저장할 수 있어요.");return;}
     /* ★ [2026-09-02] 이름 유일성 — 신규든 개명이든 같은 이름이 다른 고객에 있으면 식별자를 붙이게 한다 */
     if(!o.name){alert("이름을 입력해 주세요.");return;}
     var _rn=mpcNameResolve(o.name,o.id);if(_rn===null)return;o.name=_rn;
@@ -14627,7 +14658,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   function mpcPinDday(c){   /* ★ 지도 라벨 임박 배지 (2026-07-18): 만기(중복 제거)·상령 중 D-30 이내 최솟값 — 리스트 배지와 동일 규칙 */
     var best=null;
     var cts=(c.contracts||[]).slice();
-    if(mpcFccIdx&&c.birthDate){var fk=(c.name||"")+"|"+c.birthDate;if(mpcFccIdx[fk]&&mpcFccIdx[fk].contracts)cts=cts.concat(mpcFccIdx[fk].contracts);}
+    if(mpcFccIdx&&c.birthDate){var _fv=window.fcbLook(mpcFccIdx,c);if(_fv&&_fv.contracts)cts=cts.concat(_fv.contracts);}
     var seen={};cts.forEach(function(ct){var k=(ct.product||"")+"|"+String(ct.expiry||ct.expireDate||"").slice(0,10);if(seen[k])return;seen[k]=1;var dd=mpcDdayFromDate(String(ct.expiry||ct.expireDate||"").slice(0,10));if(dd!=null&&dd>=0&&dd<=30&&(best==null||dd<best))best=dd;});
     if(c.birthDate&&!c.birthUnknown){var sg=mpcDdayFromMmdd(mpcSangMmdd(c.birthDate));if(sg!=null&&sg<=30&&(best==null||sg<best))best=sg;}
     return best;}
@@ -14639,7 +14670,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.__mpCustOpen=function(){
     /* ★ [2026-09-03] ① 드라이브 게이트 — 통과 못 하면 고객 화면을 열지 않는다 */
     if(!mpcGateFresh()){mpcDriveGate().then(function(r){if(r==="ok"){window.__mpCustOpen();return;}mpcGateOpen(r,function(){window.__mpCustOpen();},function(){window.__mpCustOpen();});});return;}
-    mpcLoadCustomRels();mpcBusyOn("회원님 구글 드라이브에서 고객 정보를 불러오는 중…","연락처·주소·메모는 회원님 개인 드라이브에만 암호화 저장됩니다 — 직접 내려받는 중이라 잠시 걸려요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
+    mpcLoadCustomRels();mpcBusyOn("회원님 구글 드라이브에서 고객 정보를 불러오는 중…","연락처·주소·메모·출생연도는 회원님 개인 드라이브에만 암호화 저장됩니다 — 직접 내려받는 중이라 잠시 걸려요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
     /* ★ [2026-09-03] ② 표시 전에 드라이브 꼬리표 확인 — 같으면 즉시, 다르면 내려받은 뒤. 기기 사본을 확인 없이 보여주지 않는다.
        (종전: 기기 목록을 먼저 보여주고 확인 창 뒤에서 드라이브를 맞췄다 → 옛 목록이 잠깐 보였다) */
     .then(function(){if(mpcSyncBusy)return null;mpcGdPullLast="";return new Promise(function(res){mpcGdPull(function(){res();});});})
@@ -14685,10 +14716,10 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       /* ⓪ 중복 자동 정리 (2026-07-18): ⑤단계 결함으로 생성된 빈 고아 문서(무생일·무계약·무호칭 + 동명의 생일 문서 존재) 삭제.
          고아에 링크된 지도 카드는 — 데이터 없고 동명·생일 카드가 따로 있으면 카드도 삭제(편입 부산물), 데이터 있으면 링크만 해제해 재연결 유도 */
       (function(){
-        var nwb={};pd.list.forEach(function(d){if(d.birthDate)nwb[d.name]=1;});
+        var nwb={};pd.list.forEach(function(d){if(d.birthDate||d.birthMmdd)nwb[d.name]=1;});   /* ★ [2026-10-30] 월일만 있는 문서도 생일 보유 */
         var delDoc={};
         pd.list.forEach(function(d){
-          if(d.birthDate)return;if((d.contracts||[]).length)return;if(d.mgTitle)return;
+          if(d.birthDate||d.birthMmdd)return;if((d.contracts||[]).length)return;if(d.mgTitle)return;
           if(nwb[d.name])delDoc[d.id]=1;});
         var delIds=Object.keys(delDoc);
         if(!delIds.length)return;
@@ -14725,7 +14756,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
       })();
       mpcFccIdx=pd.idx;var byId={};pd.list.forEach(function(d){byId[d.id]=d;});
       /* ① 링크 없는 지도 고객 ← 이름+생일 1회 매칭으로 fccId 부여 (기존 데이터 마이그레이션) */
-      customers.forEach(function(c){if(!c.fccId&&c.name&&c.birthDate){var k=c.name+"|"+c.birthDate;if(pd.idx[k]){c.fccId=pd.idx[k].id;firstLink[c.id]=1;custPut(c);dirty=true;}}});
+      customers.forEach(function(c){if(!c.fccId&&c.name&&c.birthDate){var k=c.name+"|"+c.birthDate;if(!pd.idx[k]){var _m1=window.fcbMd(c.birthDate);if(_m1)k=c.name+"|mm"+_m1;}if(pd.idx[k]){c.fccId=pd.idx[k].id;firstLink[c.id]=1;custPut(c);dirty=true;}}});
       var upList=[],upRef=[];
       var _toUp=function(x){return {productName:x.product||"",maturityDate:x.expiry||"",yearly:(x.yearly!=null)?!!x.yearly:(x.ptype==="자동차"||x.ptype==="실손"),insType:MPC_PT2CODE[x.ptype]||x.ptype||"",insurer:x.insurer||"",premium:x.premium||""};};
       /* ①b 최초 링크 계약 통일: 상품명 기준 합집합, 만기·유형·매년 충돌 시 지도 값 우선(구버전 병합전용 upsert로 지도가 최신인 이력) → 지도 즉시 반영 + fc_clients 역반영 대기열 */
@@ -14742,9 +14773,12 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         if(c.mgTitle!=null&&c.mgTitle!=="")_u1.mgTitle=c.mgTitle;
         upList.push(_u1);upRef.push(c);});
       /* ② 조인: 마이페이지 수정(이름·생일·호칭·계약 전체)을 지도에 반영 (최초 링크분은 ①b에서 통일 완료) */
+      var _strip=[];   /* ★ [2026-10-30] 서버 옛 출생연도 → 드라이브 이관 후 서버에서 제거할 문서 */
       customers.forEach(function(c){if(!c.fccId||firstLink[c.id])return;var d=byId[c.fccId];if(!d)return;var ch=false;
         if(d.name&&c.name!==d.name){c.name=d.name;ch=true;}
-        if((d.birthDate||"")!==(c.birthDate||"")){c.birthDate=d.birthDate||"";if(c.birthDate)c.birthUnknown=false;ch=true;}
+        /* ★ [2026-10-30] 출생연도는 드라이브가 정본 — 서버에 남은 옛 연도는 드라이브가 비어 있을 때만 옮겨 담고, 서버에서는 지운다 */
+        if(d.birthDate&&d.birthDate.length===10&&!c.birthDate){c.birthDate=d.birthDate;c.birthUnknown=false;ch=true;}
+        if(d.birthDate&&c.birthDate&&c.birthDate.length===10)_strip.push({id:d.id,birthDate:c.birthDate});
         if((d.mgTitle||"")!==(c.mgTitle||"")){c.mgTitle=d.mgTitle||"";ch=true;}
         var oi={};(c.contracts||[]).forEach(function(x){if(x.product&&x.insurer)oi[x.product]=x.insurer;});
         var nct=(d.contracts||[]).map(function(x){return {product:x.product,expiry:x.expiry,ptype:x.ptype,yearly:!!x.yearly,insurer:x.insurer||oi[x.product]||"",premium:x.premium||""};});
@@ -14753,6 +14787,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         if(ch){custPut(c);dirty=true;}});
       /* ③ 역방향 삭제: fccId가 가리키는 문서 없음 = 마이페이지에서 삭제됨 → 지도에서도 제거 */
       for(var di=customers.length-1;di>=0;di--){var dc=customers[di];if(dc.fccId&&!byId[dc.fccId]){custDel(dc.id);customers.splice(di,1);removed++;dirty=true;}}
+      /* ★ [2026-10-30] 드라이브 저장이 확인된 뒤에만 서버의 옛 출생연도를 지운다 (드라이브 미연결·실패 시 다음 동기화에서 재시도) */
+      if(_strip.length&&window.fccBridge.stripYear){mpcGdPushAwait().then(function(r){if(r==="ok")window.fccBridge.stripYear(_strip);});}
       /* ⑤ 미링크 지도 고객 전원 fc_clients 등록 (100% 동기 — 이름만 있어도 등록). 동명·무생일 중복은 forceCreate로 별도 문서 */
       var _nameCnt={};customers.forEach(function(c){if(!c.fccId&&c.name&&!c.birthDate)_nameCnt[c.name]=(_nameCnt[c.name]||0)+1;});
       if(!mpTblBusy)   /* ★ [2026-09-02] 삭제 진행 중에는 등록하지 않는다 — 지우는 중인 고객의 서버 문서를 다시 만들어버린다 */
@@ -14786,7 +14822,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   },function(){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});mpcSyncOff();});ensureKakao(function(){if(!map){init();}setTimeout(function(){if(map){map.relayout&&map.relayout();mpcDrawMarkers(true);if(!mpcCountBound){kakao.maps.event.addListener(map,"idle",function(){if(document.getElementById("mpOverlay").classList.contains("custMode")){mpcDrawMarkers(false);mpcUpdateCount();var _v=document.getElementById("mpcViewOnly");if(_v&&_v.checked){mpcPage=1;mpcRenderList();}}});   /* ★ [2026-07-24] 지도 이동 시 목록도 함께 갱신 (토글 ON일 때만) */kakao.maps.event.addListener(map,"dragend",function(){mpcUserMoved=true;});kakao.maps.event.addListener(map,"zoom_changed",function(){mpcUserMoved=true;});/* ★ [2026-09-12] 사용자 조작 감지 */mpcCountBound=true;}mpcUpdateCount();}},180);});});};
   window.__mpPlacesRedraw=function(){mpcCloseInfo();mpcClearMarkers();if(map){map.relayout&&map.relayout();drawMarkers();}};
   var mpcdNeedsOpen=false;   /* ★ 지도 상세 니즈 펼침 상태 (2026-07-19) */
-  function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title,c.job].filter(Boolean).join(" · ")||"-";   /* ★ [2026-07-25] 직업 표시 */$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dk=(c.name||"")+"|"+c.birthDate;var _dfx=mpcFccIdx[_dk];if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
+  function openCustDetail(c,keepNeeds){if(!c)return;if(!keepNeeds)mpcdNeedsOpen=false;$("mpcdName").textContent=c.name||"고객";$("mpcdSub").textContent=c.title||"상세";$("mpcdRels").innerHTML=(c.rels||[]).map(function(k){return '<span class="mpc-pill" style="background:'+mpcRelColor(k)+'">'+k+'</span>';}).join("")||'<span style="font-size:11px;color:#9099AD">관계 미지정</span>';$("mpcdCompany").textContent=[c.company,c.title,c.job].filter(Boolean).join(" · ")||"-";   /* ★ [2026-07-25] 직업 표시 */$("mpcdPhone").textContent=c.phone||"-";var hasPhone=!!c.phone;$("mpcdCallRow").style.display=hasPhone?"flex":"none";if(hasPhone){$("mpcdCall").setAttribute("href","tel:"+c.phone);$("mpcdSms").setAttribute("href","sms:"+c.phone);}$("mpcdAddr").textContent=(c.addr||"-")+(c.addrDetail?(" "+c.addrDetail):"");var hasLoc=!!(c.lat&&c.lng);$("mpcdRoute").style.display=hasLoc?"block":"none";$("mpcdRoute").onclick=function(){if(hasLoc)openRoute(c.name||"고객",c.lat,c.lng);};$("mpcdMemo").textContent=c.memo||"메모 없음";var _slb=$("mpcdSales");if(_slb){var _sl=[];if(c.birthDate)_sl.push("🎂 "+c.birthDate);else if(c.birthUnknown)_sl.push("생일 미입력");if(c.status)_sl.push("상태: "+c.status);if(c.referrer)_sl.push("소개: "+c.referrer);if(c.nextContact)_sl.push("다음 연락: "+c.nextContact);if(c.email)_sl.push("✉ "+c.email);if(c.prefChannel||c.prefTime)_sl.push("연락: "+[c.prefChannel,c.prefTime].filter(Boolean).join(" · "));if(c.family&&c.family.length)_sl.push("가족: "+c.family.map(function(f){return (f.rel||"")+(f.name?" "+f.name:"");}).join(", "));var _ctAll=(c.contracts||[]).map(function(ct){return {product:ct.product,expiry:ct.expiry,src:""};});try{if(c.birthDate&&mpcFccIdx){var _dfx=window.fcbLook(mpcFccIdx,c);   /* ★ [2026-10-30] fccId 우선 조회 */if(_dfx&&_dfx.contracts){var _dl={};_ctAll.forEach(function(x){if(x.product)_dl[x.product]=1;});_dfx.contracts.forEach(function(x){if(x.product&&!_dl[x.product])_ctAll.push({product:x.product,expiry:x.expiry,src:"자비아"});});}}}catch(_e){}_ctAll.forEach(function(ct){var _dd=ct.expiry?mpcDdayFromDate(String(ct.expiry).slice(0,10)):null;_sl.push("📄 "+(ct.product||"")+(ct.expiry?" ~"+String(ct.expiry).slice(0,10):"")+((_dd!=null&&_dd>=0&&_dd<=60)?" · D-"+_dd:"")+(ct.src?" ("+ct.src+")":""));});_slb.innerHTML=_sl.length?_sl.map(function(s){return '<div style="font-size:11.5px;color:#3A4457;padding:2px 0"></div>';}).join(""):"";var _sln=_slb.querySelectorAll("div");_sl.forEach(function(s,i){if(_sln[i])_sln[i].textContent=s;});_slb.style.display=_sl.length?"block":"none";}var _aib=$("mpcdAiBtn");if(_aib){if(window.__aiCustHist&&c.name){_aib.style.display="block";_aib.onclick=function(){window.__aiCustHist(c.name);};}else _aib.style.display="none";}(function(){   /* ★ 니즈 칩 — 탭 즉시 저장 (2026-07-19) */
     var nb=$("mpcdNeeds");if(!nb)return;
     var sel=(c.needs||[]).slice();
     nb.innerHTML=mpcdNeedsOpen?mpcNeedsPalette(sel,true):mpcNeedsCompact(sel);
@@ -14881,6 +14917,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         +(P.gdOn
           ?'<div style="margin-top:8px;padding:7px 10px;border-radius:9px;background:#EAF5EF;color:#1D6A45;font-size:11.5px">☁ 구글드라이브 연결됨 — 등록 후 자동 백업됩니다</div>'
           :'<div style="margin-top:8px;padding:7px 10px;border-radius:9px;background:#FFF4E5;color:#8A4B00;font-size:11.5px">☁ 구글드라이브가 연결되어 있지 않아요 — 이 기기에만 저장되고 다른 기기·마이페이지에는 보이지 않습니다. 등록 후 <b>드라이브 연결</b>을 꼭 해주세요.</div>')
+        +'<div style="margin-top:6px;padding:6px 10px;border-radius:9px;background:#EAF5EF;color:#0F6E56;font-size:11px;line-height:1.55">🔒 생년월일 중 출생연도는 내 드라이브에만, 회사 서버에는 월·일만 저장됩니다.</div>'
       +'</div>'
       +'<div style="padding:0 16px 12px;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:12px">'
         +'<div style="font-size:12px;font-weight:800;color:#15294A;margin:4px 0 4px">엑셀 열이 이렇게 들어갑니다</div>'
@@ -15491,7 +15528,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     }else{
       ov.innerHTML='<div style="'+card+'">'
         +'<div style="font-size:15px;font-weight:800;color:#15294A">☁ 먼저 구글드라이브를 연결해 주세요</div>'
-        +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">고객 정보는 회원님 <b>본인의 구글드라이브</b>에만 저장됩니다.<br>JARVIA 서버에는 이름·생일·계약만 있고, 연락처·주소·메모는 드라이브에 있어요.</div>'
+        +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:10px">고객 정보는 회원님 <b>본인의 구글드라이브</b>에만 저장됩니다.<br>JARVIA 서버에는 이름·생일(월·일)·계약만 있고, 연락처·주소·메모·출생연도는 드라이브에 있어요.</div>'
         +'<div style="font-size:13px;color:#5C6678;line-height:1.65;margin-top:8px">연결하면 PC·휴대폰·마이페이지 어디서나 같은 목록을 보게 됩니다.</div>'
         +'<button type="button" id="mpcGateGo" style="width:100%;margin-top:16px;border:none;background:#1B3A5C;color:#fff;border-radius:11px;padding:12px 0;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">드라이브 연결하기</button>'
         +'<div style="font-size:11.5px;color:#8A93A8;text-align:center;margin-top:8px">연결 후 하려던 화면으로 바로 이어집니다</div>'
@@ -16994,7 +17031,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   window.__mrClear=function(){window.__mrF=null;window.__mrKeys=null;var b=document.getElementById('mrBadge');if(b)b.remove();if(window.__mrRefresh)window.__mrRefresh();};
   /* 📊 추출 명단을 마이페이지 표로 넘김 — 이름+생년월일 키로 전달 (소스가 달라도 마이페이지 표가 자기 목록에서 매칭) 2026-07-25 */
   window.__mrOpenTable=function(){try{localStorage.setItem('jv_mrPick',JSON.stringify({code:code,label:f.label,keys:window.__mrKeys||[],ts:Date.now()}));}catch(_e){}location.href='index.html?action=clients&mrPick=1';};
-  function _mrCollect(arr){var ks=[],n=0;(arr||[]).forEach(function(c){if(f.match(c)){n++;ks.push(String((c&&c.name)||'').trim()+'|'+((c&&c.birthDate)||''));}});window.__mrKeys=ks;return n;}
+  function _mrCollect(arr){var ks=[],n=0;(arr||[]).forEach(function(c){if(f.match(c)){n++;ks.push(String((c&&c.name)||'').trim()+'|'+window.fcbMd(c&&c.birthDate));   /* ★ [2026-10-30] 이름|월일 */}});window.__mrKeys=ks;return n;}
   function apply(list){
     window.__mrF={code:code,match:f.match};
     window.__mrRecount=function(){if(!window.__mrF)return;try{window.__mpcEnsureCustomers(function(l2){var n2=_mrCollect(l2);showBadge(n2,(l2||[]).length-n2);});}catch(_e){}};
