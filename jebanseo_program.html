@@ -275,6 +275,13 @@
   .gmfoot{padding:14px 30px;background:#FAF7F0;border-top:1px solid #EFE9DC;font-size:12.5px;color:#8A7F66;text-align:center;}
   .slide{position:relative;}
   .spbox{background:#fff;border-radius:18px;width:min(440px,92vw);overflow:hidden;box-shadow:0 24px 70px rgba(12,19,34,.45);}
+  .spbox{position:relative;}   /* ★ [2026-11-02] 닫기 버튼 기준 */
+  .spx{position:absolute;top:10px;right:12px;z-index:2;width:34px;height:34px;border:none;background:transparent;color:#8A7F66;font-size:24px;line-height:1;cursor:pointer;border-radius:8px;font-family:inherit;}
+  .spx:hover{background:rgba(0,0,0,.06);color:var(--navy);}
+  .sperr{margin:4px 0 10px;padding:10px 12px;border-radius:10px;background:#FDECEC;border:1px solid #F3C2C2;color:#8E1F1F;font-size:13px;line-height:1.55;word-break:keep-all;overflow-wrap:anywhere;}
+  .sperr b{color:#8E1F1F;}
+  .sperr .spcharge{margin-top:8px;border:none;background:#8E1F1F;color:#fff;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .spsave:disabled{opacity:.6;cursor:wait;}
   .sptop{padding:22px 26px 14px;font-size:18px;font-weight:800;color:var(--navy);background:linear-gradient(135deg,#F7F2E6,#FBEFD2);}
   .spbody{padding:18px 26px 8px;}
   .spbody p{font-size:14px;color:var(--slate);line-height:1.6;margin:0 0 10px;}
@@ -599,6 +606,15 @@
   .guidebox .gi span{color:#d8dfeb;}.guidebox .gi span b{color:#fff;font-weight:700;}
   .guidebox .gtip{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.13);color:#aab4c4;font-size:12px;}
 
+  /* ★ [2026-11-02] 태블릿 세로(701~1024px): 상단 도구줄 줄바꿈·좌측 패널 폭 축소 — 「슬라이드 N장」·「메인」 글자가 세로로 쪼개지던 문제 */
+  @media (min-width:701px) and (max-width:1024px){
+    .left{width:300px;min-width:300px;}
+    .rtop{flex-wrap:wrap;gap:8px;padding:9px 14px;}
+    .rtop .lt,.rt{flex-wrap:wrap;}
+    .rt{gap:6px;justify-content:flex-end;}
+    .rtop .lt>*,.rt>*{white-space:nowrap;flex-shrink:0;}
+    .stitle{word-break:keep-all;}
+  }
   @media (max-width:700px){
     .split{display:none;}
     /* 홈(시작) 화면 */
@@ -1121,10 +1137,12 @@
 
 <div class="modal" id="saveprompt">
   <div class="spbox">
+    <button type="button" class="spx" onclick="hideSavePrompt()" aria-label="닫기" title="닫기">×</button>
     <div class="sptop">✅ 자료가 생성되었습니다</div>
     <div class="spbody">
-      <p><b>저장해야 이용이 확정</b>되며, 저장 시 <b>자료 1건</b>이 차감됩니다. <span class="spnote">(정규회원 월 4건 무료, 초과 시 5,000원 · 일반회원 건당 10,000원)</span></p>
-      <p class="spsub">저장 후 슬라이드 수정·추가는 <b>10회 무료</b>(이후 장당 200원)로 이어집니다. <b>저장 전에는 편집·수정·추가 등 모든 작업이 잠겨</b> 있습니다.</p>
+      <p id="sp-main"><b>저장해야 이용이 확정</b>되며, 저장 후 편집·수정·추가를 이어 가실 수 있습니다.</p>
+      <p class="spsub" id="sp-sub"><b>저장 전에는 편집·수정·추가 등 모든 작업이 잠겨</b> 있습니다.</p>
+      <div class="sperr" id="sp-err" style="display:none"></div>
     </div>
     <div class="spbtns">
       <button class="spsave" onclick="saveAndCharge()">💾 저장하고 이용 시작</button>
@@ -3540,7 +3558,7 @@ let _busyGen=false;   // ★ F2 (2026-07-12): 생성 재진입 가드 — 이중
 async function generate(){
   if(_busyGen){hideThinking();toast('이미 자료를 생성하고 있어요. 잠시만 기다려 주세요.',3000);return;}   // hideThinking: 인터뷰 thinking이 켜진 채 진입하는 이론적 경로에서도 입력 차단이 남지 않게
   if(TRIAL.on&&TRIAL.consumed){aiReply('무료체험 자료 생성은 <b>1회</b>까지예요. 지금 만든 자료는 계속 <b>직접 편집</b>하실 수 있고, 정식 이용은 자비아(jarvia.co.kr) 가입 후 가능합니다. 🙂');return;}
-  _busyGen=true;
+  _busyGen=true;_jbGenSignal(true);   /* ★ [2026-11-02] 자비아 탭에 생성 중 알림 */
   deck={slides:[]};auditFlags=[];qualityAudit=[];calcOmissions=[];renderGenLoading();
   aiReply(`입력하신 내용을 정리해 ${topic} 자료를 만들고 있어요. 작성자가 작성합니다…`);
   try{
@@ -3635,6 +3653,7 @@ async function generate(){
     window._jbAssum=data.assumptions||null;   /* ★ C4 (2026-08-22): 기준일·가정 — 저장본 고지 재료 */
     // ★ A안: 생성 시 차감하지 않음 → 덱을 '미저장' 상태로 표시, 저장 시 과금
     _deckSaved=false;                              // 미저장 상태 (저장 전 편집 잠금)
+    deck.saveId=_jbNewSaveId();                    // ★ [2026-11-02] 자료 고유값 — 서버 차감 중복 방지 키
     aiOpCount=0;                                   // 새 문서 → 슬라이드 10회 무료 리셋
     if(data.params){params=data.params;fillChips(data.params);}
     /* ★ 패치H 안전망 (2026-08-28): 실제 교정은 전송 전(genPayload 직전)에서 수행한다.
@@ -3679,6 +3698,7 @@ async function generate(){
     aiReply('자료 생성에 실패했어요. 잠시 후 <b>"생성"</b>이라고 입력해 다시 시도해 주세요. 반복되면 새로고침 후 이어하기를 이용하시면 됩니다. ('+friendlyErr(e)+')');
   }finally{
     _busyGen=false;   // ★ F2: 성공·409 반려·실패 어느 경로로 끝나도 반드시 해제
+    _jbGenSignal(false);   /* ★ [2026-11-02] 생성 종료 알림 */
   }
 }
 
@@ -6581,7 +6601,7 @@ function askNextInterview(){
 }
 let MEMBER={name:'',tier:'',paid:false};
 const PAID_TIERS=['자비아멤버십','이너서클','지사장','컨홈회원'];
-const ROLE_TIER={branch_manager:'지사장',inner_circle:'이너서클',con_homepage:'컨홈회원',jarvia_member:'자비아멤버십',jarvia_inner:'이너서클',jarvia_report:'자비아멤버십'};
+const ROLE_TIER={branch_manager:'지사장',inner_circle:'이너서클',con_homepage:'컨홈회원',jarvia_member:'자비아멤버십'};   /* ★ [2026-11-02] jarvia_inner·jarvia_report는 제안서AI 무료 대상 아님(index.html AI_PROPOSAL_FREE_ROLES와 일치) */
 function normalizeTier(t){t=(t||'').trim();if(ROLE_TIER[t])return ROLE_TIER[t];if(ROLE_TIER[t.toLowerCase()])return ROLE_TIER[t.toLowerCase()];const m={'자비아멤버십':'자비아멤버십','자비아':'자비아멤버십','이너서클':'이너서클','지사장':'지사장','컨홈회원':'컨홈회원','컨홈':'컨홈회원','컨홈페이지':'컨홈회원'};if(m[t])return m[t];return PAID_TIERS.indexOf(t)>=0?t:'';}
 function resolveMember(){let name='',tier='';try{const q=new URLSearchParams(location.search);name=q.get('name')||q.get('member')||q.get('mname')||'';tier=q.get('tier')||q.get('role')||q.get('grade')||'';}catch(_){}if(!name&&window.JARVIA_MEMBER){name=window.JARVIA_MEMBER.name||'';tier=window.JARVIA_MEMBER.tier||window.JARVIA_MEMBER.role||tier;}const nt=normalizeTier(tier);return {name:(name||'').trim(),tier:nt,paid:PAID_TIERS.indexOf(nt)>=0};}
 function termItems(m){
@@ -6637,8 +6657,12 @@ async function startSession(){
   origRequest=rawInput;
   // ★ 입구 잔액 하드 게이트 — 무료도 없고 포인트+잔액도 부족하면 진입(생성) 자체를 막고 충전 유도
   if(!(TRIAL&&TRIAL.on)){
-    const _q=await requestQuota();
-    if(_q && _q.ok && !_q.unlimited){
+    const _q=await _jbProposalQuota();   /* ★ [2026-11-02] 서버(jebanseoApi)에서 직접 조회 — 자비아 탭 응답에 의존하지 않음 */
+    if(!_q || !_q.ok){                   /* ★ 확인 실패 시 생성하지 않음 (종전: 확인 실패면 그냥 통과 → 생성 후 저장 실패) */
+      jbModal({title:'이용 확인이 필요합니다',html:chargeFailMsg((_q&&_q.error)||'NET_ERR')});
+      return;
+    }
+    if(!_q.unlimited){
       const _price=_q.paid?5000:10000;                                   // 정규 5,000 / 일반 10,000 (maybePromptCharge와 동일 기준)
       const _freeLeft=_q.paid?Math.max(0,(_q.freeQuota||0)-(_q.used||0)):0;
       const _avail=(Number(_q.point)||0)+(Number(_q.balance)||0);        // 포인트+잔액 합산
@@ -6771,7 +6795,7 @@ function renderLib(){
 }
 function restore(id){
   const o=loadStore();const d=id==='__last'?o.__last:o[id];if(!d)return;
-  topic=d.topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:(d.deck&&d.deck.slides)||[]};
+  topic=d.topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:(d.deck&&d.deck.slides)||[]};if(d.deck&&d.deck.saveId)deck.saveId=String(d.deck.saveId);   /* ★ [2026-11-02] 자료 고유값 유지 — 재저장 중복 차감 방지 */
   // __last(자동저장)는 저장 당시 상태 유지(미저장이면 미저장) / 명시 저장 자료는 과금 완료 → 편집 가능
   _deckSaved = (id==='__last') ? (d._saved!==false) : true;
   document.getElementById('start').style.display='none';
@@ -7248,6 +7272,9 @@ function chargeFailMsg(err){
   if(err==='INSUFFICIENT_BALANCE')return '잔액이 부족합니다. 자비아(jarvia.co.kr)에서 충전 후 다시 이용해 주세요.';
   if(err==='NO_OPENER'||err==='TIMEOUT')return '결제 연결을 확인할 수 없습니다. 자비아에서 "제안서 생성(대화형)"으로 다시 열어 주세요.<br>생성한 자료는 상단 <b>💾 저장</b>(파일)으로 보관해 두시면 사라지지 않습니다 — 자비아에서 다시 연 뒤 <b>📂 열기</b>로 이어가시면 됩니다.';
   if(err==='NOT_LOGGED_IN')return '로그인이 필요합니다. 자비아에서 로그인 후 이용해 주세요.';
+  if(err==='NET_ERR')return '저장 확인 응답이 늦어지고 있습니다. 잠시 후 <b>다시 눌러 주세요</b> — 같은 자료는 <b>두 번 차감되지 않습니다</b>.';
+  if(err==='QUOTA_ERR')return '이용 가능 여부(무료 건수·잔액)를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요. 반복되면 자비아에서 「제안서 생성(대화형)」으로 다시 열어 주세요.';
+  if(err==='NOT_MEMBER'||err==='MEMBER_ONLY')return '회원 정보를 확인할 수 없습니다. 자비아에서 로그인한 뒤 「제안서 생성(대화형)」으로 다시 열어 주세요.';
   return '결제 처리 오류: '+(err||'');
 }
 // ★ 자료 저장(이용확정) 시 1건 차감 — A안(2026-07-13): 생성 시점엔 차감하지 않고 저장 시 chargeGenerate 호출. 함수명은 호환 유지 (4종: 월4건 무료→5,000원 / 일반: 10,000원)
@@ -7260,10 +7287,36 @@ async function chargeGenerate(){
     if(r.used){TRIAL.consumed=true;return {ok:false,error:'TRIAL_USED'};}
     return {ok:false,error:r.error||'TRIAL_ERR'};
   }
-  const res=await requestCharge('generate',{domain:topic,client:clientName||'',kind:'자료생성'});
-  if(!res.ok)return {ok:false,error:res.error};
-  return {ok:true,unlimited:res.unlimited,charged:res.charged,price:res.price,balance:res.balance,point:res.point,used:res.used,freeQuota:res.freeQuota};
+  /* ★ [2026-11-02] 서버 차감 — 자비아 탭(부모창) 없이도 저장되며, saveId로 같은 자료는 한 번만 차감 */
+  if(!deck.saveId)deck.saveId=_jbNewSaveId();
+  let r,d={};
+  try{r=await jbApi({action:'proposalCharge',saveId:deck.saveId,domain:topic},30000);try{d=await r.json();}catch(_){d={};}}
+  catch(e){return {ok:false,error:'NET_ERR'};}
+  if(r.status===401)return {ok:false,error:'NOT_LOGGED_IN'};
+  if(r.status>=500)return {ok:false,error:'NET_ERR'};   // 서버 일시 오류 — 같은 saveId로 다시 눌러도 중복 차감 없음
+  if(!r.ok||!d||!d.ok)return {ok:false,error:(d&&d.error)||('HTTP_'+r.status)};
+  _jbSyncParentBalance(d);
+  return {ok:true,unlimited:d.unlimited,charged:d.charged,price:d.price,balance:d.balance,point:d.point,used:d.used,freeQuota:d.freeQuota,already:d.already};
 }
+/* ★ [2026-11-02] 서버 차감 보조 함수 */
+function _jbNewSaveId(){return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);}
+async function _jbProposalQuota(){
+  try{
+    const r=await jbApi({action:'proposalQuota'},15000);
+    let d={};try{d=await r.json();}catch(_){d={};}
+    if(r.ok&&d&&d.ok)return d;
+    if(r.status===401)return {ok:false,error:'NOT_LOGGED_IN'};
+    if(d&&(d.error==='NOT_MEMBER'||d.error==='MEMBER_ONLY'))return {ok:false,error:d.error};
+    return {ok:false,error:'QUOTA_ERR'};
+  }catch(e){return {ok:false,error:'QUOTA_ERR'};}
+}
+function _jbSyncParentBalance(d){   // 자비아 탭 잔액 표시값 동기화(실패해도 무관)
+  try{if(window.opener&&!window.opener.closed)window.opener.postMessage({type:'jbChargeSynced',point:d.point,balance:d.balance},jbParentOrigin());}catch(_){}
+}
+function _jbGenSignal(busy){        // 자비아 탭에 생성 중 여부 알림(실패해도 무관)
+  try{if(window.opener&&!window.opener.closed)window.opener.postMessage({type:'jbGenState',busy:!!busy},jbParentOrigin());}catch(_){}
+}
+window.addEventListener('pagehide',function(){if(typeof _busyGen!=='undefined'&&_busyGen)_jbGenSignal(false);});
 // ★ AI 슬라이드 수정/추가 1회 — 10회까지 무료, 초과 시 장당 200원 (전 회원 공통, 즉시 차감)
 async function chargeSlideOp(kindLabel,n){
   if(!_deckSaved)return {ok:false,error:'NOT_SAVED'};   // ★ 안전 가드 — 저장 전 차감 방지
@@ -7385,30 +7438,69 @@ window.addEventListener('beforeunload',function(e){
   var unsaved=(typeof deck!=='undefined'&&deck&&deck.slides&&deck.slides.length&&typeof _deckSaved!=='undefined'&&!_deckSaved);
   if(busy||unsaved){e.preventDefault();e.returnValue='';return '';}
 });
+let _jbSaving=false;   // ★ [2026-11-02] 저장 진행 중 재클릭 잠금
 async function saveAndCharge(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다.');}
   if(_deckSaved){ hideSavePrompt(); return saveFile(); }   // 이미 저장(과금)된 자료 → 파일 저장만
-  // ★ 저장 시점에 과금 (A안 핵심)
-  const cg=await chargeGenerate();
-  if(!cg.ok){ return aiReply(handleChargeFail(cg.error)); }
-  _deckSaved=true;                                          // 저장 완료 → 편집 잠금 해제
-  hideSavePrompt();
-  // 과금 결과 안내
-  if(cg.dev)toast('저장 완료 · 개발모드(미과금)');
-  else if(cg.unlimited)toast('저장 완료 · 무제한 회원');
-  else if(cg.trial)toast('저장 완료 · 무료체험');
-  else if(cg.charged===false)toast('저장 완료 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
-  else toast('저장 완료 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
-  refreshQuota(cg);                                         // ★ 서버 재조회 대신 차감 결과로 건수 즉시 반영
-  try{await _doSaveFile();}catch(_){}                       // 파일 다운로드도 진행
-  _jbSignal('gen',{event:'save',n:deck.slides.length});_jbShowStar();   /* ★ D1 */
+  if(_jbSaving)return;                                      // ★ 진행 중 재클릭 무시 (중복 차감 방지)
+  _jbSaving=true;_spBusy(true);_spErr('');
+  try{
+    // ★ 저장 시점에 과금 (A안 핵심)
+    const cg=await chargeGenerate();
+    if(!cg.ok){ const _m=chargeFailMsg(cg.error); _spErr(_m,cg.error); aiReply(_m); return; }   // ★ 팝업 안에 실패 이유 표시 (자비아 탭으로 화면 전환하지 않음)
+    _deckSaved=true;                                          // 저장 완료 → 편집 잠금 해제
+    hideSavePrompt();
+    _spNoteAt=0;                                              // 다음 자료 팝업은 새로 조회
+    // 과금 결과 안내
+    if(cg.dev)toast('저장 완료 · 개발모드(미과금)');
+    else if(cg.already)toast('저장 완료 · 이미 확정된 자료 (추가 차감 없음)');
+    else if(cg.unlimited)toast('저장 완료 · 무제한 회원');
+    else if(cg.trial)toast('저장 완료 · 무료체험');
+    else if(cg.charged===false)toast('저장 완료 · 이번 달 무료 '+cg.used+'/'+cg.freeQuota+'건');
+    else toast('저장 완료 · '+wonFmt(cg.price)+' 차감 (잔액 '+wonFmt(cg.balance)+')');
+    refreshQuota(cg);                                         // ★ 서버 재조회 대신 차감 결과로 건수 즉시 반영
+    try{await _doSaveFile();}                                 // 파일 다운로드도 진행
+    catch(_fe){console.error('[saveAndCharge] 파일 저장 실패',_fe);
+      aiReply('이용 확정은 완료됐지만 파일 다운로드에 실패했습니다. 상단 <b>💾 저장</b>을 다시 눌러 주세요. (추가 차감 없음)');
+      toast('파일 다운로드 실패 — 상단 💾 저장을 다시 눌러 주세요 (추가 차감 없음)',6000);}
+    _jbSignal('gen',{event:'save',n:deck.slides.length});_jbShowStar();   /* ★ D1 */
+  }finally{
+    _jbSaving=false;_spBusy(false);
+  }
+}
+/* ★ [2026-11-02] 저장 팝업 보조 — 진행 표시·오류 표시·회원별 안내문 */
+function _spBusy(on){const b=document.querySelector('#saveprompt .spsave');if(!b)return;b.disabled=!!on;b.textContent=on?'⏳ 저장 확인 중…':'💾 저장하고 이용 시작';}
+function _spErr(html,code){const e=document.getElementById('sp-err');if(!e)return;
+  if(!html){e.style.display='none';e.innerHTML='';return;}
+  e.innerHTML=html+(code==='INSUFFICIENT_BALANCE'?'<div><button type="button" class="spcharge" onclick="gotoCharge()">충전하러 가기</button></div>':'');
+  e.style.display='block';}
+let _spNoteAt=0;
+async function _spRefreshNote(){
+  const m=document.getElementById('sp-main'),s=document.getElementById('sp-sub');if(!m)return;
+  if(Date.now()-_spNoteAt<15000)return;_spNoteAt=Date.now();   // 잠금 안내로 반복 호출될 때 조회 과다 방지
+  if(TRIAL&&TRIAL.on){m.innerHTML='<b>저장하면 이용이 확정</b>됩니다. 무료체험 <b>1회</b>로 처리되며 <b>차감 금액은 없습니다</b>.';return;}
+  const q=await _jbProposalQuota();
+  if(!q||!q.ok)return;                                      // 조회 실패 시 기본 안내문 유지
+  if(q.unlimited){
+    m.innerHTML='<b>저장하면 이용이 확정</b>됩니다. 무제한 이용 회원으로 <b>차감 금액은 없습니다</b>.';
+    if(s)s.innerHTML='<b>저장 전에는 편집·수정·추가 등 모든 작업이 잠겨</b> 있습니다.';
+    return;}
+  const freeLeft=q.paid?Math.max(0,(q.freeQuota||0)-(q.used||0)):0;
+  if(freeLeft>0){
+    m.innerHTML='<b>저장하면 이용이 확정</b>되며, 이번 달 무료 이용 <b>'+((q.used||0)+1)+'/'+q.freeQuota+'건</b>째로 처리됩니다. <b>차감 금액은 없습니다.</b>';
+    if(s)s.innerHTML='저장 후 슬라이드 AI 수정·추가는 <b>10회까지 무료</b>입니다. <b>저장 전에는 편집·수정·추가 등 모든 작업이 잠겨</b> 있습니다.';
+  }else{
+    const price=Number(q.price)||(q.paid?5000:10000),avail=(Number(q.point)||0)+(Number(q.balance)||0);
+    m.innerHTML='<b>저장하면 이용이 확정</b>되며, <b>'+wonFmt(price)+'</b>이 차감됩니다(포인트 먼저 사용). <span class="spnote">현재 사용 가능액 '+wonFmt(avail)+'</span>';
+    if(s)s.innerHTML='저장 후 슬라이드 AI 수정·추가는 <b>10회 무료</b>(이후 장당 200원)입니다. <b>저장 전에는 편집·수정·추가 등 모든 작업이 잠겨</b> 있습니다.';
+  }
 }
 async function saveFile(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
   try{await _doSaveFile();toast(_deckSaved?'저장 완료 (무료) · 파일이 다운로드됩니다':'보관용으로 저장했습니다(이용 확정 전) · 자비아에서 열고 저장하면 이용이 시작됩니다',_deckSaved?3400:6000);_jbSignal('gen',{event:'save',n:deck.slides.length});_jbShowStar();}   /* ★ D1 */
   catch(e){console.error('[saveFile]',e);aiReply('저장 중 오류가 발생했습니다. 계산기 파일과 네트워크 연결을 확인해 주세요.');}
 }
-function showSavePrompt(){const m=document.getElementById('saveprompt');if(m)m.classList.add('on');}
+function showSavePrompt(){const m=document.getElementById('saveprompt');if(m)m.classList.add('on');if(!_jbSaving)_spErr('');_spRefreshNote().catch(function(){});}   /* ★ [2026-11-02] 회원별 안내문 */
 function hideSavePrompt(){const m=document.getElementById('saveprompt');if(m)m.classList.remove('on');}
 async function _doSaveFile(){
   if(!deck.slides.length){return aiReply('저장할 자료가 없습니다. 먼저 자료를 생성해 주세요.');}
@@ -7496,7 +7588,7 @@ function handleFile(e){
     d=m?JSON.parse(m[1]):JSON.parse(txt);
     if(d&&d.app==='ceoReport'){toast('CEO리포트 파일입니다 — 대표님 리포트에서 여는 중…');openCeoReport();var _fk=new File([txt],'ceo.html',{type:'text/html'});crLoadFile({target:{files:[_fk],value:''}});return;}  /* ★CEO리포트 파일 라우팅 (2026-07-13) */
     if(!d.deck||!d.deck.slides||!d.deck.slides.length)throw new Error('형식 오류');
-    topic=d.topic||topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:jbDropEmptySlides(d.deck.slides)};ensureDeckExtras();
+    topic=d.topic||topic;params=d.params||{};calc=d.calc||{};clientName=d.clientName||'';companyName=d.companyName||'';deck={slides:jbDropEmptySlides(d.deck.slides)};if(d.deck.saveId)deck.saveId=String(d.deck.saveId);   /* ★ [2026-11-02] 자료 고유값 유지 */ensureDeckExtras();
     _deckSaved=(d._saved!==false);   /* ★ 2026-08-24: 파일의 이용확정 여부 그대로 복원 — 기록 없는 기존 파일은 확정본으로 간주(하위호환) */
     document.getElementById('start').style.display='none';
     document.getElementById('topic').textContent=topic+' · '+(clientName||'고객');
