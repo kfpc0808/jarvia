@@ -1097,18 +1097,20 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
               <select id="sub-kind" onchange="subNoticeReset()" style="padding:6px 10px;font-size:13px"><option value="zoom">자비아 활용교육 구독자</option><option value="expert">전문분야 세션 구독자</option></select>
               <button class="btn btn-sec" onclick="subNoticePreview()">👁 미리보기</button>
               <button class="btn" id="sub-send-btn" onclick="subNoticeSend()">📨 발송</button>
+              <span id="sub-sel-info" style="font-size:13px;color:#5F6E78">선택 없음 — 해당 항목 구독자 전체 발송</span><!-- ★ [2026-11-03] 선택 발송 -->
+              <button class="btn btn-sm btn-sec" id="sub-sel-clear" onclick="subSelClear()" style="display:none">선택 해제</button>
             </div>
             <pre id="sub-preview" style="white-space:pre-wrap;background:#FFFBE6;border:1px solid #F5D76E;border-radius:8px;padding:12px;font-size:13px;line-height:1.6;font-family:var(--font);margin:10px 0 0;display:none"></pre>
             <div id="sub-send-msg" style="font-size:13px;color:#666;margin-top:8px"></div>
           </div>
           <div class="toolbar mt">
-            <select id="sub-f-kind" onchange="subRender()" style="padding:6px 10px;font-size:13px"><option value="">전체</option><option value="zoom">활용교육 구독</option><option value="expert">전문분야 구독</option><option value="off">취소</option></select>
-            <select id="sub-f-src" onchange="subRender()" style="padding:6px 10px;font-size:13px"><option value="">전체 경로</option><option value="signup">가입 화면</option><option value="member_link">문자 링크</option><option value="page">신청 페이지</option></select>
+            <select id="sub-f-kind" onchange="subFilterChanged()" style="padding:6px 10px;font-size:13px"><option value="">전체</option><option value="zoom">활용교육 구독</option><option value="expert">전문분야 구독</option><option value="off">취소</option></select>
+            <select id="sub-f-src" onchange="subFilterChanged()" style="padding:6px 10px;font-size:13px"><option value="">전체 경로</option><option value="signup">가입 화면</option><option value="member_link">문자 링크</option><option value="page">신청 페이지</option></select>
             <input id="sub-f-kw" placeholder="🔍 성명·연락처 검색" oninput="subRender()" style="min-width:0;flex:1">
             <button class="btn" onclick="subLoad()">🔄 조회</button>
             <button class="btn btn-sec" onclick="subExcel()">📥 엑셀</button>
           </div>
-          <div class="tbl-wrap mt"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:110px">회원</th><th style="width:90px">신청 경로</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="8" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
+          <div class="tbl-wrap mt"><table class="tbl" style="min-width:800px"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="sub-chk-all" onchange="subChkAll(this.checked)" title="화면에 보이는 구독자 전체 선택"></th><th style="width:130px">신청일시</th><th style="width:80px">성명</th><th style="width:120px">연락처</th><th>구독 항목</th><th style="width:130px">상태</th><th style="width:110px">회원</th><th style="width:90px">신청 경로</th><th style="width:80px">관리</th></tr></thead><tbody id="sub-tb"><tr><td colspan="9" style="text-align:center;color:#999">불러오는 중…</td></tr></tbody></table></div>
         </div>
       </div>
     </div>
@@ -12436,7 +12438,7 @@ function zsExcel(){
 window.loadZoomSeminar=loadZoomSeminar;window.zsSave=zsSave;window.zsSetDate=zsSetDate;window.zsSetTime=zsSetTime;window.zsSetTopic=zsSetTopic;window.zsNotifyNow=zsNotifyNow;window.zsNotifyApply=zsNotifyApply;window.zsRenderNotifyBtns=zsRenderNotifyBtns;window.zsNoticePreview=zsNoticePreview;window.zsNoticeSend=zsNoticeSend;   /* ★ [2026-09-16] 모집 안내 발송 */
 window.zsPreview=zsPreview;window.zsLoadApps=zsLoadApps;window.zsRender=zsRender;window.zsDelApp=zsDelApp;window.zsExcel=zsExcel;
 /* ═══ ★ [2026-09-28] 전문분야 지원 세션(edu_sessions · edu_applications) · 매월 일정 안내 구독자(seminar_subscribers) ═══ */
-let _esSess=[],_esApps=[],_esCur='',_subs=[],_subConfirm='';
+let _esSess=[],_esApps=[],_esCur='',_subs=[],_subConfirm='',_subSel=new Set(),_subTarget=0;   /* ★ [2026-11-03] _subSel: 선택 발송 대상(구독자 문서 ID) */
 const _esTopic=s=>(s.field?'['+s.field+'] ':'')+(s.topic||'');
 function _esWhen(s){if(!s||!s.date)return'-';const d=new Date(s.date+'T12:00:00+09:00');return (d.getMonth()+1)+'/'+d.getDate()+'('+'일월화수목금토'[d.getDay()]+') '+(s.time||'');}
 const _esToday=()=>new Date(Date.now()+9*3600000).toISOString().slice(0,10);
@@ -12548,6 +12550,7 @@ function esExcel(){const s=_esSess.find(x=>x.id===_esCur);const rows=esFiltered(
 async function subLoad(){
   try{const snap=await getDocs(collection(db,'seminar_subscribers'));_subs=snap.docs.map(d=>({id:d.id,...d.data()}));}
   catch(e){toast('구독자 불러오기 실패: '+e.message,'error');_subs=[];}
+  {const act=new Set(_subs.filter(s=>s.zoom||s.expert).map(s=>s.id));const n=_subSel.size;_subSel.forEach(id=>{if(!act.has(id))_subSel.delete(id);});if(_subSel.size!==n)subNoticeReset();}   /* ★ [2026-11-03] 해제·삭제된 구독자는 선택에서 제외 */
   await zsFetchMembers(true);   /* ★ [2026-10-02] 회원 유형 판별용 */
   subRender();
 }
@@ -12569,9 +12572,11 @@ function subRender(){
   $('sub-sum').innerHTML=[['구독 중',on.length],['활용교육',_subs.filter(s=>s.zoom).length],['전문분야 세션',_subs.filter(s=>s.expert).length],['이번 달 취소',canc]]
     .map(x=>'<div class="dash-card"><div class="dc-num">'+x[1]+'</div><div class="dc-label">'+x[0]+'</div></div>').join('');
   const rows=subFiltered(),tb=$('sub-tb');
-  if(!rows.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:#999">구독자가 없습니다.</td></tr>';return;}
+  const ca=$('sub-chk-all'),va=rows.filter(s=>s.zoom||s.expert);if(ca){ca.checked=va.length>0&&va.every(s=>_subSel.has(s.id));ca.disabled=!va.length;}
+  subSelInfo();
+  if(!rows.length){tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:#999">구독자가 없습니다.</td></tr>';return;}
   tb.innerHTML=rows.map(s=>{const act=s.zoom||s.expert;
-    return '<tr'+(act?'':' style="opacity:.55"')+'><td>'+esc(zsWhen(s.createdAt))+'</td><td>'+esc(s.name||'')+'</td><td>'+esc(_esTel(s.phone||s.id))+'</td>'
+    return '<tr'+(act?'':' style="opacity:.55"')+'><td style="text-align:center">'+(act?'<input type="checkbox" onchange="subChk(\''+s.id+'\',this.checked)"'+(_subSel.has(s.id)?' checked':'')+'>':'')+'</td><td>'+esc(zsWhen(s.createdAt))+'</td><td>'+esc(s.name||'')+'</td><td>'+esc(_esTel(s.phone||s.id))+'</td>'
       +'<td>'+[s.zoom?'활용교육':'',s.expert?'전문분야 세션':''].filter(Boolean).join(' · ')+'</td>'
       +'<td>'+(act?'<span style="color:#1D8A5B;font-weight:700">구독</span>':'취소 '+esc(zsWhen(s.canceledAt)))+'</td><td>'+_subMemCell(s)+'</td><td>'+_subSrc(s)+'</td>'
       +'<td>'+(act?'<button class="btn btn-sm btn-danger" onclick="subAdminCancel(\''+s.id+'\')">해제</button>':'')+'</td></tr>';}).join('');
@@ -12586,20 +12591,32 @@ function subExcel(){const rows=subFiltered();if(!rows.length)return toast('내�
       '상태':(s.zoom||s.expert)?'구독':'취소','취소일시':s.canceledAt?zsWhen(s.canceledAt):'','회원':zsMemberOf(s)?'회원':'비회원','회원유형':zsMemberOf(s)?zsRoleLabel(zsMemberOf(s).role):'','신청경로':_subSrc(s),'아이디':zsMemberOf(s)?.loginId||s.loginId||''}));
     const ws=XLSX.utils.json_to_sheet(out);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'일정안내구독자');
     XLSX.writeFile(wb,'일정안내_구독자_'+rows.length+'명.xlsx');toast('엑셀 다운로드 완료','success');});}
-function subNoticeReset(){_subConfirm='';$('sub-preview').style.display='none';$('sub-send-msg').textContent='';}
+function subNoticeReset(){_subConfirm='';_subTarget=0;$('sub-preview').style.display='none';$('sub-send-msg').textContent='';}
+/* ★ [2026-11-03] 선택 발송 — 선택이 있으면 그 사람들 중 이 항목 구독자에게만, 없으면 기존처럼 전체. 선택이 바뀌면 미리보기 다시 */
+function subSelInfo(){const n=_subSel.size,el=$('sub-sel-info'),b=$('sub-sel-clear');if(!el)return;
+  el.innerHTML=n?'선택 <b style="color:#1B3A5C">'+n+'명</b>에게만 발송':'선택 없음 — 해당 항목 구독자 전체 발송';if(b)b.style.display=n?'':'none';}
+function subChk(id,on){if(on)_subSel.add(id);else _subSel.delete(id);subNoticeReset();subRender();}
+function subChkAll(on){subFiltered().filter(s=>s.zoom||s.expert).forEach(s=>{if(on)_subSel.add(s.id);else _subSel.delete(s.id);});subNoticeReset();subRender();}
+function subSelClear(){_subSel.clear();subNoticeReset();subRender();}
+/* ★ [2026-11-03] 구분·경로 필터를 바꾸면 선택 해제 — 화면에서 사라진 사람이 선택된 채 발송되는 것 방지 (이름 검색은 한 명씩 골라 담을 수 있게 선택 유지) */
+function subFilterChanged(){if(_subSel.size){_subSel.clear();subNoticeReset();}subRender();}
 async function subNoticePreview(){
-  const kind=$('sub-kind').value;$('sub-send-msg').textContent='미리보기 불러오는 중…';
-  try{const r=(await httpsCallable(functions,'eduNoticeSend')({kind,preview:true})).data;
-    _subConfirm=r.confirmKey||'';const pv=$('sub-preview');pv.textContent=r.preview||'';pv.style.display='block';
-    $('sub-send-msg').innerHTML='발송 대상 <b>'+(r.targetCount||0)+'명</b> (이 항목 구독자)'+(r.templateReady?'':' · <span style="color:#C0392B">⚠ 템플릿 ID 미등록 — 카카오알림설정에서 「교육 일정 안내」 ID를 먼저 입력하세요</span>');}
+  const kind=$('sub-kind').value,ids=[..._subSel];$('sub-send-msg').textContent='미리보기 불러오는 중…';
+  try{const r=(await httpsCallable(functions,'eduNoticeSend')(ids.length?{kind,preview:true,ids}:{kind,preview:true})).data;
+    /* ★ [2026-11-03] 서버가 선택 명단을 처리하지 못하면(구버전) 전체 발송이 되므로 발송을 막는다 */
+    if(ids.length&&r.selectedCount===undefined){_subConfirm='';_subTarget=0;$('sub-preview').style.display='none';
+      $('sub-send-msg').innerHTML='<span style="color:#C0392B">⚠ 서버에 선택 발송 기능이 아직 배포되지 않았습니다. 이대로 보내면 구독자 전체에게 발송되므로 발송을 막았습니다. (eduNoticeSend 배포 후 다시 미리보기)</span>';return;}
+    _subConfirm=r.confirmKey||'';_subTarget=r.targetCount||0;const pv=$('sub-preview');pv.textContent=r.preview||'';pv.style.display='block';
+    const ex=ids.length-(r.targetCount||0);
+    $('sub-send-msg').innerHTML='발송 대상 <b>'+(r.targetCount||0)+'명</b> '+(ids.length?'(선택 '+ids.length+'명 중 이 항목 구독자'+(ex>0?' · <span style="color:#C0392B">'+ex+'명 제외 — 이 항목 미구독 또는 번호 오류</span>':'')+')':'(이 항목 구독자 전체)')+(r.templateReady?'':' · <span style="color:#C0392B">⚠ 템플릿 ID 미등록 — 카카오알림설정에서 「교육 일정 안내」 ID를 먼저 입력하세요</span>');}
   catch(e){_subConfirm='';$('sub-send-msg').innerHTML='<span style="color:#C0392B">'+esc(e.message||'미리보기 실패')+'</span>';}
 }
 async function subNoticeSend(){
   if(!_subConfirm)return toast('먼저 [👁 미리보기]로 문구와 대상을 확인하세요.','warning');
-  const kind=$('sub-kind').value;
-  if(!confirm(($('sub-kind').selectedOptions[0]?.textContent||'')+'에게 일정 안내 알림톡을 발송합니다.\n\n발송하시겠습니까?'))return;
+  const kind=$('sub-kind').value,ids=[..._subSel];
+  if(!confirm(($('sub-kind').selectedOptions[0]?.textContent||'')+(ids.length?' 중 선택한 '+_subTarget+'명':' 전체('+_subTarget+'명)')+'에게 일정 안내 알림톡을 발송합니다.\n\n발송하시겠습니까?'))return;
   const btn=$('sub-send-btn');btn.disabled=true;
-  try{const r=(await httpsCallable(functions,'eduNoticeSend',{timeout:300000})({kind,confirmKey:_subConfirm})).data;
+  try{const r=(await httpsCallable(functions,'eduNoticeSend',{timeout:300000})(ids.length?{kind,confirmKey:_subConfirm,ids}:{kind,confirmKey:_subConfirm})).data;
     $('sub-send-msg').innerHTML='✅ 발송 완료 — 총 '+(r.totalCount||0)+'건 · 성공 <b>'+(r.successCount||0)+'</b> · 실패 '+(r.failCount||0)+' · 제외 '+(r.skippedCount||0);_subConfirm='';}
   catch(e){toast('발송 실패: '+(e.message||'오류'),'error');}
   finally{btn.disabled=false;}
@@ -12607,6 +12624,7 @@ async function subNoticeSend(){
 window.zsTab=zsTab;window.esSaveSession=esSaveSession;window.esNewSession=esNewSession;window.esEditSession=esEditSession;window.esDelSession=esDelSession;
 window.esPick=esPick;window.esLoadAll=esLoadAll;window.esRender=esRender;window.esNotify=esNotify;window.esResendApply=esResendApply;window.esDelApp=esDelApp;window.esExcel=esExcel;
 window.subLoad=subLoad;window.subRender=subRender;window.subAdminCancel=subAdminCancel;window.subExcel=subExcel;window.subNoticeReset=subNoticeReset;window.subNoticePreview=subNoticePreview;window.subNoticeSend=subNoticeSend;
+window.subChk=subChk;window.subChkAll=subChkAll;window.subSelClear=subSelClear;window.subFilterChanged=subFilterChanged;   /* ★ [2026-11-03] 선택 발송 */
 window.zsSortBy=zsSortBy;window.zsClearFilter=zsClearFilter;   /* ★ [2026-09-02] 정렬·검색초기화 */
 
 // ═══ 게시예정콘텐츠 관리 ═══
