@@ -9,7 +9,7 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="1분 재무검진">
 <meta property="og:description" content="답하면 바로 결과가 나옵니다">
-<meta property="og:image" content="https://jarvia.co.kr/mypb/share_default.png">
+<meta property="og:image" content="https://mypb.kr/mypb/share_default.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="600">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -165,6 +165,7 @@ button{font-family:inherit;font-size:inherit;color:var(--ink);cursor:pointer;-we
 .ans{display:grid;gap:1px;font-size:14.5px} .ans span{color:var(--muted)} .ans b{font-weight:500;color:var(--ink)}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px} .row2 .btn{width:100%}
 .empty{display:grid;gap:8px} .empty span{font-size:14.5px;color:var(--ink2)}
+.boot{margin-top:18vh} p.boot{text-align:center}
 .toast{position:fixed;left:16px;right:16px;bottom:24px;max-width:448px;margin:0 auto;background:var(--navy);color:#fff;padding:15px 18px;border-radius:14px;font-size:15px;z-index:20;box-shadow:0 10px 30px rgba(14,33,72,.3)}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid rgba(14,33,72,.35);outline-offset:2px}
 @media (max-width:340px){.q{font-size:21px}.hero h1{font-size:21px}.segb{min-width:44px;font-size:13.5px}.tel .pre{padding:0 10px}}
@@ -419,6 +420,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .stickybar{position:fixed;left:0;right:0;bottom:0;z-index:8;max-width:480px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 84px;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(255,255,255,.97);border-top:1px solid var(--line);box-shadow:0 -6px 20px rgba(18,24,38,.07);transition:transform .2s ease}
 .stickybar .btn{min-height:50px;margin:0;width:100%}
 .stickybar.hide{transform:translateY(110%)}
+.stickybar.one{grid-template-columns:minmax(0,1fr)}
 body.has-bar #app{padding-bottom:80px}
 body.has-bar .toast{bottom:96px}
 /* 시연 도구 */
@@ -912,9 +914,9 @@ function snapshot(d, ans, more, res, extra) {
 
 /* 저장소 (브라우저 저장 실패 시 메모리) */
 var Store = (function () {
-  var mem = { records: [] }, KEY = 'mypb.records.v2';
+  var mem = { records: [] }, KEY = 'mypb.records.v2', remote = false;
   function load() { try { var s = localStorage.getItem(KEY); if (s) mem.records = JSON.parse(s); } catch (e) {} }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(mem.records)); } catch (e) {} }
+  function save() { if (remote) return; try { localStorage.setItem(KEY, JSON.stringify(mem.records)); } catch (e) {} }
   load();
   return {
     all: function () { return mem.records.slice().reverse(); },
@@ -922,6 +924,7 @@ var Store = (function () {
     update: function (id, patch) { mem.records.forEach(function (r) { if (r.id === id) Object.assign(r, patch); }); save(); },
     get: function (id) { return mem.records.filter(function (r) { return r.id === id; })[0]; },
     clear: function () { mem.records = []; save(); },
+    useRemote: function (list) { remote = true; mem.records = list; },   /* 회원 화면: 서버 목록을 메모리로만 (이 기기에 남기지 않음) */
     remove: function (id) { mem.records = mem.records.filter(function (r) { return r.id !== id; }); save(); },
     latest: function (designId, exceptId) { var r = null; mem.records.forEach(function (x) { if (x.design === designId && x.id !== exceptId && !x.pending && (!r || x.at > r.at)) r = x; }); return r; }
   };
@@ -4343,7 +4346,34 @@ refAdd([
   /* 고객 화면 미리보기(pv=1): 회원이 고객과 똑같은 화면을 보되, 저장·전달·열람 기록을 남기지 않음 */
   var PV = params.pv === '1';
   /* 시연 도구: 파일로 열 때만 기본 표시. 자비아에 올린 화면(고객 링크 포함)에서는 ?demo=1 일 때만 */
-  var DEMO = !PV && (params.demo === '1' || (location.protocol === 'file:' && params.demo !== '0'));
+  var DEMO = !PV && !/(^|\.)mypb\.kr$/.test(location.hostname) && (params.demo === '1' || (location.protocol === 'file:' && params.demo !== '0'));   /* 고객용 주소(mypb.kr)에서는 시연 도구를 절대 켜지 않음 */
+  /* ───── 서버 연결 (2026-11-04) ─────
+     자비아(jarvia.co.kr)·mypb.kr 에 올린 화면에서만 서버를 씀. 파일로 열거나 ?demo=1 이면 이 기기에만 저장(시연).
+     · 회원: 자비아 로그인 상태를 그대로 이어받아(같은 주소) 토큰으로 서버 함수를 부름
+     · 고객: 로그인 없이 링크 번호(k)로만 부름 — Firebase 를 싣지 않음 */
+  var HOSTED = /^https?:$/.test(location.protocol) && !DEMO;
+  var FN_URL = 'https://asia-northeast3-jarvia-platform.cloudfunctions.net/';
+  var FBJS = 'https://www.gstatic.com/firebasejs/10.12.0/';
+  var FB_CFG = { apiKey: 'AIzaSyBD9p-bf162RiiD1Y3BsY-NvbYjpOSrzmg', authDomain: 'jarvia-platform.firebaseapp.com', projectId: 'jarvia-platform', storageBucket: 'jarvia-platform.firebasestorage.app', messagingSenderId: '388025068900', appId: '1:388025068900:web:09ba8e12e9e9e2ec49de71' };
+  var CLOUD = { cust: false, cons: false, token: null };   /* cust: 서버 링크로 연 고객 화면 · cons: 로그인한 회원 화면 */
+  var ON_MYPB = /(^|\.)mypb\.kr$/.test(location.hostname);   /* 고객용 중립 주소: 자비아 이름·회원 화면을 절대 보이지 않음 */
+  function rnd22() {   /* 링크 번호: 추측할 수 없는 22자 난수 (서버는 20자 이상만 받음) */
+    var a = new Uint8Array(16);
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(a); else for (var i = 0; i < 16; i++) a[i] = Math.floor(Math.random() * 256);
+    return btoa(String.fromCharCode.apply(null, a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function callFn(name, data) {   /* onCall 규약: POST {data} → {result} | {error} */
+    return (CLOUD.token ? CLOUD.token() : Promise.resolve(null)).then(function (tk) {
+      var hd = { 'Content-Type': 'application/json' }; if (tk) hd.Authorization = 'Bearer ' + tk;
+      return fetch(FN_URL + name, { method: 'POST', headers: hd, body: JSON.stringify({ data: data || {} }) });
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (j && j.error) throw new Error(j.error.message || '오류');
+        if (!r.ok) throw new Error('서버 응답 ' + r.status);
+        return (j && j.result) || {};
+      });
+    });
+  }
   /* 카톡 공유 이미지(분야별): 이미지 안 큰 글자 = SHARE_HOOK, 미리보기 제목 = 「고객님께 · 컨설턴트가 보낸 1분 재무검진」 */
   var SHARE_HOOK = {
     inheritance: ['상속세,', '현금으로 낼 수 있을까요?'], gift: ['세금 없이 줄 수 있는 한도,', '얼마나 남았을까요?'],
@@ -4358,7 +4388,7 @@ refAdd([
   }
   var CUST = (params.n || '').trim().slice(0, 20);
   /* 고객별 고유 링크 번호: 보내기에서 만든 「링크 발송」 기록과 고객의 열람·완료·상담 신청을 한 고객으로 이어 줌 */
-  var LINK_ID = /^[A-Za-z0-9_-]{4,40}$/.test(params.k || '') ? params.k : '';
+  var LINK_ID = /^[A-Za-z0-9_-]{20,40}$/.test(params.k || '') ? params.k : '';   /* 서버 링크 번호와 같은 규칙 */
   /* 결과 저장 동의(개인정보 수집·이용): 기기별 한 번 묻고, 처음 화면에서 바꿀 수 있음 */
   function saveChoice() { var v = null; if (PV) v = S.saveMem; else try { v = localStorage.getItem('mypb.save'); } catch (e) { v = S.saveMem; } return v === '1' ? true : v === '0' ? false : null; }
   function setSaveChoice(b) { S.saveMem = b === null ? null : (b ? '1' : '0'); if (PV) return; try { if (b === null) localStorage.removeItem('mypb.save'); else localStorage.setItem('mypb.save', b ? '1' : '0'); } catch (e) {} }
@@ -4374,7 +4404,7 @@ refAdd([
   var PREP_DOCS = { 'inheritance.2': ['부동산 등기부등본 또는 주소 목록', '대출·임대보증금 내역', '최근 10년 안에 가족에게 준 재산 메모', '가입한 보험 증권 (있다면)'] };
 
   /* 첫 화면: 주소에 고객 링크 정보(rec·n·pub·pv)가 없으면 컨설턴트 화면 「보내기」 탭. 고객 화면은 고객에게 보낸 링크로만 열림 */
-  var IS_CUST = params.view === 'customer' || !!(params.rec || params.n || params.pub || params.pv);
+  var IS_CUST = params.view === 'customer' || !!(params.rec || params.n || params.pub || params.pv || params.k);
   var CTABS = [['send', '보내기'], ['list', '고객 현황'], ['annual', '연간 관리'], ['guide', '활용 가이드']];
   var S = { screen: params.view === 'consultant' || !IS_CUST ? 'consultant' : 'home', ctab: ['send', 'list', 'annual', 'guide', 'ref'].indexOf(params.tab) >= 0 ? params.tab : 'send', field: null, design: null, entry: '', menuLabel: '', pos: 0, ans: [], more: {}, result: null, record: null, filter: 'all', prev: null, taskDone: [], newField: null, open: {}, facts: {}, trend: {}, prefilled: false, sched: {}, exp: {} };
   var app = document.getElementById('app');
@@ -4463,7 +4493,7 @@ refAdd([
       ['수집 항목', '검진 답변(재산·소득·부채 구간, 가족 상황 등), 검진 일시, 완료 여부'],
       ['보유·이용 기간', '마지막 검진일부터 2년, 또는 동의를 철회(기록 삭제)하실 때까지'],
       ['동의를 거부할 권리', '동의하지 않으셔도 검진과 결과 보기는 그대로 됩니다. 결과 저장과 1년 뒤 비교만 제공되지 않습니다.'],
-      ['처리하는 사람', whoName() + ' · 자비아 시스템에 보관']]);
+      ['처리하는 사람', whoName() + ' · 보관: (주)KFPC 운영 서버']]);
     h += back ? '<button class="btn primary block big" data-act="consentYes">동의하고 저장하기</button><button class="btn ghost block" data-act="consentNo">저장하지 않고 돌아가기</button></main>' : '<button class="btn primary block big" data-act="consentYes">동의하고 시작하기</button><button class="btn ghost block" data-act="consentNo">저장 없이 검진만 하기</button></main>';
     return h;
   }
@@ -4471,7 +4501,9 @@ refAdd([
   /* ───────── 알림 신청 (정보통신망법: 고객이 신청한 알림만, 08~21시, 수신 거부 안내) ───────── */
   function vAlertCard(r) {
     if (PUB || !r) return '';
-    if (!savedRec(r)) return '<div class="card alertc"><b>1년 뒤 작년과 비교해 드릴까요?</b><p class="tiny">결과를 저장하지 않아 1년 뒤 비교 알림을 받을 수 없습니다. 지금 저장하면 알림을 신청할 수 있습니다.</p><button class="btn ghost block" data-act="saveNow">이 결과 저장하기</button></div>';
+    if (!savedRec(r)) return HOSTED ? '<div class="card alertc"><b>이 결과를 저장해 둘까요?</b><p class="tiny">저장해 두면 처음 화면 「내 검진 기록」에서 언제든 다시 볼 수 있습니다.</p><button class="btn ghost block" data-act="saveNow">이 결과 저장하기</button></div>'
+      : '<div class="card alertc"><b>1년 뒤 작년과 비교해 드릴까요?</b><p class="tiny">결과를 저장하지 않아 1년 뒤 비교 알림을 받을 수 없습니다. 지금 저장하면 알림을 신청할 수 있습니다.</p><button class="btn ghost block" data-act="saveNow">이 결과 저장하기</button></div>';
+    if (HOSTED && !r.alertOk) return '';   /* 알림톡 발송 준비 전: 신청을 받지 않음 (지킬 수 없는 안내 방지) */
     if (r.alertOk) return '<div class="card alertc on"><b>알림 신청됨</b><p class="tiny">' + esc((r.alertTopics || []).map(topicName).join(' · ')) + '<br>카카오 알림톡으로 오전 8시~오후 9시에만 보내 드립니다.</p><button class="link sm" data-act="alertOff" data-id="' + r.id + '">알림 해지</button></div>';
     var sel = S.alertSel || (S.alertSel = { recheck: true });
     return '<div class="card alertc"><b>1년 뒤 같은 날, 작년과 비교한 결과를 알려 드릴까요?</b><p class="tiny">작년 답이 채워져 있어 1분이면 끝납니다. 받고 싶은 알림을 골라 주세요(선택).</p>' +
@@ -4767,13 +4799,13 @@ refAdd([
   /* 결과 화면 아래 고정 바: 길게 내려가지 않아도 상담 신청·전화가 늘 보임 (소개카드가 화면에 보이면 숨김) */
   function stickyBar() {
     if (PUB || (S.record && isReq(S.record))) return '';
-    var tel = CONSULTANT.phone ? '<a class="btn ghost sb-call" href="tel:' + esc(CONSULTANT.phone.replace(/[^0-9+]/g, '')) + '">전화</a>' : '<button class="btn ghost sb-call" data-act="noPhone">전화</button>';
-    return '<div class="stickybar"><button class="btn primary" data-act="form">이 결과로 상담 신청</button>' + tel + '</div>';
+    var tel = CONSULTANT.phone ? '<a class="btn ghost sb-call" href="tel:' + esc(CONSULTANT.phone.replace(/[^0-9+]/g, '')) + '">전화</a>' : HOSTED ? '' : '<button class="btn ghost sb-call" data-act="noPhone">전화</button>';
+    return '<div class="stickybar' + (tel ? '' : ' one') + '"><button class="btn primary" data-act="form">이 결과로 상담 신청</button>' + tel + '</div>';
   }
   function vIntroCard(cta, act, done) {
     var h = '<div class="intro"><div class="intro-top"><div class="avatar lg">' + initials(CONSULTANT.name) + '</div><div class="min0"><b>' + esc(CONSULTANT.name) + '</b> 컨설턴트<br><span>' + (CONSULTANT.org ? esc(CONSULTANT.org) + ' · ' : '') + '이 결과를 함께 정리해 드립니다</span></div></div>';
     h += done ? '<div class="sent">상담 신청이 전달되었습니다</div>' : '<button class="btn primary block big" data-act="' + act + '">' + esc(cta) + '</button>';
-    h += CONSULTANT.phone ? '<a class="btn ghost block" href="tel:' + esc(CONSULTANT.phone.replace(/[^0-9+]/g, '')) + '">전화로 바로 상담하기</a>' : '<button class="btn ghost block" data-act="noPhone">전화로 바로 상담하기</button>';
+    h += CONSULTANT.phone ? '<a class="btn ghost block" href="tel:' + esc(CONSULTANT.phone.replace(/[^0-9+]/g, '')) + '">전화로 바로 상담하기</a>' : HOSTED ? '' : '<button class="btn ghost block" data-act="noPhone">전화로 바로 상담하기</button>';
     return h + '</div>';
   }
   function vPubCard() { return '<div class="card"><b>이 결과를 더 자세히 보고 싶으시면</b><p class="tiny">평소 이야기 나누시는 재무 전문가에게 이 결과 화면을 보여 주세요. 정보 제공용 셀프 검진이라 저장·전달 기능은 없습니다.</p></div>'; }
@@ -4827,7 +4859,7 @@ refAdd([
     h += '<label class="field-in"><span>성함</span><input class="input" id="fName" placeholder="성함" autocomplete="name" value="' + esc((S.record && S.record.contact && S.record.contact.name) || CUST) + '"></label>';
     h += '<div class="field-in"><span>휴대폰 번호</span><div class="tel"><div class="pre">010</div><input class="input" id="fTel1" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="0000" aria-label="휴대폰 가운데 4자리"><span class="dash">-</span><input class="input" id="fTel2" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="0000" aria-label="휴대폰 끝 4자리"></div></div>';
     h += '<label class="agree"><input type="checkbox" id="fReq"><span><b>(필수)</b> 연락을 위해 성함·휴대폰 번호·연락 방법과 시간을 ' + esc(whoName()) + '에게 제공하는 데 동의합니다.</span></label>';
-    h += cdet('필수 동의 자세히 보기', [['받는 사람', whoName()], ['이용 목적', '상담 연락과 일정 조율'], ['항목', '성함, 휴대폰 번호, 연락 방법·시간'], ['보유·이용 기간', '상담이 끝난 뒤 1년, 또는 동의를 철회하실 때까지'], ['동의를 거부할 권리', '거부하실 수 있으나, 연락처를 받을 수 없어 상담 신청이 되지 않습니다. 결과 화면의 「전화로 바로 상담하기」는 그대로 쓰실 수 있습니다.']]);
+    h += cdet('필수 동의 자세히 보기', [['받는 사람', whoName()], ['이용 목적', '상담 연락과 일정 조율'], ['항목', '성함, 휴대폰 번호, 연락 방법·시간'], ['보유·이용 기간', '휴대폰 번호는 접수일부터 30일 뒤 자동 삭제 · 성함과 신청 내용은 상담 처리 완료일부터 1년, 또는 동의를 철회하실 때까지'], ['동의를 거부할 권리', '거부하실 수 있으나, 연락처를 받을 수 없어 상담 신청이 되지 않습니다. 결과 화면의 「전화로 바로 상담하기」는 그대로 쓰실 수 있습니다.']]);
     h += '<label class="agree"><input type="checkbox" id="fAgree"><span><b>(선택)</b> 답변과 결과도 함께 전달합니다. 같은 질문을 다시 받지 않고, 첫 상담에서 바로 결과물을 받아 보실 수 있습니다.</span></label>';
     h += cdet('선택 동의 자세히 보기', [['받는 사람', whoName()], ['이용 목적', '상담 준비와 결과물(표·비교안) 작성'], ['항목', '검진 답변·결과, 「더 정확하게 보기」에 넣은 숫자'], ['보유·이용 기간', '상담이 끝난 뒤 1년, 또는 동의를 철회하실 때까지 (처음 화면 「내 검진 기록」에서 언제든 철회)'], ['동의를 거부할 권리', '거부하셔도 상담 신청은 됩니다. 컨설턴트는 답변 없이 신청 사실만 보고 연락드립니다.']]);
     h += '<button class="btn primary block big" data-act="submit">상담 신청 보내기</button>' + (DEMO ? demoBox('<span>시연판에서는 실제로 전송되지 않고 이 기기의 컨설턴트 화면에만 저장됩니다.</span>') : '') + '</main>';
@@ -5009,8 +5041,9 @@ refAdd([
       '<div class="gd-card"><em>2</em><b>상품은 고객이 물을 때</b><span>결과물을 보고 「그럼 어떻게 준비하죠?」라고 물을 때 꺼냅니다. 금융소비자보호 원칙에도 맞습니다.</span></div>' +
       '<div class="gd-card"><em>3</em><b>실천과제를 같이 정하기</b><span>예: 「가족과 납부 방법 이야기해 보기」. 1년 뒤 재검진 때 했는지 묻습니다.</span></div></div>';
 
-    var b5 = gMiniTrend() + '<ul class="gd-list"><li><b>같은 날 알림</b><span>완료 1년 뒤 같은 날 재검진 알림. 고객이 결과 화면에서 신청한 경우에만 갑니다. 작년 답이 채워져 있어 1분이면 끝납니다.</span></li>' +
-      '<li><b>시기별 알림</b><span>연말정산(11월)·종합소득세(5월)·재산세(7·9월) 알림을 신청한 고객에게만, 그 시기에 맞는 검진이 갑니다.</span></li>' +
+    var SOON = HOSTED ? ' <em class="tag">준비 중</em>' : '';   /* 알림톡 자동 발송은 다음 단계 */
+    var b5 = gMiniTrend() + '<ul class="gd-list"><li><b>같은 날 알림' + SOON + '</b><span>완료 1년 뒤 같은 날 재검진 알림. 고객이 결과 화면에서 신청한 경우에만 갑니다. 작년 답이 채워져 있어 1분이면 끝납니다.</span></li>' +
+      '<li><b>시기별 알림' + SOON + '</b><span>연말정산(11월)·종합소득세(5월)·재산세(7·9월) 알림을 신청한 고객에게만, 그 시기에 맞는 검진이 갑니다.</span></li>' +
       '<li><b>변화 큰 순으로 연락</b><span>「연간 관리」 탭 위에서부터. 숫자·가족·은퇴 상황이 바뀌었거나 새 관심 분야를 고른 고객입니다.</span></li>' +
       '<li><b>실천과제 확인</b><span>못 한 고객에게는 「올해는 이것부터 같이 해요」로 상담을 다시 엽니다.</span></li>' +
       '<li><b>미응답은 7일 뒤 한 번</b><span>재발송 버튼으로 한 번만 다시 보냅니다.</span></li></ul>' +
@@ -5040,11 +5073,13 @@ refAdd([
   }
   function vConsultant() {
     var h = cTop() + '<main class="pad"><div class="tabs">' + CTABS.map(function (x) { return '<button class="tab' + (S.ctab === x[0] ? ' on' : '') + '" data-act="ctab" data-v="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>';
+    try {
     if (S.ctab === 'guide') h += vGuide();
     else if (S.ctab === 'annual') h += vAnnualMgmt();
     else if (S.ctab === 'ref') h += '<button class="link left" data-act="ctab" data-v="guide">← 활용 가이드로</button><h2 class="h2">기준값 표</h2>' + vRefTable();
     else if (S.ctab === 'list') h += vList();
     else h += vSend();
+    } catch (e) { h += '<div class="card empty"><b>화면을 그리는 중 문제가 생겼습니다</b><span>일부 기록의 형식이 맞지 않습니다. 「보내기」 탭은 그대로 쓸 수 있습니다.</span></div>'; }   /* 기록 하나 때문에 회원 화면 전체가 멈추지 않게 */
     return h + '</main>';
   }
   /* 상태 값 (결과 로직 탭): 링크 발송 → 열람 → 검진 완료 → 더 정확하게 완료(관심 높음) → 상담 신청 → 연락 완료 → 상담 예정 */
@@ -5055,8 +5090,9 @@ refAdd([
   /* 고객에게 가는 링크: 자비아(jarvia.co.kr)에서 만들면 고객용 중립 도메인 mypb.kr 로 바꿔 자비아가 드러나지 않게 함 (같은 Netlify 사이트) */
   function linkBase() { var u = location.href.split('#')[0].split('?')[0]; return /(^|\.)jarvia\.co\.kr$/.test(location.hostname) ? 'https://mypb.kr' + location.pathname : u; }
   function qs(o) { return Object.keys(o).filter(function (k) { return o[k]; }).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(o[k]); }).join('&'); }
-  function lmKey(o) { if (!o.k || o.kFor !== o.n + '|' + o.id) { o.k = 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); o.kFor = o.n + '|' + o.id; } return o.k; }
-  function lmUrl(o, extra) { return linkBase() + '?' + qs(Object.assign({ c: CONSULTANT.name, org: CONSULTANT.org, tel: CONSULTANT.phone, rec: o.id, n: o.n, k: extra && extra.pv ? '' : lmKey(o) }, extra || {})); }
+  function lmKey(o) { if (!o.k || o.kFor !== o.n + '|' + o.id) { o.k = rnd22(); o.kFor = o.n + '|' + o.id; } return o.k; }
+  function lmUrl(o, extra) { if (CLOUD.cons && !(extra && extra.pv)) return linkBase() + '?k=' + lmKey(o);   /* 실서비스: 이름·전화번호 없이 번호만 (서버가 채움) */
+    return linkBase() + '?' + qs(Object.assign({ c: CONSULTANT.name, org: CONSULTANT.org, tel: CONSULTANT.phone, rec: o.id, n: o.n, k: extra && extra.pv ? '' : lmKey(o) }, extra || {})); }
   /* 검진별 기본 문구: 검진 제목(고객이 보게 될 질문)과 결과 안내가 자동으로 들어가고, 회원이 고칠 수 있음 */
   function lmDefault(o) {
     var d = DMAP[o.id], nm = o.n || '○○';
@@ -5111,6 +5147,15 @@ refAdd([
     var k = lmKey(S.lm);
     if (Store.get(k)) { Store.update(k, { msg: S.lm.msg, sentAt: new Date().toISOString() }); return; }
     Store.add({ id: k, pending: true, status: '링크 발송', design: S.lm.id, contact: { name: S.lm.n }, msg: S.lm.msg, at: new Date().toISOString(), sentAt: new Date().toISOString() });
+  }
+  /* 서버에 링크 등록 — 보내기 누를 때 바로 (고객이 열기 전에 등록되도록). 실패하면 알려서 다시 보내게 함 */
+  function lmIssue() {
+    if (!CLOUD.cons) return Promise.resolve();
+    var k = lmKey(S.lm);
+    return callFn('mypbIssue', { k: k, design: S.lm.id, custName: S.lm.n, menuLabel: menuLabelOf(S.lm.id) }).catch(function (e) {
+      var x = Store.get(k); if (x && x.status === '링크 발송') Store.remove(k);
+      alertBox('링크를 등록하지 못했습니다(' + e.message + '). 고객이 열 수 없으니 다시 보내 주세요.'); if (S.screen === 'consultant') rerender(true);
+    });
   }
   function lmReady() {
     if (!S.lm.id) { alertBox('② 보낼 검진을 골라 주세요.'); var ne = document.getElementById('lmNone'); if (ne) ne.scrollIntoView({ block: 'center', behavior: 'smooth' }); return false; }
@@ -5167,7 +5212,7 @@ refAdd([
       return (S.filter === 'req' && isReq(r)) || (S.filter === 'hot' && r.interest === '관심 높음') || (S.filter === 'comp' && !isReq(r)) || (S.filter === 'big' && bigChange(r));
     });
     if (!recs.length) h += emptySeed();
-    h += '<div class="clist">'; list.forEach(function (r) { h += r.pending ? pendCard(r) : recCard(r); }); h += '</div>';
+    h += '<div class="clist">'; list.forEach(function (r) { try { h += r.pending ? pendCard(r) : recCard(r); } catch (e) { h += '<div class="card cons"><b>' + esc(custName(r)) + '</b><p class="tiny">이 기록은 형식이 맞지 않아 표시하지 못했습니다.</p></div>'; } }); h += '</div>';
     if (recs.length && DEMO) h += demoBox('<button class="link left" data-act="clear">시연 기록 모두 지우기</button>');
     return h;
   }
@@ -5196,7 +5241,7 @@ refAdd([
     var flow = ['검진 완료', '정밀 입력', '상담 신청', '연락 완료', '상담 예정'], cur = flow.indexOf(r.status);
     h += '<ol class="flow">' + flow.map(function (st, i) { var on = i === 0 || (i === 1 ? r.interest === '관심 높음' : i <= cur); return '<li class="' + (on ? 'on' : '') + '">' + esc(st) + '</li>'; }).join('') + '</ol>';
     if (!see) {
-      h += '<div class="box">' + (r.consentWithdrawnAt ? '고객이 답변 공유 동의를 철회했습니다(' + esc(dstr(r.consentWithdrawnAt)) + '). 답변과 결과를 새로 열람할 수 없습니다.' : '고객이 답변 공유에 동의하지 않았습니다. 신청 사실만 보고 연락합니다.') + '</div>';
+      h += '<div class="box">' + (r.consentWithdrawnAt ? '고객이 답변 공유 동의를 철회했습니다(' + esc(dstr(r.consentWithdrawnAt)) + '). 답변과 결과를 새로 열람할 수 없습니다.' : r.shareClearedAt ? '고객이 그 뒤 다른 검진(또는 재검진)을 해서 전에 공유한 답변은 내렸습니다. 다음 상담 신청 때 다시 공유됩니다.' : '고객이 답변 공유에 동의하지 않았습니다. 신청 사실만 보고 연락합니다.') + '</div>';
     } else {
       h += r.opener ? '<div class="opener">첫 통화 멘트 · “' + esc(r.opener) + '”</div>' : '<div class="opener">첫 통화 멘트 · 이 결과에는 고정 멘트의 전제(숫자·상황)가 맞지 않아 멘트를 쓰지 않습니다. 결과 문장과 「상담에서 확인할 것」부터 여쭤보세요.</div>';
       var unc = r.unconfirmed || d.unconfirmed;
@@ -5218,14 +5263,15 @@ refAdd([
           '<button class="btn ghost sm" data-act="dlFacts" data-id="' + r.id + '">V5 JSON 내려받기</button></div>';
       }
     }
-    if (r.requestedAt) h += '<div class="alim"><b>알림톡 미리보기</b><span>[재무검진] ' + esc(custName(r)) + '님이 「' + esc(r.menuLabel || r.name) + '」 결과로 상담을 신청했습니다. 연락 방법: ' + esc(r.contact.how || '전화') + (r.contact.when ? ' · ' + esc(r.contact.when) : '') + '</span></div>';
+    if (r.requestedAt && HOSTED) h += '<div class="alim"><b>알림톡</b><span>상담 신청이 들어오면 회원님 휴대폰으로 「상담요청 접수」 알림톡이 갑니다 (알림톡 수신 설정이 켜져 있을 때).</span></div>';
+    else if (r.requestedAt) h += '<div class="alim"><b>알림톡 미리보기</b><span>[재무검진] ' + esc(custName(r)) + '님이 「' + esc(r.menuLabel || r.name) + '」 결과로 상담을 신청했습니다. 연락 방법: ' + esc(r.contact.how || '전화') + (r.contact.when ? ' · ' + esc(r.contact.when) : '') + '</span></div>';
     if (DEMO) h += '<button class="link demo-l" data-act="recheck" data-id="' + r.id + '">1년 뒤 재검진 (시연)</button>';
     return h + '</div></div>';
   }
   /* 변화 큰 순: 핵심 계산값 변화율 + 상황 변화 답변 수 + 새 관심 분야 선택 (결과 로직 탭) */
   /* 상황 변화 답변: 가족·은퇴·나이 같은 상황을 묻는 질문의 답이 바뀐 수 */
   var SITUATION_RE = /배우자|자녀|가족|부양|부모|결혼|은퇴|퇴직|그만|나이|세대|상속이|돌아가|동거|아이/;
-  function changedAnswers(r, p) { var d = DMAP[r.design], n = 0; d.qs.forEach(function (q, i) { if (SITUATION_RE.test(q.text) && answerLabel(d, i, p.answers[i]) !== answerLabel(d, i, r.answers[i])) n++; }); return n; }
+  function changedAnswers(r, p) { if (!r.answers || !p.answers) return 0; var d = DMAP[r.design], n = 0; d.qs.forEach(function (q, i) { if (SITUATION_RE.test(q.text) && answerLabel(d, i, p.answers[i]) !== answerLabel(d, i, r.answers[i])) n++; }); return n; }
   function changeParts(r) {
     var p = r.prevId && Store.get(r.prevId); if (!p) return null;
     var same = !p.band_sig || !r.band_sig || p.band_sig === r.band_sig;
@@ -5280,8 +5326,8 @@ refAdd([
       notSent.forEach(function (r) { h += '<div class="card rowcard"><div class="min0"><b>' + esc(custName(r)) + '</b><small>' + esc(r.menuLabel || r.name) + ' · 재검진일 ' + esc(ymd(recheckDue(r.at))) + ' · ' + alertLabel(r) + '</small></div>' + (r.alertOk ? '<button class="btn sm primary" data-act="remind" data-id="' + r.id + '">알림 보내기</button>' : '<button class="btn sm ghost" disabled>보낼 수 없음</button>') + '</div>'; });
     }
     var tc = ALERT_TOPICS.slice(1).map(function (t) { return [t[1], all.filter(function (r) { return r.alertOk && (r.alertTopics || []).indexOf(t[0]) >= 0; }).length]; });
-    h += '<h2 class="h2">시기별 알림 신청</h2><div class="card"><ul class="ul">' + tc.map(function (x) { return '<li>' + esc(x[0]) + ' · <b>' + x[1] + '명</b></li>'; }).join('') + '</ul><p class="tiny">신청한 고객에게만 그 시기에 맞는 검진 링크가 자동으로 갑니다(오전 8시~오후 9시).</p></div>';
-    h += '<p class="tiny">재검진일은 완료 1년 뒤 같은 날(2월 29일은 다음 해 2월 28일)입니다. 알림은 고객이 신청한 경우에만 보낼 수 있고, 미동의 고객은 버튼이 꺼져 있습니다. 시연판에서는 알림톡을 실제로 보내지 않고, 보낸 날짜와 횟수만 기록합니다.</p>';
+    h += '<h2 class="h2">시기별 알림 신청</h2><div class="card"><ul class="ul">' + tc.map(function (x) { return '<li>' + esc(x[0]) + ' · <b>' + x[1] + '명</b></li>'; }).join('') + '</ul><p class="tiny">' + (HOSTED ? '알림톡 자동 발송은 준비 중입니다. 지금은 시기가 되면 고객에게 카톡으로 직접 안내해 주세요.' : '신청한 고객에게만 그 시기에 맞는 검진 링크가 자동으로 갑니다(오전 8시~오후 9시).') + '</p></div>';
+    h += '<p class="tiny">재검진일은 완료 1년 뒤 같은 날(2월 29일은 다음 해 2월 28일)입니다. 알림은 고객이 신청한 경우에만 보낼 수 있고, 미동의 고객은 버튼이 꺼져 있습니다. ' + (HOSTED ? '알림톡 자동 발송이 준비될 때까지는 버튼을 누르면 보낸 날짜와 횟수만 기록되니, 고객에게는 카톡으로 직접 안내해 주세요.' : '시연판에서는 알림톡을 실제로 보내지 않고, 보낸 날짜와 횟수만 기록합니다.') + '</p>';
     return h;
   }
   /* 기준값 표시: 값의 종류를 설명(괄호 안 단위·「나이」「연도」「율·비율」)으로 판단 */
@@ -5311,6 +5357,81 @@ refAdd([
   }
 
 
+  /* ───────── 서버 기록 ↔ 화면 기록 ───────── */
+  /* 서버 목록 1건(링크 1개) → 화면 기록. 재검진 이력은 앞 기록으로 이어 붙임(prevId). 답변은 공유 동의가 살아 있을 때만 snap 으로 옴 */
+  function cloudRecords(items) {
+    var out = [];
+    items.forEach(function (it) {
+      var d = DMAP[it.design]; if (!d) return;
+      var contact = { name: it.contactName || it.custName || '', tel: it.tel || '', how: it.how || '', when: it.when || '' };
+      var base = { id: it.k, linkId: it.k, design: it.design, entry: d.field, field: d.field, name: d.name, menuLabel: it.menuLabel || menuLabelOf(it.design), contact: contact, alertOk: !!it.alertOk, alertTopics: it.alertTopics || [], recheckSentAt: it.recheckSentAt || null, recheckCount: it.recheckCount || 0, meetAt: it.meetAt || '', saveOk: true };
+      if (it.status === '링크 발송' || it.status === '열람') { out.push(Object.assign(base, { pending: true, status: it.status, at: it.openedAt || it.sentAt || new Date().toISOString(), sentAt: it.sentAt })); return; }
+      var prevId = null;
+      (it.history || []).forEach(function (hh, i) { var hid = it.k + '~' + i; out.push({ id: hid, linkId: it.k, design: it.design, entry: d.field, field: d.field, name: d.name, menuLabel: base.menuLabel, contact: contact, at: hh.at, yearLabel: hh.yearLabel, interest: hh.interest, status: '완료·미신청', saveOk: true, prevId: prevId }); prevId = hid; });
+      var snap = null; if (it.snap) { try { snap = cleanSnap(JSON.parse(it.snap)); } catch (e) { snap = null; } }
+      out.push(Object.assign({}, snap || {}, base, { at: it.at || it.requestedAt || new Date().toISOString(), yearLabel: it.yearLabel || '', interest: it.interest || (snap && snap.interest) || '', status: it.status === '완료' ? '완료·미신청' : it.status, requestedAt: it.requestedAt || null, consent: !!(snap && it.shareOk) || !!it.consentWithdrawnAt, consentWithdrawnAt: it.consentWithdrawnAt || null, shareClearedAt: it.shareClearedAt || null, prevId: prevId }));
+    });
+    return out.reverse();
+  }
+  /* 서버에서 온 답변 스냅숏: 회원 화면이 쓰는 항목만, 정해진 형식일 때만 받음 (링크를 가진 사람이 아무 값이나 보낼 수 있으므로) */
+  var CS_STR = ['sentence', 'extra', 'opener', 'task', 'band_sig', 'rule_version', 'ref_version', 'title', 'yearLabel', 'newField', 'recheckAnswer'], CS_STRARR = ['findings', 'unconfirmed', 'tasks'], CS_OBJ = ['more', 'facts', 'values'];
+  function cleanSnap(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o) || !Array.isArray(o.answers)) return null;
+    var out = { answers: o.answers.map(function (a) { return a && typeof a === 'object' && !Array.isArray(a) ? a : { state: 'skipped' }; }) };
+    CS_STR.forEach(function (k) { if (typeof o[k] === 'string') out[k] = o[k]; });
+    CS_STRARR.forEach(function (k) { if (Array.isArray(o[k])) out[k] = o[k].filter(function (x) { return typeof x === 'string'; }); });
+    CS_OBJ.forEach(function (k) { if (o[k] && typeof o[k] === 'object' && !Array.isArray(o[k])) out[k] = o[k]; });
+    if (typeof o.sIndex === 'number') out.sIndex = o.sIndex;
+    if (Array.isArray(o.uncHit)) out.uncHit = o.uncHit.map(function (x) { return !!x; });
+    if (Array.isArray(o.taskDone)) out.taskDone = o.taskDone.map(function (x) { return typeof x === 'number' ? x : null; });
+    if (o.metric && typeof o.metric.label === 'string' && typeof o.metric.value === 'number' && isFinite(o.metric.value)) out.metric = { label: o.metric.label, value: o.metric.value, money: !!o.metric.money, unit: typeof o.metric.unit === 'string' ? o.metric.unit : '' };
+    return out;
+  }
+  /* 답변 공유(선택 동의) 때 보내는 내용: 답변·계산 결과만. 연락처·동의·상태 같은 관리 값은 빼고 보냄 */
+  var SNAP_SKIP = ['id', 'prevId', 'linkId', 'local', 'saveOk', 'pending', 'status', 'contact', 'contactConsentAt', 'consent', 'consentAt', 'consentWithdrawnAt', 'requestedAt', 'alertOk', 'alertTopics', 'alertAt', 'alertOffAt', 'recheckSentAt', 'recheckCount', 'meetAt'];
+  function snapFor(r) { var o = {}; Object.keys(r || {}).forEach(function (k) { if (SNAP_SKIP.indexOf(k) < 0) o[k] = r[k]; }); return JSON.stringify(o); }
+  function keyLine(r) { return r.metric ? r.metric.label + ' ' + fmtMetric(r.metric) : splitSentence(r.sentence || '')[0]; }
+  function doneData(r) { return { k: r.linkId, design: r.design, menuLabel: r.menuLabel || menuLabelOf(r.design), interest: r.interest || '', yearLabel: r.yearLabel || '', at: r.at, recheck: !!r.prevId }; }
+  /* 고객 쪽 서버 반영 — 서버 링크로 연 화면에서, 그 링크로 만든 기록만. 실패하면 이 기기 기록도 바꾸지 않음 */
+  function cloudCust(name, data, r, done) {
+    if (!CLOUD.cust || !r || !r.linkId) { done(); return; }
+    callFn(name, Object.assign({ k: r.linkId }, data)).then(function () { done(); }, function () { alertBox('담당 컨설턴트 쪽에 반영하지 못했습니다. 인터넷 연결을 확인하고 다시 눌러 주세요.'); });
+  }
+  function cloudFire(name, data, r) { if (CLOUD.cust && r && r.linkId) callFn(name, Object.assign({ k: r.linkId }, data)).catch(function () {}); }   /* 실패해도 고객 화면은 그대로 (상태 전달만) */
+  /* 회원 쪽 서버 반영 */
+  function consSet(data, done) { if (!CLOUD.cons) { done(); return; } callFn('mypbSet', data).then(function () { done(); }, function (e) { alertBox('저장하지 못했습니다. ' + e.message); }); }
+  function cloudLoad() {
+    return callFn('mypbList', {}).then(function (r) {
+      if (r.me) { CONSULTANT.name = r.me.name || CONSULTANT.name; CONSULTANT.org = r.me.org || ''; CONSULTANT.phone = r.me.phone || ''; }
+      Store.useRemote(cloudRecords(r.items || []));
+    });
+  }
+  /* 회원 화면 시작: 자비아 로그인 이어받기 → 목록 불러오기 */
+  function consBoot() {
+    S.screen = 'loading'; render();
+    Promise.all([import(FBJS + 'firebase-app.js'), import(FBJS + 'firebase-auth.js')]).then(function (m) {
+      var a = m[0].getApps().length ? m[0].getApp() : m[0].initializeApp(FB_CFG), auth = m[1].getAuth(a);
+      return new Promise(function (res) { var un = m[1].onAuthStateChanged(auth, function (u) { un(); res(u); }); });
+    }).then(function (u) {
+      if (!u || u.isAnonymous) { S.screen = 'login'; render(); return; }
+      CLOUD.token = function () { return u.getIdToken(); }; CLOUD.cons = true;
+      return cloudLoad().then(function () { S.screen = 'consultant'; render(); });
+    }).catch(function (e) { S.err = e && e.message; S.screen = 'login'; render(); });
+  }
+  /* 고객 화면 시작: 링크 번호로 컨설턴트·고객 이름·추천 검진을 받아 옴 (주소에 이름·전화번호가 없음) */
+  function custBoot(next) {
+    S.screen = 'loading'; render();
+    callFn('mypbOpen', { k: LINK_ID }).then(function (r) {
+      CLOUD.cust = true;
+      CONSULTANT.name = (r.c && r.c.name) || '담당'; CONSULTANT.org = (r.c && r.c.org) || ''; CONSULTANT.phone = (r.c && r.c.phone) || '';
+      CUST = String(r.n || '').slice(0, 20); if (DMAP[r.rec]) REC = r.rec;
+      S.screen = 'home'; next();
+    }, function (e) { S.err = e && e.message; S.screen = 'linkErr'; render(); });
+  }
+  function vLoading() { return '<main class="pad"><p class="center sub boot">불러오는 중…</p></main>'; }
+  function vLinkErr() { return '<main class="pad"><div class="card empty boot"><b>링크를 열 수 없습니다</b><span>' + esc(/찾을 수 없/.test(S.err || '') ? S.err : '인터넷 연결을 확인한 뒤 다시 열어 주세요. 계속 열리지 않으면 링크를 보내 주신 분께 다시 요청해 주세요.') + '</span><button class="btn ghost sm" data-act="reload">다시 열기</button></div></main>'; }
+  function vLogin() { return cTop() + '<main class="pad"><div class="card empty boot"><b>자비아에 로그인해 주세요</b><span>재무검진 관리는 자비아에 로그인한 상태에서 메인 화면 「마이PB 재무검진」 버튼으로 엽니다.' + (S.err ? ' (' + esc(S.err) + ')' : '') + '</span><a class="btn primary sm" href="https://jarvia.co.kr/">자비아로 가기</a></div></main>'; }
+
   /* ───────── 흐름 ───────── */
   function start(id, label, entry) {
     if (!PUB && saveChoice() === null) { S.pendingStart = [id, label, entry]; S.screen = 'consent'; return; }
@@ -5335,13 +5456,14 @@ refAdd([
   function finish() {
     S.result = compute();
     var extra = { menuLabel: S.menuLabel, entry: S.entry, local: true, saveOk: S.recheck ? true : saveChoice() !== false };
-    if (S.recheck && S.prev) { if (S.prev.alertOk) { extra.alertOk = true; extra.alertTopics = (S.prev.alertTopics || []).slice(); } extra.prevId = S.prev.id; extra.taskDone = S.taskDone.slice(); extra.newField = S.newField; extra.recheckAnswer = S.recheckAnswer || null; extra.yearLabel = String(yearOf(S.prev) + 1) + '년'; if (S.prev.contact) extra.contact = S.prev.contact; }
+    if (S.recheck && S.prev) { if (S.prev.alertOk) { extra.alertOk = true; extra.alertTopics = (S.prev.alertTopics || []).slice(); } extra.prevId = S.prev.id; extra.taskDone = S.taskDone.slice(); extra.newField = S.newField; extra.recheckAnswer = S.recheckAnswer || null; extra.yearLabel = String(yearOf(S.prev) + 1) + '년'; if (S.prev.contact) extra.contact = S.prev.contact; if (S.prev.linkId) extra.linkId = S.prev.linkId; }
     if (PUB) { S.record = null; S.screen = 'result'; return; }   /* 공개용: 저장·전달 없음 */
     if (PV) { S.record = snapshot(S.design, S.ans, S.more, S.result, extra); S.screen = S.recheck ? 'trend' : 'result'; return; }   /* 미리보기: 기록 없음 */
     Store.all().forEach(function (x) { if (x.pending && x.status === '열람' && x.local && x.id !== LINK_ID) Store.remove(x.id); });
     if (LINK_ID) { extra.linkId = LINK_ID; if (!extra.contact && CUST) extra.contact = { name: CUST }; }
     var snapR = snapshot(S.design, S.ans, S.more, S.result, extra);
     S.record = extra.saveOk ? Store.add(snapR) : snapR;   /* 저장 거부: 이 화면에서만 쓰고 기기·컨설턴트에 남기지 않음 */
+    if (extra.saveOk) cloudFire('mypbDone', doneData(S.record), S.record);   /* 저장 동의: 검진 완료 여부만 컨설턴트에게 (답변 없음) */
     if (extra.saveOk && LINK_ID && Store.get(LINK_ID) && Store.get(LINK_ID).pending) Store.remove(LINK_ID);   /* 같은 고객: 「열람」 → 검진 기록으로 넘어감 */
     S.screen = S.recheck ? 'trend' : 'result';
   }
@@ -5391,19 +5513,19 @@ refAdd([
   function render() {
     if (lastScreen !== null && lastScreen !== S.screen + '|' + S.ctab) document.querySelectorAll('.toast').forEach(function (x) { x.remove(); });
     lastScreen = S.screen + '|' + S.ctab;
-    var v = { home: vHome, q: vQuestion, result: vResult, more: vMore, form: vForm, done: vDone, consultant: vConsultant, recheck: vRecheckStart, trend: vTrend, consent: vConsent }[S.screen] || vHome;
+    var v = { home: vHome, q: vQuestion, result: vResult, more: vMore, form: vForm, done: vDone, consultant: vConsultant, recheck: vRecheckStart, trend: vTrend, consent: vConsent, loading: vLoading, linkErr: vLinkErr, login: vLogin }[S.screen] || vHome;
     app.innerHTML = v();
     window.scrollTo(0, 0);
     var bar = app.querySelector('.stickybar'), intro = app.querySelector('.intro');
     document.body.classList.toggle('has-bar', !!bar);
     if (bar && intro && 'IntersectionObserver' in window) { var ob = new IntersectionObserver(function (es) { bar.classList.toggle('hide', es[0].isIntersecting); }); ob.observe(intro); }
-    document.body.classList.toggle('is-cons', S.screen === 'consultant');
+    document.body.classList.toggle('is-cons', S.screen === 'consultant' || S.screen === 'login');
     saveProgress(); syncHistory();
   }
   /* ───── 실제 사용 보강: 새로고침해도 이어서 · 휴대폰 뒤로 가기 = 앞 화면 · 검진 중 창 닫기 확인 ───── */
   var PKEY = 'mypb.progress';
   function saveProgress() {
-    if (PV || S.screen === 'consultant') return;
+    if (PV || ['consultant', 'loading', 'linkErr', 'login'].indexOf(S.screen) >= 0) return;
     try {
       if ((S.screen === 'q' || S.screen === 'more') && S.design && !S.recheck) sessionStorage.setItem(PKEY, JSON.stringify({ url: location.search, id: S.design.id, entry: S.entry, label: S.menuLabel, ans: S.ans, more: S.more, pos: S.pos, screen: S.screen, rid: S.record ? S.record.id : null }));
       else if (S.screen !== 'consent') sessionStorage.removeItem(PKEY);
@@ -5418,7 +5540,7 @@ refAdd([
       else { S.screen = 'q'; enterQ(); }
     } catch (e) {}
   }
-  function isRoot() { return S.screen === 'consultant' ? S.ctab === 'send' : S.screen === 'home'; }
+  function isRoot() { if (['loading', 'linkErr', 'login'].indexOf(S.screen) >= 0) return true; return S.screen === 'consultant' ? S.ctab === 'send' : S.screen === 'home'; }
   function appBack() {   /* 화면 안 「뒤로」와 같은 동작 */
     if (document.querySelector('.modal')) { document.querySelector('.modal').remove(); return; }
     if (S.screen === 'consultant') { S.ctab = S.ctab === 'ref' ? 'guide' : 'send'; return; }
@@ -5467,10 +5589,10 @@ refAdd([
       case 'dateNext': var dv = document.getElementById('dateIn').value; if (!dv) { alertBox('날짜를 고르거나 「날짜를 몰라요」를 눌러 주세요.'); return; } setAns({ date: dv }); next(); break;
       case 'dateUnknown': setAns({ date: '' }); next(); break;
       case 'selNext': var sv = document.getElementById('selIn').value; if (sv === '') { alertBox('하나를 골라 주세요.'); return; } setAns({ i: +sv }); next(); break;
-      case 'withdraw': Store.update(t.dataset.id, { consentWithdrawnAt: new Date().toISOString() }); alertBox('답변 공유 동의를 철회했습니다. 컨설턴트는 이제 답변을 새로 볼 수 없습니다.'); rerender(true); return;
-      case 'cstatus': Store.update(t.dataset.id, { status: t.dataset.v }); rerender(true); return;
+      case 'withdraw': var wid = t.dataset.id; cloudCust('mypbWithdraw', { mode: 'share' }, Store.get(wid), function () { Store.update(wid, { consentWithdrawnAt: new Date().toISOString() }); alertBox('답변 공유 동의를 철회했습니다. 컨설턴트에게 전달된 답변도 지웠습니다.'); rerender(true); }); return;
+      case 'cstatus': var csId = t.dataset.id, csV = t.dataset.v; consSet({ k: csId, status: csV }, function () { Store.update(csId, { status: csV }); rerender(true); }); return;
       case 'schedOpen': S.sched[t.dataset.id] = !S.sched[t.dataset.id]; rerender(true); return;
-      case 'schedSave': var sd = document.getElementById('sched_' + t.dataset.id); if (!sd || !sd.value) { alertBox('상담 날짜를 골라 주세요.'); return; } Store.update(t.dataset.id, { status: '상담 예정', meetAt: sd.value }); S.sched[t.dataset.id] = false; alertBox('상담 예정으로 저장했습니다.'); rerender(true); return;
+      case 'schedSave': var sd = document.getElementById('sched_' + t.dataset.id); if (!sd || !sd.value) { alertBox('상담 날짜를 골라 주세요.'); return; } var scId = t.dataset.id, scV = sd.value; consSet({ k: scId, status: '상담 예정', meetAt: scV }, function () { Store.update(scId, { status: '상담 예정', meetAt: scV }); S.sched[scId] = false; alertBox('상담 예정으로 저장했습니다.'); rerender(true); }); return;
       case 'recheckAns': S.recheckAnswer = t.dataset.v; break;
       case 'newField': S.newField = S.newField === t.dataset.v ? null : t.dataset.v; rerender(true); return;
       case 'pairNext': var pa = document.getElementById('ageA').value, pb = document.getElementById('ageB').value; if (!pa || !pb) { alertBox('두 나이를 모두 골라 주세요. 모르면 「이 질문 건너뛰기」를 누르세요.'); return; } setAns({ pair: [+pa, +pb] }); next(); break;
@@ -5487,7 +5609,7 @@ refAdd([
           var snap = snapshot(S.design, S.ans, S.more, S.result, {});
           ['id', 'at', 'status'].forEach(function (k) { delete snap[k]; });
           if (S.record.interest && !snap.interest) snap.interest = S.record.interest;
-          if (Store.get(S.record.id)) { Store.update(S.record.id, snap); S.record = Store.get(S.record.id); } else Object.assign(S.record, snap);
+          if (Store.get(S.record.id)) { Store.update(S.record.id, snap); S.record = Store.get(S.record.id); cloudFire('mypbDone', Object.assign(doneData(S.record), { update: true, recheck: false, keepInterest: true, snap: canSeeAnswers(S.record) ? snapFor(S.record) : undefined }), S.record); } else Object.assign(S.record, snap);
         }
         S.screen = S.recheck ? 'trend' : 'result'; break;
       case 'form': S.screen = 'form'; break;
@@ -5498,16 +5620,26 @@ refAdd([
         var t1 = document.getElementById('fTel1').value, t2 = document.getElementById('fTel2').value;
         if (t1.length !== 4 || t2.length !== 4) { alertBox('휴대폰 번호 8자리를 입력해 주세요.'); (t1.length !== 4 ? document.getElementById('fTel1') : document.getElementById('fTel2')).focus(); return; }
         if (!reqOk) { alertBox('연락을 위한 필수 동의에 체크해 주세요.'); return; }
-        if (!Store.get(S.record.id)) { Store.add(S.record); if (LINK_ID && Store.get(LINK_ID) && Store.get(LINK_ID).pending) Store.remove(LINK_ID); }   /* 저장 거부 고객: 상담 신청(필수 동의) 범위로만 보관 */
         var contact = { name: document.getElementById('fName').value.trim() || '고객', tel: '010-' + t1 + '-' + t2, how: how ? how.dataset.v : '전화', when: when ? when.dataset.v : '' };
-        Store.update(S.record.id, { status: '상담 신청', contact: contact, contactConsentAt: new Date().toISOString(), consent: agreed, consentAt: agreed ? new Date().toISOString() : null, requestedAt: new Date().toISOString() }); S.record = Store.get(S.record.id);
-        S.screen = 'done'; break;
+        var reqDone = function () {
+          if (!Store.get(S.record.id)) { Store.add(S.record); if (LINK_ID && Store.get(LINK_ID) && Store.get(LINK_ID).pending) Store.remove(LINK_ID); }   /* 저장 거부 고객: 상담 신청(필수 동의) 범위로만 보관 */
+          Store.update(S.record.id, { status: '상담 신청', contact: contact, contactConsentAt: new Date().toISOString(), consent: agreed, consentAt: agreed ? new Date().toISOString() : null, requestedAt: new Date().toISOString() }); S.record = Store.get(S.record.id);
+          S.screen = 'done'; render();
+        };
+        if (CLOUD.cust && S.record.linkId) {   /* 실서비스: 서버에 접수되어야 완료 화면으로 (담당 컨설턴트에게 알림톡) */
+          t.disabled = true; t.textContent = '보내는 중…';
+          callFn('mypbRequest', { k: S.record.linkId, name: contact.name, tel: '010' + t1 + t2, how: contact.how, when: contact.when, agree: true, share: agreed, snap: agreed ? snapFor(S.record) : '', design: S.record.design, menuLabel: S.record.menuLabel || menuLabelOf(S.record.design), title: S.design.title, line: agreed ? keyLine(S.record) : '', interest: S.record.interest || '' })
+            .then(reqDone, function (e) { t.disabled = false; t.textContent = '상담 신청 보내기'; alertBox('신청을 보내지 못했습니다. ' + (e.message || '') + ' 잠시 뒤 다시 눌러 주세요.'); });
+          return;
+        }
+        reqDone(); return;
       case 'consentYes': case 'consentNo':
         if (S.consentReturn) {   /* 결과 화면의 「이 결과 저장하기」에서 온 경우: 동의하면 저장하고 결과로 돌아감 */
           if (act === 'consentYes' && S.record) {
             setSaveChoice(true);
             if (Store.get(S.record.id)) Store.update(S.record.id, { saveOk: true }); else { S.record.saveOk = true; Store.add(S.record); }
             S.record = Store.get(S.record.id); alertBox('결과를 저장했습니다.');
+            cloudFire('mypbDone', doneData(S.record), S.record);   /* 이제 저장 동의 → 검진 완료 여부 전달 (재검진이면 재검진으로) */
           }
           S.screen = S.consentReturn; S.consentReturn = null; break;
         }
@@ -5517,19 +5649,23 @@ refAdd([
       case 'delRec':
         var did = t.dataset.id;
         confirmBox('이 검진 기록을 삭제할까요? 담당 컨설턴트에게도 더 이상 보이지 않고, 1년 뒤 비교와 알림도 끝납니다.', '삭제하기', function () {
+          cloudCust('mypbWithdraw', { mode: 'all' }, Store.get(did), function () {
           Store.remove(did);
           if (!Store.all().some(function (x) { return x.local && !x.pending && savedRec(x); })) setSaveChoice(null);   /* 남은 기록이 없으면 저장 동의도 철회: 다음 검진 때 다시 여쭤봄 */
           alertBox('기록을 삭제했습니다.'); rerender(true);
+          });
         });
         return;
       case 'alertPick': var al = S.alertSel || (S.alertSel = {}); al[t.dataset.v] = !al[t.dataset.v]; rerender(true); return;
       case 'alertOn':
         var keys = ALERT_TOPICS.map(function (x) { return x[0]; }).filter(function (k) { return S.alertSel && S.alertSel[k]; });
         if (!keys.length) { alertBox('받으실 알림을 하나 이상 골라 주세요.'); return; }
-        if (S.record && !Store.get(S.record.id)) Store.add(S.record);
-        Store.update(S.record.id, { alertOk: true, alertTopics: keys, alertAt: new Date().toISOString() }); S.record = Store.get(S.record.id);
-        alertBox('알림을 신청했습니다. 언제든 해지할 수 있습니다.'); rerender(true); return;
-      case 'alertOff': var aid = t.dataset.id || (S.record && S.record.id); Store.update(aid, { alertOk: false, alertOffAt: new Date().toISOString() }); if (S.record && S.record.id === aid) S.record = Store.get(aid); alertBox('알림을 해지했습니다.'); rerender(true); return;
+        cloudCust('mypbAlert', { on: true, topics: keys }, S.record, function () {
+          if (S.record && !Store.get(S.record.id)) Store.add(S.record);
+          Store.update(S.record.id, { alertOk: true, alertTopics: keys, alertAt: new Date().toISOString() }); S.record = Store.get(S.record.id);
+          alertBox('알림을 신청했습니다. 언제든 해지할 수 있습니다.'); rerender(true);
+        }); return;
+      case 'alertOff': var aid = t.dataset.id || (S.record && S.record.id); cloudCust('mypbAlert', { on: false }, Store.get(aid) || S.record, function () { Store.update(aid, { alertOk: false, alertOffAt: new Date().toISOString() }); if (S.record && S.record.id === aid) S.record = Store.get(aid); alertBox('알림을 해지했습니다.'); rerender(true); }); return;
       case 'lmReset': S.lm.dirty = false; lmSync('reset'); return;
       case 'lmField': S.lm.fOpen = S.lm.fOpen === t.dataset.id ? '' : t.dataset.id; rerender(true); return;
       case 'lmPick': lmSetId(t.dataset.id); rerender(true); var st3 = document.getElementById('lmStep3'); if (st3) st3.scrollIntoView({ block: 'start', behavior: 'smooth' }); return;
@@ -5539,8 +5675,11 @@ refAdd([
         if (!lmReady()) return;
         lmGuard(function () {
           var shareText = S.lm.msg.trim() + '\n\n' + lmUrl(S.lm);
-          if (navigator.share) { navigator.share({ text: shareText }).then(function () { lmRecord(); rerender(true); alertBox('보냈습니다. 「고객 현황」에서 열람·완료를 확인할 수 있습니다.'); }, function () {}); }
-          else { lmRecord(); copyText(shareText, '이 기기에서는 공유창을 열 수 없어 문구+링크를 복사했습니다. 카카오톡 대화방에 붙여 넣어 보내세요.'); }
+          if (navigator.share) {
+            lmIssue();   /* 공유창을 여는 순간 등록 (공유창은 누른 즉시 열어야 해서 기다리지 않음) */
+            navigator.share({ text: shareText }).then(function () { lmRecord(); rerender(true); alertBox('보냈습니다. 「고객 현황」에서 열람·완료를 확인할 수 있습니다.'); }, function () {});   /* 취소로 와도 링크는 지우지 않음 (일부 브라우저는 실제로 보냈어도 취소로 알려 줌 · 안 보낸 링크는 1년 뒤 자동 정리) */
+          }
+          else { lmIssue(); lmRecord(); copyText(shareText, '이 기기에서는 공유창을 열 수 없어 문구+링크를 복사했습니다. 카카오톡 대화방에 붙여 넣어 보내세요.'); }
         });
         return;
       case 'lmPreview':
@@ -5549,15 +5688,16 @@ refAdd([
         var pw = window.open(lmUrl(S.lm, { pv: '1' }), '_blank'); if (!pw) location.href = lmUrl(S.lm, { pv: '1' }); return;
       case 'lmCopy':
         if (!lmReady()) return;
-        lmGuard(function () { lmRecord(); copyText(S.lm.msg.trim() + '\n\n' + lmUrl(S.lm), '문구와 링크를 복사했습니다. 카카오톡 대화방에 붙여 넣어 보내세요.'); });
+        lmGuard(function () { lmIssue(); lmRecord(); copyText(S.lm.msg.trim() + '\n\n' + lmUrl(S.lm), '문구와 링크를 복사했습니다. 카카오톡 대화방에 붙여 넣어 보내세요.'); });
         return;
       case 'pubCopy': copyText(linkBase() + '?pub=1'); return;
       case 'viewRec':
         var vr = Store.get(t.dataset.id); if (!vr) return;
         S.design = DMAP[vr.design]; S.entry = vr.entry || S.design.field; S.menuLabel = vr.menuLabel || menuLabelOf(vr.design); S.ans = JSON.parse(JSON.stringify(vr.answers)); S.more = JSON.parse(JSON.stringify(vr.more || {}));
         S.recheck = false; S.prev = null; S.result = compute(); S.record = vr; S.alertSel = null; S.screen = 'result'; break;
-      case 'consultant': S.screen = 'consultant'; break;
-      case 'ctab': S.ctab = t.dataset.v; break;
+      case 'consultant': if (ON_MYPB) return; S.screen = 'consultant'; break;
+      case 'ctab': S.ctab = t.dataset.v; if (CLOUD.cons && (S.ctab === 'list' || S.ctab === 'annual')) cloudLoad().then(function () { if (S.screen === 'consultant') rerender(true); }).catch(function () {}); break;   /* 목록 탭을 열 때마다 서버에서 새로 받음 */
+      case 'reload': location.reload(); return;
       case 'filter': S.filter = t.dataset.v; rerender(true); return;
       case 'exp': S.exp[t.dataset.id] = !S.exp[t.dataset.id]; rerender(true); return;
       case 'toggleOpen': S.open[t.dataset.id] = !S.open[t.dataset.id]; rerender(true); return;
@@ -5566,8 +5706,10 @@ refAdd([
       case 'dlFacts': var fr = Store.get(t.dataset.id); if (fr) download('mypb_' + fr.design + '_' + fr.id + '.json', { design: fr.design, rule_version: fr.rule_version, ref_version: fr.ref_version, at: fr.at, status: fr.status, facts: fr.facts || factsOf(DMAP[fr.design], fr.answers, fr.more), result: { sentence: fr.sentence, metric: fr.metric, findings: fr.findings } }); return;
       case 'remind':
         var rr = Store.get(t.dataset.id); if (!rr) return;
-        Store.update(rr.id, { recheckSentAt: new Date().toISOString(), recheckCount: (rr.recheckCount || 0) + 1 });
-        alertBox('재검진 알림을 보냈습니다 (시연: 기록만 남김).'); rerender(true); return;
+        consSet({ k: rr.id, remind: true }, function () {
+          Store.update(rr.id, { recheckSentAt: new Date().toISOString(), recheckCount: (rr.recheckCount || 0) + 1 });
+          alertBox(CLOUD.cons ? '보낸 날짜를 기록했습니다. 재검진 알림톡 자동 발송은 준비 중이니, 이번에는 고객에게 카톡으로 직접 안내해 주세요.' : '재검진 알림을 보냈습니다 (시연: 기록만 남김).'); rerender(true);
+        }); return;
       case 'seed': seed(); break;
       case 'clear': Store.clear(); break;
       case 'recheck':
@@ -5606,6 +5748,7 @@ refAdd([
     setTimeout(function () { b.remove(); }, 2600);
   }
   /* 고객이 링크를 열면 「열람」 (검진을 끝내면 검진 기록으로 바뀜) */
+  function bootLocal() {
   if (!PUB && !PV && S.screen === 'home') {
     if (LINK_ID) {   /* 보낸 링크를 열면 그 고객의 「링크 발송」이 「열람」으로 바뀜 (실서비스: 서버의 같은 기록) */
       var lk = Store.get(LINK_ID);
@@ -5615,6 +5758,16 @@ refAdd([
   }
   restoreProgress();
   render();
+  }
+  /* 시작: 서버 링크(?k= 만 있는 링크)로 연 고객 → 서버에서 정보 받아 시작 · 올린 화면의 회원 → 자비아 로그인 확인 · 그 밖(파일·시연·미리보기) → 이 기기만 */
+  /* mypb.kr(고객용 주소): 미리보기·공개용 말고는 서버에 등록된 링크로만 엶 — 서버를 거치지 않는 옛 형식 링크는 신청이 전달되지 않으므로 받지 않음 */
+  if (ON_MYPB && !PV && !PUB) {
+    if (LINK_ID) { S.screen = 'home'; custBoot(bootLocal); }
+    else { S.err = '링크를 찾을 수 없습니다. 보내 주신 분께 다시 요청해 주세요.'; S.screen = 'linkErr'; render(); }
+  }
+  else if (HOSTED && S.screen === 'home' && LINK_ID && !params.c && !PV && !PUB) custBoot(bootLocal);
+  else if (HOSTED && S.screen === 'consultant') consBoot();
+  else bootLocal();
 })();
 
 </script>
