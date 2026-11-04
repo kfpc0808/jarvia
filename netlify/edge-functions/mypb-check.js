@@ -3,7 +3,7 @@
  * 역할: 마이PB 재무검진 고객 링크(mypb.kr/mypb-check.html?k=번호)를 카톡 등이 미리보기로 읽을 때,
  *       회원이 「보내기」 화면에서 본 모습과 똑같은 미리보기가 나가도록 og 태그를 바꿔 준다.
  *   · 그림: 그 링크로 보낸 검진의 전용 그림 mypb/share_{검진}.png (검진 제목이 그대로 들어간 그림)
- *   · 제목: 「○○님께 · ○○○ 컨설턴트가 보낸 1분 재무검진」
+ *   · 제목: 「○○님께 · 성춘향 팀장이 보낸 1분 재무검진」 (마이페이지 「내 플랫폼」 이름·직함, 직함이 없으면 「○○○ 컨설턴트가」 · 이/가 자동)
  *   · 설명: 「{검진 제목} · 답하면 바로 결과가 나옵니다」
  * · 미리보기 수집기(카톡 스크랩 등)에게만 바꿔 준다 — 실제 고객이 열 때는 아무것도 하지 않고 원본 그대로(지연 없음)
  * · 서버 함수 mypbMeta 는 읽기 전용(「열람」으로 기록하지 않음)
@@ -41,7 +41,8 @@ export default async function handler(request, context) {
   if (!meta || FIELDS.indexOf(meta.field) < 0) return response;
   const title = TITLES[meta.design] || "";
   const image = IMG_BASE + (title ? meta.design.replace(".", "-") : meta.field) + ".png";
-  const ogTitle = meta.n ? meta.n + "님께 · " + (meta.c || "담당") + " 컨설턴트가 보낸 1분 재무검진" : "1분 재무검진";
+  const who = (meta.c || "담당") + " " + (meta.t || "컨설턴트");
+  const ogTitle = meta.n ? meta.n + "님께 · " + josa(who) + " 보낸 1분 재무검진" : "1분 재무검진";
   const ogDesc = (title ? title + " · " : "") + "답하면 바로 결과가 나옵니다";
 
   const html = await response.text();
@@ -55,4 +56,6 @@ export default async function handler(request, context) {
   });
 }
 
+/** 받침 있으면 「이」, 없으면 「가」 (한글이 아니면 「이」) — 화면의 josa() 와 같은 규칙 */
+function josa(w) { const c = w.charCodeAt(w.length - 1); if (c < 0xAC00 || c > 0xD7A3) return w + "이"; return w + ((c - 0xAC00) % 28 ? "이" : "가"); }
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
