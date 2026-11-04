@@ -7,7 +7,9 @@
  *   · 설명: 「{검진 제목} · 답하면 바로 결과가 나옵니다」
  * · 미리보기 수집기(카톡 스크랩 등)에게만 바꿔 준다 — 실제 고객이 열 때는 아무것도 하지 않고 원본 그대로(지연 없음)
  * · 서버 함수 mypbMeta 는 읽기 전용(「열람」으로 기록하지 않음)
- * · 조회가 실패하거나 늦으면(1.5초) 원본의 기본 그림·제목 그대로
+ * · 링크에 검진 번호(&d=retirement-2)가 있으면 그림·설명은 서버를 기다리지 않고 바로 고름 → 서버가 늦어도 그림은 늘 맞음
+ *   (서버 답이 오면 서버에 기록된 검진이 우선 · 제목의 고객·회원 이름만 서버에서 받음)
+ * · 조회가 실패하거나 늦으면(3초) 제목은 「1분 재무검진」, 그림·설명은 d 로 (d 도 없는 옛 링크는 원본 그대로)
  * 지인용 링크(?r=번호, 고객이 「지인에게 보내기」로 보낸 것)도 같은 그림·「○○○ 팀장이 보낸 1분 재무검진」 (보낸 고객 이름은 넣지 않음)
  * 배포: netlify.toml [[edge_functions]] path="/mypb-check.html" function="mypb-check"
  * 검진을 새로 추가하면 TITLES 에 한 줄 넣고 mypb/share_{검진}.png 그림을 올린다 (없으면 분야 그림으로 나감)
@@ -25,11 +27,13 @@ export default async function handler(request, context) {
   const ua = request.headers.get("user-agent") || "";
   const ID_RE = /^[A-Za-z0-9_-]{20,40}$/;
   if (!(ID_RE.test(k) || ID_RE.test(r)) || !BOT_RE.test(ua)) return context.next();
+  const dq = (url.searchParams.get("d") || "").replace("-", ".");
+  const linkDesign = TITLES[dq] ? dq : "";
 
   let meta = null;
   try {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 1500);
+    const timer = setTimeout(() => ctl.abort(), 3000);
     const res = await fetch(META_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -41,11 +45,13 @@ export default async function handler(request, context) {
   } catch (_e) { /* 실패하면 기본 그림·제목 */ }
 
   const response = await context.next();
-  if (!meta || FIELDS.indexOf(meta.field) < 0) return response;
-  const title = TITLES[meta.design] || "";
-  const image = IMG_BASE + (title ? meta.design.replace(".", "-") : meta.field) + ".png";
-  const who = (meta.c || "담당") + " " + (meta.t || "컨설턴트");
-  const ogTitle = (meta.n ? meta.n + "님께 · " : "") + josa(who) + " 보낸 1분 재무검진";
+  const ok = meta && FIELDS.indexOf(meta.field) >= 0;
+  if (!ok && !linkDesign) return response;
+  const design = ok ? meta.design : linkDesign;
+  const title = TITLES[design] || "";
+  const image = IMG_BASE + (title ? design.replace(".", "-") : meta.field) + ".png";
+  const who = ok ? (meta.c || "담당") + " " + (meta.t || "컨설턴트") : "";
+  const ogTitle = ok ? (meta.n ? meta.n + "님께 · " : "") + josa(who) + " 보낸 1분 재무검진" : "1분 재무검진";
   const ogDesc = (title ? title + " · " : "") + "답하면 바로 결과가 나옵니다";
 
   const html = await response.text();
