@@ -8,6 +8,7 @@
  * · 미리보기 수집기(카톡 스크랩 등)에게만 바꿔 준다 — 실제 고객이 열 때는 아무것도 하지 않고 원본 그대로(지연 없음)
  * · 서버 함수 mypbMeta 는 읽기 전용(「열람」으로 기록하지 않음)
  * · 조회가 실패하거나 늦으면(1.5초) 원본의 기본 그림·제목 그대로
+ * 지인용 링크(?r=번호, 고객이 「지인에게 보내기」로 보낸 것)도 같은 그림·「○○○ 팀장이 보낸 1분 재무검진」 (보낸 고객 이름은 넣지 않음)
  * 배포: netlify.toml [[edge_functions]] path="/mypb-check.html" function="mypb-check"
  * 검진을 새로 추가하면 TITLES 에 한 줄 넣고 mypb/share_{검진}.png 그림을 올린다 (없으면 분야 그림으로 나감)
  */
@@ -20,8 +21,10 @@ const BOT_RE = /kakaotalk-scrap|kakaostory|facebookexternalhit|facebot|twitterbo
 export default async function handler(request, context) {
   const url = new URL(request.url);
   const k = url.searchParams.get("k") || "";
+  const r = url.searchParams.get("r") || "";
   const ua = request.headers.get("user-agent") || "";
-  if (!/^[A-Za-z0-9_-]{20,40}$/.test(k) || !BOT_RE.test(ua)) return context.next();
+  const ID_RE = /^[A-Za-z0-9_-]{20,40}$/;
+  if (!(ID_RE.test(k) || ID_RE.test(r)) || !BOT_RE.test(ua)) return context.next();
 
   let meta = null;
   try {
@@ -30,7 +33,7 @@ export default async function handler(request, context) {
     const res = await fetch(META_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: { k } }),
+      body: JSON.stringify({ data: ID_RE.test(k) ? { k } : { r } }),
       signal: ctl.signal,
     });
     clearTimeout(timer);
@@ -42,7 +45,7 @@ export default async function handler(request, context) {
   const title = TITLES[meta.design] || "";
   const image = IMG_BASE + (title ? meta.design.replace(".", "-") : meta.field) + ".png";
   const who = (meta.c || "담당") + " " + (meta.t || "컨설턴트");
-  const ogTitle = meta.n ? meta.n + "님께 · " + josa(who) + " 보낸 1분 재무검진" : "1분 재무검진";
+  const ogTitle = (meta.n ? meta.n + "님께 · " : "") + josa(who) + " 보낸 1분 재무검진";
   const ogDesc = (title ? title + " · " : "") + "답하면 바로 결과가 나옵니다";
 
   const html = await response.text();
