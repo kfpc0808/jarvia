@@ -8242,7 +8242,7 @@ async function loadTermHist(type){
     const snap=await getDocs(query(collection(db,'terms'),where('type','==',type)));
     _teHist=snap.docs.map(d=>Object.assign({},d.data(),{_id:d.id})).sort((a,b)=>(b.version||0)-(a.version||0));/* ★ [2026-11-05] 수정·삭제용 문서ID(_id) 보관 */
     if(!_teHist.length){box.innerHTML='<div style="font-size:13px;color:#888">저장된 이력이 없습니다.</div>';return;}
-    let h='<h3 style="margin:0 0 10px;font-size:16px">📜 '+(_TERM_LBL[type]||type)+' 변경 이력 ('+_teHist.length+'건)</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>버전</th><th>저장일시</th><th>저장자</th><th>상태</th><th style="width:190px">관리</th></tr></thead><tbody>';
+    let h='<h3 style="margin:0 0 10px;font-size:16px">📜 '+(_TERM_LBL[type]||type)+' 변경 이력 ('+_teHist.length+'건)</h3>'+_teGapHtml()+'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>버전</th><th>저장일시</th><th>저장자</th><th>상태</th><th style="width:190px">관리</th></tr></thead><tbody>';
     _teHist.forEach((t,i)=>{const by=t.updatedBy?(_teAdmNames[t.updatedBy]||String(t.updatedBy).slice(0,8)):'-';
       /* ★ [2026-11-05] 수정·삭제 — 현재 적용 + 직전 1건(상위 2건)만 허용, 나머지 이력은 보존 */
       const _ed=(i<2&&_teHist.length>1)||(i===0&&_teHist.length===1);const _dl=i<2&&_teHist.length>1;
@@ -8275,9 +8275,19 @@ async function delTermVer(i){const t=_teHist[i];if(!t||!t._id)return;
   if(!confirm((_TERM_LBL[t.type]||t.type)+' v'+(t.version||'-')+'을(를) 삭제할까요?\n\n삭제하면 되돌릴 수 없습니다.'+(nx?'\n현재 적용 버전이므로 v'+(nx.version||'-')+'이(가) 「현재 적용」으로 복원됩니다.':'')))return;
   try{if(nx)await updateDoc(doc(db,'terms',nx._id),{isActive:true,restoredAt:serverTimestamp()});/* 복원 먼저 — 적용 약관이 비는 순간 방지 */
     await deleteDoc(doc(db,'terms',t._id));
+    /* ★ [2026-11-05] 넘버링 정리 — 직전 버전 삭제 시 위 버전 번호를 한 칸 당겨 빈 번호 방지 (예: v29 삭제 → v30이 v29로) */
+    let rn='';const up=(i===1)?_teHist[0]:null;
+    if(up&&up._id!==t._id&&(up.version||0)>(t.version||0)){try{await updateDoc(doc(db,'terms',up._id),{version:t.version,renumberedAt:serverTimestamp()});rn=' · v'+up.version+' → v'+t.version+' 번호 정리';}catch(e2){console.warn('약관 번호 정리 실패:',e2);}}
     if(nx&&$('te-type').value===t.type)$('te-body').value=nx.content||'';
-    toast('약관 v'+(t.version||'-')+' 삭제 완료'+(nx?' · v'+(nx.version||'-')+' 적용':''),'success');loadTermHist(t.type);}
+    toast('약관 v'+(t.version||'-')+' 삭제 완료'+(nx?' · v'+(nx.version||'-')+' 적용':'')+rn,'success');loadTermHist(t.type);}
   catch(e){console.error('약관 삭제 오류:',e);toast('삭제 실패: '+e.message,'error');}}
+/* ★ [2026-11-05] 빈 번호 감지 — 최신 버전과 직전 버전 사이 번호가 비면 안내 + 「번호 정리」 버튼 (이미 v29를 지운 경우 등) */
+function _teGapHtml(){if(_teHist.length<2)return '';const a=_teHist[0],b=_teHist[1];if((a.version||0)-(b.version||0)<=1)return '';
+  return '<div style="margin:0 0 10px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;font-size:13px;color:#9A3412;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><span>버전 번호가 비어 있습니다 (v'+b.version+' 다음이 v'+a.version+')</span><button class="btn btn-sm" onclick="fixTermNum()">v'+a.version+' → v'+(b.version+1)+' 번호 정리</button></div>';}
+async function fixTermNum(){if(_teHist.length<2)return;const a=_teHist[0],b=_teHist[1];const nv=(b.version||0)+1;if((a.version||0)<=nv)return;
+  if(!confirm('v'+a.version+'을(를) v'+nv+'(으)로 번호를 정리할까요?\n(본문·저장일시는 그대로 유지됩니다)'))return;
+  try{await updateDoc(doc(db,'terms',a._id),{version:nv,renumberedAt:serverTimestamp()});toast('번호 정리 완료 (v'+a.version+' → v'+nv+')','success');loadTermHist(a.type);}
+  catch(e){console.error('약관 번호 정리 오류:',e);toast('번호 정리 실패: '+e.message,'error');}}
 async function copyTermVer(){if(!_tvCur)return;try{await navigator.clipboard.writeText(_tvCur.content||'');toast('원문을 복사했습니다.','success');}catch(_e){toast('복사에 실패했습니다.','error');}}
 function printTermVer(){if(!_tvCur)return;const w=window.open('','_blank');if(!w){toast('팝업이 차단되었습니다.','warning');return;}
   const ttl=esc((_TERM_LBL[_tvCur.type]||_tvCur.type)+' v'+(_tvCur.version||'-'));
@@ -10938,7 +10948,7 @@ window.loadMorningReading=loadMorningReading;window.updateMorningReading=updateM
 window.showNF=showNF;window.editNotice=editNotice;window.deleteNotice=deleteNotice;window.saveNotice=saveNotice;window.nfCatChange=nfCatChange;window.ncCopyLink=ncCopyLink;window.loadNoticesAdm=loadNoticesAdm;
 window.loadTermEdit=loadTermEdit;window.saveTerm=saveTerm;
 window.loadTermHist=loadTermHist;window.viewTermVer=viewTermVer;window.copyTermVer=copyTermVer;window.printTermVer=printTermVer;   /* ★ [2026-09-28] 약관 변경 이력 */
-window.editTermVer=editTermVer;window.cancelTermEdit=cancelTermEdit;window.saveTermVer=saveTermVer;window.delTermVer=delTermVer;   /* ★ [2026-11-05] 약관 버전 수정·삭제 */
+window.editTermVer=editTermVer;window.cancelTermEdit=cancelTermEdit;window.saveTermVer=saveTermVer;window.delTermVer=delTermVer;window.fixTermNum=fixTermNum;   /* ★ [2026-11-05] 약관 버전 수정·삭제·번호 정리 */
 window.loadGuide=loadGuide;window.saveGuide=saveGuide;window.gdPreview=gdPreview;
 
 /* ===== 영상가이드 관리 (guide_videos · video-guide.html 노출) ===== */
