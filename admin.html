@@ -6972,6 +6972,7 @@ async function showMember(uid){
     <h3>회원 정보 수정</h3>
     <div class="fr" style="margin:12px 0"><div class="fg"><label>이름</label><input id="ed-name-${uid}" value="${esc(m.name||'')}"></div><div class="fg"><label>연락처</label><input id="ed-phone-${uid}" value="${esc(m.phone||'')}" placeholder="010-0000-0000"></div><div class="fg"><label>회원유형</label><select id="ed-role-${uid}" onchange="(function(sel){var jArea=document.getElementById('jarvia-area-${uid}');if(jArea)jArea.style.display=(sel.value==='jarvia_member'||sel.value==='jarvia_inner')?'':'none';var rArea=document.getElementById('report-area-${uid}');if(rArea)rArea.style.display=(sel.value==='jarvia_report')?'':'none';var icArea=document.getElementById('inner-area-${uid}');if(icArea)icArea.style.display=(sel.value==='inner_circle')?'':'none';var expArea=document.getElementById('exp-section-${uid}');if(expArea)expArea.style.display=(sel.value==='user'||sel.value==='jarvia_member'||sel.value==='jarvia_inner'||sel.value==='jarvia_report'||sel.value==='inner_circle'||sel.value==='con_homepage'||sel.value==='branch_manager')?'none':'';})(this)"><option value="user" ${m.role==='user'?'selected':''}>일반회원 (유료)</option><option value="free_user" ${m.role==='free_user'?'selected':''}>자비아(기간제)</option>${m.role==='jarvia_member'?'<option value="jarvia_member" selected disabled>JARVIA멤버십 (하단에서 관리)</option>':''}${m.role==='jarvia_report'?'<option value="jarvia_report" selected disabled>리포트회원 (하단에서 관리)</option>':''}<option value="jarvia_inner" ${m.role==='jarvia_inner'?'selected':''}>자비아멤버십(이너서클)</option><option value="inner_circle" ${m.role==='inner_circle'?'selected':''}>이너서클멤버십</option><option value="con_homepage" ${m.role==='con_homepage'?'selected':''}>컨홈페이지</option><option value="branch_manager" ${m.role==='branch_manager'?'selected':''}>지사장</option></select></div><button class="btn btn-sm" style="align-self:end" onclick="updateMemberInfo('${uid}')">저장</button></div>
     <div id="mref-${uid}"></div>
+    <div id="mnd-${uid}"></div>   <!-- ★ [2026-11-05] 맞춤 니즈 (users.needs) 표시·수정 -->
     <h3>추천인 등록</h3>
     ${m.referredBy
       ? `<div style="margin:12px 0 16px;padding:14px;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px">
@@ -7156,6 +7157,7 @@ async function showMember(uid){
   openM('mdl-member');
   try{_rgvMemberBox(uid,m);}catch(_e){console.warn('추천 정보 표시 오류:',_e);}   /* ★ [2026-10-17] */
   try{_wdaBox(uid,m);}catch(_e){console.warn('탈퇴 합의 금액 표시 오류:',_e);}   /* ★ [2026-10-28] */
+  try{_ndaBox(uid,m);}catch(_e){console.warn('맞춤 니즈 표시 오류:',_e);}   /* ★ [2026-11-05] */
   _loadMemberPlatform(uid, m.loginId);
   setTimeout(()=>{const ei=$('ed-email-'+uid);if(ei)ei.value='';},100);
 }
@@ -11368,6 +11370,76 @@ function _rgvCell(m){
   else if(f.weak)h+='<span class="rf-b rf-gray" title="참고 신호 — 이상 징후 건수에는 포함하지 않음">참고: '+esc(f.weak)+'</span>';
   return h;
 }
+/* ★ [2026-11-05] 회원 상세 — 맞춤 니즈(users.needs) 표시·수정
+   · 회원 화면(index.html ND_Q)·서버 memberNeedsSave 와 같은 코드표 — 코드표 밖 값은 저장하지 않음
+   · 관리자 수정은 2,000P 지급 없음 (지급은 회원 본인 저장 시 서버에서만) · 기록 needsAdminAt / needsAdminBy */
+const _NDA_Q=[
+  {k:'corpLevel',t:'법인영업 관심도',one:true,o:[['none','관심 없음'],['interest','관심만 있음'],['early','초기 단계'],['active','활발히 진행 중']]},
+  {k:'product',t:'주력 상품군',o:[['protection','보장성'],['pension','연금·저축'],['corpConsult','법인 유료컨설팅'],['corpInsurance','법인보험'],['variable','변액·투자'],['inherit','상속·증여 플랜']]},
+  {k:'job',t:'주요 고객 직업군',o:[['worker','직장인·공무원'],['selfemp','자영업자·프리랜서'],['pro','전문직(의사·변호사 등)'],['ceo','법인대표'],['homemaker','주부'],['retiree','은퇴자']]},
+  {k:'age',t:'주요 고객 연령대',o:[['a2030','2030'],['a40','40대'],['a50','50대'],['a60','60대 이상']]},
+  {k:'method',t:'주 영업방식',o:[['referral','지인·소개'],['db','DB'],['cold','개척'],['seminar','세미나'],['online','SNS·온라인']]},
+  {k:'interest',t:'관심 분야',o:[['tax','절세·세무'],['inherit','상속·증여'],['corp','법인컨설팅'],['retire','은퇴·연금'],['health','의료·건강'],['invest','투자·시황']]}
+];
+const _ndaSel={},_ndaM={};
+function _ndaBox(uid,m){
+  const box=$('mnd-'+uid);if(!box)return;
+  _ndaM[uid]=m||{};const n=(m&&m.needs)||{};
+  const sel={corpLevel:n.corpLevel?[n.corpLevel]:[]};
+  _NDA_Q.forEach(q=>{if(!q.one)sel[q.k]=Array.isArray(n[q.k])?n[q.k].slice():[];});
+  _ndaSel[uid]=sel;_ndaPaint(uid);
+}
+function _ndaPaint(uid){
+  const box=$('mnd-'+uid);if(!box)return;
+  const m=_ndaM[uid]||{},n=m.needs||{},sel=_ndaSel[uid]||{},done=!!n.corpLevel;
+  const st=[];
+  st.push(done?'<b style="color:#15803D">설정 완료</b>':'<b style="color:#B91C1C">미완료</b>');
+  if(m.needsFirstAt)st.push('최초 '+fdatetime(m.needsFirstAt));
+  if(n.updatedAt)st.push('최종 '+fdatetime(n.updatedAt));
+  if(m.needsBonusGiven===true)st.push('2,000P 지급'+(m.needsBonusAt?' ('+fdatetime(m.needsBonusAt)+')':''));
+  else if(m.needsV===1)st.push('신규 가입 절차 (2,000P 대상 아님)');
+  if(m.needsAdminAt)st.push('관리자 수정 '+fdatetime(m.needsAdminAt)+(m.needsAdminBy?' · '+esc(String(m.needsAdminBy).split('@')[0]):''));
+  let h='<h3>🎯 맞춤 니즈 <span style="font-size:11px;background:#EAF0FF;color:#1F4FD8;padding:2px 8px;border-radius:10px;margin-left:4px;font-weight:600">가입 설문</span></h3>'
+    +'<div style="margin:12px 0 16px;padding:14px;background:#F8FAFF;border:1px solid #D6E0F5;border-radius:8px;min-width:0">'
+    +'<div style="font-size:13px;line-height:1.7;margin-bottom:10px;word-break:keep-all;color:#334155">'+st.join(' · ')+'</div>';
+  _NDA_Q.forEach(q=>{
+    const cur=sel[q.k]||[];
+    h+='<div style="margin:0 0 10px"><div style="font-size:13px;font-weight:700;color:#1B3A5C;margin-bottom:6px">'+esc(q.t)+(q.one?' <span style="color:#C0392B">*</span>':'')+'</div><div style="display:flex;flex-wrap:wrap;gap:6px">';
+    q.o.forEach(o=>{const on=cur.includes(o[0]);
+      h+='<button type="button" aria-pressed="'+on+'" onclick="ndaPick(\''+uid+'\',\''+q.k+'\',\''+o[0]+'\')" style="min-height:32px;padding:0 12px;border-radius:16px;font-size:13px;cursor:pointer;max-width:100%;word-break:keep-all;'
+        +(on?'border:1.5px solid #1F4FD8;background:#EAF0FF;color:#163A9E;font-weight:700':'border:1px solid #D3D8E0;background:#fff;color:#2B3445;font-weight:500')+'">'+(on?'✓ ':'')+esc(o[1])+'</button>';});
+    h+='</div></div>';
+  });
+  h+='<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm btn-success" onclick="ndaSave(\''+uid+'\')">맞춤 니즈 저장</button><button class="btn btn-sm btn-sec" onclick="ndaReset(\''+uid+'\')">되돌리기</button></div>'
+    +'<p style="margin:8px 0 0;font-size:12px;color:#999">⚠️ 관리자가 저장해도 2,000P는 지급되지 않습니다(회원 본인 저장 시에만 지급). 저장하면 회원 마이페이지와 맞춤 자료 안내에 바로 반영됩니다.</p>'
+    +'</div>';
+  box.innerHTML=h;
+}
+window.ndaPick=function(uid,k,v){
+  const q=_NDA_Q.find(x=>x.k===k),sel=_ndaSel[uid];if(!q||!sel)return;
+  let cur=(sel[k]||[]).slice();
+  if(q.one)cur=cur.includes(v)?[]:[v];else cur=cur.includes(v)?cur.filter(x=>x!==v):cur.concat([v]);
+  sel[k]=cur;_ndaPaint(uid);
+};
+window.ndaReset=function(uid){_ndaBox(uid,_ndaM[uid]);};
+window.ndaSave=async function(uid){
+  const sel=_ndaSel[uid];if(!sel)return;
+  if(!(sel.corpLevel||[]).length)return toast('법인영업 관심도를 선택하세요.','error');
+  const ok=(k,arr)=>{const q=_NDA_Q.find(x=>x.k===k);const codes=q.o.map(o=>o[0]);return Array.from(new Set(arr||[])).filter(v=>codes.includes(v));};
+  const needs={corpLevel:ok('corpLevel',sel.corpLevel)[0]};
+  if(!needs.corpLevel)return toast('법인영업 관심도를 선택하세요.','error');
+  _NDA_Q.forEach(q=>{if(!q.one)needs[q.k]=ok(q.k,sel[q.k]);});
+  const m=_ndaM[uid]||{},first=!(m.needs&&m.needs.corpLevel);
+  if(!confirm((m.name||'')+' ('+(m.loginId||'')+')\n\n맞춤 니즈를 저장할까요?\n관리자 저장은 2,000P가 지급되지 않습니다.'))return;
+  try{
+    const em=(auth.currentUser&&auth.currentUser.email)||'';
+    const upd={needs:Object.assign({},needs,{updatedAt:serverTimestamp()}),needsAdminAt:serverTimestamp(),needsAdminBy:em,updatedAt:serverTimestamp()};
+    if(first)upd.needsFirstAt=serverTimestamp();
+    await updateDoc(doc(db,'users',uid),upd);
+    toast('맞춤 니즈를 저장했습니다.','success');
+    const ud=(await getDoc(doc(db,'users',uid))).data()||{};_ndaBox(uid,ud);
+  }catch(e){console.error('[맞춤 니즈]',e);toast('저장 실패: '+e.message,'error');}
+};
 /* ★ [2026-10-28] 탈퇴 합의 금액 — 담당자가 회원과 합의한 탈퇴 정산 금액 지정 (입력 후 72시간 유효)
    저장: withdrawal_agreements/{uid} (관리자 전용). 서버 getWithdrawalQuote·payWithdrawalSettlement 가 자동 계산보다 우선 적용.
    탈퇴 정산 결제는 총판 수수료 대상이 아님(기존 chargedBy:'withdrawal' 제외 규칙 그대로). */
