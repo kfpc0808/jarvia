@@ -9,7 +9,7 @@
  * · 서버 함수 mypbMeta 는 읽기 전용(「열람」으로 기록하지 않음)
  * · 링크에 검진 번호(&d=retirement-2)가 있으면 그림·설명은 서버를 기다리지 않고 바로 고름 → 서버가 늦어도 그림은 늘 맞음
  *   (서버 답이 오면 서버에 기록된 검진이 우선 · 제목의 고객·회원 이름만 서버에서 받음)
- * · 조회가 실패하거나 늦으면(3초) 제목은 「1분 재무검진」, 그림·설명은 d 로 (d 도 없는 옛 링크는 원본 그대로)
+ * · 서버는 d 가 있으면 0.8초, 없으면 3초까지만 기다림 (수집기가 기다리다 포기하지 않게) — 늦으면 제목은 「1분 재무검진」, 그림·설명은 d 로 (d 도 없는 옛 링크는 원본 그대로)
  * 지인용 링크(?r=번호, 고객이 「지인에게 보내기」로 보낸 것)도 같은 그림·「○○○ 팀장이 보낸 1분 재무검진」 (보낸 고객 이름은 넣지 않음)
  * 배포: netlify.toml [[edge_functions]] path="/mypb-check.html" function="mypb-check"
  * 검진을 새로 추가하면 TITLES 에 한 줄 넣고 mypb/share_{검진}.png 그림을 올린다 (없으면 분야 그림으로 나감)
@@ -33,15 +33,15 @@ export default async function handler(request, context) {
   let meta = null;
   try {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 3000);
+    const timer = setTimeout(() => ctl.abort(), linkDesign ? 800 : 3000);
     const res = await fetch(META_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ data: ID_RE.test(k) ? { k } : { r } }),
       signal: ctl.signal,
     });
-    clearTimeout(timer);
     if (res.ok) { const j = await res.json(); meta = j && j.result; }
+    clearTimeout(timer);
   } catch (_e) { /* 실패하면 기본 그림·제목 */ }
 
   const response = await context.next();
