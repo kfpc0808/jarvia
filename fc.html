@@ -5998,13 +5998,18 @@ window.ccStorage=(function(){
   const pin=()=>{try{return localStorage.getItem('cc_pin_'+slug())||'';}catch(_e){return '';}};
   const connected=()=>{try{return localStorage.getItem('cc_gd_'+slug())==='1';}catch(_e){return false;}};
   /* ── 접근토큰 (서버가 리프레시로 발급 — 재로그인 없음) ── */
+  let _tokP=null;   /* ★ [2026-11-05] 동시 요청 묶기 — 접속 직후 여러 기능이 한꺼번에 토큰을 요청해도 서버 호출은 1번 */
   async function token(){
     if(_tok&&Date.now()<_exp-60000)return _tok;
+    if(_tokP)return _tokP;
+    _tokP=(async()=>{
     const r=await httpsCallable(fns,'gdAccessToken')({slug:slug(),pin:pin()});
     const d=r.data||{};if(!d.ok)throw new Error('token');
     _tok=d.accessToken;_exp=Date.now()+((d.expiresIn||3500)*1000);
     try{localStorage.setItem('cc_gd_'+slug(),'1');}catch(_e){}
     return _tok;
+    })();
+    try{return await _tokP;}finally{_tokP=null;}
   }
   /* ── 최초 연결 (GIS 코드 플로우 팝업 → 서버 교환·보관) ── */
   function connect(){
@@ -14686,9 +14691,11 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     /* ★ [2026-09-03] ② 표시 전에 드라이브 꼬리표 확인 — 같으면 즉시, 다르면 내려받은 뒤. 기기 사본을 확인 없이 보여주지 않는다.
        (종전: 기기 목록을 먼저 보여주고 확인 창 뒤에서 드라이브를 맞췄다 → 옛 목록이 잠깐 보였다) */
     .then(function(){if(mpcSyncBusy)return null;mpcGdPullLast="";return new Promise(function(res){mpcGdPull(function(){res();});});})
+    /* ★ [2026-11-05] 일시 오류 자동 재시도 1회 — 'fail'일 때만 1.5초 뒤 한 번 더 확인하고, 그래도 실패하면 아래 안내 */
+    .then(function(){if(mpcSyncBusy||mpcGdPullLast!=="fail")return null;mpcGdPullLast="";return new Promise(function(res){setTimeout(function(){mpcGdPull(function(){res();});},1500);});})
     .then(function(){
       if(!mpcSyncBusy&&(mpcGdPullLast==="fail"||mpcGdPullLast==="off")){
-        mpcBusyDone(mpcGdPullLast==="off"?"드라이브 연결이 필요합니다":"드라이브 확인에 실패했습니다","정확한 정보만 보여드리기 위해 이 기기의 목록은 표시하지 않아요. 인터넷을 확인하고 다시 시도해 주세요.",null,true,function(){mpcGateLast="";window.__mpCustOpen();});return;}
+        mpcBusyDone(mpcGdPullLast==="off"?"드라이브 연결이 필요합니다":"드라이브 확인에 실패했습니다","정확한 정보만 보여드리기 위해 이 기기의 목록은 표시하지 않아요. 인터넷을 확인하고 다시 시도해 주세요."+(mpcGdPullLast==="fail"&&mpcGdPullWhy?" (오류코드: "+mpcGdPullWhy+")":""),null,true,function(){mpcGateLast="";window.__mpCustOpen();});return;}
       try{mpcMaybeIntro();mpcRenderFilter();mpcRenderList();}catch(e){try{console.error("[__mpCustOpen] 렌더 중 오류:",e);}catch(_e){}mpcBusyDone("고객 목록을 표시하지 못했습니다",String((e&&e.message)||e).slice(0,80),null,true,function(){window.__mpCustOpen();});return;}if(mpcLoadErr){mpcBusyDone("고객을 불러오지 못했습니다",mpcLoadErrHint(),null,true,function(){window.__mpCustOpen();});return;}var _n=(customers||[]).length;try{var _rb=$("mpcGdReloadBtn");if(_rb)_rb.style.display=mpcGdOn()?"":"none";}catch(_e){}mpcBusyDone(_n?("고객 "+_n+"명을 불러왔습니다"):"등록된 고객이 없습니다",_n?"회원님 구글 드라이브에서 안전하게 내려받았습니다 · 확인을 누르면 고객 목록이 표시됩니다":"고객을 추가하면 이곳에 표시됩니다",function(){if(mpTblBusy){mpcSyncOff();return;}   /* 삭제 진행 중이면 이번 동기화는 건너뛴다 — 다음에 열 때 수행된다 */
     if(mpcSyncBusy)return;   /* ★ [2026-09-02] 이미 동기화가 도는 중(탭 왕복) — 두 번째 체인을 겹쳐 시작하면 ⑤등록이 서버 문서를 중복 생성한다 */
     mpcSyncLock();mpcSyncOn("드라이브 백업을 확인하는 중…");mpcGdPull(function(synced){if(synced){mpcRenderFilter();mpcRenderList();if(map){mpcDrawMarkers(false);mpcUpdateCount();}}
@@ -15575,6 +15582,8 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   window.mpcDriveGate=mpcDriveGate;window.mpcGateOpen=mpcGateOpen;window.mpcGated=mpcGated;window.mpcGateFresh=mpcGateFresh;   /* 음성 입력·AI 비서·딥링크(module 스크립트)에서 사용 */
   /* ★ [2026-09-03] 꼬리표 — 드라이브 '내고객.safe' 의 수정시각. 마지막 확인과 같으면 내려받지 않는다 */
   var mpcGdPullLast="";   /* 'same'|'merged'|'empty'|'fail'|'off' — 열 때 기기 사본을 보여줘도 되는지 판단 */
+  var mpcGdPullWhy="";    /* ★ [2026-11-05] 'fail' 원인 코드(token·folder·drive-403·download 등) — 실패 안내에 작게 표시 */
+  function mpcGdWhy(e,d){try{return String((e&&e.message)||d||"err").replace(/[^A-Za-z0-9_\-]/g,"").slice(0,30)||d||"err";}catch(_e){return d||"err";}}
   function mpcGdMtKey(){return "mpc_gd_mt:"+String((window.ccVaultId&&window.ccVaultId())||window._ccSlug||"");}   /* 계정별 키(ccStorage 와 같은 slug) — 같은 기기에서 다른 회원이 로그인해도 섞이지 않게 */
   function mpcGdStampGet(){try{return localStorage.getItem(mpcGdMtKey())||"";}catch(_e){return "";}}
   function mpcGdStampSet(mt){try{if(mt)localStorage.setItem(mpcGdMtKey(),mt);else localStorage.removeItem(mpcGdMtKey());}catch(_e){}}
@@ -15760,7 +15769,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
         /* ★ [2026-09-03] 꼬리표 확인 — 드라이브 수정시각이 마지막 확인과 같고, 기기에 미백업 편집이 없으면 내려받지 않는다.
            같음 = 기기 사본이 드라이브와 동일하므로 그대로 보여줘도 된다(정본 원칙 유지). 확인 자체가 실패하면 'fail'. */
         var _dirty0=false;try{_dirty0=localStorage.getItem("mpc_dirty")==="1";}catch(_e){}
-        var _meta=null;try{_meta=await mpcGdMeta();}catch(_e){_meta=null;mpcGdPullLast="fail";cb&&cb(false);return;}
+        var _meta=null;try{_meta=await mpcGdMeta();}catch(_e){_meta=null;mpcGdPullWhy=mpcGdWhy(_e,"meta");mpcGdPullLast="fail";cb&&cb(false);return;}
         if(_meta&&_meta.mt&&!_dirty0&&customers.length&&_meta.mt===mpcGdStampGet()){mpcGdPullLast="same";cb&&cb(true);return;}
         var d=null;
         if(_meta&&_meta.id){
@@ -15769,7 +15778,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           try{var _bytes=await window.ccStorage.download(_meta.id);d=JSON.parse(new TextDecoder().decode(await window.ccStorage.dec(_bytes)));
               try{localStorage.setItem('cc_v_'+(window.ccVaultId?window.ccVaultId():'')+'_내고객',JSON.stringify(d));}catch(_e){}}   /* 기기 캐시(ccStorage.loadJson 이 쓰는 키)도 방금 받은 것으로 맞춘다 */
           catch(_e){d=null;}
-          if(d===null){mpcGdPullLast="fail";cb&&cb(false);return;}   /* 파일은 있는데 못 내려받음 → 실패로 판정(기기 사본 표시 금지) */
+          if(d===null){mpcGdPullWhy="download";mpcGdPullLast="fail";cb&&cb(false);return;}   /* 파일은 있는데 못 내려받음 → 실패로 판정(기기 사본 표시 금지) */
         }else{
           try{d=await window.ccStorage.loadJson('고객관리','내고객');}catch(_e){d=null;}   /* .safe 파일이 아직 없는 경우(신규·레거시) — 기존 경로 */
         }
@@ -15794,7 +15803,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
           cb&&cb(true);return;
         }
         mpcGdPullLast="empty";cb&&cb(false);
-      }catch(_e){mpcGdPullLast="fail";cb&&cb(false);}
+      }catch(_e){mpcGdPullWhy=mpcGdWhy(_e,"pull");mpcGdPullLast="fail";cb&&cb(false);}
     })();}
 
   /* ---------- 미디어 압축 ---------- */
