@@ -12774,6 +12774,12 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return
   function custAll(){return new Promise(function(res){if(!cdb){res([]);return;}var out=[],c=cst("readonly").openCursor();c.onsuccess=function(e){var x=e.target.result;if(x){out.push(x.value);x.continue();}else res(out);};c.onerror=function(){res([]);};});}
   function custPut(o,keepTs){try{if(!keepTs)o.updatedAt=Date.now();}catch(_e){}try{if(o&&o.id&&window.mpcHayDrop)window.mpcHayDrop(o.id);}catch(_e){}   /* ★ [2026-08-26] 저장 시 검색 색인 무효화 */return new Promise(function(res,rej){var r=cst("readwrite").put(o);r.onsuccess=function(){res();try{window.__ownerCustBadgeRefresh&&window.__ownerCustBadgeRefresh();}catch(_e){}};r.onerror=function(){rej(r.error);};});}
   function custDel(id){try{if(window.mpcHayDrop)window.mpcHayDrop(id);}catch(_e){}   /* ★ [2026-08-26] 삭제 시 색인 제거 */return new Promise(function(res){var r=cst("readwrite").delete(id);r.onsuccess=r.onerror=function(){res();try{window.__ownerCustBadgeRefresh&&window.__ownerCustBadgeRefresh();}catch(_e){}};});}
+  /* ★ [2026-11-06] 기기 저장소 연결(cdb)이 비어 있으면 다시 연결한 뒤 저장·삭제한다.
+     열기 실패(8초 초과·차단)나 연결 해제 뒤에 드라이브 병합이 저장을 시도하면 cst() 의 cdb.transaction 에서
+     "Cannot read properties of null" → 드라이브 확인 실패로 보이던 경로 차단. 연결이 있으면 종전과 완전히 같다(동기 동작 유지). */
+  var _custPutRaw=custPut,_custDelRaw=custDel;
+  custPut=function(o,keepTs){if(cdb)return _custPutRaw(o,keepTs);return openCustDB().then(function(){return _custPutRaw(o,keepTs);});};
+  custDel=function(id){if(cdb)return _custDelRaw(id);return openCustDB().then(function(){return _custDelRaw(id);});};
   /* ★ 고객 삭제 공용 (2026-07-18 개정) — 양방향 완전 동기: 지도(IndexedDB·Drive)와 fc_clients(마이페이지·알림·캘린더) 모두 삭제 */
 /* ═══ ★ [2026-08-29] 고객 목록 탭 ═══
      마이페이지(index.html)의 표를 이곳으로 옮겼다. 데이터 출처는 기기(customers) — 여기가 정본이라
@@ -13428,7 +13434,7 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
   window.__mpcOpenCustForm=function(c){try{openCustForm(c);}catch(_e){}};
   /* ★ [2026-11-05] 수정창은 드라이브 확인이 끝난 뒤에 연다 — 기기 사본(이전 값)으로 먼저 열려 최신본을 덮어쓰는 위험 차단.
      __mpcEditById 는 열 고객만 기억하고 「내 고객」을 연다 → __mpCustOpen 성공 안내의 [확인] 시 mpcPendingEditRun 이 최신본에서 찾아 연다.
-     드라이브 확인 실패 시에는 열지 않는다([다시 시도] 성공 시 열림 · [확인] 시 취소). 2분 지난 요청은 무시 */
+     드라이브 확인 실패 시에는 열지 않는다([다시 시도] 성공 시 열림 · [확인] 시 취소). 10분 지난 요청은 무시 */
   var mpcPendingEdit=null;
   function mpcFindForEdit(id,hint){
     var c=(customers||[]).find(function(x){return String(x.id)===String(id);});
@@ -13444,10 +13450,23 @@ window.__mpcOpenEditByCid=function(cid,phone,last4){
   }
   function mpcPendingEditRun(){
     var p=mpcPendingEdit;mpcPendingEdit=null;
-    if(!p||(Date.now()-p.at)>120000)return;
-    var c=mpcFindForEdit(p.id,p.hint);
-    if(!c){if(p.hint){try{var _m=(p.hint.name?('\''+p.hint.name+'\' '):'')+'고객을 찾지 못했습니다 — 목록에서 선택해 주세요';if(typeof toast==='function')toast(_m);else if(window.toast)window.toast(_m);}catch(_e){}}return;}
-    setTimeout(function(){try{openCustForm(c);}catch(_e){}},150);
+    if(!p||(Date.now()-p.at)>600000)return;   /* ★ [2026-11-06] 유효 10분 — 대량 고객을 드라이브에서 내려받는 시간 고려 */
+    var tries=0,_nm=(p.hint&&p.hint.name)?String(p.hint.name):"";
+    var shown=function(){var ov=document.getElementById("mpOverlay");return !!(ov&&ov.classList.contains("show"));};   /* 고객 화면을 닫으면 요청 취소 */
+    var say=function(m){try{if(typeof toast==='function')toast(m);else if(window.toast)window.toast(m);}catch(_e){}};
+    (function attempt(){
+      if(!shown())return;
+      var c=mpcFindForEdit(p.id,p.hint);
+      if(c){setTimeout(function(){try{if(shown())openCustForm(c);}catch(_e){}},150);return;}
+      tries++;
+      /* ★ [2026-11-06] 못 찾으면 바로 포기하지 않는다 — [확인] 직후 시작되는 동기화(①fccId 연결)가 끝날 때까지 1.5초 간격 재검색(최대 약 60초) */
+      if(tries===1&&_nm)say("'"+_nm+"' 고객 정보를 맞추는 중이에요…");
+      if(tries<40&&(tries<3||mpcSyncBusy)){setTimeout(attempt,1500);return;}
+      if(!p.hint)return;
+      say((_nm?("'"+_nm+"' "):"")+"고객을 찾지 못했습니다 — 목록에서 선택해 주세요");
+      /* ★ [2026-11-06] 목록 검색창에 이름을 미리 넣어 바로 고를 수 있게 */
+      try{var si=document.getElementById("mpcSearchIn");if(si&&_nm){si.value=_nm;if(si.oninput)si.oninput();}}catch(_e){}
+    })();
   }
   window.__mpcEditById=function(id,hint){   /* ★ [2026-08-26] 업무일지 딥링크용 · [2026-11-05] 마이페이지 ✏️ 공용 — 드라이브 확인 후 수정폼 */
     try{
@@ -14717,6 +14736,7 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
     mpcLoadCustomRels();mpcBusyOn("회원님 구글 드라이브에서 고객 정보를 불러오는 중…","연락처·주소·메모·출생연도는 회원님 개인 드라이브에만 암호화 저장됩니다 — 직접 내려받는 중이라 잠시 걸려요");(mpcSyncBusy?(mpcLoadErr=null,Promise.resolve(customers)):custLoad())
     /* ★ [2026-09-03] ② 표시 전에 드라이브 꼬리표 확인 — 같으면 즉시, 다르면 내려받은 뒤. 기기 사본을 확인 없이 보여주지 않는다.
        (종전: 기기 목록을 먼저 보여주고 확인 창 뒤에서 드라이브를 맞췄다 → 옛 목록이 잠깐 보였다) */
+    .then(function(){if(mpcSyncBusy||!mpcLoadErr)return null;try{console.warn("[__mpCustOpen] 기기 저장소 재적재 1회:",mpcLoadErr);}catch(_e){}return custLoad();})   /* ★ [2026-11-06] 기기 저장소 열기 실패 시 드라이브 확인 전에 1회 재시도 */
     .then(function(){if(mpcSyncBusy)return null;mpcGdPullLast="";return new Promise(function(res){mpcGdPull(function(){res();});});})
     /* ★ [2026-11-05] 일시 오류 자동 재시도 1회 — 'fail'일 때만 1.5초 뒤 한 번 더 확인하고, 그래도 실패하면 아래 안내 */
     .then(function(){if(mpcSyncBusy||mpcGdPullLast!=="fail")return null;mpcGdPullLast="";return new Promise(function(res){setTimeout(function(){mpcGdPull(function(){res();});},1500);});})
@@ -15611,7 +15631,11 @@ function mpcRenderList(){var rows=$("mpcListRows"),lctl=$("mpcLctl");if(!rows)re
   /* ★ [2026-09-03] 꼬리표 — 드라이브 '내고객.safe' 의 수정시각. 마지막 확인과 같으면 내려받지 않는다 */
   var mpcGdPullLast="";   /* 'same'|'merged'|'empty'|'fail'|'off' — 열 때 기기 사본을 보여줘도 되는지 판단 */
   var mpcGdPullWhy="";    /* ★ [2026-11-05] 'fail' 원인 코드(token·folder·drive-403·download 등) — 실패 안내에 작게 표시 */
-  function mpcGdWhy(e,d){try{return String((e&&e.message)||d||"err").replace(/[^A-Za-z0-9_\-]/g,"").slice(0,30)||d||"err";}catch(_e){return d||"err";}}
+  function mpcGdWhy(e,d){try{
+    try{console.error("[mpcGdPull] 드라이브 확인 실패("+d+"):",e);}catch(_c){}   /* ★ [2026-11-06] 콘솔에 전체 오류(스택 포함) */
+    var m=String((e&&e.message)||"");var rd=m.match(/reading '([^']+)'/);
+    if(rd)return ("null-"+rd[1]).replace(/[^A-Za-z0-9_\-]/g,"").slice(0,40);   /* ★ [2026-11-06] "Cannot read properties of null (reading 'x')" → null-x (읽으려던 항목을 남긴다) */
+    return m.replace(/[^A-Za-z0-9_\-]/g,"").slice(0,30)||d||"err";}catch(_e){return d||"err";}}
   function mpcGdMtKey(){return "mpc_gd_mt:"+String((window.ccVaultId&&window.ccVaultId())||window._ccSlug||"");}   /* 계정별 키(ccStorage 와 같은 slug) — 같은 기기에서 다른 회원이 로그인해도 섞이지 않게 */
   function mpcGdStampGet(){try{return localStorage.getItem(mpcGdMtKey())||"";}catch(_e){return "";}}
   function mpcGdStampSet(mt){try{if(mt)localStorage.setItem(mpcGdMtKey(),mt);else localStorage.removeItem(mpcGdMtKey());}catch(_e){}}
