@@ -29656,7 +29656,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
   const NOTICE_IDS=['HEALTH_LONG_TERM_CARE_RATES','HEALTH_PREMIUM_CAP','NATIONAL_PENSION_CONTRIBUTION','MINIMUM_WAGE','EMPLOYMENT_INSURANCE_RATES'];   /* ruleNoticeCollector.js NOTICE_TARGETS 와 같게 */
 
   /* ── 상태 ── */
-  const R={ov:null,ovAt:0,cands:[],rej:null,hist:null,tab:'pending',open:'',edit:'',man:'',pv:{},q:'',flt:'all',sort:null,busy:false,run:{law:null,col:null,net:null},xc:{},xcAll:{},loading:false};
+  const R={ov:null,ovAt:0,cands:[],rej:null,hist:null,tab:'pending',open:'',edit:'',man:'',pv:{},q:'',flt:'all',sort:null,busy:false,run:{law:null,col:null,net:null},xc:{},xcAll:{},bulkNg:null,loading:false};
   const title=id=>(R.ov&&R.ov.rules[id]&&R.ov.rules[id].title)||id;
 
   async function loadAll(){
@@ -29693,11 +29693,20 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
   function candEff(c){return (c.candidate&&c.candidate.effectiveFrom)||(c.sourceSnapshot&&c.sourceSnapshot.effectiveDate)||'';}
   const nm=(t,id)=>'<span class="c-nm"><b>'+esc(t)+'</b><small>'+esc(id)+'</small></span>';
   const cell=(lbl,html,cls)=>'<span class="c'+(cls?' '+cls:'')+'" data-l="'+esc(lbl)+'">'+html+'</span>';
+  /* ★ [2026-11-07 e] 일괄 원문 기준 등록 — 원문 전문으로 ✅(환산 없이 그대로 일치)인 후보만 대상 */
+  function bulkList(){return R.cands.filter(c=>{const x=R.xcAll[c.id];return x&&x.verdict==='ALL_FOUND'&&!(x.summary&&x.summary.converted)&&!x.partialText;});}
+  function bulkBar(){
+    const el=bulkList();let h='';
+    if(el.length)h+='<div class="rb-bar"><button class="btn btn-sm btn-success" data-rb="xcbulk" data-id="x"'+(R.busy?' disabled':'')+'>✅ '+el.length+'건 일괄 원문 기준 등록</button><span class="rb-cnt" style="margin-left:0">값은 그대로 두고 원문 지문만 연결 · 등록 직전에 서버가 다시 대조해 ✅인 것만 등록</span></div>';
+    if(R.bulkNg&&R.bulkNg.length)h+='<div class="rb-note">일괄 등록에서 보류된 '+R.bulkNg.length+'건 — 줄을 펼쳐 개별 확인하세요<br>'+R.bulkNg.map(x=>'· '+esc(title(x.ruleId||String(x.candidateId).split('__')[0]))+' — '+esc(x.error||'')).join('<br>')+'</div>';
+    return h;
+  }
   function renderPending(){
     const b=$('rb-body');
     if(!R.cands.length){b.innerHTML='<div class="rb-empty">승인을 기다리는 후보가 없습니다.</div>';return;}
     b.innerHTML='<div class="rb-hint">법제처 원문 확인·고시값 수집이 찾은 후보입니다. 장부는 담당자가 승인해야만 바뀝니다(법인세·법인지방소득세·상속세율 3개만 원문 그대로 자동 반영). 줄을 누르면 확인 화면이 펼쳐집니다.</div>'
       +'<div class="rb-bar"><button class="btn btn-sm" data-rb="xcall" data-id="x"'+(R.busy?' disabled':'')+'>🔍 전체 자동 대조</button><span class="rb-cnt" style="margin-left:0">장부 값의 숫자를 법제처 원문에서 자동으로 찾아 ✅·⚠·❌로 표시합니다(장부는 바뀌지 않음)</span></div>'
+      +bulkBar()
       +'<div class="rb-list"><div class="rb-lh g-cand"><span>규정</span><span>출처</span><span>내용</span><span>시행</span><span>감지</span><span>값</span></div>'
       +R.cands.map(candRow).join('')+'</div>';
     if(R.open){const c=R.cands.find(x=>x.id===R.open);if(c&&c.candidate&&c.candidate.value&&!(c.id in R.pv)){R.pv[c.id]=null;runPreview(c.id,c.ruleId,c.candidate.value,candEff(c),'pv');}
@@ -29856,7 +29865,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     if(!x)return '';
     if(x.verdict==='ERROR')return ' <span class="pill ng">대조 오류</span>';
     const v=XC_V[x.verdict]||['info','?',''],sm=x.summary||{};
-    return ' <span class="pill '+v[0]+'">대조 '+v[1]+(x.verdict==='PARTIAL'?' '+sm.notFound:'')+'</span>';
+    return ' <span class="pill '+v[0]+'">대조 '+v[1]+(x.verdict==='PARTIAL'?' '+sm.notFound:'')+(x.verdict==='ALL_FOUND'&&(sm.converted||x.partialText)?' 개별확인':'')+'</span>';   // ★ [2026-11-07 e] 환산·일부 원문은 일괄 등록 제외
   }
   function xcHtml(x){
     if(x===undefined)return '<div class="rb-hint">아직 대조하지 않았습니다.</div>';
@@ -29870,7 +29879,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     if(chk.length)h+='<div class="xc-list">'+chk.sort((a,b)=>(a.status==='NOT_FOUND'?0:1)-(b.status==='NOT_FOUND'?0:1)).map(c=>{
       const leaf=String(c.path).split('.').pop().replace(/\[\d+\]$/,'');
       return '<div class="xc-row"><span class="xc-ic '+(c.status==='FOUND'?'ok':'ng')+'">'+(c.status==='FOUND'?'✓':'✗')+'</span><div class="xc-bd"><div class="xc-t">'+esc(c.path)+' <b>'+esc(fv(leaf,c.value))+'</b></div>'
-        +(c.status==='FOUND'&&c.snippet?'<div class="xc-s">…'+esc(c.snippet.before)+'<mark>'+esc(c.snippet.hit)+'</mark>'+esc(c.snippet.after)+'…</div>'
+        +(c.status==='FOUND'&&c.snippet?'<div class="xc-s">…'+esc(c.snippet.before)+'<mark>'+esc(c.snippet.hit)+'</mark>'+esc(c.snippet.after)+'…</div>'+(c.via?'<div class="xc-s" style="color:#b45309">↳ '+esc(c.via)+'해서 찾음 — 원문 표기와 장부 단위가 맞는지 확인</div>':'')
           :'<div class="xc-s ng">원문에서 못 찾음 — 개정됐거나 다른 조문에 있을 수 있습니다. 찾아본 표기: '+esc((c.tried||[]).slice(0,4).join(' · '))+'</div>')+'</div></div>';}).join('')+'</div>';
     if(skip.length)h+='<details class="xc-skip"><summary>대조 제외 '+skip.length+'개 (문자·참거짓·계산값 등 — 필요하면 직접 확인)</summary>'+skip.map(c=>'<div class="rb-src">'+esc(c.path)+' = '+esc(typeof c.value==='number'?fv(String(c.path).split('.').pop(),c.value):String(c.value))+' — '+esc(c.why||'')+'</div>').join('')+'</details>';
     if(x.lawLinks&&x.lawLinks.length)h+='<div class="rb-src" style="margin-top:6px">법제처 공식 화면에서 직접 보기: '+x.lawLinks.map(l=>/^https:\/\/www\.law\.go\.kr\//.test(l.url)?'<a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.label)+' ↗</a>':'').join(' · ')+'</div>';
@@ -29881,7 +29890,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     R.xc[key]=null;
     const el=()=>$(params.candidateId?'rb-xc-'+sid(params.candidateId):'rb-xcr-'+sid(params.ruleId));
     if(el())el().innerHTML=xcHtml(null);
-    try{const r=await api({action:'crosscheck',...params});R.xc[key]=r.result;if(params.candidateId)R.xcAll[params.candidateId]={verdict:r.result.verdict,summary:r.result.summary};}
+    try{const r=await api({action:'crosscheck',...params});R.xc[key]=r.result;if(params.candidateId)R.xcAll[params.candidateId]={verdict:r.result.verdict,summary:r.result.summary,partialText:!!(r.result.source&&r.result.source.partial)};}
     catch(e){R.xc[key]={err:e.message};}
     if(el())el().innerHTML=xcHtml(R.xc[key]);
     return R.xc[key];
@@ -29991,6 +30000,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
         if(!x||x.err)warn='⚠ 자동 대조를 하지 못했습니다.';
         else if(x.verdict==='PARTIAL')warn='⚠ 자동 대조에서 원문에서 못 찾은 값이 '+sm.notFound+'개 있습니다.';
         else if(x.verdict!=='ALL_FOUND')warn='⚠ 자동 대조 결과: '+((XC_V[x.verdict]||[])[2]||x.verdict);
+        else if(sm.converted)warn='⚠ 환산(근로자·사용자 합계, 지방소득세 제외 등)해서 찾은 값이 '+sm.converted+'개 있습니다.';   // ★ [2026-11-07 e]
         if(warn&&!confirm(title(c.ruleId)+'\n\n'+warn+'\n법제처 원문(링크)에서 그 값을 직접 확인하셨습니까?\n\n확인하지 않았다면 「취소」를 누르세요.'))return;
         if(!confirm(title(c.ruleId)+'\n\n'+(warn?'':'✅ 장부 값 '+sm.found+'개가 모두 원문에서 확인됐습니다.\n')+'값은 그대로 두고 법제처 원문 지문만 장부에 연결합니다. 진행할까요?'))return;
         await busy(()=>api({action:'baseline',candidateId:id}));toast('원문 기준을 등록했습니다','success');R.open='';await loadAll();return;
@@ -30046,10 +30056,20 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
       if(a==='xcrule'){R.xc['rule:'+id]=null;render();await runXc({ruleId:id},'rule:'+id);return;}
       if(a==='xcall'){
         const r=await busy(()=>api({action:'crosscheckAll'},true),true);
-        (r.list||[]).forEach(x=>{R.xcAll[x.candidateId]={verdict:x.verdict,summary:x.summary};});
+        (r.list||[]).forEach(x=>{R.xcAll[x.candidateId]={verdict:x.verdict,summary:x.summary,partialText:!!x.partialText};});R.bulkNg=null;
         const n=v=>(r.list||[]).filter(x=>x.verdict===v).length;
         toast('자동 대조 완료 — ✅ '+n('ALL_FOUND')+' · ⚠ '+n('PARTIAL')+' · ❌ '+n('NONE_FOUND')+(n('NO_TEXT')?' · 원문 없음 '+n('NO_TEXT'):''),'success');
         render();return;
+      }
+      if(a==='xcbulk'){   // ★ [2026-11-07 e]
+        const el=bulkList();if(!el.length)return;
+        if(!confirm('자동 대조 ✅ '+el.length+'건을 원문 기준으로 일괄 등록합니다.\n값은 그대로 두고 법제처 원문 지문만 장부에 연결합니다.\n등록 직전에 서버가 다시 대조해 ✅인 것만 등록합니다.\n\n'+el.slice(0,30).map(c=>'· '+title(c.ruleId)).join('\n')+(el.length>30?'\n… 외 '+(el.length-30)+'건':'')+'\n\n진행할까요?'))return;
+        const r=await busy(()=>api({action:'bulkBaseline',candidateIds:el.map(c=>c.id)},true),true);
+        const L=r.list||[],okN=L.filter(x=>x.ok).length,ng=L.filter(x=>!x.ok);
+        ng.forEach(x=>{delete R.xcAll[x.candidateId];delete R.xc[x.candidateId];});   // 보류된 것은 다시 대조해야 버튼에 다시 나온다
+        R.bulkNg=ng.length?ng:null;R.open='';
+        toast('일괄 등록 '+okN+'건 완료'+(ng.length?' · 보류 '+ng.length+'건(아래 사유 확인)':''),ng.length?'':'success');
+        await loadAll();return;
       }
       if(a==='netcheck'){
         R.run.net=null;
