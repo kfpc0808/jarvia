@@ -29641,7 +29641,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
   const NOTICE_IDS=['HEALTH_LONG_TERM_CARE_RATES','HEALTH_PREMIUM_CAP','NATIONAL_PENSION_CONTRIBUTION','MINIMUM_WAGE','EMPLOYMENT_INSURANCE_RATES'];   /* ruleNoticeCollector.js NOTICE_TARGETS 와 같게 */
 
   /* ── 상태 ── */
-  const R={ov:null,ovAt:0,cands:[],rej:null,hist:null,tab:'pending',open:'',edit:'',man:'',pv:{},q:'',flt:'all',sort:null,busy:false,run:{law:null,col:null},loading:false};
+  const R={ov:null,ovAt:0,cands:[],rej:null,hist:null,tab:'pending',open:'',edit:'',man:'',pv:{},q:'',flt:'all',sort:null,busy:false,run:{law:null,col:null,net:null},loading:false};
   const title=id=>(R.ov&&R.ov.rules[id]&&R.ov.rules[id].title)||id;
 
   async function loadAll(){
@@ -29872,7 +29872,26 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
         +'<div class="rb-acts"><button class="btn"'+dis+' data-rb="runlaw" data-id="plan">일정대로 확인</button><button class="btn btn-sec"'+dis+' data-rb="runlaw" data-id="full">전체 조문 확인</button></div>'+runResHtml('law')+'</div>'
       +'<div class="rb-card"><div class="rb-tt">📢 공식 고시값 수집</div><div class="rb-src">마지막: '+(lc?esc(dt(lc.ranAt)):'기록 없음')+' · 대상 5개(건강·장기요양·상하한·국민연금·최저임금·고용보험)</div>'
         +'<div class="rb-acts"><button class="btn"'+dis+' data-rb="runcol" data-id="plan">일정상 대상만</button><button class="btn btn-sec"'+dis+' data-rb="runcol" data-id="all">5개 모두 조회</button></div>'+runResHtml('col')+'</div>'
+      +'<div class="rb-card" style="grid-column:1/-1"><div class="rb-tt">🔌 법제처 연결 진단</div><div class="rb-src">서버에서 법제처(www.law.go.kr) 주소별 연결과 실제 조회 1건을 확인합니다. 장부·콘텐츠는 바뀌지 않습니다(약 10~20초).</div>'
+        +'<div class="rb-acts"><button class="btn"'+dis+' data-rb="netcheck" data-id="x">연결 진단</button></div>'+netHtml()+'</div>'
       +'</div>'+(R.busy?'<div class="rb-hint" style="margin-top:8px">⏳ 실행 중입니다. 이 화면을 닫아도 서버에서는 계속 진행됩니다.</div>':'');
+  }
+  /* ★ [2026-11-07 c] 법제처 연결 진단 결과 */
+  const NET_V={OK:['ok','정상 연결'],PARTIAL:['up','일부 주소만 연결 안 됨 — 되는 주소로 재시도하게 고치면 해결'],ALL_BLOCKED:['ng','모든 주소 연결 안 됨 — 차단 가능성(법제처 문의 필요)'],DNS_FAIL:['ng','주소 조회(DNS) 실패'],CONNECT_OK_QUERY_FAIL:['up','연결은 되나 조회 실패 — 인증·응답 확인 필요']};
+  function netHtml(){
+    const r=R.run.net;if(!r)return '';
+    if(r.err)return '<div class="rb-err">'+esc(r.err)+'</div>';
+    const x=r.result||{},v=NET_V[x.verdict]||['info',x.verdict||'-'];
+    const p80=a=>(x.http80||[]).find(y=>y.addr===a);
+    const cellR=y=>!y?'<span class="c-dim">-</span>':(y.ok?'<span class="pill ok" style="white-space:normal">연결 '+y.ms+'ms</span>':'<span class="pill ng" style="white-space:normal;word-break:break-all">'+esc(y.error||'실패')+' '+y.ms+'ms</span>');
+    let h='<div style="margin-top:8px"><span class="pill '+v[0]+'">판정</span> <b style="font-size:13px">'+esc(v[1])+'</b></div>';
+    h+=(x.addrs&&x.addrs.length?'<table class="rb-diff"><thead><tr><th style="width:40%">법제처 서버 주소(IP)</th><th>https(443)</th><th>http(80)</th></tr></thead><tbody>'
+      +x.addrs.map(a=>'<tr><td>'+esc(a.addr)+'</td><td>'+cellR(a)+'</td><td>'+cellR(p80(a.addr))+'</td></tr>').join('')+'</tbody></table>':'<div class="rb-hint">조회된 주소가 없습니다.</div>');
+    const q=x.query||{};
+    h+='<div class="rb-res">실제 조회(소득세법 목록): '+(q.ok?'성공 · '+q.items+'건 · '+q.ms+'ms':'실패'+(q.error?' — '+esc(q.error):'')+(q.note?' — 응답: '+esc(q.note):''))
+      +'<br>우리 서버의 외부 IP: <b>'+esc(x.egressIp||'확인 못 함')+'</b> (법제처 문의 시 전달)'
+      +'<br>진단 시각: '+esc(dt(x.at))+(x.errors&&x.errors.length?'<br>기타: '+x.errors.map(esc).join(' · '):'')+'</div>';
+    return h;
   }
   /* ★ 마지막 법제처 실행 한 줄 요약 — 접속 불가·미룸을 실패와 구분 (2026-11-07 b 이전 기록은 실패에 미룸이 섞여 있음) */
   function syncState(ls){
@@ -29957,6 +29976,13 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
         if(reason===null)return;if(!reason.trim()){toast('사유를 입력해 주세요','error');return;}
         await busy(()=>api({action:'revoke',ruleId:id,effectiveFrom:v.effectiveFrom,verifiedAt:v.verifiedAt||'',reason}));
         toast('되돌렸습니다 — 5분 안에 반영됩니다','success');await loadAll();return;
+      }
+      if(a==='netcheck'){
+        R.run.net=null;
+        try{const r=await busy(()=>api({action:'netcheck'},true),true);R.run.net=r;toast('진단을 마쳤습니다','success');}
+        catch(e){R.run.net={err:e.message};throw e;}
+        finally{if(R.tab==='run')render();}
+        return;
       }
       if(a==='runlaw'||a==='runcol'){
         const law=a==='runlaw';
