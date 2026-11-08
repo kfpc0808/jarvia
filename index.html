@@ -23776,21 +23776,26 @@ async function _tfLoad(){
         if(v.ok){_tf.needs=!!v.hasNeeds;_tf.field=v.field||'';_tf.stars=v.stars||{};}
       }catch(_e){}
     }
+    if(_tfIsMem()){try{await jvlLoadAvail();}catch(_e){}}   /* ★ [2026-11-08] 요일 콘텐츠의 레터 준비 여부 (10분 캐시) */
     return R;
   })();
   try{return await _tf.loading;}finally{_tf.loading=null;}
 }
-function _tfSaveSeen(){
-  if(!me)return;
+function _tfSaveSeen(now){   /* ★ [2026-11-08] now — 다른 페이지로 넘어가기 전 바로 저장(Promise 반환) */
+  if(!me)return Promise.resolve();
   clearTimeout(_tf._sv);
-  _tf._sv=setTimeout(()=>{
+  const run=()=>{
     const min=_tfD8(_tfAdd(_jvKstDay(),-21));
     const arr=[..._tf.seen].filter(k=>k.slice(0,8)>=min).slice(-300);
     _tf.seen=new Set(arr);
-    setDoc(doc(db,'users',me.uid,'private','today_feed'),{seen:arr,updatedAt:serverTimestamp()}).catch(e=>console.warn('[오늘의자비아] 본 표시 저장 실패',e&&e.message));
-  },800);
+    return setDoc(doc(db,'users',me.uid,'private','today_feed'),{seen:arr,updatedAt:serverTimestamp()}).catch(e=>console.warn('[오늘의자비아] 본 표시 저장 실패',e&&e.message));
+  };
+  if(now)return run();
+  _tf._sv=setTimeout(run,800);
+  return Promise.resolve();
 }
 function _tfFind(key){
+  if(_tf.syn&&_tf.syn[key])return _tf.syn[key];   /* ★ [2026-11-08] 화면이 만든 고정 항목(아침독서·월간 영업전략·지난 이너서클) */
   const p=String(key).split('|');if(p.length<3)return null;
   const d=_tf.days[p[0]];if(!d||!Array.isArray(d.items))return null;
   const id=p.slice(2).join('|');
@@ -23806,17 +23811,51 @@ function _tfList(days,f){
 const _tfNotSig=it=>it.k!=='signal';
 const _tfIsSig=it=>it.k==='signal';
 const _tfUnseen=arr=>arr.filter(x=>!_tf.seen.has(_tfKey(x.d8,x.it)));
-function _tfTodaySets(){
-  const R=_tf.R;if(!R)return {send:[],read:[],live:[],base:[]};
-  if(R.pub){
-    const all=_tfList([R.today]);
-    return {send:all.filter(x=>['client','mc'].includes(x.it.k)),read:all.filter(x=>!['client','mc','signal'].includes(x.it.k)),live:all.filter(x=>_tfIsSig(x.it)).sort((a,b)=>(b.it.at||0)-(a.it.at||0)),base:all};
+/* ★ [2026-11-08] 개편 — ①오늘의 콘텐츠(요일 트랙·고객 레터) ②고객에게 보내기(고객 데일리·컨센서스·아침독서) ③읽어 볼 자료(월간 영업전략 1~7일·데일리·영업주제·통계·이너서클) ④실시간 자료실
+   PC·휴대폰은 같은 함수로 같은 내용을 그리고, 칸 배치만 화면 폭에 따라 바뀐다 */
+const TF_TRK=['closing','tax','master','medical'];
+function _tfInnerOk(){return !!(me&&meData&&(meData.role==='inner_circle'||meData.role==='admin'||(me.email&&me.email.endsWith('@javia-admin.internal'))));}
+function _tfShowDay(){const R=_tf.R;return R?(R.pub?R.today:(R.last||R.today)):_jvKstDay();}
+function _tfSyn(){
+  const R=_tf.R,out={mr:null,monthly:null,inner:null};_tf.syn={};if(!R)return out;
+  const today=R.today,D=_tfShowDay();
+  /* 아침독서 — 매주 월요일 갱신, 항상 표시 */
+  const mon=_jvKstWeekMon(today);
+  if(mon){out.mr={d8:_tfD8(mon),it:{k:'mr',id:'w',t:'이번 주 도서 6권 · '+_tfMd(mon)+'(월)부터',at:new Date(mon+'T00:00:00+09:00').getTime()}};_tf.syn[_tfKey(out.mr.d8,out.mr.it)]=out.mr;}
+  /* 월간 영업전략 — 매월 1~7일 고정 (불러온 날 중 이번 달 호가 있으면 그 자료, 없으면 고정 항목) */
+  if(+today.slice(8,10)<=7){
+    const ym=today.slice(0,7),from=_tfD8(_tfAdd(ym+'-01',-5));let hit=null;
+    Object.keys(_tf.days).forEach(d8=>{if(d8<from||d8>_tfD8(today))return;(_tf.days[d8].items||[]).forEach(it=>{if(it.k==='monthly'&&(!hit||d8>hit.d8))hit={d8,it};});});
+    if(hit)out.monthly=hit;
+    else{out.monthly={d8:_tfD8(ym+'-01'),it:{k:'monthly',id:'m'+ym,t:(+ym.slice(5,7))+'월호 월간 영업전략',at:new Date(ym+'-01T00:00:00+09:00').getTime()}};_tf.syn[_tfKey(out.monthly.d8,out.monthly.it)]=out.monthly;}
   }
-  const lastAll=_tfList([R.last],_tfNotSig);
-  const live=_tfList(R.stretch,_tfIsSig).sort((a,b)=>(b.it.at||0)-(a.it.at||0));
-  return {send:lastAll.filter(x=>['client','mc'].includes(x.it.k)),read:lastAll.filter(x=>!['client','mc'].includes(x.it.k)),live,base:live.concat(lastAll)};
+  /* 이너서클(월·수·금) — 그날 호가 없으면 직전 호를 다음 호가 나올 때까지 */
+  if(_tfInnerOk()){
+    const from=_tfD8(_tfAdd(D,-3));let hit=null;
+    Object.keys(_tf.days).forEach(d8=>{if(d8<from||d8>=_tfD8(D))return;(_tf.days[d8].items||[]).forEach(it=>{if(it.k==='inner'&&(!hit||d8>hit.d8||(d8===hit.d8&&(it.at||0)>(hit.it.at||0))))hit={d8,it};});});
+    out.inner=hit;
+  }
+  return out;
 }
-function _tfMissed(){const R=_tf.R;if(!R)return [];const a=_tfList(R.missed,_tfNotSig).sort((x,y)=>(y.it.at||0)-(x.it.at||0));return me?_tfUnseen(a):a;}
+function _tfTodaySets(){
+  const R=_tf.R;if(!R)return {trk:[],send:[],read:[],live:[],base:[]};
+  const D=_tfShowDay(),Y=_tfSyn(),inOk=_tfInnerOk();
+  const day=_tfList([D],_tfNotSig).filter(x=>x.it.k!=='inner'||inOk);
+  const trk=day.filter(x=>TF_TRK.includes(x.it.k));
+  const send=day.filter(x=>['client','mc'].includes(x.it.k)).concat(Y.mr?[Y.mr]:[]);
+  const read=day.filter(x=>!TF_TRK.includes(x.it.k)&&!['client','mc'].includes(x.it.k));
+  if(Y.monthly&&!read.some(x=>x.it.k==='monthly'))read.unshift(Y.monthly);
+  if(Y.inner&&!read.some(x=>x.it.k==='inner'))read.push(Y.inner);
+  read.sort((a,b)=>(b.it.k==='monthly')-(a.it.k==='monthly'));
+  const live=(R.pub?_tfList([R.today],_tfIsSig):_tfList(R.stretch,_tfIsSig)).sort((a,b)=>(b.it.at||0)-(a.it.at||0));
+  return {trk,send,read,live,base:trk.concat(send,read,live)};
+}
+function _tfMissed(){
+  const R=_tf.R;if(!R)return [];
+  const bk=new Set(_tfTodaySets().base.map(x=>_tfKey(x.d8,x.it))),inOk=_tfInnerOk();   /* ★ [2026-11-08] 오늘 화면에 이미 나온 자료·다른 등급 이너서클은 빼고 */
+  const a=_tfList(R.missed,_tfNotSig).filter(x=>!bk.has(_tfKey(x.d8,x.it))&&(x.it.k!=='inner'||inOk)).sort((x,y)=>(y.it.at||0)-(x.it.at||0));
+  return me?_tfUnseen(a):a;
+}
 
 /* ── 그리기 ── */
 function _tfStar(d8,it){const s=_tf.stars[_tfKey(d8,it)]||0;return s>=2?'<span class="tf-star" title="내 맞춤">★ 맞춤</span>':(s>=1?'<span class="tf-star" title="관련 분야">★</span>':'');}
@@ -23835,22 +23874,53 @@ function _tfRow(x,opt){
   return '<button type="button" class="tf-row'+(seen?' seen':'')+'" data-k="'+_tfE(key)+'">'+(me?'<span class="tf-dot"></span>':'')
     +'<span class="tf-rb"><span class="tf-rl">'+_tfE(TF_LAB[it.k]||'')+(it.s?' · '+_tfE(it.s):'')+_tfStar(x.d8,it)+day+'</span><span class="tf-rt">'+_tfE(it.t)+'</span></span>'+lock+'</button>';
 }
+const TF_SD={client:['고객 데일리 리포트','고객용 아침 경제 소식'],mc:['모닝 컨센서스','증시·투자 전망 요약'],mr:['아침독서','신간 6권 10분 요약 · 매주 월요일 갱신']};
+const TF_TD={closing:['클로징 리포트','보험 계약 성사를 위한 사례·화법'],tax:['택스컨설팅 위클리','세법 기준과 절세 포인트'],master:['마스터가이드','제도의 핵심 원리 해설'],medical:['메디컬 위클리','병의원 원장님 고객용 세무·경영 자료']};
+const TF_RD={dr:'컨설턴트용 오늘의 시장·영업 포인트',stat:'고객에게 바로 보여 줄 숫자',monthly:'이번 달 영업 방향·이슈',inner:'이너서클 회원 전용'};
+const TF_IC={send:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',book:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h8z"/></svg>',mail:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>'};
+function _tfNewTag(key){return me&&!_tf.seen.has(key)?'<span class="tf-tg1">새 자료</span>':'';}
 function _tfSendCard(x){
+  const it=x.it,key=_tfKey(x.d8,it),L=TF_SD[it.k]||[TF_LAB[it.k]||'',''],k=_tfE(key);
+  let btn,note='';
+  if(!_tfIsMem())btn='<button type="button" class="tf-sb" data-k="'+k+'">정규회원 전용 · 열기</button>';
+  else if(it.k==='mr')btn='<div class="tf-b2"><button type="button" class="tf-sb" data-k="'+k+'">'+TF_IC.book+'이번 주 도서 보기</button><button type="button" class="tf-sb" data-mrsend="'+k+'">'+TF_IC.send+'고객에게 보내기</button></div>';
+  else btn='<button type="button" class="tf-sb'+(it.k==='client'?' pri':'')+'" data-k="'+k+'">'+TF_IC.send+'고객 골라서 보내기</button>';
+  if(it.k==='mr'){const nx=_tfAdd(_jvKstWeekMon(_tf.R?_tf.R.today:_jvKstDay()),7);note='<p class="tf-cn2">매주 월요일 새 도서로 바뀝니다(다음 '+_tfMd(nx)+'). 고객에게 알림톡으로 보내면 매주 자동 발송도 걸 수 있습니다.</p>';}
+  return '<div class="tf-send" data-k="'+k+'" style="cursor:pointer"><div class="tf-sl"><b>'+_tfE(L[0])+'</b>'+(L[1]?'<span class="tf-what">· '+_tfE(L[1])+'</span>':'')+_tfStar(x.d8,it)+_tfNewTag(key)+'</div>'
+    +'<div class="tf-st">'+_tfE(it.t)+'</div>'+note+btn+'</div>';
+}
+function _tfLetterCid(id){id=String(id);try{if(typeof jvlHas!=='function')return '';if(jvlHas(id))return id;if(jvlHas('cr_'+id))return 'cr_'+id;}catch(_e){}return '';}
+function _tfTrkCard(x){
+  const it=x.it,key=_tfKey(x.d8,it),L=TF_TD[it.k]||[TF_LAB[it.k]||'',''],k=_tfE(key);
+  let btn;
+  if(!_tfIsMem())btn='<button type="button" class="tf-sb" data-k="'+k+'">정규회원 전용 · 열기</button>';
+  else btn='<div class="tf-b2"><button type="button" class="tf-sb" data-k="'+k+'">'+TF_IC.book+'먼저 읽어 보기</button>'
+    +(_tfLetterCid(it.id)?'<button type="button" class="tf-sb pri" data-letter="'+k+'">'+TF_IC.mail+'고객에게 레터 보내기</button>':'<button type="button" class="tf-sb" disabled>레터 준비 중</button>')+'</div>';
+  return '<div class="tf-send tf-trk" data-k="'+k+'" style="cursor:pointer"><div class="tf-sl"><b>'+_tfE(L[0])+(it.k==='closing'?({1:' (개인)',2:' (법인)'}[new Date(x.d8.slice(0,4)+'-'+x.d8.slice(4,6)+'-'+x.d8.slice(6)+'T00:00:00Z').getUTCDay()]||''):'')+'</b>'+(L[1]?'<span class="tf-what">· '+_tfE(L[1])+'</span>':'')+_tfStar(x.d8,it)+_tfNewTag(key)+'</div>'
+    +'<div class="tf-st">'+_tfE(it.t)+'</div>'+btn
+    +'<p class="tf-cn2">레터는 이 콘텐츠를 고객이 읽기 쉽게 줄인 짧은 편지입니다. 회원님 이름으로 카톡에 보내고, 고객이 바로 상담을 신청할 수 있습니다.</p></div>';
+}
+function _tfStLab(s,id){   /* 영업주제 — 서버 id 끝이 _age(연령)/_job(직업), s 는 그 고객층(없으면 「연령」·「직업」) */
+  const age=/_age$/.test(String(id||''));s=String(s||'').trim();
+  if(s==='연령'||s==='직업')s='';
+  if(age){if(s==='2030')s='20·30대';else if(/^\d0$/.test(s))s+='대';return '연령별 고객'+(s?' · '+s:'');}
+  return '직업별 고객'+(s?' · '+s:'');
+}
+function _tfReadRow(x){
   const it=x.it,key=_tfKey(x.d8,it),seen=_tf.seen.has(key);
-  const big=it.k==='client';
-  return '<div class="tf-send'+(big?' big':'')+(seen?' seen':'')+'"><div class="tf-sl"><b>'+_tfE(TF_LAB[it.k])+'</b>'+_tfStar(x.d8,it)+(seen?'<span class="tf-ok">확인함</span>':'')+'</div>'
-    +'<div class="tf-st">'+_tfE(it.t)+'</div>'
-    +'<button type="button" class="tf-sb" data-k="'+_tfE(key)+'">'+(_tfIsMem()?(big?'고객에게 보내러 가기':'열어서 보내기'):'정규회원 전용 · 열기')+'</button></div>';
+  let desc=it.k==='st'?_tfStLab(it.s,it.id):(TF_RD[it.k]||'');
+  if(it.k==='monthly')desc+=' · '+_tfMd(x.d8.slice(0,4)+'-'+x.d8.slice(4,6)+'-'+x.d8.slice(6))+' 발행';
+  else if(it.k!=='st'&&it.s)desc+=(desc?' · ':'')+it.s;
+  const lock=!_tfIsMem()?'<span class="tf-lock" aria-label="정규회원 전용"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>':'<span class="tf-ar" aria-hidden="true">›</span>';
+  const tag=me?(seen?'<span class="tf-tg0">열어 봄</span>':'<span class="tf-tg1">새 자료</span>'):'';
+  return '<button type="button" class="tf-row'+(seen?' seen':'')+'" data-k="'+_tfE(key)+'">'+(me?'<span class="tf-dot"></span>':'')
+    +'<span class="tf-rb"><span class="tf-rl">'+_tfE(TF_LAB[it.k]||'')+(desc?'<span class="tf-rw">· '+_tfE(desc)+'</span>':'')+_tfStar(x.d8,it)+tag+'</span><span class="tf-rt wrap">'+_tfE(it.t)+'</span></span>'+lock+'</button>';
 }
 function _tfSec(title,sub,body,extra){return '<section class="tf-sec"><h3>'+title+(sub?'<small>'+sub+'</small>':'')+(extra||'')+'</h3>'+body+'</section>';}
 function _tfEmpty(t){return '<div class="tf-empty">'+t+'</div>';}
-function _tfReadBox(list){
+function _tfReadBox(list){   /* ★ [2026-11-08] 열어 본 자료도 접지 않고 회색으로 모두 표시 */
   if(!list.length)return _tfEmpty('아직 올라온 자료가 없습니다');
-  const un=me?list.filter(x=>!_tf.seen.has(_tfKey(x.d8,x.it))):list;
-  const sn=me?list.filter(x=>_tf.seen.has(_tfKey(x.d8,x.it))):[];
-  let h='<div class="tf-box">'+un.map(x=>_tfRow(x)).join('');
-  if(sn.length){h+=_tf.more?sn.map(x=>_tfRow(x)).join(''):'<button type="button" class="tf-more" data-act="more"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>확인한 자료 '+sn.length+'건 펼치기</button>';}
-  return h+'</div>';
+  return '<div class="tf-box">'+list.map(_tfReadRow).join('')+'</div>';
 }
 function _tfLiveBox(list,max){
   if(!list.length)return _tfEmpty('새로 올라온 자료가 없습니다');
@@ -23868,32 +23938,37 @@ function _tfNeedsBanner(){
 }
 function _tfHead(){
   const R=_tf.R||{today:_jvKstDay(),pub:true};
-  const S=_tfTodaySets();
-  const base=S.base;
-  const seenN=me?base.filter(x=>_tf.seen.has(_tfKey(x.d8,x.it))).length:0;
-  const tot=base.length,pct=tot?seenN/tot:0,C=2*Math.PI*22;
-  const ring=me?'<div class="tf-ring"><svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="22" class="bg"/><circle cx="26" cy="26" r="22" class="fg" stroke-dasharray="'+(C*pct).toFixed(1)+' '+C.toFixed(1)+'" transform="rotate(-90 26 26)"/></svg><b>'+seenN+'/'+tot+'</b></div>'
-    :'<div class="tf-ring sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></div>';
-  const sub=R.pub?_tfMd(R.today)+' '+_tfWk(R.today)+'요일':'오늘은 정기 발행이 없는 날입니다';
-  const cnt=(n,l,gold)=>'<div class="tf-cn"><b'+(gold?' class="g"':'')+'>'+n+'</b><span>'+l+'</span></div>';
-  const liveLab=R.pub?'새 자료':(R.stretch&&R.stretch.length>2?'연휴 새 자료':'주말 새 자료');
-  return '<div class="tf-hd"><div class="tf-hr">'+ring+'<div class="tf-ht"><span>'+sub+'</span><h2 id="jvtf-title">오늘의 자비아</h2></div><button type="button" class="tf-x" data-act="close" aria-label="닫기">×</button></div>'
-    +(!R.pub&&R.last?'<div class="tf-off">마지막 발행 '+_tfMd(R.last)+'('+_tfWk(R.last)+')'+(R.next?' · 다음 발행 '+_tfMd(R.next)+'('+_tfWk(R.next)+')':'')+'</div>':'')
-    +'<div class="tf-cnt">'+cnt(S.send.length,'보낼 것',true)+cnt(S.read.length,'읽을 것')+cnt(S.live.length,liveLab)+'</div></div>';
+  const S=_tfTodaySets(),tot=S.base.length,un=me?_tfUnseen(S.base).length:tot;
+  const off=(!R.pub&&R.last)?'<div class="tf-off">오늘은 발행이 없는 날입니다. 최근 발행 '+_tfMd(R.last)+'('+_tfWk(R.last)+') 자료를 보여 드립니다.'+(R.next?' 다음 발행은 '+_tfMd(R.next)+'('+_tfWk(R.next)+') 오전 8시.':'')+'</div>':'';
+  const cnt=me?'<div class="tf-cl">아직 안 본 자료 <b>'+un+'건</b> <span>/ 전체 '+tot+'건</span></div>':'<div class="tf-cl">오늘 볼 자료 <b>'+tot+'건</b></div>';
+  return '<div class="tf-hd"><div class="tf-hr"><div class="tf-ht"><span>'+_tfMd(R.today)+' '+_tfWk(R.today)+'요일</span><h2 id="jvtf-title">오늘의 자비아</h2>'
+    +'<p>자비아가 평일 아침 8시에 드리는 영업 자료입니다. 아래 ①→②→③→④ 순서대로 확인하세요.</p></div><button type="button" class="tf-x" data-act="close" aria-label="닫기">×</button></div>'
+    +'<div class="tf-hb">'+off+cnt+'</div></div>';
 }
 function _tfTabs(){
-  const m=_tfMissed().length,lv=_tfTodaySets().live.length;
-  const T=[['today','오늘'],['missed',me?'놓친 자료':'지난 자료',m],['live','자료실',lv],['mine','내 맞춤 ★']];
-  return '<div class="tf-tabs" role="tablist">'+T.map(t=>'<button type="button" role="tab" aria-selected="'+(_tf.tab===t[0])+'" class="'+(_tf.tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[2]?' <b>'+t[2]+'</b>':'')+'</button>').join('')+'</div>';
+  const m=_tfMissed().length;
+  const T=[['today','오늘 볼 자료'],['missed','이번 주 지난 자료',m]];
+  if(me&&_tf.needs===true)T.push(['mine','내 맞춤 ★']);   /* 맞춤 설정을 마친 회원만 */
+  return '<div class="tf-tabs n'+T.length+'" role="tablist">'+T.map(t=>'<button type="button" role="tab" aria-selected="'+(_tf.tab===t[0])+'" class="'+(_tf.tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[2]?' <b>'+t[2]+'</b>':'')+'</button>').join('')+'</div>';
+}
+function _tfSec2(n,title,sub,desc,body){return '<section class="tf-sec"><h3><span class="tf-n">'+n+'</span>'+title+(sub?'<small>'+sub+'</small>':'')+'</h3>'+(desc?'<p class="tf-sd">'+desc+'</p>':'')+body+'</section>';}
+function _tfWkStrip(){
+  const w=new Date(_tfShowDay()+'T00:00:00Z').getUTCDay();
+  return '<div class="tf-wk">'+[[1,'월 클로징(개인)'],[2,'화 클로징(법인)'],[3,'수 택스'],[4,'목 마스터'],[5,'금 메디컬']].map(v=>'<span'+(v[0]===w?' class="on"':'')+'>'+v[1]+'</span>').join('')+'</div>';
 }
 function _tfBodyToday(){
-  const R=_tf.R||{pub:true},S=_tfTodaySets();
-  const sendH=S.send.length?S.send.map(_tfSendCard).join(''):_tfEmpty(R.pub?'아직 올라오지 않았습니다 (보통 오전 8시 전후)':'마지막 발행일 보낼 자료가 없습니다');
-  const c1=_tfSec(R.pub?'고객에게 보내기':'마지막 발행일 · 보내기',R.pub?'오늘 연락할 명분':_tfMd(R.last),sendH);
-  const c2=_tfSec(R.pub?'오늘 읽을 것':'마지막 발행일 · 읽을 것',R.pub?'5분':_tfMd(R.last),_tfReadBox(S.read)+(R.pub?'<div class="tf-note">이너서클·월간 영업전략은 발행일에 함께 표시됩니다</div>':''));
-  const lvTitle='실시간 자료실 <span class="tf-live">LIVE</span>';
-  const c3=_tfSec(lvTitle,R.pub?'오늘 수집':(R.stretch.length>2?'연휴 동안':'주말 동안'),_tfLiveBox(S.live,6),S.live.length>6?'<button type="button" class="tf-all" data-tab="live">전체 '+S.live.length+' →</button>':'');
-  return '<div class="tf-cols">'+(R.pub?'<div class="tf-col">'+c1+'</div><div class="tf-col">'+c2+'</div><div class="tf-col">'+c3+'</div>':'<div class="tf-col">'+c3+'</div><div class="tf-col">'+c1+'</div><div class="tf-col">'+c2+'</div>')+'</div>';
+  const R=_tf.R||{pub:true,stretch:[]},S=_tfTodaySets();
+  const c1=_tfSec2(1,'오늘의 콘텐츠','요일마다 바뀌는 대표 콘텐츠','',_tfWkStrip()+(S.trk.length?S.trk.map(_tfTrkCard).join(''):_tfEmpty(R.pub?'오늘 콘텐츠는 오전 8시 전후로 올라옵니다':'최근 발행일에 대표 콘텐츠가 없습니다')));
+  const sd=S.send.filter(x=>x.it.k!=='mr'),mr=S.send.filter(x=>x.it.k==='mr');
+  const c2=_tfSec2(2,'고객에게 보내기','매일·매주 보내는 자료','내 이름·사진이 들어간 리포트를 고객 카톡으로 보냅니다. 고객이 열어 보면 마이페이지 [열람현황]에서 확인할 수 있습니다.',
+    (sd.length?sd.map(_tfSendCard).join(''):_tfEmpty(R.pub?'고객 데일리 리포트는 오전 8시 전후로 올라옵니다':'최근 발행일에 보낼 리포트가 없습니다'))+mr.map(_tfSendCard).join(''));
+  const c3=_tfSec2(3,'읽어 볼 자료','나만 보는 영업 자료'+(S.read.length?' · '+S.read.length+'건':''),'고객을 만나기 전에 읽어 두면 대화 소재가 되는 자료입니다. 이미 연 자료도 지우지 않고 회색으로 남겨 둡니다.',
+    _tfReadBox(S.read)+(_tfInnerOk()?'<div class="tf-note">이너서클 리포트(월·수·금)는 다음 호가 나올 때까지 이 목록에 함께 나옵니다.</div>':''));
+  const lvSub=(R.pub?'오늘':((R.stretch&&R.stretch.length>2)?'연휴 동안':'주말 동안'))+' 새로 '+S.live.length+'건';
+  const c4=_tfSec2(4,'실시간 자료실',lvSub,'정부 발표·판례·세제 변경을 수시로 요약해 올립니다. 상담 중 근거 자료로 쓰세요.',
+    S.live.length?'<div class="tf-box">'+S.live.slice(0,3).map(x=>_tfRow(x)).join('')+'<button type="button" class="tf-more2" data-act="signals">새 자료 '+S.live.length+'건 모두 보기 →</button></div>'
+      :'<div class="tf-box"><div class="tf-empty" style="border:none;border-radius:0">새로 올라온 자료가 없습니다</div><button type="button" class="tf-more2" data-act="signals">실시간 자료실 가기 →</button></div>');
+  return '<div class="tf-cols"><div class="tf-col">'+c1+c2+'</div><div class="tf-col">'+c3+c4+'</div></div>';
 }
 function _tfBodyMissed(){
   const a=_tfMissed();
@@ -23928,7 +24003,7 @@ function _tfBodyMine(){
   const a=_tfList(days).filter(x=>(_tf.stars[_tfKey(x.d8,x.it)]||0)>=2).sort((x,y)=>((_tf.stars[_tfKey(y.d8,y.it)]||0)-(_tf.stars[_tfKey(x.d8,x.it)]||0))||((y.it.at||0)-(x.it.at||0))).slice(0,30);
   return _tfSec('내 맞춤 ★',_tfE(_tf.field||''),a.length?'<div class="tf-box">'+a.map(x=>_tfRow(x,{day:1})).join('')+'</div>':_tfEmpty('이번 주 맞춤 자료가 아직 없습니다'));
 }
-function _tfFootCnt(){const S=_tfTodaySets();return me?_tfUnseen(S.base).length+_tfMissed().length:S.base.length;}
+function _tfFootCnt(){const S=_tfTodaySets();return me?_tfUnseen(S.base).length:S.base.length;}   /* ★ [2026-11-08] 위쪽 「아직 안 본 자료」와 같은 숫자 */
 function _tfRender(){
   const el=document.getElementById('jvtf');if(!el)return;
   const b=el.querySelector('.tf-bd'),st=b?b.scrollTop:0;
@@ -23936,10 +24011,10 @@ function _tfRender(){
   const n=_tfFootCnt();
   const cta=!me?'<button type="button" class="tf-cta" data-act="login">로그인하고 자료 열기</button>'
     :!_tfIsMem()?'<button type="button" class="tf-cta" data-act="lockinfo">정규회원 전용 자료 안내</button>'
-    :(n?'<button type="button" class="tf-cta" data-act="first">안 본 것부터 보기 · '+n+'</button>':'<button type="button" class="tf-cta" data-act="close">모두 확인했습니다</button>');
+    :(n?'<button type="button" class="tf-cta" data-act="first">안 본 자료부터 차례로 보기 ('+n+'건)</button>':'<button type="button" class="tf-cta" data-act="close">모두 확인했습니다</button>');
   el.querySelector('.tf-card0').innerHTML=_tfHead()+_tfTabs()
     +'<div class="tf-bd">'+_tfNeedsBanner()+body+'</div>'
-    +'<div class="tf-ft"><label><input type="checkbox" id="jvtf-hide"'+(_tf.hideChk?' checked':'')+'> <span class="tf-hl">오늘은 </span>다시 띄우지 않기</label><div class="tf-fb"><button type="button" class="tf-later" data-act="close">나중에</button>'+cta+'</div></div>'
+    +'<div class="tf-ft"><label><input type="checkbox" id="jvtf-hide"'+(_tf.hideChk?' checked':'')+'> 오늘 하루 다시 보지 않기</label><div class="tf-fb"><button type="button" class="tf-later" data-act="close">닫기</button>'+cta+'</div></div>'
     +(_tf.lock?'<div class="tf-lockbox" role="alertdialog" aria-modal="true"><div><b>정규회원 전용 자료입니다</b><p>자비아·이너서클·컨설턴트홈·지사장 회원은 바로 열어 볼 수 있습니다.</p><button type="button" data-act="lockclose">확인</button></div></div>':'');
   const nb=el.querySelector('.tf-bd');if(nb)nb.scrollTop=st;
 }
@@ -23997,9 +24072,26 @@ function _tfCss(){
   +'#jvtf .tf-fb{margin-left:auto;display:flex;gap:8px}#jvtf .tf-later{height:46px;border-radius:12px;border:1px solid #C9D0DB;background:#fff;color:#3B4556;font-weight:600;font-size:14px;font-family:inherit;padding:0 16px;cursor:pointer}'
   +'#jvtf .tf-cta{height:46px;border-radius:12px;border:none;background:#15284A;color:#fff;font-weight:700;font-size:14.5px;font-family:inherit;padding:0 20px;cursor:pointer}'
   +'#jvtf .tf-lockbox{position:absolute;inset:0;background:rgba(14,22,40,.5);display:flex;align-items:center;justify-content:center;padding:20px}#jvtf .tf-lockbox>div{background:#fff;border-radius:14px;padding:22px 20px;max-width:340px;text-align:center}#jvtf .tf-lockbox b{font-size:16px}#jvtf .tf-lockbox p{font-size:13.5px;color:#5B6474;line-height:1.6;margin:8px 0 14px}#jvtf .tf-lockbox button{height:46px;width:100%;border:none;border-radius:11px;background:#15284A;color:#fff;font-weight:700;font-size:15px;font-family:inherit;cursor:pointer}'
+  /* ★ [2026-11-08] 개편 — ①~④ 번호 섹션 · 2칸(PC)/1칸(휴대폰) */
+  +'#jvtf .tf-cols{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}#jvtf .tf-col{display:flex;flex-direction:column;gap:8px}'
+  +'#jvtf .tf-ht p{margin:4px 0 0;font-size:13.5px;color:#E2E8F2;line-height:1.55;word-break:keep-all}'
+  +'#jvtf .tf-hb{display:flex;align-items:center;gap:10px;flex-wrap:wrap}#jvtf .tf-off{flex:1 1 320px;min-width:0;line-height:1.55;word-break:keep-all;font-weight:600}'
+  +'#jvtf .tf-cl{margin-left:auto;font-size:13.5px;font-weight:700;color:#fff;background:#213A63;border-radius:8px;padding:7px 10px;white-space:nowrap}#jvtf .tf-cl b{color:#F6C760}#jvtf .tf-cl span{color:#C9D3E3;font-weight:500}'
+  +'#jvtf .tf-tabs.n2{grid-template-columns:repeat(2,minmax(0,1fr));max-width:400px}#jvtf .tf-tabs.n3{grid-template-columns:repeat(3,minmax(0,1fr));max-width:560px}'
+  +'#jvtf .tf-sec h3{font-size:16px;gap:8px}#jvtf .tf-n{width:24px;height:24px;border-radius:12px;background:#15284A;color:#fff;font-size:12.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none}'
+  +'#jvtf .tf-sd{margin:0 0 9px;font-size:12.5px;color:#4A5466;line-height:1.55;word-break:keep-all}'
+  +'#jvtf .tf-wk{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 9px}#jvtf .tf-wk span{font-size:12px;font-weight:600;color:#4A5466;background:#fff;border:1px solid #DCE1E9;border-radius:14px;padding:3px 9px}#jvtf .tf-wk span.on{font-weight:800;color:#15284A;background:#FFF4D6;border:1.5px solid #F6C760}'
+  +'#jvtf .tf-send.tf-trk{border:2px solid #F6C760}#jvtf .tf-sl{flex-wrap:wrap}#jvtf .tf-what{font-size:12px;font-weight:500;color:#5B6474}'
+  +'#jvtf .tf-sb{display:flex;align-items:center;justify-content:center;gap:7px;padding:0 10px;min-width:0;white-space:nowrap}#jvtf .tf-sb.pri{background:#15284A;color:#fff}#jvtf .tf-sb:disabled{opacity:.55;cursor:default}'
+  +'#jvtf .tf-sb svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}'
+  +'#jvtf .tf-b2{display:flex;gap:8px}#jvtf .tf-b2>button{flex:1}'
+  +'#jvtf .tf-cn2{margin:0;font-size:12px;color:#5B6474;line-height:1.55;word-break:keep-all}'
+  +'#jvtf .tf-rw{font-weight:500;color:#5B6474}#jvtf .tf-tg0{font-size:11px;font-weight:700;color:#5B6474;background:#EEF1F5;border-radius:4px;padding:1px 6px}#jvtf .tf-tg1{font-size:11px;font-weight:800;color:#C2410C}'
+  +'#jvtf .tf-more2{display:block;width:100%;padding:12px 14px;border:none;border-top:1px solid #EEF1F5;background:#F8FAFC;color:#1F5FBF;font-weight:600;font-size:13px;font-family:inherit;cursor:pointer;text-align:center}'
   +'@media (max-width:899px){#jvtf .tf-cols{grid-template-columns:minmax(0,1fr);gap:0}}'
   +'@media (max-width:640px){#jvtf{align-items:stretch}#jvtf .tf-card0{width:100%;max-height:none;height:100%;border-radius:0}#jvtf .tf-hd{padding:calc(12px + env(safe-area-inset-top)) 14px 14px}#jvtf .tf-tabs{margin:8px 12px 0}#jvtf .tf-tabs button{font-size:13px}#jvtf .tf-bd{padding:12px 12px 14px}'
-  +'#jvtf .tf-ft{gap:10px;padding:8px 12px calc(8px + env(safe-area-inset-bottom))}#jvtf .tf-ft label{flex:none;gap:6px;font-size:12.5px;white-space:nowrap}#jvtf .tf-ft .tf-hl{display:none}#jvtf .tf-fb{flex:1;min-width:0;margin-left:0}#jvtf .tf-later{display:none}#jvtf .tf-cta{flex:1;min-width:0;height:46px;font-size:15px;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}'   /* 모바일: 체크와 버튼을 한 줄로 */
+  +'#jvtf .tf-ft{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:8px 12px calc(8px + env(safe-area-inset-bottom))}#jvtf .tf-fb{display:contents}#jvtf .tf-cta{grid-column:1/-1;grid-row:1;width:100%;height:48px;font-size:15px;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#jvtf .tf-ft label{grid-row:2;grid-column:1;font-size:13px;min-height:40px}#jvtf .tf-later{grid-row:2;grid-column:2;height:40px;border:none;padding:0 6px}'
+  +'#jvtf .tf-tabs.n2,#jvtf .tf-tabs.n3{max-width:none}#jvtf .tf-cl{margin-left:0}#jvtf .tf-ht p{font-size:13px}#jvtf .tf-trk .tf-b2{flex-direction:column}#jvtf .tf-trk .tf-b2>button{flex:none}}'   /* 모바일: 체크와 버튼을 한 줄로 */
   /* 메인 화면 바로가기 줄 · 새 자료 알림 */
   +'.jvtf-bar{display:flex;align-items:center;gap:12px;width:100%;margin:0 0 12px;padding:12px 14px;border:1px solid #DDE3EC;border-radius:14px;background:linear-gradient(135deg,#15284A,#213A63);color:#fff;text-align:left;cursor:pointer;font-family:inherit;box-sizing:border-box}'
   +'.jvtf-bar .i{width:36px;height:36px;border-radius:10px;background:rgba(246,199,96,.16);display:flex;align-items:center;justify-content:center;flex:none}.jvtf-bar .i svg{width:20px;height:20px;fill:none;stroke:#F6C760;stroke-width:2;stroke-linecap:round}'
@@ -24038,8 +24130,10 @@ async function _tfShow(){
   _tfRender();
 }
 function _tfClick(e){
-  const t=e.target.closest('[data-act],[data-k],[data-tab],[data-per],[data-cat]');if(!t)return;
+  const t=e.target.closest('[data-act],[data-k],[data-letter],[data-mrsend],[data-tab],[data-per],[data-cat]');if(!t)return;
   const d=t.dataset;
+  if(d.letter){_tfLetter(d.letter);return;}   /* ★ [2026-11-08] 고객에게 레터 보내기 */
+  if(d.mrsend){_tfMrSend(d.mrsend);return;}   /* ★ [2026-11-08] 아침독서 고객에게 보내기 */
   if(d.k){_tfGo(d.k);return;}
   if(d.tab){_tf.tab=d.tab;_tf.more=false;_tfRender();const b=document.querySelector('#jvtf .tf-bd');if(b)b.scrollTop=0;return;}
   if(d.per){_tf.per=d.per;_tfRender();return;}
@@ -24052,8 +24146,9 @@ function _tfClick(e){
   if(a==='lockclose'){_tf.lock=false;_tfRender();return;}
   if(a==='needs'){_tfClose();setTimeout(()=>{try{window.jvNeedsOpen('soft',()=>{_tf.needs=null;});}catch(_e){}},150);return;}
   if(a==='nbx'){try{const u=me.uid;localStorage.setItem('jv_tf_nbw_'+u,_jvKstWeekMon(_jvKstDay()));localStorage.setItem('jv_tf_nbx_'+u,String(+(localStorage.getItem('jv_tf_nbx_'+u)||0)+1));}catch(_e){}_tfRender();return;}
+  if(a==='signals'){_tfSignals();return;}   /* ★ [2026-11-08] 실시간 자료실 전체 */
   if(a==='first'){
-    const S=_tfTodaySets();const f=_tfUnseen(S.send.concat(S.read,S.live))[0]||_tfMissed()[0];
+    const S=_tfTodaySets();const f=_tfUnseen(S.trk.concat(S.send,S.read,S.live))[0];   /* ★ [2026-11-08] 화면 순서 ①→④ */
     if(f)_tfGo(_tfKey(f.d8,f.it));else _tfClose();
   }
 }
@@ -24079,10 +24174,19 @@ function _tfGo(key){
   const it=f.it,id=String(it.id);
   if(it.k==='inner'&&!(meData.role==='inner_circle'||meData.role==='admin'||(me.email&&me.email.endsWith('@javia-admin.internal')))){toast('이너서클 전용 자료입니다','warning');return;}
   _tf.seen.add(key);_tfSaveSeen();
+  /* ★ [2026-11-08] 고객 데일리 리포트 → 본인 고객용 리포트 화면(client-daily)으로 넘어간다. 관리자(role admin)는 그 화면이 「이용할 수 없는 서비스」라 종전대로 마이페이지 */
+  const cdLid=(it.k==='client'&&meData.role!=='admin'&&!(me.email&&me.email.endsWith('@javia-admin.internal')))?(meData.loginId||''):'';
+  if(cdLid)_tf.done=null;   /* 페이지를 떠나므로 다음 순서 팝업을 띄우지 않는다(이동 직전 깜빡임 방지) */
+  if(it.k==='mr'){_tfClose();try{window.goMorningRead();}catch(_e){}return;}   /* ★ [2026-11-08] 아침독서 — 새 창은 클릭 즉시 열어야 차단되지 않는다 */
   _tfClose();
   setTimeout(()=>{
     try{
-      if(it.k==='client'){nav('mypage');_actGoTab('tab-client-profile');return;}
+      if(it.k==='client'){   /* ★ [2026-11-08] 본인 고객용 리포트 화면의 「고객에게 보낼 링크」 시트로 — 로그인 유지 위해 같은 도메인(상대경로) */
+        if(!cdLid){nav('mypage');_actGoTab('tab-client-profile');return;}
+        const u='./client-daily.html?fc='+encodeURIComponent(cdLid)+'&share=1';
+        Promise.race([_tfSaveSeen(true),new Promise(r=>setTimeout(r,1500))]).then(()=>{location.href=u;});
+        return;
+      }
       if(it.k==='mc'){window.jvConsensusGo();return;}
       if(it.k==='st'){location.href='./salestalk.html';return;}
       if(it.k==='stat'){window.jvStatsGo();return;}
@@ -24102,6 +24206,40 @@ function _tfGo(key){
     }catch(e){console.warn('[오늘의자비아] 열기 실패',e);toast('화면을 열지 못했습니다','error');}
   },120);
 }
+/* ★ [2026-11-08] 요일 콘텐츠 → 고객에게 레터 보내기 (콘텐츠 상세 창의 기존 jvlOpen) */
+function _tfGate(){
+  if(!me){_tfClose();setTimeout(()=>openM('mdl-login-prompt'),150);return false;}
+  if(!_tfIsMem()){_tf.lock=true;_tfRender();return false;}
+  return true;
+}
+function _tfLetter(key){
+  const f=_tfFind(key);if(!f||!_tfGate())return;
+  const cid=_tfLetterCid(f.it.id);
+  if(!cid){toast('이 콘텐츠의 레터는 아직 준비 중입니다','warning');return;}
+  _tf.seen.add(key);_tfSaveSeen();_tfClose();
+  setTimeout(()=>{try{jvlOpen(cid);}catch(e){console.warn('[오늘의자비아] 레터 열기 실패',e);toast('레터 창을 열지 못했습니다','error');}},120);
+}
+/* ★ [2026-11-08] 아침독서 → 고객에게 보내기 (리포트 알림톡 「아침독서」) */
+function _tfMrSend(key){
+  if(!_tfGate())return;
+  _tf.seen.add(key);_tfSaveSeen();_tfClose();
+  setTimeout(async()=>{
+    try{await window.rptOpen();if(window.rptAllowed()&&_rpt&&_rpt.kind!=='mr')await window.rptSetKind('mr');}
+    catch(e){console.warn('[오늘의자비아] 아침독서 보내기 열기 실패',e);toast('아침독서 보내기 화면을 열지 못했습니다','error');}
+  },120);
+}
+/* ★ [2026-11-08] 실시간 자료실 전체 — 메인 화면 자료실로 */
+function _tfSignals(){
+  if(!_tfGate())return;
+  _tfClose();
+  try{const pm=document.getElementById('pg-main');if(pm&&pm.classList.contains('hidden'))nav('main');}catch(_e){}
+  let n=0;const iv=setInterval(()=>{
+    n++;if(n>60){clearInterval(iv);return;}
+    if(!window._jvMainReady)return;
+    clearInterval(iv);
+    try{filterCat('signals',document.getElementById('btn-signals'));setTimeout(()=>{const x=document.getElementById('signal-sec');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});},150);}catch(_e){}
+  },300);
+}
 window.jvTfShow=function(){_tfShow();};
 
 /* ── 메인 화면 바로가기 줄 ── */
@@ -24113,7 +24251,7 @@ function _tfBar(){
   const sub=R.pub?(tot?'오늘 나온 자료 '+tot+'건'+(me?' · 안 본 자료 '+n+'건':''):'오늘 자료는 오전 8시 전후로 올라옵니다')
     :'정기 발행이 없는 날 · '+(S.live.length?'새 자료 '+S.live.length+'건':'마지막 발행 '+_tfMd(R.last));
   b.querySelector('.t span').textContent=sub;
-  const nb=b.querySelector('.n');const v=me?n:(S.live.length+(R.pub?S.send.length+S.read.length:0));
+  const nb=b.querySelector('.n');const v=me?n:(S.live.length+(R.pub?S.trk.length+S.send.length+S.read.length:0));
   nb.textContent=v>99?'99+':String(v);nb.classList.toggle('hid',!v);
   b.style.display='';
 }
