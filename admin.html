@@ -1434,6 +1434,8 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
       #p-srccheck .cw-li:first-of-type{border-top:0}
       #p-srccheck .cw-loc{font-size:11.5px;color:#6b7590;overflow-wrap:anywhere;word-break:break-all}
       #p-srccheck .cw-run{font-size:12px;color:#4a5573;line-height:1.7;overflow-wrap:anywhere}
+      #p-srccheck .cc-f{border-left:3px solid #F5C2C2}   /* ★ [2026-11-09 F10] 생성물 검증 */
+      #p-srccheck .cc-f b{color:#C62828}
       @media(max-width:768px){
         #p-srccheck .cw-two{grid-template-columns:minmax(0,1fr)}
       }
@@ -1477,6 +1479,8 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
       <div class="rb-card" id="ck-src"><div class="rb-hint" style="margin:0">계산기·사본 파일이 장부 값과 같은지 확인하는 점검 엔진은 다음 단계에서 연결합니다. 연결 후 이 자리에 결과가 표시됩니다.</div></div>
       <h3>3. 감시 조문 (자료가 인용하는 법령 조문)</h3><!-- ★ [2026-11-09 D3] lawRuleSync 감시 조문 단계 결과 · 개정 확인 · 지난 문서 정리 -->
       <div class="rb-card" id="ck-watch"><div class="rb-hint" style="margin:0">점검 중…</div></div>
+      <h3>4. 생성물 검증 (AI가 만든 콘텐츠의 옛 값·없는 조문)</h3><!-- ★ [2026-11-09 F10] contentCheck.js 기록 · 알림만(게시는 그대로) -->
+      <div class="rb-card" id="ck-content"><div class="rb-hint" style="margin:0">점검 중…</div></div>
     </div>
     <div id="p-letters" class="panel hidden"><!-- ★ [2026-10-11] 일반회원 고객 레터 — 검수·승인·회원별 이용현황 (functions/customerLetter.js letterAdmin) -->
       <style>
@@ -30244,7 +30248,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
   const ST_LBL={VERIFIED:['ok','법제처 확인'],VERIFIED_SEED:['hold','기본값(승인)']};
   const stPill=s=>{const x=ST_LBL[s]||['info',s||'-'];return '<span class="pill '+x[0]+'">'+esc(x[1])+'</span>';};
   const REASON={AUTO_APPLY_DISABLED:'법제처 원문 — 담당자 확인 필요',DETERMINISTIC_PARSE_FAILED:'법제처 원문 — 값을 자동으로 읽지 못함',NOTICE_VALUE_FOUND:'공식 고시값 발견'};
-  const ACT={UPSERT:'반영',REVOKE:'되돌림',REJECT:'반려',REOPEN:'다시 열기',WATCH_ACK:'감시 조문 확인',WATCH_CLEANUP:'감시 문서 정리'};   // ★ [2026-11-09 D3] 감시 조문 동작
+  const ACT={UPSERT:'반영',REVOKE:'되돌림',REJECT:'반려',REOPEN:'다시 열기',WATCH_ACK:'감시 조문 확인',WATCH_CLEANUP:'감시 문서 정리',CONTENT_CHECK_ACK:'생성물 검증 확인'};   // ★ [2026-11-09 D3] 감시 조문 동작
   const SRC={MOLEG_AUTO_SYNC:'법제처 자동',ADMIN_APPROVE:'승인',ADMIN_APPROVE_EDITED:'수정 승인',ADMIN_BASELINE:'원문 기준 등록',ADMIN_MANUAL:'수동 입력',lawRuleSync:'법제처 자동'};
   const NOTICE_IDS=['HEALTH_LONG_TERM_CARE_RATES','HEALTH_PREMIUM_CAP','NATIONAL_PENSION_CONTRIBUTION','MINIMUM_WAGE','EMPLOYMENT_INSURANCE_RATES'];   /* ruleNoticeCollector.js NOTICE_TARGETS 와 같게 */
 
@@ -30728,10 +30732,11 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     if(_ckBusy)return;_ckBusy=true;
     $('ck-sum').innerHTML='<div class="rb-c"><span>점검 중…</span></div>';$('ck-rules').innerHTML='';
     if($('ck-watch'))$('ck-watch').innerHTML='<div class="rb-hint" style="margin:0">점검 중…</div>';   // ★ [2026-11-09 D3]
+    if($('ck-content'))$('ck-content').innerHTML='<div class="rb-hint" style="margin:0">점검 중…</div>';   // ★ [2026-11-09 F10]
     try{
-      const [ov,cd,wv]=await Promise.all([api({action:'overview'}),api({action:'candidates',status:'PENDING_REVIEW'}),api({action:'watchOverview'}).catch(e=>({__err:e.message}))]);   // ★ [2026-11-09 D3] 감시 조문(실패해도 나머지 점검은 표시)
-      R.ov=ov;R.ovAt=Date.now();R.cands=cd.list||[];R.pv={};R.wv=wv;
-      const L=ckList(ov,R.cands).concat(cwItems(wv));   // ★ [2026-11-09 D3]
+      const [ov,cd,wv,cv]=await Promise.all([api({action:'overview'}),api({action:'candidates',status:'PENDING_REVIEW'}),api({action:'watchOverview'}).catch(e=>({__err:e.message})),api({action:'contentChecks'}).catch(e=>({__err:e.message}))]);   // ★ [2026-11-09 F10] cv 생성물 검증   // ★ [2026-11-09 D3] 감시 조문(실패해도 나머지 점검은 표시)
+      R.ov=ov;R.ovAt=Date.now();R.cands=cd.list||[];R.pv={};R.wv=wv;R.cv=cv;
+      const L=ckList(ov,R.cands).concat(cwItems(wv)).concat(ccItems(cv));   // ★ [2026-11-09 D3] · [F10]
       const n=lv=>L.filter(x=>x.lv===lv).length;
       $('ck-sum').innerHTML='<div class="rb-c'+(n('bad')?' bad':'')+'"><span>문제</span><b>'+n('bad')+'건</b><em>바로 처리 필요</em></div>'
         +'<div class="rb-c'+(n('warn')?' warn':'')+'"><span>주의</span><b>'+n('warn')+'건</b><em>기한 안에 확인</em></div>'
@@ -30741,6 +30746,7 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
       L.sort((a,b)=>ord[a.lv]-ord[b.lv]);
       $('ck-rules').innerHTML=L.map(x=>'<div class="ck-row"><div class="ck-ic '+x.lv+'">'+ic[x.lv]+'</div><div class="ck-bd"><div class="ck-t">'+esc(x.t)+'</div><div class="ck-d">'+x.d+'</div></div>'+(x.go?'<button class="btn btn-sec btn-sm ck-go" data-ck="go" data-id="'+esc(x.go)+'">처리하기</button>':'')+'</div>').join('');
       cwRender(wv);   // ★ [2026-11-09 D3]
+      ccRender(cv);   // ★ [2026-11-09 F10]
     }catch(e){console.error(e);$('ck-sum').innerHTML='<div class="rb-c bad"><span>점검 실패</span><b>'+esc(e.message)+'</b></div>';}
     finally{_ckBusy=false;}
   }
@@ -30885,6 +30891,48 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     ckRun();
   }
 
+  /* ══ ★ [2026-11-09 F10] 4. 생성물 검증 — AI가 만든 콘텐츠를 장부·감시 조문과 대조한 결과(알림만, 게시는 그대로) ══ */
+  function ccItems(cv){
+    if(!cv||cv.__err)return[{lv:'warn',t:'생성물 검증 기록을 불러오지 못함',d:esc(cv&&cv.__err||'응답 없음')}];
+    const p=cv.problems||[];
+    if(!p.length)return[{lv:'ok',t:'생성물 검증',d:'확인할 문제 없음'+(cv.scanned?' · 최근 기록 '+cv.scanned+'건':' · 아직 기록 없음')}];
+    const by={};p.forEach(x=>{by[x.label||x.feature]=(by[x.label||x.feature]||0)+1;});
+    return[{lv:'warn',t:'생성물 검증 — 확인할 콘텐츠 '+p.length+'건',d:Object.entries(by).map(([k,n])=>esc(k)+' '+n).join(' · ')+' — 아래 「4. 생성물 검증」에서 문장과 바른 값 확인'}];
+  }
+  function ccRender(cv){
+    const box=$('ck-content');if(!box)return;
+    if(!cv||cv.__err){box.innerHTML='<div class="rb-hint" style="margin:0">생성물 검증 기록을 불러오지 못했습니다 — '+esc(cv&&cv.__err||'응답 없음')+'</div>';return;}
+    const p=cv.problems||[],bf=cv.byFeature||[];
+    let h='<div class="cw-sum">'+'<div class="'+(p.length?'warn':'')+'"><span>확인할 콘텐츠</span><b>'+p.length+'건</b></div>'
+      +'<div><span>옛 값</span><b>'+p.reduce((a,x)=>a+(x.staleCount||0),0)+'곳</b></div>'
+      +'<div><span>없는 조문</span><b>'+p.reduce((a,x)=>a+(x.citeCount||0),0)+'곳</b></div>'
+      +'<div><span>미감시 조문</span><b>'+(cv.unwatched||[]).length+'개</b></div></div>';
+    h+='<div class="rb-hint" style="margin:0 0 6px">콘텐츠가 저장될 때 자동으로 검사합니다. 게시는 그대로 진행되며, 여기서 문장과 바른 값을 보고 필요하면 원고를 고친 뒤 「확인 완료」를 눌러 주세요.</div>';
+    if(!p.length)h+='<div class="rb-hint" style="margin:0 0 6px">확인할 문제가 없습니다.</div>';
+    else{
+      if(p.length>1)h+='<div class="cw-btns" style="margin:0 0 8px"><button class="btn btn-sm" data-ck="cackall">모두 확인 완료 ('+p.length+'건)</button></div>';
+      h+=p.map(x=>'<div class="cw-item"><div class="cw-t">'+esc(x.label||x.feature)+'<span class="cw-tag">'+((x.staleCount||0)+(x.citeCount||0))+'곳</span></div>'
+        +'<div class="cw-m">'+esc(dt(x.createdAt))+(x.docPath?' · '+esc(x.docPath):'')+'</div>'
+        +(x.findings||[]).map(f=>'<div class="cw-li cc-f"><div><b>'+(f.type==='cite'?'없는 조문':'옛 값')+'</b> · '+esc(f.found||f.name)+' → <b style="color:#1F7A3D">'+esc(f.current||'')+'</b></div><div class="cw-loc">'+esc(f.sentence||'')+'</div></div>').join('')
+        +'<div class="cw-btns"><button class="btn btn-sm" data-ck="cack" data-id="'+esc(x.id)+'">확인 완료</button>'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">원고 열기 ↗</a>':'')+'</div></div>').join('');
+    }
+    if(bf.length)h+='<details class="cw-det"><summary>기능별 기록 ('+bf.length+'개 기능)</summary>'+bf.map(f=>'<div class="cw-run">'+esc(f.label)+' · 확인 대기 '+f.open+' · 옛 값 '+f.stale+' · 없는 조문 '+f.cite+' · 최근 '+esc(dt(f.last))+'</div>').join('')+'</details>';
+    if((cv.unwatched||[]).length)h+='<details class="cw-det"><summary>감시 목록에 없는 조문 '+cv.unwatched.length+'개 — 감시 대상 추가 검토(D 단계)</summary>'+cv.unwatched.map(u=>'<div class="cw-loc">'+esc(u.article)+' · '+u.count+'회</div>').join('')+'</details>';
+    box.innerHTML=h;
+  }
+  let _ccBusy=false;
+  async function ccAct(b){
+    if(_ccBusy)return;const cv=R.cv||{};
+    const ids=b.dataset.ck==='cack'?[b.dataset.id]:(cv.problems||[]).map(x=>x.id);
+    if(!ids.length)return;
+    if(b.dataset.ck==='cackall'&&!confirm(ids.length+'건을 모두 확인 완료로 표시할까요?\n(기록은 지우지 않고 확인 표시만 남깁니다)'))return;
+    _ccBusy=true;b.disabled=true;
+    try{const r=await api({action:'contentCheckAck',ids});toast('확인 완료 '+(r.acked||0)+'건','success');}
+    catch(e){console.error(e);toast(e.message,'error');}
+    finally{_ccBusy=false;b.disabled=false;}
+    ckRun();
+  }
+
   /* ── 연결: 클릭 위임 · 패널이 열릴 때 자동 불러오기 ── */
   function wire(){
     const pr=$('p-rulebook'),pc=$('p-srccheck');
@@ -30893,7 +30941,8 @@ import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.
     pr.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const b=e.target.closest('.rb-li[data-rb]');if(!b||e.target!==b)return;e.preventDefault();act(b.dataset.rb,b.dataset.id||'',b);});
     pc.addEventListener('click',e=>{const b=e.target.closest('[data-ck]');if(!b)return;e.preventDefault();
       if(b.dataset.ck==='reload'){ckRun();return;}
-      if(/^w(ack|ackall|clean)$/.test(b.dataset.ck)){cwAct(b);return;}   // ★ [2026-11-09 D3] 감시 조문 확인 완료·지난 문서 정리
+      if(/^w(ack|ackall|clean)$/.test(b.dataset.ck)){cwAct(b);return;}
+      if(/^c(ack|ackall)$/.test(b.dataset.ck)){ccAct(b);return;}   // ★ [2026-11-09 F10] 생성물 검증 확인 완료   // ★ [2026-11-09 D3] 감시 조문 확인 완료·지난 문서 정리
       if(b.dataset.ck==='go'){R.tab=b.dataset.id;R.open='';R.edit='';R.man='';const sn=document.querySelector('.sn[data-p="p-rulebook"]');if(sn&&window.goPanel)window.goPanel(sn);}
     });
     const onShow=(el,fn)=>new MutationObserver(()=>{if(!el.classList.contains('hidden'))fn();}).observe(el,{attributes:true,attributeFilter:['class']});
