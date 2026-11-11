@@ -4403,13 +4403,14 @@ refAdd([
     if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(a); else for (var i = 0; i < 16; i++) a[i] = Math.floor(Math.random() * 256);
     return btoa(String.fromCharCode.apply(null, a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
-  function callFn(name, data) {   /* onCall 규약: POST {data} → {result} | {error} */
+  function callFn(name, data, ka) {   /* onCall 규약: POST {data} → {result} | {error} · ka: 화면이 다른 앱으로 넘어가도 요청을 끊지 않음 [2026-11-11] */
     return (CLOUD.token ? CLOUD.token() : Promise.resolve(null)).then(function (tk) {
       var hd = { 'Content-Type': 'application/json' }; if (tk) hd.Authorization = 'Bearer ' + tk;
-      return fetch(FN_URL + name, { method: 'POST', headers: hd, body: JSON.stringify({ data: data || {} }) });
+      var op = { method: 'POST', headers: hd, body: JSON.stringify({ data: data || {} }) }; if (ka) op.keepalive = true;
+      return fetch(FN_URL + name, op);
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
-        if (j && j.error) throw new Error(j.error.message || '오류');
+        if (j && j.error) { var er = new Error(j.error.message || '오류'); er.status = String(j.error.status || ''); throw er; }
         if (!r.ok) throw new Error('서버 응답 ' + r.status);
         return (j && j.result) || {};
       });
@@ -5258,13 +5259,47 @@ refAdd([
     Store.add({ id: k, pending: true, status: '링크 발송', design: S.lm.id, contact: { name: S.lm.n }, msg: S.lm.msg, at: new Date().toISOString(), sentAt: new Date().toISOString() });
   }
   /* 서버에 링크 등록 — 보내기 누를 때 바로 (고객이 열기 전에 등록되도록). 실패하면 알려서 다시 보내게 함 */
+  /* ★ [2026-11-11] 등록이 빠진 채 링크가 나가는 일 방지 — 서버가 깨어나는 2~3초 사이에 카카오톡으로 넘어가면 등록 요청이 끊겼다.
+     ① 보내기 화면에서 등록 서버를 미리 깨움 ② 요청을 끊기지 않게 보냄 ③ 실패하면 3회까지 다시 ④ 화면으로 돌아오면 등록 안 된 링크를 다시 등록 */
+  var ISSUE_KEY = 'mypb.issue.pending', ISSUE_TRIES = 3, ISSUE_KEEP = 10 * 60000, ISSUE_RUN = {}, WARM_AT = 0;
+  function issueLoad() {   /* 등록 확인이 안 끝난 링크 (10분 지나면 버림) */
+    try { var a = JSON.parse(localStorage.getItem(ISSUE_KEY) || '[]'); return Array.isArray(a) ? a.filter(function (x) { return x && /^[A-Za-z0-9_-]{20,40}$/.test(x.k || '') && Date.now() - (x.at || 0) < ISSUE_KEEP; }) : []; } catch (e) { return []; }
+  }
+  function issueSave(a) { try { if (a.length) localStorage.setItem(ISSUE_KEY, JSON.stringify(a.slice(-20))); else localStorage.removeItem(ISSUE_KEY); } catch (e) {} }
+  function issueDrop(k) { issueSave(issueLoad().filter(function (x) { return x.k !== k; })); }
+  function issueSend(p, n, id) {
+    if (!id) { id = Math.random().toString(36).slice(2); ISSUE_RUN[p.k] = { id: id, t: 0 }; }
+    else if (!ISSUE_RUN[p.k] || ISSUE_RUN[p.k].id !== id) return;   /* 새 시도로 바뀌었거나 이미 등록됨 */
+    ISSUE_RUN[p.k].t = Date.now();
+    callFn('mypbIssue', { k: p.k, design: p.design, custName: p.custName, menuLabel: p.menuLabel }, !n).then(function () {   /* 첫 시도만 끊김 방지 옵션 (옛 브라우저가 이 옵션을 거부해도 다시 보낼 때는 일반 요청) */
+      delete ISSUE_RUN[p.k]; issueDrop(p.k);
+    }, function (e) {
+      if (!ISSUE_RUN[p.k] || ISSUE_RUN[p.k].id !== id) return;
+      var fatal = /INVALID_ARGUMENT|PERMISSION_DENIED|ALREADY_EXISTS|UNAUTHENTICATED/.test((e && e.status) || '');   /* 다시 보내도 같은 결과인 오류 */
+      if (!fatal && n + 1 < ISSUE_TRIES) { setTimeout(function () { issueSend(p, n + 1, id); }, n ? 4000 : 1500); return; }
+      delete ISSUE_RUN[p.k]; issueDrop(p.k);
+      var x = Store.get(p.k); if (x && x.status === '링크 발송') Store.remove(p.k);
+      alertBox('링크를 등록하지 못했습니다(' + ((e && e.message) || '오류') + '). ' + (p.custName ? p.custName + '님께 보낸 링크는 ' : '') + '고객이 열 수 없으니 다시 보내 주세요.'); if (S.screen === 'consultant') rerender(true);
+    });
+  }
+  function issueFlush() {   /* 화면으로 돌아왔을 때·다시 열었을 때: 등록 확인이 안 끝난 링크를 다시 등록 */
+    if (!CLOUD.cons) return;
+    issueLoad().forEach(function (p) {
+      if (p.uid !== (CLOUD.uid || '')) return;
+      var r = ISSUE_RUN[p.k]; if (r && Date.now() - r.t < 8000) return;   /* 방금 보낸 요청은 기다림 */
+      issueSend(p, 0);
+    });
+  }
+  function issueWarm() {   /* 등록 서버 미리 깨우기 — 사전 확인 요청만 보내 서버를 켜 둠 (기록·등록 없음 · 4분에 한 번) */
+    if (!CLOUD.cons || Date.now() - WARM_AT < 240000) return; WARM_AT = Date.now();
+    try { fetch(FN_URL + 'mypbIssue', { method: 'OPTIONS' }).catch(function () {}); } catch (e) {}
+  }
   function lmIssue() {
     if (!CLOUD.cons) return Promise.resolve();
-    var k = lmKey(S.lm);
-    return callFn('mypbIssue', { k: k, design: S.lm.id, custName: S.lm.n, menuLabel: menuLabelOf(S.lm.id) }).catch(function (e) {
-      var x = Store.get(k); if (x && x.status === '링크 발송') Store.remove(k);
-      alertBox('링크를 등록하지 못했습니다(' + e.message + '). 고객이 열 수 없으니 다시 보내 주세요.'); if (S.screen === 'consultant') rerender(true);
-    });
+    var p = { k: lmKey(S.lm), design: S.lm.id, custName: S.lm.n, menuLabel: menuLabelOf(S.lm.id), at: Date.now(), uid: CLOUD.uid || '' };
+    var a = issueLoad().filter(function (x) { return x.k !== p.k; }); a.push(p); issueSave(a);
+    issueSend(p, 0);
+    return Promise.resolve();
   }
   function lmReady() {
     if (!S.lm.id) { alertBox('② 보낼 검진을 골라 주세요.'); var ne = document.getElementById('lmNone'); if (ne) ne.scrollIntoView({ block: 'center', behavior: 'smooth' }); return false; }
@@ -5292,6 +5327,7 @@ refAdd([
     document.getElementById('lmKk').innerHTML = lmKk(o);
     document.getElementById('lmWarn').innerHTML = lmWarnHtml(o.msg);
     var rb = document.getElementById('lmResetBtn'); if (rb) rb.hidden = !o.dirty;
+    issueWarm();   /* ★ [2026-11-11] 보낼 준비가 되면 등록 서버를 미리 깨움 */
   }
   /* 확인 창(브라우저 기본 창 대신 화면 안 창) */
   function confirmBox(msg, okLabel, onOk) {
@@ -5561,8 +5597,12 @@ refAdd([
       return new Promise(function (res) { var un = m[1].onAuthStateChanged(auth, function (u) { un(); res(u); }); });
     }).then(function (u) {
       if (!u || u.isAnonymous) { S.screen = 'login'; render(); return; }
-      CLOUD.token = function () { return u.getIdToken(); }; CLOUD.cons = true;
-      return cloudLoad().then(function () { S.screen = 'consultant'; render(); });
+      CLOUD.token = function () { return u.getIdToken(); }; CLOUD.cons = true; CLOUD.uid = u.uid;
+      /* ★ [2026-11-11] 등록 서버 미리 깨우기 + 화면으로 돌아오면 등록 안 된 링크 재확인 */
+      issueWarm();
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { issueWarm(); issueFlush(); setTimeout(issueFlush, 9000); } });
+      window.addEventListener('pageshow', issueFlush);
+      return cloudLoad().then(function () { S.screen = 'consultant'; render(); issueFlush(); });
     }).catch(function (e) { S.err = e && e.message; S.screen = 'login'; render(); });
   }
   /* 고객 화면 시작: 링크 번호로 컨설턴트·고객 이름·추천 검진을 받아 옴 (주소에 이름·전화번호가 없음) */
@@ -5833,7 +5873,7 @@ refAdd([
       case 'alertOff': var aid = t.dataset.id || (S.record && S.record.id); cloudCust('mypbAlert', { on: false }, Store.get(aid) || S.record, function () { Store.update(aid, { alertOk: false, alertOffAt: new Date().toISOString() }); if (S.record && S.record.id === aid) S.record = Store.get(aid); alertBox('알림을 해지했습니다.'); rerender(true); }); return;
       case 'lmReset': S.lm.dirty = false; lmSync('reset'); return;
       case 'lmField': S.lm.fOpen = S.lm.fOpen === t.dataset.id ? '' : t.dataset.id; rerender(true); return;
-      case 'lmPick': lmSetId(t.dataset.id); rerender(true); var st3 = document.getElementById('lmStep3'); if (st3) st3.scrollIntoView({ block: 'start', behavior: 'smooth' }); return;
+      case 'lmPick': lmSetId(t.dataset.id); issueWarm(); rerender(true); var st3 = document.getElementById('lmStep3'); if (st3) st3.scrollIntoView({ block: 'start', behavior: 'smooth' }); return;
       case 'lmBrowse': S.lm.browse = true; rerender(true); return;
       case 'lmUse': S.lm = S.lm || { n: '', id: null, msg: '', dirty: false, fOpen: '', browse: true }; lmSetId(t.dataset.id); S.ctab = 'send'; break;
       case 'lmShare':
