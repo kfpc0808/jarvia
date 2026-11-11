@@ -3708,12 +3708,20 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
       <div id="alim-result" class="hidden form-box" style="margin-top:12px;background:#f0f7ff"></div>
       <h3 style="margin-top:32px;font-size:18px;font-weight:600;color:var(--primary);padding-bottom:10px;border-bottom:2px solid var(--border-lt)">📋 이 화면에서 보낸 일괄 발송 이력</h3><!-- ★ [2026-09-29] 전체 이력과 구분 -->
       <div style="font-size:12.5px;color:var(--text-lt);margin-top:8px">시스템 자동 발송(이너서클 브리핑·멤버십·결제 안내 등)을 포함한 <b>전체 알림톡 발송 내역</b>은 <a href="#" onclick="goPanel(document.querySelector('[data-p=p-send-history]'));return false;" style="color:var(--primary);font-weight:600">📨 알림 발송이력</a>에서 확인합니다.</div>
+      <!-- ★ [2026-11-11] 알림톡 발송 이력 — 건수 표시 + 페이지당 개수 선택 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <span id="alim-log-info" style="font-size:13px;color:var(--text-lt)"></span>
+        <select id="alim-log-size" onchange="alimLogSetPageSize(this.value)" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:13px">
+          <option value="20" selected>20개씩</option><option value="50">50개씩</option><option value="100">100개씩</option>
+        </select>
+      </div>
       <div class="tbl-wrap mt">
         <table class="tbl">
           <thead><tr><th>발송일시</th><th>발송자</th><th>채널</th><th>템플릿</th><th>대상</th><th>수신자</th><th>성공</th><th>실패</th><th>대체</th><th>내용</th></tr></thead>
           <tbody id="tb-alim-logs"></tbody>
         </table>
       </div>
+      <div id="alim-log-pagination" style="display:flex;justify-content:center;align-items:center;gap:8px;margin:16px 0;flex-wrap:wrap"></div><!-- ★ [2026-11-11] 알림톡 발송 이력 페이지네이션 -->
       <!-- ═══ 알림톡 이용가이드 모달 ═══ -->
       <div id="mdl-alim-guide" class="modal hidden" style="z-index:9100">
         <div class="mdl-bg" onclick="closeM('mdl-alim-guide')"></div>
@@ -20183,13 +20191,51 @@ async function doSendAlimTest(btn){
 }
 
 // ── 발송 이력 ──
-async function loadAlimLogs(){
+/* ★ [2026-11-11] 알림톡 발송 이력 페이지네이션 — 문자 발송 이력(loadSmsLogs)과 같은 방식.
+   · loadAlimLogs()      : 인자 없이 부르면 1페이지부터 새로 조회(전체 건수·커서 초기화) — 기존 호출부 그대로 사용
+   · loadAlimLogs(page)  : 해당 페이지만 조회. 방문한 페이지의 첫·끝 문서를 커서로 기억해 필요한 만큼만 읽는다
+   · _alimLogsCache 는 「현재 페이지」 목록 — 행 클릭 상세·재발송 인덱스가 그대로 맞는다 */
+let _alimLogPage=1,_alimLogSize=20,_alimLogTotal=0,_alimLogSeq=0;
+let _alimLogCur={};         // {페이지번호:{first,last}} 문서 스냅샷 커서
+async function loadAlimLogs(page){
   const tb=$('tb-alim-logs');
+  const fresh=typeof page!=='number';
+  if(fresh){page=1;_alimLogCur={};}
+  const seq=++_alimLogSeq;
   tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--text-lt)">로딩 중...</td></tr>';
   try{
-    const snap=await getDocs(query(collection(db,'alimtalk_logs'),orderBy('sentAt','desc'),limit(50)));
-    if(snap.empty){tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--text-lt)">발송 이력이 없습니다</td></tr>';_alimLogsCache=[];return;}
-    _alimLogsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const base=collection(db,'alimtalk_logs'),size=_alimLogSize,ob=orderBy('sentAt','desc');
+    if(fresh){
+      const c=await getCountFromServer(query(base,ob));
+      if(seq!==_alimLogSeq)return;
+      _alimLogTotal=c.data().count||0;
+    }
+    const pages=Math.max(1,Math.ceil(_alimLogTotal/size));
+    page=Math.min(Math.max(1,page),pages);
+    const C=_alimLogCur;
+    let docs;
+    if(page===1){
+      docs=(await getDocs(query(base,ob,limit(size)))).docs;
+    }else if(C[page-1]){
+      docs=(await getDocs(query(base,ob,startAfter(C[page-1].last),limit(size)))).docs;
+    }else if(C[page+1]){
+      docs=(await getDocs(query(base,ob,endBefore(C[page+1].first),limitToLast(size)))).docs;
+    }else if(page===pages){
+      /* 마지막 페이지로 바로 이동 — 오래된 순으로 남은 건수만 읽어 뒤집는다 */
+      docs=(await getDocs(query(base,orderBy('sentAt','asc'),limit(_alimLogTotal-(pages-1)*size)))).docs.slice().reverse();
+    }else{
+      /* 건너뛰기 — 가장 가까운 앞쪽 방문 페이지부터 이어 읽고, 지나온 페이지 커서도 함께 기억 */
+      let k=page-1;while(k>0&&!C[k])k--;
+      const all=(await getDocs(k?query(base,ob,startAfter(C[k].last),limit((page-k)*size)):query(base,ob,limit(page*size)))).docs;
+      for(let i=0;i*size<all.length;i++){const ch=all.slice(i*size,(i+1)*size);C[k+1+i]={first:ch[0],last:ch[ch.length-1]};}
+      docs=all.slice((page-k-1)*size);
+    }
+    if(seq!==_alimLogSeq)return;
+    if(!docs.length&&page>1){return loadAlimLogs();}   // 그 사이 건수가 달라진 경우 — 1페이지부터 다시
+    _alimLogPage=page;
+    if(!docs.length){tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--text-lt)">발송 이력이 없습니다</td></tr>';_alimLogsCache=[];alimLogRenderPager(1);return;}
+    C[page]={first:docs[0],last:docs[docs.length-1]};
+    _alimLogsCache=docs.map(d=>({id:d.id,...d.data()}));
     tb.innerHTML=_alimLogsCache.map((l,idx)=>{
       const dt=l.sentAt?.toDate?l.sentAt.toDate():new Date();
       const dateStr=dt.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
@@ -20198,10 +20244,35 @@ async function loadAlimLogs(){
       const pv=(_rn?(l.preview||'').split('#{이름}').join(_rn):(l.preview||'')).replace(/\n+/g,' ');
       return `<tr style="cursor:pointer" onclick="showAlimLogDetail(${idx})"><td>${dateStr}</td><td>${_alimEsc(l.sentBy)}</td><td>${_alimEsc(ALIM_CHANNELS[l.channel]?.name||l.channel)}</td><td>${_alimEsc(l.templateLabel||l.templateKey)}${l.isTest?' <span style="font-size:11px;color:#B45309">(테스트)</span>':''}</td><td>${l.totalCount||0}명</td><td style="white-space:nowrap">${_alimEsc(_rcv)}</td><td style="color:#238636;font-weight:600">${l.successCount||0}</td><td style="color:#DA3633;font-weight:600">${l.failCount||0}</td><td style="color:#B45309">${l.fallbackCount||0}</td><td title="${_alimEsc(_rn?(l.preview||'').split('#{이름}').join(_rn):(l.preview||''))}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_alimEsc(pv.substring(0,40))}${pv.length>40?'...':''}</td></tr>`;
     }).join('');
+    alimLogRenderPager(pages);
   }catch(e){
+    if(seq!==_alimLogSeq)return;
     tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--danger)">이력 로드 실패</td></tr>';
   }
 }
+/* ★ [2026-11-11] 알림톡 발송 이력 — 페이지 버튼·건수 표시 (문자 발송 이력과 같은 모양) */
+function alimLogRenderPager(pages){
+  const el=$('alim-log-pagination'),info=$('alim-log-info'),cur=_alimLogPage,tot=_alimLogTotal;
+  if(info){
+    const s=(cur-1)*_alimLogSize+1,e=Math.min(tot,cur*_alimLogSize);
+    info.textContent=tot?('전체 '+tot.toLocaleString()+'건 중 '+s.toLocaleString()+'–'+e.toLocaleString()):'';
+  }
+  if(!el)return;
+  let h='';
+  if(pages>1){
+    const b=(p,label,dis,on)=>'<button class="btn btn-sm'+(on?' btn-primary':' btn-sec')+'" '+(dis?'disabled':'')+' onclick="alimLogGoPage('+p+')">'+label+'</button>';
+    h+=b(1,'«',cur<=1)+b(cur-1,'‹',cur<=1);
+    for(let p=1;p<=pages;p++){
+      if(p===1||p===pages||Math.abs(p-cur)<=2)h+=b(p,p,false,p===cur);
+      else if(Math.abs(p-cur)===3)h+='<span style="padding:0 4px">…</span>';
+    }
+    h+=b(cur+1,'›',cur>=pages)+b(pages,'»',cur>=pages);
+  }
+  el.innerHTML=h;
+}
+function alimLogGoPage(p){loadAlimLogs(parseInt(p,10)||1);}
+function alimLogSetPageSize(v){_alimLogSize=parseInt(v,10)||20;loadAlimLogs();}
+window.alimLogGoPage=alimLogGoPage;window.alimLogSetPageSize=alimLogSetPageSize;
 
 function showAlimLogDetail(idx){
   const log=_alimLogsCache[idx];if(!log)return;
