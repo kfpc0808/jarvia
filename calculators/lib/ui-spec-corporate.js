@@ -591,8 +591,8 @@ execSeveranceLimit: {
         { k: 'retireDate', label: '퇴임 예정일', type: 'date', required: true, def: '2026-12-31' },
         { k: 'salaryRecent3yrAvg', label: '최근 3년 평균 연봉', unit: '원', type: 'money', required: true, ph: '예) 180,000,000', quick: [10000000] },
         { k: 'salary2017to2019Avg', label: '2017~2019 평균 연봉', hint: '해당 기간 재직 시 필수', unit: '원', type: 'money', def: 0 },
-        { k: 'multiple', label: '정관상 지급 배수', unit: '배', type: 'num', def: 3 },
-        { k: 'plannedPayout', label: '지급 예정액', unit: '원', type: 'money', def: 0, ph: '예) 500,000,000' }
+        { k: 'salaryPre2012Avg', label: '2011년 이전 평균 연봉', hint: '해당 기간 재직 시 필수', unit: '원', type: 'money', def: 0 },
+        { k: 'bylawMultiple', alias: ['preLawMultiple'], label: '정관상 지급 배수', unit: '배', type: 'num', def: 3 }
       ]}],
       outputs: {
         main: { k: 'totalLimit', label: '퇴직소득 한도', fmt: 'won' },
@@ -605,6 +605,7 @@ execSeveranceLimit: {
           { k: 'totalMonths', label: '근속 개월', fmt: 'month' },
           { path: 'whatIf.multiple2.payout', label: '배수 2배 지급 시' },
           { path: 'whatIf.multiple3.payout', label: '배수 3배 지급 시' },
+          { path: 'bylaw.payout', label: '정관 배수 지급 시' },
           { k: 'totalLimit', label: '퇴직소득 한도', sum: true }
         ]
       }
