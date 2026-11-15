@@ -19,10 +19,9 @@
         { k: 'ownType', label: '보유 형태', type: 'select', def: 'purchase',
           options: [{ v: 'purchase', t: '구입' }, { v: 'lease', t: '리스' }, { v: 'rent', t: '렌트' }] },
         { k: 'annualFuelCost', label: '연간 유류·유지비', unit: '원', type: 'money', def: 0, ph: '예) 4,000,000' },
-        { k: 'annualLeaseFee', label: '연간 리스료', unit: '원', type: 'money', def: 0 },
-        { k: 'annualRentFee', label: '연간 렌트료', unit: '원', type: 'money', def: 0 },
-        { k: 'businessRatio', label: '업무사용 비율', unit: '%', type: 'num', def: 80 },
-        { k: 'hasLog', label: '운행기록부', type: 'select', cast: 'bool', def: 'true',
+        { k: 'annualLeaseCost', label: '연간 리스료·렌트료', hint: '리스·렌트일 때', unit: '원', type: 'money', def: 0 },
+        { k: 'businessUseRatio', label: '업무사용 비율', unit: '%', type: 'num', def: 80, scale: 0.01 },
+        { k: 'hasLogbook', label: '운행기록부', type: 'select', cast: 'bool', def: 'true',
           options: [{ v: 'true', t: '작성함' }, { v: 'false', t: '미작성' }] }
       ]}],
       outputs: {
@@ -561,8 +560,7 @@ overseasAsset: {
       groups: [{ label: '사업 현황', fields: [
         { k: 'annualProfit', label: '연간 사업이익', unit: '원', type: 'money', required: true, ph: '예) 300,000,000', quick: [10000000, 100000000] },
         { k: 'ceoSalary', label: '대표 급여 (법인 전환 시)', unit: '원', type: 'money', required: true, ph: '예) 120,000,000', quick: [10000000] },
-        { k: 'dividendAmount', label: '배당 인출액', unit: '원', type: 'money', def: 0 },
-        { k: 'dependents', label: '부양가족 수', unit: '명', type: 'num', def: 1 }
+        { k: 'dividendRatio', label: '세후 이익 중 배당 비율', unit: '%', type: 'num', def: 50, scale: 0.01 }
       ]}],
       outputs: {
         main: { k: 'betterChoice', label: '세부담이 낮은 쪽', fmt: 'text' },
@@ -584,8 +582,8 @@ overseasAsset: {
 execSeveranceLimit: {
       id: 'execSeveranceLimit', bundle: 'corporate', icon: '🎖️',
       title: '임원퇴직금 한도계산기',
-      lead: '정관에 정한 배수로 임원 퇴직금을 지급할 때 손금으로 인정되는 한도를 계산합니다.',
-      note: '법인세법 시행령 제44조 기준입니다. 2012년 이후 기간은 3년 평균급여 × 1/10 × 근속연수 × 배수로 한도가 정해지며, 2020년 이후 기간은 배수 2배가 상한입니다. 한도 초과분은 근로소득으로 과세됩니다.',
+      lead: '정관에 정한 배수로 임원 퇴직금을 지급할 때 퇴직소득으로 인정되는 한도와 초과액을 계산합니다.',
+      note: '소득세법 제22조 제3항 기준입니다. 2012~2019년 근무 기간은 3년 평균급여 × 1/10 × 근속연수 × 3배, 2020년 이후 근무 기간은 2배까지 퇴직소득으로 보며, 2011년 이전 근무 기간은 한도 규정이 없어 정관상 배수를 적용합니다. 한도 초과분은 근로소득으로 과세됩니다. 법인의 손금 인정 여부(법인세법 시행령 제44조)는 정관 규정에 따라 별도로 확인해야 합니다.',
       groups: [{ label: '재임 기간', fields: [
         { k: 'appointDate', label: '취임일', type: 'date', required: true, def: '2014-01-01' },
         { k: 'retireDate', label: '퇴임 예정일', type: 'date', required: true, def: '2026-12-31' },
@@ -620,7 +618,7 @@ deemedInterestFull: {
         { k: 'loanAmount', label: '가지급금 잔액', unit: '원', type: 'money', required: true, ph: '예) 200,000,000', quick: [10000000, 100000000] },
         { k: 'deemedRate', label: '인정이자율', unit: '%', type: 'num', def: 4.6, scale: 0.01 },
         { k: 'actualRate', label: '실제 수취 이자율', unit: '%', type: 'num', def: 0, scale: 0.01 },
-        { k: 'ceoAnnualSalary', label: '대표 연봉', unit: '원', type: 'money', def: 0, ph: '예) 120,000,000' }
+        { k: 'ceoSalary', label: '대표 연봉', unit: '원', type: 'money', def: 0, ph: '예) 120,000,000' }
       ]}],
       outputs: {
         main: { path: 'diagnosis.deemedInterest', k: 'deemedInterest', label: '연간 인정이자', fmt: 'won' },
@@ -761,7 +759,7 @@ corpLiquidation: {
       groups: [{ label: '청산 정보', fields: [
         { k: 'residualAssets', label: '잔여재산가액', unit: '원', type: 'money', required: true, ph: '예) 2,000,000,000', quick: [100000000] },
         { k: 'paidInCapital', label: '납입자본금', unit: '원', type: 'money', def: 0, ph: '예) 100,000,000' },
-        { k: 'otherIncome', label: '대표 기타 종합소득금액', unit: '원', type: 'money', def: 0 }
+        { k: 'otherFinancialIncome', label: '대표 기타 종합소득금액', unit: '원', type: 'money', def: 0 }
       ]}],
       outputs: {
         main: { k: 'totalTax', label: '총 세부담', fmt: 'won' },
@@ -790,7 +788,7 @@ holdingCompany: {
       groups: [{ label: '배당 수취', fields: [
         { k: 'dividendReceived', label: '수입배당금', unit: '원', type: 'money', required: true, ph: '예) 200,000,000', quick: [10000000] },
         { k: 'ownershipRatio', label: '자회사 지분율', unit: '%', type: 'num', required: true, def: 80, scale: 0.01 },
-        { k: 'corpTaxableIncome', label: '법인 과세표준', hint: '절감액 계산용', unit: '원', type: 'money', def: 0 }
+        { k: 'taxableIncomeBefore', label: '법인 과세표준', hint: '절감액 계산용', unit: '원', type: 'money', def: 0 }
       ]}],
       outputs: {
         main: { k: 'exemptAmount', label: '익금불산입액', fmt: 'won' },
@@ -802,6 +800,7 @@ holdingCompany: {
           { k: 'dividendReceived', label: '수입배당금' },
           { k: 'ownershipRatio', label: '지분율', fmt: 'pct' },
           { k: 'exemptAmount', label: '익금불산입액' },
+          { k: 'taxSaving', label: '법인세 절감액' },
           { k: 'taxableAmount', label: '익금 산입액', sum: true }
         ]
       }
