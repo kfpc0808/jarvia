@@ -510,6 +510,7 @@
   Copyright © 2025 KFPC Co., Ltd. All Rights Reserved.
 </div>
 
+<script src="./lib/calc-personal.js?v=20261116"></script>
 <script>
 // ============================================================
 //  유틸
@@ -534,117 +535,20 @@ function attachComma(el){
 //  계산 엔진  (personal.js calcPensionPlan 과 동일 수식)
 //  모든 금액은 실질(오늘 가치) 기준
 // ============================================================
+// ★ [2026-11-16] 계산은 공용 엔진(lib/calc-personal.js)이 수행한다. 이 화면에는 계산식을 두지 않는다.
+function __engine(){
+  const J = window.JarviaCalculators;
+  if(!J || typeof J.calcPensionPlan !== 'function'){
+    const msg = '계산 엔진을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 새로고침해 주세요.';
+    if(!window.__engAlerted){ window.__engAlerted = true; alert(msg); }
+    throw new Error(msg);
+  }
+  return J;
+}
 function calcPensionPlan(p){
-  const currentAge   = p.currentAge,
-        retireAge    = p.retireAge,
-        lifeExpectancy = p.lifeExpectancy,
-        streams      = p.streams || [],
-        useDirect    = !!p.useDirectProjected,
-        directProj   = p.directProjected || 0,
-        ssMonthly    = p.ssMonthly || 0,
-        ssStartAge   = p.ssStartAge || retireAge,
-        otherMonthly = p.otherMonthly || 0,
-        expenseBasis = p.expenseBasis || 'today',
-        accumRate    = p.accumRate,
-        receiveRate  = p.receiveRate,
-        inflationRate= p.inflationRate,
-        ssGrowthRate = (p.ssGrowthRate != null ? p.ssGrowthRate : p.inflationRate),
-        addMonthly   = p.addMonthly || 0,
-        addYears     = p.addYears || 0;
-
-  const ny = Math.max(0, retireAge - currentAge);   // 은퇴까지(년)
-  const nd = Math.max(0, lifeExpectancy - retireAge); // 은퇴기간(년)
-  const Y  = Math.round(ny*12);
-  const N  = Math.round(nd*12);
-
-  // 실질(인플레 차감) 월 수익률
-  const rAccY  = (1+accumRate)/(1+inflationRate) - 1;
-  const rAcc   = Math.pow(1+rAccY, 1/12) - 1;
-  const rRecY  = (1+receiveRate)/(1+inflationRate) - 1;
-  const rRec   = Math.pow(1+rRecY, 1/12) - 1;
-
-  // 적립 항목 → 은퇴시점 미래가치(FV)
-  function streamFV(lump, monthly, years){
-    const lumpFV = lump * Math.pow(1+rAcc, Y);
-    let pm = (years && years>0) ? Math.round(years*12) : Y; // 0/빈값 = 은퇴까지
-    pm = Math.min(pm, Y);
-    let annFV;
-    if(rAcc === 0) annFV = monthly * pm;
-    else annFV = monthly * ((Math.pow(1+rAcc, pm) - 1)/rAcc);
-    annFV *= Math.pow(1+rAcc, Y - pm); // 납입 종료 후 은퇴까지 추가 성장
-    return lumpFV + annFV;
-  }
-
-  let projected = 0;
-  if(useDirect){
-    projected = directProj;
-  } else {
-    for(const s of streams){ projected += streamFV(s.lump||0, s.monthly||0, s.years||0); }
-  }
-
-  // 목표 월생활비(실질, 오늘 가치)
-  let expToday = p.monthlyExpense || 0;
-  if(expenseBasis === 'retire') expToday = expToday / Math.pow(1+inflationRate, ny);
-  const grossNeed = Math.max(0, expToday);
-
-  // 은퇴시점 필요자산 = 인출액(국민연금 차감)의 은퇴시점 현재가치
-  let needAtRetire = 0;
-  for(let k=1;k<=N;k++){
-    const age = retireAge + k/12;
-    const ss = (age >= ssStartAge) ? ssMonthly * Math.pow((1+ssGrowthRate)/(1+inflationRate), age - ssStartAge) : 0;
-    const net = Math.max(0, grossNeed - otherMonthly - ss);
-    needAtRetire += net / Math.pow(1+rRec, k);
-  }
-
-  const gap = Math.max(0, needAtRetire - projected);
-  const surplus = projected - needAtRetire;
-  const sufficiencyRate = needAtRetire > 0 ? projected/needAtRetire : (projected>0?2:1);
-
-  // 부족분 메우는 추가 월저축(은퇴 전, 실질)
-  let additionalMonthly = 0;
-  if(gap > 0 && Y > 0){
-    additionalMonthly = (rAcc === 0) ? gap/Y : gap*rAcc/(Math.pow(1+rAcc,Y)-1);
-  }
-
-  // 추가 가입 시뮬
-  const addFV = (addMonthly>0) ? streamFV(0, addMonthly, addYears) : 0;
-  const projectedAfter = projected + addFV;
-  const gapAfter = Math.max(0, needAtRetire - projectedAfter);
-  const surplusAfter = projectedAfter - needAtRetire;
-  const sufficientAfter = projectedAfter >= needAtRetire;
-
-  // 자산 잔액 곡선 + 소진 나이 (월 시뮬, 실질)
-  // 적립기: 예상자산을 0→projected 로 성장시키는 등가 곡선
-  const curve = [];
-  let depletionAge = null;
-  const eqLump = Math.pow(1+rAcc, Y) !== 0 ? projected / Math.pow(1+rAcc, Y) : projected;
-  let bal = eqLump;
-  curve.push({age: currentAge, balance: Math.max(0, bal)});
-  for(let k=1;k<=Y;k++){
-    bal *= (1+rAcc);
-    if(k%12===0) curve.push({age: currentAge + k/12, balance: Math.max(0,bal)});
-  }
-  bal = projected;
-  for(let k=1;k<=N;k++){
-    bal *= (1+rRec);
-    const age = retireAge + k/12;
-    const ss = (age >= ssStartAge) ? ssMonthly * Math.pow((1+ssGrowthRate)/(1+inflationRate), age - ssStartAge) : 0;
-    const net = Math.max(0, grossNeed - otherMonthly - ss);
-    bal -= net;
-    if(bal <= 0 && depletionAge === null){ depletionAge = Math.round((retireAge + k/12)*10)/10; bal = 0; }
-    if(k%12===0) curve.push({age: retireAge + k/12, balance: Math.max(0,bal)});
-  }
-  const endBalance = Math.max(0, bal);
-
-  return {
-    yearsToRetire: ny, yearsInRetire: nd,
-    projected, needAtRetire, gap, surplus, sufficiencyRate,
-    additionalMonthlyNeeded: additionalMonthly,
-    grossMonthlyNeed: grossNeed,
-    depletionAge, endBalance,
-    addSim: { addFV, projectedAfter, gapAfter, surplusAfter, sufficientAfter },
-    curve
-  };
+  const r = __engine().calcPensionPlan(p);
+  if(!r || r.calculated === false) throw new Error('입력 범위를 확인해 주세요.');
+  return r;
 }
 
 // ============================================================
@@ -740,25 +644,22 @@ let LAST = null; // 마지막 계산 입력 보관 (시뮬용)
 // ============================================================
 function normalSsAge(cAge){
   const by = (new Date().getFullYear()) - (cAge||0); // 출생연도 근사
-  if(by <= 1952) return 60;
-  if(by <= 1956) return 61;
-  if(by <= 1960) return 62;
-  if(by <= 1964) return 63;
-  if(by <= 1968) return 64;
-  return 65;
+  return __engine().calcNationalPensionStartAge({birthYear: by}).normalAge;
 }
-function ssFactor(startAge, normalAge){
+// 조기·연기 수령 보정 (감액·가산율은 엔진 값) → {monthly, kind:'early'|'delay'|'normal', pct}
+function ssAdjust(raw, startAge, normalAge){
   const d = startAge - normalAge;
-  if(d < 0) return 1 - 0.06*Math.min(5, -d);   // 조기노령연금 감액
-  if(d > 0) return 1 + 0.072*Math.min(5, d);   // 연기연금 가산
-  return 1;
+  const t = __engine().calcNationalPensionTiming({baseMonthly: raw, normalAge: normalAge, earlyYears: Math.max(0,-d), delayYears: Math.max(0,d)});
+  if(d < 0) return {monthly: t.early.monthly, kind:'early', pct: t.earlyReduction};
+  if(d > 0) return {monthly: t.delay.monthly, kind:'delay', pct: t.delayIncrease};
+  return {monthly: t.normal.monthly, kind:'normal', pct: 0};
 }
 function adjustedSsMonthly(){
   const raw = toInt(document.getElementById('ssMonthly').value);
   if(!document.getElementById('ssEarlyDefer').checked) return raw;
   const nAge = normalSsAge(toInt(document.getElementById('currentAge').value));
   const startAge = toInt(document.getElementById('ssStartAge').value) || 65;
-  return Math.round(raw * ssFactor(startAge, nAge));
+  return ssAdjust(raw, startAge, nAge).monthly;
 }
 function updateSsAdj(){
   const note = document.getElementById('ssAdjNote');
@@ -771,11 +672,11 @@ function updateSsAdj(){
     return;
   }
   const nAge = normalSsAge(cAge);
-  const f = ssFactor(startAge, nAge);
-  const adj = Math.round(raw * f);
+  const a = ssAdjust(raw, startAge, nAge);
+  const adj = a.monthly;
   let s = '정상 개시 <b>'+nAge+'세</b> 기준 · 설정 '+startAge+'세 → ';
-  if(f < 1) s += '조기수령 <b>'+Math.round((1-f)*100)+'% 감액</b>';
-  else if(f > 1) s += '연기수령 <b>'+(Math.round((f-1)*1000)/10)+'% 가산</b>';
+  if(a.kind === 'early') s += '조기수령 <b>'+Math.round(a.pct)+'% 감액</b>';
+  else if(a.kind === 'delay') s += '연기수령 <b>'+a.pct+'% 가산</b>';
   else s += '<b>감액·가산 없음</b>';
   s += ' → 적용 월수령액 <b>'+won(adj)+'</b>';
   note.innerHTML = s;
@@ -955,7 +856,8 @@ function smSS(){
 
 function smLife(){
   if(!LAST) return;
-  const life = parseInt(document.getElementById('sm-life').value,10);
+  let life = parseInt(document.getElementById('sm-life').value,10);
+  life = Math.max(life, LAST.retireAge+1);   // 은퇴 나이 이후만 계산
   document.getElementById('sm-lifeOut').textContent = life+'세';
   const r = plan({lifeExpectancy:life});
   const el = document.getElementById('sm-lifeMsg');
@@ -995,9 +897,10 @@ function smExtras(){
   const m = parseInt(document.getElementById('addMonthly').value,10);
   const annual = m*12;
   const salary = toInt(document.getElementById('sm-salary').value);
-  const base = Math.min(annual, 9000000); // 연금저축+IRP 합산 한도
-  const rate = (salary>0 && salary>55000000) ? 0.132 : 0.165;
-  const refund = Math.round(base*rate);
+  // 연금저축+IRP 합산 한도·공제율은 엔진 값 사용
+  const tc = __engine().calcTaxCredit({totalSalary: salary>0 ? salary : 0, pensionSaving: 0, irp: Math.max(0, annual||0)});
+  const rate = tc.creditRate;
+  const refund = tc.taxCredit;
   const tax = document.getElementById('sm-tax');
   if(m>0) tax.innerHTML = '연금저축·IRP로 납입 시 매년 약 <b>'+won(refund)+'</b> 세금 환급 (월 약 '+won(refund/12)+' · 공제율 '+(rate*100).toFixed(1)+'%'+(salary>0?'':' · 총급여 5,500만 이하 가정')+'). 한도 연 900만원 기준.';
   else tax.innerHTML = '추가 납입을 설정하면 연말정산 환급액이 표시됩니다.';

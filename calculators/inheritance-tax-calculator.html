@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>상속세 완전 계산기 - KFPC</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="./lib/calc-corporate.js?v=20261116"></script>
     <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
     <style>
         * {
@@ -2106,15 +2107,14 @@
             const publicCharges = parseValue(document.getElementById('publicCharges').value);
             const majorShareholder = document.getElementById('majorShareholderSurcharge').checked;
             
-            // 최대주주 할증평가 (상증법 §63③) - 비상장주식 평가단계에만 적용
-            const stockSurcharge = (majorShareholder && unlistedStock > 0) ? unlistedStock * 0.20 : 0;
-            
-            // 상증법 §19: 배우자공제 한도 산정용 상속재산가액
-            // = (총재산 + 사전증여 - 비과세 - 채무·공과금 - 배우자 사전증여) × 법정지분
-            const grossAssets = realEstate + financialAssets + otherAssets + unlistedStock 
-                                + stockSurcharge + retirement - taxExempt;
-            const preGift = spouseGift + otherGift;
-            const inheritanceBase = grossAssets + preGift - debts - publicCharges - spouseGift;
+            // 상증법 §19: 배우자공제 한도 산정용 상속재산가액 — 공용 엔진 값 사용
+            const E = __runInheritanceEngine({
+                totalAssets: realEstate + financialAssets + otherAssets,
+                unlistedStock, majorShareholderSurchargeApplies: majorShareholder,
+                retirement, taxExempt, spouseGift, otherGift, debts, publicCharges
+            });
+            if (!E) return;
+            const inheritanceBase = E.inheritanceBase;
             
             const numChildren = parseInt(document.getElementById('numChildren').value) || 0;
             const legalRatio = numChildren > 0 ? 1.5 : 1;
@@ -2133,6 +2133,21 @@
             if (confirm('입력한 내용을 모두 초기화하시겠습니까?')) {
                 location.reload();
             }
+        }
+
+        // ★ [2026-11-16] 공용 엔진 호출 — 상속세 계산식은 lib/calc-corporate.js 한 곳에만 있다.
+        function __runInheritanceEngine(input) {
+            const J = window.JarviaCalculators;
+            if (!J || typeof J.calcInheritanceTax !== 'function') {
+                alert('계산 엔진을 불러오지 못했습니다.\n인터넷 연결을 확인한 뒤 새로고침해 주세요.');
+                return null;
+            }
+            const out = J.calcInheritanceTax(input);
+            if (!out || out.calculated === false) {
+                alert('⚠️ 입력값을 확인해주세요.\n금액과 인원은 0 이상의 숫자여야 합니다.');
+                return null;
+            }
+            return out;
         }
 
         function calculate() {
@@ -2177,11 +2192,8 @@
                 let burialCost = parseValue(document.getElementById('burialCost').value);
                 const financialDebts = parseValue(document.getElementById('financialDebts').value);
                 
-                // 시행령 §9② 장례비 의제 공제: 500만원 미만이면 500만원 자동 적용
+                // 시행령 §9② 장례비 의제 공제(최저·최고 한도)는 엔진이 적용한다
                 const originalFuneralInput = funeralCost;
-                funeralCost = Math.max(funeralCost, 5000000);
-                funeralCost = Math.min(funeralCost, 10000000);
-                burialCost = Math.min(burialCost, 5000000);
                 
                 const hasSpouse = document.getElementById('hasSpouse').value === 'has';
                 const isSingleInheritance = document.getElementById('isSingleInheritance').checked;
@@ -2197,14 +2209,8 @@
                 let farmDeduction = parseValue(document.getElementById('farmDeduction').value);
                 const disasterLoss = parseValue(document.getElementById('disasterLoss').value);
                 
-                // 한도 적용
-                residenceDeduction = Math.min(residenceDeduction, 600000000);
-                // 상증법 §18조의3: 영농상속공제 한도 30억원 (2023.1.1~)
-                farmDeduction = Math.min(farmDeduction, 3000000000);
-                // [수정] 가업상속공제 한도 — 경영기간별 300억(10년↑)/400억(20년↑)/600억(30년↑) (상증법 §18조의2)
+                // 한도(동거주택·영농·가업상속 경영기간별)는 엔진이 적용한다
                 const fbYears = parseInt(document.getElementById('familyBusinessYears').value) || 10;
-                const familyBusinessCap = fbYears >= 30 ? 60000000000 : (fbYears >= 20 ? 40000000000 : 30000000000);
-                familyBusinessDeduction = Math.min(familyBusinessDeduction, familyBusinessCap);
                 
                 // 할증
                 const majorShareholder = document.getElementById('majorShareholderSurcharge').checked;
@@ -2215,153 +2221,60 @@
 
                 // 2. 최대주주 할증평가 (상증법 §63③) - 비상장주식 평가단계에만 적용
                 //    중소기업기본법상 중소기업은 제외 (사용자 체크박스로 판단)
-                const stockSurcharge = (majorShareholder && unlistedStock > 0) ? unlistedStock * 0.20 : 0;
-
-                // 3. 총 상속재산가액 (사전증여 제외, 채무·장례비 차감 전)
-                const grossAssets = realEstate + financialAssets + otherAssets + unlistedStock 
-                                    + stockSurcharge + retirement - taxExempt;
-                const preGift = spouseGift + otherGift;
-                // [수정 §24·§28] 증여재산 과세표준 = 증여재산가액 - 증여재산공제 (배우자 6억 / 기타 성년 5천만 가정)
-                const giftTaxableBase = Math.max(0, spouseGift - 600000000) + Math.max(0, otherGift - 50000000);
-
-                // 4. 배우자공제 한도 산정용 상속재산가액 (상증법 §19)
-                //    = 총재산 + 가산되는 증여재산 - 비과세 - 채무·공과금 - 배우자 사전증여
-                const inheritanceBase = grossAssets + preGift - debts - publicCharges - spouseGift;
-
-                // 5. 상속세 과세가액 = (총재산 - 채무·공과금·장례비) + 사전증여재산
-                //    (상증법 §13: 사전증여재산은 채무·장례비 차감 후 가산)
-                const taxableAmount = grossAssets - debts - publicCharges 
-                                      - funeralCost - burialCost + preGift;
-
-                // 결과 출력 호환용
-                const totalAssets = grossAssets + preGift;
-
-                // 6. 기초공제
-                const basicDeduction = 200000000;
-
-                // 7. 인적공제
-                const childDeduction = numChildren * 50000000;
-                
-                let minorDeduction = 0;
+                // ★ [2026-11-16] 계산은 공용 엔진(lib/calc-corporate.js → calcInheritanceTax)이 수행한다.
+                //    이 화면은 입력을 넘기고 결과를 받아 표시만 한다. (자체 계산식 없음)
+                const minorAges = [];
                 for (let i = 0; i < numMinors; i++) {
                     const ageInput = document.getElementById(`minorAge${i}`);
-                    if (ageInput) {
-                        const age = parseInt(ageInput.value) || 0;
-                        if (age < 19 && age >= 0) {
-                            minorDeduction += (19 - age) * 10000000;
-                        }
-                    }
+                    if (ageInput) minorAges.push(parseInt(ageInput.value) || 0);
                 }
-                
-                const elderlyDeduction = numElderly * 50000000;
-                const personalDeduction = childDeduction + minorDeduction + elderlyDeduction + disabledDeduction;
-
-                // 8. 일괄공제 vs 기초+인적공제 선택
-                const lumpSumDeduction = 500000000;
-                let selectedDeduction;
-                let isLumpSum;
-                
-                if (isSingleInheritance) {
-                    selectedDeduction = basicDeduction + personalDeduction;
-                    isLumpSum = false;
-                } else {
-                    // 일괄공제 5억 vs (기초공제 + 인적공제) 중 큰 금액
-                    const personalTotal = basicDeduction + personalDeduction;
-                    if (lumpSumDeduction >= personalTotal) {
-                        selectedDeduction = lumpSumDeduction;
-                        isLumpSum = true;
-                    } else {
-                        selectedDeduction = personalTotal;
-                        isLumpSum = false;
-                    }
-                }
-
-                // 9. 배우자공제 (상증법 §19)
-                //    한도 = MIN(실제 상속받은 금액, 법정상속분 한도(최대 30억))
-                //    단, 최소 5억원 보장 (상증법 §19 단서)
-                let spouseDeduction = 0;
-                if (hasSpouse) {
-                    const spouseMinimum = 500000000;
-                    const spouseMaximum = 3000000000;
-                    
-                    const legalRatio = numChildren > 0 ? 1.5 : 1;
-                    const legalBase = numChildren > 0 ? numChildren + 1.5 : 1;
-                    // inheritanceBase 음수 방지 (극단 케이스)
-                    const safeLegalShare = Math.max(0, inheritanceBase * legalRatio / legalBase);
-                    
-                    if (spouseInheritance === 0 || spouseInheritance < spouseMinimum) {
-                        spouseDeduction = spouseMinimum;
-                    } else {
-                        spouseDeduction = Math.min(
-                            spouseInheritance,
-                            Math.min(safeLegalShare, spouseMaximum)
-                        );
-                        // 상증법 §19 단서: 한도 < 5억이면 5억 적용
-                        spouseDeduction = Math.max(spouseDeduction, spouseMinimum);
-                    }
-                }
-
-                // 10. 금융재산공제
-                const netFinancial = financialAssets - financialDebts;
-                let financialDeduction = 0;
-                if (netFinancial > 0) {
-                    if (netFinancial <= 20000000) {
-                        financialDeduction = netFinancial;
-                    } else {
-                        financialDeduction = Math.max(netFinancial * 0.2, 20000000);
-                    }
-                    financialDeduction = Math.min(financialDeduction, 200000000);
-                }
-
-                // 11. 총 공제액 (상증법 §24: 공제한도 = 과세가액 - 사전증여재산 과세표준 - 비상속인 유증재산)
-                const deductionLimit = Math.max(0, taxableAmount - giftTaxableBase - nonHeirBequest);
-                let totalDeduction = selectedDeduction + spouseDeduction + financialDeduction + 
-                                    residenceDeduction + familyBusinessDeduction + farmDeduction + disasterLoss;
-                totalDeduction = Math.min(totalDeduction, deductionLimit);
-
-                // 12. 과세표준
-                //     ※ 최대주주 할증은 비상장주식 평가단계에서 이미 반영됨 (위 2단계 stockSurcharge)
-                let taxBase = Math.max(0, taxableAmount - totalDeduction);
-
-                // 13. 산출세액 (상증법 §26 누진세율)
-                let tax = 0;
-                if (taxBase <= 100000000) {
-                    tax = taxBase * 0.1;
-                } else if (taxBase <= 500000000) {
-                    tax = taxBase * 0.2 - 10000000;
-                } else if (taxBase <= 1000000000) {
-                    tax = taxBase * 0.3 - 60000000;
-                } else if (taxBase <= 3000000000) {
-                    tax = taxBase * 0.4 - 160000000;
-                } else {
-                    tax = taxBase * 0.5 - 460000000;
-                }
-
-                // 14. 세대생략 할증과세 (상증법 §27)
-                //     비율 분모 = 상속세 과세가액 (국세청 실무 기준)
-                //     미성년자가 20억원 초과 상속 시 40% 할증
-                //     단서: 대습상속(민법 §1001)은 할증 적용 안 함
-                let generationSurcharge = 0;
-                let genSkipRatio = 0;
-                let genSkipRate = 0;
-                if (generationSkipping && genSkipAmount > 0 && taxableAmount > 0 && !isDaeseupInheritance) {
-                    genSkipRatio = Math.min(genSkipAmount / totalAssets, 1);   // [수정 §27] 총상속재산 기준
-                    genSkipRate = (isMinorGenSkip && genSkipAmount > 2000000000) ? 0.40 : 0.30;
-                    generationSurcharge = tax * genSkipRatio * genSkipRate;
-                    tax += generationSurcharge;
-                }
-
-                // 15. 증여세액공제 (상증법 §28) — 한도: 산출세액 × (증여재산 과세표준 / 상속세 과세표준)
-                let giftTaxCredit = 0;
-                if (giftTaxPaid > 0 && taxBase > 0) {
-                    const giftCreditLimit = tax * Math.min(giftTaxableBase / taxBase, 1);
-                    giftTaxCredit = Math.min(giftTaxPaid, giftCreditLimit);
-                }
-                const taxAfterGiftCredit = Math.max(0, tax - giftTaxCredit);
-
-                // 16. 신고세액공제 (상증법 §69, 2019년 이후 3%) — 증여세액공제 차감 후 산출세액 기준
-                const reportDeduction = taxAfterGiftCredit * 0.03;
-                const finalTax = Math.max(0, taxAfterGiftCredit - reportDeduction);
+                const E = __runInheritanceEngine({
+                    totalAssets: realEstate + financialAssets + otherAssets,
+                    spouseGift, otherGift, giftTaxPaid, nonHeirBequest,
+                    debts, publicCharges,
+                    funeralCost: originalFuneralInput, burialCost,
+                    financialAssets, financialDebts,
+                    unlistedStock, majorShareholderSurchargeApplies: majorShareholder,
+                    retirement, taxExempt,
+                    hasSpouse, isSingleInheritance, spouseInheritance,
+                    numChildren, numMinors, minorAges, numElderly, disabledDeduction,
+                    residenceDeduction, familyBusinessDeduction, familyBusinessYears: fbYears,
+                    farmDeduction, disasterLoss,
+                    genSkipAmount: generationSkipping ? genSkipAmount : 0,
+                    isMinorGenSkip, isDaeseupInheritance
+                });
+                if (!E) return;
+                const stockSurcharge = E.stockSurcharge;
+                const preGift = E.preGift;
+                const giftTaxableBase = E.giftTaxableBase;
+                const inheritanceBase = E.inheritanceBase;
+                const taxableAmount = E.taxableAmount;
+                const totalAssets = E.totalEstate;
+                const basicDeduction = E.basicDeduction;
+                const childDeduction = E.childDeduction;
+                const minorDeduction = E.minorDeduction;
+                const elderlyDeduction = E.elderlyDeduction;
+                const personalDeduction = E.personalDeduction;
+                const lumpSumDeduction = E.lumpSumDeduction;
+                const selectedDeduction = E.mainDeduction;
+                const isLumpSum = E.isLumpSum;
+                const spouseDeduction = E.spouseDeduction;
+                const financialDeduction = E.financialDeduction;
+                residenceDeduction = E.residenceDeduction;
+                familyBusinessDeduction = E.familyBusinessDeduction;
+                farmDeduction = E.farmDeduction;
+                const deductionLimit = E.deductionLimit;
+                const totalDeduction = E.totalDeduction;
+                const taxBase = E.taxBase;
+                const generationSurcharge = E.generationSurcharge;
+                const genSkipRatio = E.genSkipRatio;
+                const genSkipRate = E.genSkipRate;
+                const tax = E.taxWithSurcharge;
+                const giftTaxCredit = E.giftTaxCredit;
+                const reportDeduction = E.reportDeduction;
+                const finalTax = E.finalTax;
+                funeralCost = E.funeralDeduction;   // 장례비용 + 봉안시설 (한도 적용 후 합계)
+                burialCost = 0;
 
                 // 결과 표시
                 displayResults({
