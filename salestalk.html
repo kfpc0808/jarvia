@@ -86,6 +86,7 @@ button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,s
 .top .ebrow a.home{white-space:nowrap}
 .lab{display:inline-flex;flex-direction:column;align-items:flex-start;gap:3px;margin-top:10px;background:rgba(232,184,74,.16);border:1px solid rgba(232,184,74,.55);color:#fff;border-radius:12px;padding:7px 12px;font-size:13px;line-height:1.5;max-width:100%}
 .lab b{color:var(--pg-gold)}
+body.wk-ro #cardLab{display:none!important}   /* ★ [2026-11-18] 로그인 없는 읽기 전용 화면에서는 카드 안내 숨김 */
 .lab a{background:var(--pg-gold);color:var(--pg-navy);font-weight:800;text-decoration:none;border-radius:999px;padding:1px 8px;margin:0 1px;white-space:nowrap}
 .top .date{font-size:15px;font-weight:700;background:rgba(255,255,255,.12);border-radius:10px;padding:8px 14px;white-space:nowrap}
 main{padding:0 16px calc(60px + env(safe-area-inset-bottom,0px))}
@@ -354,7 +355,7 @@ nav.bar[hidden],.wk-ro-badge[hidden]{display:none}   /* hidden 속성이 display
 <header class="top"><div class="wrap">
   <div class="row">
     <div><div class="ebrow"><span class="eb">TODAY'S SALES TOPIC</span><a class="home" href="index.html">← 메인으로</a></div><h1>오늘의 영업주제</h1><p>계약으로 이어지는 지금 꺼내기 좋은 주제 <b>'매일 2가지'</b></p>
-      <div class="lab"><span>🧪 <b>실험실 버전입니다.</b></span><span>개선 부분은 <a href="https://pf.kakao.com/_xmVjSX" target="_blank" rel="noopener noreferrer">'카톡센터'</a>로 제안 부탁드립니다.</span></div></div>
+      <div class="lab" id="cardLab" style="display:none"><span>💳 <b>결제카드를 등록해 주시면 감사하겠습니다.</b></span><span>자비아멤버십 월 이용료는 매월 말일 후불로 결제됩니다. 번거로우시겠지만 1분이면 등록하실 수 있습니다. <a href="index.html?action=card">카드 등록하기 →</a></span></div></div>   <!-- ★ [2026-11-18] 실험실 안내 삭제 → 카드 미등록 회원 전용 등록 안내 (cardLabPaint 가 표시) -->
   </div>
 </div></header>
 <main><div class="wrap">
@@ -476,6 +477,28 @@ async function checkRole(user){
     return ROLES.includes(d.exists()?d.data().role:'');}
   catch(e){console.warn('[salestalk] role',e);return false;}
 }
+/* ★ [2026-11-18] 결제카드 등록 안내 — 카드 미등록 자비아멤버십 월납 회원만 표시 (판정은 index.html jvCardGateNeed 와 같게 유지)
+   제외: 관리자 · 자비아멤버십 외 등급 · 총판 · 단체 · 비활성 · 연납(과금 시작 전) · 카드 등록 회원 · 조회 실패 */
+async function cardLabPaint(user){
+  const el=$('cardLab');if(!el)return;el.style.display='none';
+  try{
+    if(/@javia-admin\.internal$/.test(user.email||''))return;
+    const s=await getDoc(doc(db,'users',user.uid));if(!s.exists())return;
+    const u=s.data()||{};
+    if(u.role!=='jarvia_member')return;
+    if(u.isDistributor===true)return;
+    if(u.isGroup===true||u.groupMasterId||(u.status&&u.status!=='active'))return;
+    if(u.annualPrepaid===true){
+      const b=u.billingStartMonth;
+      if(!b||!/^\d{4}-\d{2}$/.test(b))return;
+      const t=new Date();
+      if((t.getFullYear()*12+t.getMonth())<((+b.slice(0,4))*12+(+b.slice(5,7)-1)))return;
+    }
+    const c=await getDoc(doc(db,'billing_cards',user.uid));
+    if(c.exists()&&c.data().status==='active')return;
+    if(me&&me.uid===user.uid)el.style.display='';
+  }catch(e){}
+}
 function gate(html){$('app').style.display='none';$('gate').style.display='';$('gateMsg').innerHTML=html;$('gateBtn').style.display='';}
 onAuthStateChanged(auth,async user=>{
   if(!user){me=null;if(wkTryRO())return;gate('자비아 <b>로그인 후</b> 이용할 수 있습니다.<br>메인에서 로그인해 주세요.');return;}   /* ★ [2026-10-23] 알림톡 링크 ?w= 는 로그인 없이 읽기 전용 */
@@ -485,6 +508,7 @@ onAuthStateChanged(auth,async user=>{
   $('gate').style.display='none';$('app').style.display='';
   wk.ro=false;document.body.classList.remove('wk-ro');$('wkRoBadge').hidden=true;
   logVisit(user);
+  cardLabPaint(user);   /* ★ [2026-11-18] 카드 미등록 회원에게만 등록 안내 표시 */
   try{if(window.JvMemo)JvMemo.init({db,uid:user.uid,email:user.email||'',fs:{doc,getDoc,collection,setDoc,serverTimestamp},from:'영업주제',pill:'이 카드 담기',z:45,getItem:_jvmItem});}catch(_e){}   /* ★ [2026-10-17] 이지메모 플로팅(A안) */
   loadFavs();loadFcDoc();
   /* ★ 깊은 링크 ?d=YYYY-MM-DD&s=job|age (이지메모·공유에서 특정 카드로 바로) */
