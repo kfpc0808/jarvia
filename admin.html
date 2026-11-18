@@ -20168,18 +20168,53 @@ async function _alimCall(payload,recipients,btn){
   }finally{btn.disabled=false;btn.textContent=_orig;}
 }
 
+/* ★ [2026-11-18] 대량 발송 중단 대응 — ① 오늘 같은 템플릿을 이미 받은 회원 제외(선택) ② 40명씩 나눠 순서대로 발송(진행 표시)
+   · 서버(sendAdminAlimtalk)는 한 번 호출에 540초 한도 — 전원을 한 번에 넘기면 건당 지연 시 중간에 끊기고 일괄 이력도 남지 않는다
+   · 이미 받은 회원 판정: 오늘 send_history 중 같은 tplKey·status=sent 인 건의 회원(uid) 또는 번호(refId 끝) */
+const ALIM_CHUNK=40;
+let _alimSending=false;
+async function _alimSentToday(templateKey){
+  const st=new Date();st.setHours(0,0,0,0);
+  const snap=await getDocs(query(collection(db,'send_history'),where('createdAt','>=',Timestamp.fromDate(st))));
+  const uids=new Set(),phones=new Set();
+  snap.forEach(d=>{const x=d.data();if(x.tplKey!==templateKey||x.status!=='sent'||!x.consultantUid)return;
+    uids.add(String(x.consultantUid));
+    const p=String(x.refId||'').split('_').pop().replace(/\D/g,'');if(/^01\d{8,9}$/.test(p))phones.add(p);});
+  return {uids,phones};
+}
+
 async function doSendAdminAlimtalk(){
+  if(_alimSending){toast('발송이 진행 중입니다.','warning');return;}
   const payload=_alimValidate();if(!payload)return;
-  const recipients=[..._alimSel.values()];
+  let recipients=[..._alimSel.values()];
   if(!recipients.length){toast('발송 대상을 선택하세요.','error');return;}
-  if(!confirm(`${recipients.length}명에게 알림톡을 발송합니다.\n채널: ${ALIM_CHANNELS[payload.channel].name}\n템플릿: ${payload.templateLabel}\n대체발송: ${payload.fallback?'문자':'안 함'}\n예상 금액: ${Math.round(recipients.length*ALIM_UNIT_COST).toLocaleString()}원\n\n발송하시겠습니까?`))return;
+  let excluded=0;
   try{
-    const d=await _alimCall(payload,recipients,$('alim-send-btn'));
-    const el=$('alim-result');
-    el.classList.remove('hidden');
-    el.innerHTML=`<div style="font-size:15px;font-weight:600;margin-bottom:8px">✅ 발송 완료</div><div style="font-size:14px">총 ${d.totalCount||0}건 — 성공 <b style="color:#238636">${d.successCount||0}</b>건, 실패 <b style="color:#DA3633">${d.failCount||0}</b>건${d.fallbackCount?`, 문자 대체 <b style="color:#B45309">${d.fallbackCount}</b>건`:''}</div>`;
+    const s=await _alimSentToday(payload.templateKey);
+    const dup=recipients.filter(r=>s.uids.has(String(r.uid||''))||s.phones.has(String(r.phone||'').replace(/\D/g,'')));
+    if(dup.length&&confirm(`선택한 ${recipients.length}명 중 ${dup.length}명은 오늘 이 템플릿을 이미 받았습니다.\n\n[확인] 이미 받은 회원을 제외하고 ${recipients.length-dup.length}명에게만 발송\n[취소] 제외하지 않고 ${recipients.length}명 전원에게 발송`)){
+      const ds=new Set(dup);recipients=recipients.filter(r=>!ds.has(r));excluded=dup.length;
+    }
+  }catch(e){if(!confirm('오늘 발송 이력을 확인하지 못했습니다 ('+(e.message||'오류')+').\n이미 받은 회원 제외 없이 진행할까요?'))return;}
+  if(!recipients.length){toast('발송할 대상이 없습니다 (모두 오늘 이미 받았습니다).','warning');return;}
+  if(!confirm(`${recipients.length}명에게 알림톡을 발송합니다.${excluded?`\n(오늘 이미 받은 ${excluded}명 제외)`:''}\n채널: ${ALIM_CHANNELS[payload.channel].name}\n템플릿: ${payload.templateLabel}\n대체발송: ${payload.fallback?'문자':'안 함'}\n예상 금액: ${Math.round(recipients.length*ALIM_UNIT_COST).toLocaleString()}원\n\n발송하시겠습니까?`))return;
+  const el=$('alim-result'),tot={total:0,ok:0,fail:0,fb:0};let done=0;
+  const show=(head,extra)=>{el.classList.remove('hidden');el.innerHTML=`<div style="font-size:15px;font-weight:600;margin-bottom:8px">${head}</div><div style="font-size:14px">총 ${tot.total}건 — 성공 <b style="color:#238636">${tot.ok}</b>건, 실패 <b style="color:#DA3633">${tot.fail}</b>건${tot.fb?`, 문자 대체 <b style="color:#B45309">${tot.fb}</b>건`:''}</div>${extra?`<div style="font-size:13px;color:#7A5C16;margin-top:8px;line-height:1.6">${extra}</div>`:''}`;};
+  _alimSending=true;
+  try{
+    for(let i=0;i<recipients.length;i+=ALIM_CHUNK){
+      const part=recipients.slice(i,i+ALIM_CHUNK);
+      show(`⏳ 발송 중 — ${done} / ${recipients.length}명`,'끝날 때까지 이 화면을 닫거나 다른 메뉴로 이동하지 마세요.');
+      const d=await _alimCall(payload,part,$('alim-send-btn'));
+      tot.total+=d.totalCount||0;tot.ok+=d.successCount||0;tot.fail+=d.failCount||0;tot.fb+=d.fallbackCount||0;done+=part.length;
+    }
+    show(`✅ 발송 완료 — ${done}명`);
     loadAlimLogs();
-  }catch(e){toast('발송 실패: '+(e.message||'오류'),'error');}
+  }catch(e){
+    show(`⚠️ 발송 중단 — ${done} / ${recipients.length}명까지 완료`,'오류: '+esc(e.message||'오류')+'<br>2~3분 뒤 같은 대상을 선택해 다시 「알림톡 발송」을 누르고, 안내창에서 [확인](이미 받은 회원 제외)을 선택하면 남은 회원에게만 이어서 발송됩니다.');
+    toast('발송 중단: '+(e.message||'오류'),'error');
+    loadAlimLogs();
+  }finally{_alimSending=false;}
 }
 
 async function doSendAlimTest(btn){
