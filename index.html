@@ -7594,7 +7594,7 @@ document.addEventListener('DOMContentLoaded', function(){
      ════════════════════════════════════════════════════ -->
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,setPersistence,browserLocalPersistence,updatePassword,reauthenticateWithCredential,EmailAuthProvider}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import{getAuth,onAuthStateChanged,signInWithCustomToken,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,setPersistence,browserLocalPersistence,updatePassword,reauthenticateWithCredential,EmailAuthProvider}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import{getFunctions,httpsCallable}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js';
 import{getFirestore,collection,doc,getDoc,getDocFromServer,getDocs,setDoc,updateDoc,deleteDoc,query,where,orderBy,limit,runTransaction,serverTimestamp,increment,Timestamp,deleteField,onSnapshot,writeBatch}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import{getStorage,ref as stRef,uploadBytes,uploadString,getDownloadURL}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
@@ -8119,6 +8119,7 @@ function goSnapshot(){if(!me){openM('mdl-login-prompt');return;}const _moRoles=[
 /* ═══ 📋 약관분석 (2026-07-27) — 정규회원(지사장·이너·컨홈·멤버십) 오픈 · 별도 창 ═══ */
 function openPolicyAnalysis(){
   if(!me){openM('mdl-login-prompt');return;}
+  if(window.jvTrialLocked&&window.jvTrialLocked('policy'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   const _moRoles=['admin'/*★2026-09-03 관리자*/,'jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager'];
   if(!_moRoles.includes(meData?.role)){toast('약관분석은 멤버십회원 전용서비스입니다.','warning');return;}
   openM('mdl-policy-intro');
@@ -9774,6 +9775,106 @@ function jvNormalizeFreeRole(d){
   return d;
 }
 function jvIsFreeUser(d){ return !!(d && (d.realRole||d.role)==='free_user'); }
+/* ★ [2026-11-19] 영업 체험 링크 — 체험 계정(users.isTrial) 전용 처리
+   · 입장: jarvia.co.kr/?t=코드 → 서버 trialEnter 가 링크 확인·체험 계정 생성 → 커스텀 토큰 로그인 (아이디·비밀번호 없음)
+   · 체험 계정은 기간제(free_user)와 같은 권한 — 정기결제·카드 등록 대상 아님, 기간 지나면 로그인 차단(jvFreeExpired)
+   · 동시 로그인 기기 제한은 적용하지 않는다(기기 수는 링크에서 서버가 제한)
+   · 관리자가 막은 기능(trialLocks)은 「유료회원 전용」 안내 후 멈춘다 — 누른 기록은 service_logs(trial_lock_기능)·users.trialLockHits
+   · 관리자가 사용 중지(status)·기간 변경(expiresAt)하면 쓰는 중에도 바로 로그아웃 */
+const JV_TRIAL_LOCKS={
+  proposal:['AI 제안서는','고객 상황에 맞춘 제안서를 AI가 바로 만들어 드리는 기능입니다.'],
+  taxnavi:['택스나비는','세법 예규·판례를 찾아 정리해 드리는 기능입니다.'],
+  ai:['AI 비서는','고객 상담·자료 작성을 AI가 도와드리는 기능입니다.'],
+  sms:['문자 발송은','고객에게 실제 문자를 보내는 기능입니다.'],
+  ppt:['PPT 만들기는','상담용 PPT를 AI가 만들어 드리는 기능입니다.'],
+  corp:['기업진단리포트는','법인 고객 진단 리포트를 만들어 드리는 기능입니다.'],
+  policy:['약관분석은','보험 약관을 AI가 분석해 드리는 기능입니다.']
+};
+function jvIsTrial(){return !!(window.meData&&window.meData.isTrial===true);}
+function _jvtEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function jvTrialEnd(d){try{if(!d||!d.expiresAt||d.expiresAt==='unlimited')return null;const e=d.expiresAt.toDate?d.expiresAt.toDate():new Date(d.expiresAt);return isNaN(e.getTime())?null:e;}catch(_e){return null;}}
+function jvTrialPeriodText(d){const e=jvTrialEnd(d);if(!e)return '기간 제한 없음';const left=Math.max(0,Math.ceil((e.getTime()-Date.now())/86400000));return (e.getMonth()+1)+'월 '+e.getDate()+'일까지 (D-'+left+')';}
+function jvTrialLockList(d){return Array.isArray(d&&d.trialLocks)?d.trialLocks.filter(k=>JV_TRIAL_LOCKS[k]):['proposal','taxnavi'];}
+function jvTrialModal(inner,btnLabel){
+  try{const old=document.getElementById('jv-trial-mdl');if(old)old.remove();}catch(_e){}
+  const w=document.createElement('div');w.id='jv-trial-mdl';w.setAttribute('role','dialog');w.setAttribute('aria-modal','true');
+  w.style.cssText='position:fixed;inset:0;z-index:2147482000;background:rgba(15,36,64,.5);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  w.innerHTML='<div style="background:#fff;border-radius:16px;width:100%;max-width:420px;max-height:calc(100vh - 32px);overflow-y:auto;overflow-x:hidden;box-sizing:border-box;padding:22px 20px 18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 8px 32px rgba(27,58,92,.25);color:#2C3E50;word-break:keep-all;overflow-wrap:anywhere">'+inner+'<button type="button" id="jv-trial-mdl-ok" style="height:48px;border:none;border-radius:10px;background:#1B3A5C;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;flex:none">'+_jvtEsc(btnLabel||'확인')+'</button></div>';
+  document.body.appendChild(w);
+  const ok=document.getElementById('jv-trial-mdl-ok');if(ok){ok.onclick=()=>w.remove();try{ok.focus();}catch(_e){}}
+  return w;
+}
+window.jvTrialLocked=function(key){
+  if(!jvIsTrial())return false;
+  if(!jvTrialLockList(meData).includes(key))return false;
+  try{logSvc('trial_lock_'+key);}catch(_e){}
+  try{if(me&&me.uid)updateDoc(doc(db,'users',me.uid),{trialLockHits:increment(1),trialLastLockAt:serverTimestamp()}).catch(()=>{});}catch(_e){}
+  const t=JV_TRIAL_LOCKS[key]||['이 기능은',''];const mgr=meData.trialManager||'';
+  jvTrialModal('<span style="align-self:flex-start;font-size:12px;font-weight:700;color:#8A3A05;background:#FDEBD8;border-radius:6px;padding:3px 8px">유료회원 전용</span>'
+    +'<h3 style="margin:0;font-size:18px;line-height:1.45;color:#1B3A5C">'+_jvtEsc(t[0])+' 유료회원 전용입니다</h3>'
+    +'<p style="margin:0;font-size:14px;line-height:1.7;color:#475569">'+_jvtEsc(t[1])+' 체험 계정에서는 이용하실 수 없습니다.</p>'
+    +'<div style="background:#F7F9FC;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:#334155">정식 회원이 되시면 바로 이용하실 수 있습니다. 가입 문의는 담당자'+(mgr?'('+_jvtEsc(mgr)+')':'')+'에게 해 주세요.</div>','닫기');
+  return true;
+};
+function jvTrialBar(){
+  try{
+    const host=document.getElementById('pg-main');if(!host)return;
+    let bar=document.getElementById('jv-trial-bar');
+    if(!bar){bar=document.createElement('div');bar.id='jv-trial-bar';bar.setAttribute('role','status');host.insertBefore(bar,host.firstChild);}
+    const names=jvTrialLockList(meData).map(k=>JV_TRIAL_LOCKS[k][0].replace(/(은|는)$/,'')).join('·');
+    bar.style.cssText='background:#E2F1F7;color:#155E7A;font-size:12.5px;font-weight:700;padding:8px 14px;display:flex;flex-wrap:wrap;gap:2px 12px;justify-content:center;align-items:center;line-height:1.5;text-align:center;word-break:keep-all;box-sizing:border-box;max-width:100%';
+    bar.innerHTML='<span>체험 중 · '+_jvtEsc(jvTrialPeriodText(meData))+'</span>'+(names?'<span style="font-weight:500">'+_jvtEsc(names)+'은(는) 유료회원 전용입니다</span>':'');
+  }catch(_e){}
+}
+let _jvTrialUnsub=null,_jvTrialTimer=null;
+function jvTrialStop(msg){
+  if(_jvTrialUnsub){try{_jvTrialUnsub();}catch(_e){}_jvTrialUnsub=null;}
+  if(_jvTrialTimer){clearInterval(_jvTrialTimer);_jvTrialTimer=null;}
+  try{alert(msg);}catch(_e){}
+  doLogout().then(()=>nav('login')).catch(()=>{});
+}
+function jvTrialInit(){
+  if(!jvIsTrial()||!me)return;
+  jvTrialBar();
+  if(_jvTrialUnsub){try{_jvTrialUnsub();}catch(_e){}}
+  const uid=me.uid;
+  _jvTrialUnsub=onSnapshot(doc(db,'users',uid),s=>{
+    if(!me||me.uid!==uid)return;
+    const x=s.exists()?s.data():{status:'removed'};
+    if(x.status&&x.status!=='active'){jvTrialStop('체험 이용이 중지되었습니다.\n계속 이용하시려면 담당자에게 문의해 주세요.');return;}
+    if(x.trialLocks)meData.trialLocks=x.trialLocks;
+    if(x.expiresAt)meData.expiresAt=x.expiresAt;
+    const e=jvTrialEnd(x);if(e&&e.getTime()<Date.now()){jvTrialStop('체험 기간이 끝났습니다.\n계속 이용하시려면 담당자에게 문의해 주세요.');return;}
+    jvTrialBar();
+  },()=>{});
+  if(_jvTrialTimer)clearInterval(_jvTrialTimer);
+  _jvTrialTimer=setInterval(()=>{if(!jvIsTrial()){clearInterval(_jvTrialTimer);_jvTrialTimer=null;return;}const e=jvTrialEnd(meData);if(e&&e.getTime()<Date.now())jvTrialStop('체험 기간이 끝났습니다.\n계속 이용하시려면 담당자에게 문의해 주세요.');},60000);
+  /* 처음 한 번 환영 안내 (기기별) */
+  try{
+    const k='jv_trial_hello_'+uid;
+    if(!localStorage.getItem(k)){
+      localStorage.setItem(k,'1');
+      const kakao=/KAKAOTALK/i.test(navigator.userAgent||'');
+      const names=jvTrialLockList(meData).map(k2=>JV_TRIAL_LOCKS[k2][0].replace(/(은|는)$/,'')).join('·');
+      setTimeout(()=>jvTrialModal(
+        '<span style="font-size:13px;color:#155E7A;font-weight:700">자비아 체험이 준비됐습니다</span>'
+        +'<h3 style="margin:0;font-size:21px;line-height:1.4;color:#1B3A5C">'+_jvtEsc(meData.name||'')+' 님, 환영합니다</h3>'
+        +(meData.company?'<span style="font-size:13.5px;color:#5D6B78;margin-top:-6px">'+_jvtEsc(meData.company)+'</span>':'')
+        +'<div style="border:1px solid #E1E8EE;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;font-size:13.5px">'
+        +'<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:#5D6B78">체험 기간</span><b>'+_jvtEsc(jvTrialPeriodText(meData))+'</b></div>'
+        +(meData.trialManager?'<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:#5D6B78">담당</span><b>'+_jvtEsc(meData.trialManager)+'</b></div>':'')
+        +'</div>'
+        +'<div style="font-size:13.5px;line-height:1.7;display:flex;flex-direction:column;gap:4px"><b style="color:#1B3A5C">이렇게 쓰시면 됩니다</b>'
+        +'<span>· 고객 등록, 고객 리포트, 영업주제, 계산기 등 대부분의 기능을 실제처럼 써 보실 수 있습니다.</span>'
+        +'<span>· 입력하신 자료는 본인만 볼 수 있습니다.</span>'
+        +(names?'<span>· '+_jvtEsc(names)+'은(는) 유료회원 전용입니다.</span>':'')
+        +'<span>· 다시 들어오실 때는 받으신 링크를 누르시면 됩니다.</span></div>'
+        +(kakao?'<div style="background:#FFF8EB;border:1px solid #F3DCA8;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6;color:#6B4E0A">카카오톡 안에서 열면 창을 닫을 때 로그인이 풀릴 수 있습니다. 오른쪽 위 메뉴의 「다른 브라우저로 열기」를 누르면 계속 유지됩니다.</div>':''),
+        '체험 시작하기'),900);
+    }
+  }catch(_e){}
+}
+window.jvTrialInit=jvTrialInit;
 function jvFreeExpiryText(d){
   try{
     if(!d||!d.expiresAt||d.expiresAt==='unlimited') return '';
@@ -9798,6 +9899,7 @@ window.jvIsFreeUser=jvIsFreeUser;
 function showFreeNotice(force){
   try{
     if(!jvIsFreeUser(meData)) return false;
+    if(meData&&meData.isTrial===true) return false;   /* ★ [2026-11-19] 영업 체험 계정은 체험 전용 안내(jvTrialInit)를 쓴다 */
     const el=document.getElementById('mdl-free-notice');
     if(!el || !el.classList.contains('hidden')) return false;
     const left=jvFreeDaysLeft(meData);
@@ -10000,6 +10102,70 @@ async function setupPlatformPWA(){
   }catch(_e){console.warn('setupPlatformPWA error:',_e);}
 }
 
+/* ★ [2026-11-19] 영업 체험 링크 입장 — jarvia.co.kr/?t=코드
+   · 인증을 마친 기기는 서버(trialEnter)가 바로 로그인시킨다. 아이디·비밀번호 입력 없음
+   · 새 기기는 휴대폰 인증(trialSendCode → trialVerify) 후 입장. 링크를 처음 인증한 번호만 계속 쓸 수 있다 */
+(function(){
+  let code='';try{code=String(new URLSearchParams(location.search).get('t')||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}catch(_e){}
+  if(!code)return;
+  const ov=document.createElement('div');ov.id='jv-trial-enter';ov.setAttribute('role','dialog');ov.setAttribute('aria-label','체험 입장');
+  ov.style.cssText='position:fixed;inset:0;z-index:2147483000;background:#F7F9FC;display:flex;align-items:center;justify-content:center;padding:24px 18px;box-sizing:border-box;overflow-y:auto';
+  const wrap='<div style="max-width:420px;width:100%;display:flex;flex-direction:column;gap:14px;word-break:keep-all;overflow-wrap:anywhere;color:#2C3E50;margin:auto">';
+  const spin=(t)=>{ov.innerHTML='<style>@keyframes jvtSpin{to{transform:rotate(360deg)}}</style>'+wrap.replace('gap:14px','gap:14px;align-items:center;text-align:center')+'<div style="width:52px;height:52px;border-radius:50%;border:5px solid #D5E6EF;border-top-color:#2E86AB;box-sizing:border-box;animation:jvtSpin 1s linear infinite"></div><strong style="font-size:18px;color:#1B3A5C"></strong><span style="font-size:14px;color:#5D6B78;line-height:1.6">잠시만 기다려 주세요.</span></div>';ov.querySelector('strong').textContent=t;};
+  spin('입장 확인 중입니다');
+  document.body.appendChild(ov);
+  const clean=()=>{try{const u=new URL(location.href);u.searchParams.delete('t');history.replaceState(null,'',u.pathname+u.search+u.hash);}catch(_e){}};
+  const showErr=msg=>{
+    clean();
+    ov.innerHTML=wrap+'<h2 style="margin:0;font-size:21px;line-height:1.4;color:#1B3A5C">체험 링크를 열 수 없습니다</h2><p style="margin:0;font-size:14.5px;line-height:1.7;color:#475569"></p><button type="button" style="height:50px;border:none;border-radius:10px;background:#1B3A5C;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">닫기</button></div>';
+    ov.querySelector('p').textContent=msg;ov.querySelector('button').onclick=()=>ov.remove();
+  };
+  const login=async token=>{spin('입장 중입니다');clean();await signInWithCustomToken(auth,token);setTimeout(()=>{try{ov.remove();}catch(_e){}},1500);};
+  let dev='';
+  try{dev=localStorage.getItem('jv_trial_dev')||'';if(!/^[A-Za-z0-9]{20,40}$/.test(dev)){const a=new Uint8Array(16);crypto.getRandomValues(a);dev=Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem('jv_trial_dev',dev);}}catch(_e){dev='';}
+  const call=(fn,data)=>httpsCallable(functions,fn)(data).then(r=>(r&&r.data)||{});
+  const verifyForm=info=>{
+    const inp='height:48px;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:8px;padding:0 12px;font-size:16px;font-family:inherit;width:100%;min-width:0;background:#fff;color:#2C3E50';
+    ov.innerHTML=wrap
+      +'<span style="font-size:13px;font-weight:700;color:#155E7A">자비아 체험 · 본인 확인</span>'
+      +'<h2 id="jvt-who" style="margin:0;font-size:20px;line-height:1.45;color:#1B3A5C"></h2>'
+      +'<p style="margin:0;font-size:13.5px;line-height:1.65;color:#475569">처음 여는 기기에서는 휴대폰 인증이 필요합니다. 한 번 인증한 기기는 다시 묻지 않습니다.</p>'
+      +'<label for="jvt-ph" style="font-size:13px;font-weight:700;color:#334155">휴대폰 번호</label>'
+      +'<div style="display:flex;gap:8px"><input id="jvt-ph" type="tel" inputmode="numeric" autocomplete="tel" placeholder="01012345678" maxlength="13" style="'+inp+';flex:1"><button type="button" id="jvt-send" style="flex:none;height:48px;padding:0 14px;border:none;border-radius:8px;background:#2E86AB;color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">인증번호 받기</button></div>'
+      +'<label for="jvt-otp" style="font-size:13px;font-weight:700;color:#334155">인증번호 6자리</label>'
+      +'<input id="jvt-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="문자로 받은 번호" style="'+inp+'">'
+      +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.6;color:#475569;cursor:pointer"><input id="jvt-agree" type="checkbox" style="width:18px;height:18px;flex:none;margin-top:2px">본인 확인을 위해 휴대폰 번호를 인증합니다. 번호는 같은 분인지 확인하는 용도로만 알아볼 수 없게 바꿔 보관하며, 체험이 끝나면 삭제합니다. (동의하지 않으면 체험을 이용할 수 없습니다)</label>'
+      +'<div id="jvt-msg" role="status" style="min-height:20px;font-size:13px;line-height:1.5;color:#B42318"></div>'
+      +'<button type="button" id="jvt-ok" style="height:52px;border:none;border-radius:10px;background:#1B3A5C;color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit">인증하고 시작하기</button>'
+      +'<span style="font-size:12px;line-height:1.6;color:#64748B">본인이 아니시면 인증하지 마세요. 이 링크는 처음 인증한 번호로만 계속 쓸 수 있습니다.</span></div>';
+    ov.querySelector('#jvt-who').textContent=(info.who||'')+' 님'+(info.company?'('+info.company+')':'')+' 전용 체험 링크입니다';
+    const $q=id=>ov.querySelector('#'+id),msg=(t,ok)=>{const m=$q('jvt-msg');m.textContent=t||'';m.style.color=ok?'#166534':'#B42318';};
+    $q('jvt-send').onclick=async()=>{
+      const b=$q('jvt-send');const ph=$q('jvt-ph').value.replace(/\D/g,'');
+      if(!/^01[016789]\d{7,8}$/.test(ph)){msg('휴대폰 번호를 정확히 입력해 주세요.');return;}
+      b.disabled=true;b.textContent='보내는 중...';
+      try{const r=await call('trialSendCode',{code,phone:ph});if(!r.success){msg(r.error||'인증번호를 보내지 못했습니다.');b.disabled=false;b.textContent='인증번호 받기';return;}
+        msg('인증번호를 보냈습니다. 5분 안에 입력해 주세요.',true);$q('jvt-otp').focus();
+        let n=60;const tm=setInterval(()=>{n--;b.textContent='다시 받기 '+n+'초';if(n<=0){clearInterval(tm);b.disabled=false;b.textContent='다시 받기';}},1000);
+      }catch(_e){msg('인증번호를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');b.disabled=false;b.textContent='인증번호 받기';}
+    };
+    $q('jvt-ok').onclick=async()=>{
+      const otp=$q('jvt-otp').value.replace(/\D/g,'');
+      if(!$q('jvt-agree').checked){msg('본인 확인 안내에 동의해 주세요.');return;}
+      if(otp.length!==6){msg('인증번호 6자리를 입력해 주세요.');return;}
+      const b=$q('jvt-ok');b.disabled=true;
+      try{const r=await call('trialVerify',{code,dev,otp});if(!r.success||!r.token){msg(r.error||'확인하지 못했습니다.');b.disabled=false;if(['revoked','expired','other_owner','device_limit'].includes(r.code))setTimeout(()=>showErr(r.error),1200);return;}
+        await login(r.token);
+      }catch(_e){msg('확인 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.');b.disabled=false;}
+    };
+    try{if('OTPCredential' in window){navigator.credentials.get({otp:{transport:['sms']}}).then(c=>{if(c&&c.code){const o=$q('jvt-otp');if(o)o.value=c.code;}}).catch(()=>{});}}catch(_e){}
+  };
+  call('trialEnter',{code,dev}).then(async r=>{
+    if(r.success&&r.token){await login(r.token);return;}
+    if(r.code==='need_verify'){verifyForm(r);return;}
+    showErr(r.error||'링크를 확인하지 못했습니다. 받으신 링크를 다시 눌러 주세요.');
+  }).catch(()=>showErr('입장 처리 중 문제가 생겼습니다. 잠시 뒤 받으신 링크를 다시 눌러 주세요.'));
+})();
 onAuthStateChanged(auth,async u=>{
   window.__authResolved=true;   /* ★ [2026-07-25] 인증 상태 확정 — action 딥링크 스케줄러가 비로그인 판정을 즉시 내리도록 (동작 영향 없음) */
   if(window.__signupCardFlow){return;}   /* ★ 가입 직후 카드등록 흐름 중에는 자동 이동 억제 (카드 등록/나중에 선택 후 흐름이 직접 제어) */
@@ -10053,13 +10219,14 @@ onAuthStateChanged(auth,async u=>{
          DB 의 실제 role 은 free_user 그대로 — 관리자·통계·정산에는 영향 없음.
          realRole 은 표시·결제 예외 판정에 쓴다. (반드시 위 만료검사 이후) */
       jvNormalizeFreeRole(meData);
+      if(meData.isTrial===true){try{jvTrialInit();}catch(_e){}}   /* ★ [2026-11-19] 영업 체험 계정 — 안내 띠·중지/만료 감시·환영 안내 */
       /* 기간 안내: 로그인 직후 1회(하루 1회). 렌더 완료 후 표시 */
       if(jvIsFreeUser(meData)) jvPopQ(40,function(){try{showFreeNotice(false);}catch(_e){}});   /* ★ [2026-10-02] 팝업 순서 큐 */
       try{localStorage.setItem('jarvia_hasLogin','1');}catch(_e){}   /* ★ [2026-07-21] 로그아웃 오탐 방어용 로그인 이력 */
       try{sessionStorage.removeItem('_authAutoReload');}catch(_e){}  /* ★ [2026-07-27] 오탐 자동복구 가드 해제 — 재발 시 다시 1회 복구 가능 */
       // ── 중복 로그인 차단: PC 1대 + 휴대폰 1대 동시 허용, 같은 종류끼리는 1대 (같은 브라우저 탭 허용) ──
       /* ★ [2026-09-30] 단일 칸(activeSessionId) → 기기 종류별 칸(activeSessions.pc/.mo). 옛 칸은 로그인 시 정리 */
-      try{
+      if(meData.isTrial!==true)try{   /* ★ [2026-11-19] 영업 체험 계정은 동시 로그인 제한 제외 — 기기 수는 링크(서버)에서 제한 */
         let _sid=localStorage.getItem('jarvia_session');
         if(!_sid){_sid=gid();localStorage.setItem('jarvia_session',_sid);}
         const _slot=jvDevSlot(),_slotNm=_slot==='mo'?'휴대폰':(_slot==='tb'?'태블릿':'PC');
@@ -12867,6 +13034,7 @@ window.fccMsgClick=function(e){
 // ── 📱 문자 보내기: 로컬 번호 + sms: 호출 (전화번호 서버 미전송) ──
 // ── 문자발송 배너: admin·gildong + 멤버십 회원(자비아멤버십·이너서클·컨홈·지사장) 진입 / 그 외 안내 ──
 window.smsGate=function(e){
+  if(window.jvTrialLocked&&window.jvTrialLocked('sms')){ if(e&&e.preventDefault)e.preventDefault(); return false; }   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   var _smsRoles=['jarvia_member','jarvia_inner','inner_circle','con_homepage','branch_manager'];
   var ok=meData&&(meData.role==='admin'||meData.loginId==='gildong'||_smsRoles.indexOf(meData.role)>=0);
   if(!ok){ if(e&&e.preventDefault)e.preventDefault(); toast('문자발송은 자비아 멤버십 회원 전용입니다','warning'); return false; }
@@ -18197,6 +18365,7 @@ function voiceStop(btn){
 let _pptgenFormData=null,_pptgenType=null;
 async function submitPptGen(type){
   if(!me||!meData){toast('로그인이 필요합니다.','error');return;}
+  if(window.jvTrialLocked&&window.jvTrialLocked('ppt'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   if(isExpired){toast('이용 기간이 만료되었습니다.','error');return;}
   let formData={};
   if(type==='personal'){
@@ -22972,6 +23141,7 @@ const TAXNAVI_API = 'https://taxnavi-backend-104558014699.asia-northeast3.run.ap
 
 window.openTaxNaviPopup = function() {
   if(!me){openM('mdl-login-prompt');return;}
+  if(window.jvTrialLocked&&window.jvTrialLocked('taxnavi'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   const _moRoles=['admin'/*★2026-09-03 관리자*/,'jarvia_member','jarvia_inner','jarvia_report','inner_circle','con_homepage','branch_manager'];
   if(!_moRoles.includes(meData?.role)){toast('멤버십 회원 전용 서비스입니다.','warning');return;}
   document.getElementById('tnModalOverlay').classList.add('active');
@@ -22981,6 +23151,7 @@ window.closeTaxNaviPopup = function() {
 };
 window.goTaxNavi = async function(isMember) {
   closeTaxNaviPopup();
+  if(window.jvTrialLocked&&window.jvTrialLocked('taxnavi'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   if(me){try{const logId=gid();setDoc(doc(db,'service_logs',logId),{logId,userId:me.uid,userName:meData?.name||'',service:'tax_navi',createdAt:serverTimestamp()}).catch(e=>console.warn('service_log 실패:',e));}catch(e){console.warn('service_log 실패:',e);}}
   if (isMember && me) {
     try {
@@ -23672,6 +23843,7 @@ function _jvPopIdle(){   /* 600ms 연속으로 비어 있어야 '빈 상태' —
   return new Promise(res=>{let ok=0;const t=setInterval(()=>{if(_jvPopBusy()){ok=0;return;}ok+=150;if(ok>=600){clearInterval(t);res();}},150);});
 }
 function jvPopQ(pri,fn){
+  if(window.meData&&window.meData.isTrial===true)return;   /* ★ [2026-11-19] 영업 체험 계정 — 회원용 순서 팝업(환영·카톡 연결·설문·추천·후기·공지 등) 띄우지 않음. 체험 전용 안내는 jvTrialInit */
   _jvPQ=_jvPQ||[];
   _jvPQ.push({pri:pri,fn:fn});
   _jvPQ.sort((a,b)=>a.pri-b.pri);
@@ -26718,6 +26890,7 @@ function _aiProposalUrl(){
 }
 function goAiProposal(){
   if(!window.me){ if(typeof openM==='function') openM('mdl-login-prompt'); return; }
+  if(window.jvTrialLocked&&window.jvTrialLocked('proposal'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   if(window.jvCardGate){ jvCardGate(function(){_goAiProposalRun();}); return; }   /* ★ [2026-09-19] 결제카드 게이트 */
   _goAiProposalRun();
 }
@@ -27824,6 +27997,7 @@ window.addEventListener('load', ()=>{ _actWhenReady(handleClientReportAction); }
   /* ── 음성 고객입력 · AI 비서 · 고객 지도: 내 채널(fc)로 이동 + 딥링크(?open=voice|ai|map)로 해당 기능 자동 오픈 ── */
   window.jmOpenChannel=function(feature){
     if(!window.me){if(typeof window.openM==='function')window.openM('mdl-login-prompt');return;}
+    if(feature==='ai'&&window.jvTrialLocked&&window.jvTrialLocked('ai'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
     /* ★ [2026-09-19] 결제카드 게이트 — AI 비서만 대상 */
     if(feature==='ai'&&window.jvCardGate){ jvCardGate(function(){_jmOpenChannelRun(feature);}); return; }
     _jmOpenChannelRun(feature);
@@ -28326,6 +28500,7 @@ function _corpReportUrl(){
 }
 function goCorpReport(){
   if(!window.me){ if(typeof openM==='function')openM('mdl-login-prompt'); return; }
+  if(window.jvTrialLocked&&window.jvTrialLocked('corp'))return;   /* ★ [2026-11-19] 영업 체험 계정 잠금 */
   if(!_corpReportAllowed()){ if(typeof openM==='function')openM('mdl-corp-report-guide'); return; }
   if(typeof logSvc==='function')logSvc('corp_report');
   window.open(_corpReportUrl(),'_blank');
