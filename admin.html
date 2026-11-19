@@ -30912,7 +30912,8 @@ async function trDel(id){
 }
 async function trLog(id){
   const x=_trList.find(v=>v.id===id);if(!x)return;
-  $('tl-title').textContent=(x.name||'')+' · 이용 기록';$('tl-sub').textContent=(x.company||'')+' · 체험 기간 '+trPeriod(x)+' · 입장 '+(x.enters||0)+'회';
+  try{const fs=await getDoc(doc(db,'trial_links',id));if(fs.exists())Object.assign(x,fs.data());}catch(_e){}/* ★ [2026-11-19] 기록 창을 열 때마다 링크 정보를 서버에서 새로 읽음(새로고침 불필요) */
+  $('tl-title').textContent=(x.name||'')+' · 이용 기록';$('tl-sub').textContent=(x.company||'')+' · 체험 기간 '+trPeriod(x)+' · 입장(링크) '+(x.enters||0)+'회';
   const body=$('tl-body');openM('mdl-trial-log');
   if(!x.uid){body.innerHTML='<div class="tc" style="padding:28px;color:var(--text-lt)">아직 링크로 들어온 적이 없습니다.</div>';return;}
   body.innerHTML='<div class="tc" style="padding:28px;color:var(--text-lt)">불러오는 중...</div>';
@@ -30925,16 +30926,18 @@ async function trLog(id){
       getDocs(query(collection(db,'calc_logs'),where('userId','==',uid))).catch(()=>null),
       getDocs(query(collection(db,'transactions'),where('userId','==',uid))).catch(()=>null)
     ]);
-    if(sv)sv.docs.forEach(d=>{const v=d.data();const k=String(v.service||'');rows.push({t:ms(v.createdAt),cat:k.startsWith('trial_lock_')?'막힌 기능':(k==='main_access'?'접속':'기능'),txt:lab[k]||k});});
+    if(sv)sv.docs.forEach(d=>{const v=d.data();const k=String(v.service||'');rows.push({t:ms(v.createdAt),cat:k.startsWith('trial_lock_')?'막힌 기능':(k==='main_access'?'메인 진입':'기능'),txt:lab[k]||k,main:k==='main_access'});});
     const cids=new Set();if(vl)vl.docs.forEach(d=>{const v=d.data();if(v.contentId)cids.add(String(v.contentId));});
     const ttl={};await Promise.all([...cids].slice(0,60).map(async c=>{try{const s=await getDoc(doc(db,'contents',c));if(s.exists())ttl[c]=s.data().title||'';}catch(_e){}}));
     if(vl)vl.docs.forEach(d=>{const v=d.data();const c=String(v.contentId||'');rows.push({t:ms(v.createdAt),cat:'콘텐츠',txt:(ttl[c]||(c.startsWith('cr_')?'클로징리포트':'콘텐츠'))+' 열람'});});
     if(cl)cl.docs.forEach(d=>{const v=d.data();rows.push({t:ms(v.createdAt),cat:'계산기',txt:(v.quick?'간편계산기 · ':'계산기 · ')+String(v.calcTitle||'').replace(/^간편\s*/,'')});});
     if(tx)tx.docs.forEach(d=>{const v=d.data();rows.push({t:ms(v.createdAt),cat:'결제·차감',txt:v.memo||v.type||'',amt:v.amount!=null?fmt(v.amount)+'원':''});});
   }catch(e){body.innerHTML='<div class="tc" style="padding:28px;color:var(--danger)">불러오지 못했습니다 — '+esc(e.message)+'</div>';return;}
+  const cnt={'입장(링크)':x.enters||0};rows.forEach(r=>{cnt[r.cat]=(cnt[r.cat]||0)+1;});
+  /* ★ [2026-11-19] 30분 안에 이어진 「메인 화면 진입」은 한 줄로 묶음(처음 시각 표시, 횟수 덧붙임) */
+  rows.sort((a,b)=>a.t-b.t);{let g=null;const keep=[];rows.forEach(r=>{if(r.main&&g&&r.t&&g.last&&r.t-g.last<=30*60e3){g.n++;g.last=r.t;g.txt='메인 화면 진입 ('+g.n+'회)';return;}if(r.main){g=r;g.n=1;g.last=r.t;}keep.push(r);});rows.length=0;rows.push(...keep);}
   rows.sort((a,b)=>b.t-a.t);
   const days={};rows.forEach(r=>{const k=r.t?new Date(r.t).toLocaleDateString('ko-KR',{month:'2-digit',day:'2-digit',weekday:'short'}):'날짜 없음';(days[k]=days[k]||[]).push(r);});
-  const cnt={};rows.forEach(r=>{cnt[r.cat]=(cnt[r.cat]||0)+1;});
   body.innerHTML=rows.length?('<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">'+Object.keys(cnt).map(k=>`<span class="tl-cat">${esc(k)} ${cnt[k]}</span>`).join('')+'</div>'
     +Object.keys(days).map(k=>`<div style="padding:8px 4px 4px;font-weight:700;color:var(--primary);font-size:12.5px">${esc(k)}</div>`+days[k].map(r=>`<div class="tl-row"><span class="tl-t">${r.t?new Date(r.t).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):'-'}</span><span><span class="tl-cat">${esc(r.cat)}</span></span><span style="word-break:keep-all">${esc(r.txt)}</span><span style="text-align:right;font-weight:700">${esc(r.amt||'')}</span></div>`).join('')).join(''))
     :'<div class="tc" style="padding:28px;color:var(--text-lt)">아직 이용 기록이 없습니다.</div>';
