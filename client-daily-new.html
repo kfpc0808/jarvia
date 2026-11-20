@@ -6333,6 +6333,8 @@ function nhBuild(){
     }
   }catch(e){console.warn('[NH] 자료 창',e);}
 
+  try{document.body.appendChild(nhEl('<div class="nh-full" id="nhEnFull"><div class="nh-ph"><button type="button" class="nh-x" onclick="nhBack()" aria-label="닫기">✕</button><b>영어 학습</b></div><div class="nh-fb" id="nhEnBody"></div></div>'));}catch(_e){}
+
   /* 공용: 어두운 바탕 + 아래에서 올라오는 창 2개(목록용·문의용) */
   try{
     document.body.appendChild(nhEl('<div class="nh-dim" id="nhDim" onclick="nhBack()"></div>'));
@@ -6392,18 +6394,31 @@ function nhApply(){
   nhWrapTopLinks();
   try{
     [...sc.querySelectorAll(':scope > .wrap')].forEach(function(w){
-      if(!w.id&&!w.querySelector('.market-strip,.secTileGrid')&&(w.classList.contains('en-learn-block')||[...w.querySelectorAll('button')].some(function(b){return b.textContent.trim()==='EN 영어학습';})))w.classList.add('nh-en0');
+      if(w.classList.contains('en-learn-block')||(!w.id&&!w.querySelector('.market-strip,.secTileGrid')&&[...w.querySelectorAll('button')].some(function(b){return b.textContent.trim()==='EN 영어학습';})))w.classList.add('nh-en0');
       if(w.querySelector('.market-strip')){
         w.classList.add('nh-ind');
-        if(w.querySelector('.indicator-insight')&&!w.querySelector('.nh-insbtn')){
-          const b=nhEl('<button type="button" class="nh-insbtn">한 줄 해석 보기 ⌄</button>');
-          b.onclick=function(){const on=w.classList.toggle('nh-ins-on');b.textContent=on?'한 줄 해석 접기 ⌃':'한 줄 해석 보기 ⌄';};
-          w.appendChild(b);
-        }
+        /* 숫자 옆에 등락률 한 줄 — 원래 값·등락 표시는 그대로 두고(숨김) 간략 표시만 덧붙인다 */
+        [...w.querySelectorAll('.market-item')].forEach(function(it){
+          const v=it.querySelector('.mi-val');if(!v||v.querySelector('.nh-v'))return;
+          const raw=(v.textContent||'').trim(),num=(raw.match(/^-?[\d,]+(?:\.\d+)?/)||[raw])[0];
+          const ch=it.querySelector('.mi-change');let c='';
+          if(ch){
+            const t=ch.textContent||'',pm=t.match(/\(([+-]?)([\d.]+)%\)/);
+            if(ch.classList.contains('flat'))c='<span class="nh-chg flat">—</span>';
+            else if(pm)c='<span class="nh-chg '+(ch.classList.contains('up')?'up':'down')+'">'+(ch.classList.contains('up')?'▲':'▼')+esc(pm[2])+'%</span>';
+          }
+          v.setAttribute('title',raw);
+          v.innerHTML='<span class="nh-v">'+esc(num)+'</span>'+c;
+        });
       }
       if(w.querySelector('.secTileGrid'))w.classList.add('nh-tiles');
     });
   }catch(e){console.warn('[NH] 배치',e);}
+  /* 지표용 영어 학습(글 밖에 있는 것)은 「더보기 › 영어 학습」 창으로 */
+  try{
+    const eb=nhG('nhEnBody');
+    if(eb){eb.innerHTML='';[...sc.querySelectorAll(':scope > .wrap.nh-en0')].forEach(function(w){eb.appendChild(w);});}
+  }catch(_e){}
   try{nhReadPaint();}catch(_e){}
 }
 
@@ -6465,6 +6480,12 @@ function nhListOpen(title,rows){
   d.classList.add('nh-on');s.classList.add('nh-on');
   nhPush(function(){s.classList.remove('nh-on');d.classList.remove('nh-on');});
 }
+function nhNoteOpen(title,text){
+  const s=nhG('nhList'),d=nhG('nhDim');if(!s||!d)return;
+  s.innerHTML='<div class="nh-st"><div class="nh-grip"></div><div class="nh-sh"><b>'+esc(title)+'</b><button type="button" class="nh-x" onclick="nhBack()" aria-label="닫기">✕</button></div></div><div class="nh-sb"><p class="nh-note">'+esc(text)+'</p></div>';
+  d.classList.add('nh-on');s.classList.add('nh-on');
+  nhPush(function(){s.classList.remove('nh-on');d.classList.remove('nh-on');});
+}
 function nhClick(id){const e=nhG(id);if(e)e.click();}
 window.nhQuiz=function(){
   nhTrack('nh_quiz');
@@ -6488,8 +6509,14 @@ window.nhMore=function(){
   rows.push({ic:'ti-compass',t:'생활변화 점검',s:'이사·결혼·퇴직 등 달라진 일이 있을 때',go:function(){nhClick('lcBanner');}});
   try{const ci=nhG('ciEntryBtn');if(ci&&ci.style.display!=='none')rows.push({ic:'ti-message-question',t:'오늘의 질문',s:'10초면 충분해요 · 하루 한 가지',go:function(){try{window.ciOpen&&window.ciOpen();}catch(_e){}}});}catch(_e){}
   try{if(nhG('cdKmiBanner'))rows.push({ic:'ti-stethoscope',t:'KMI 종합검진',s:'제휴 특별가 예약',go:function(){nhClick('cdKmiBanner');}});}catch(_e){}
-  try{const en=[...document.querySelectorAll('#sectionsContainer button')].find(function(b){return b.textContent.trim()==='EN 영어학습';});
-    if(en)rows.push({ic:'ti-language',t:'영어 학습',s:'오늘 뉴스로 배우는 영어 표현',go:function(){const pane=en.closest('.secPane');const idx=(window._secPanes||[]).indexOf(pane);if(idx>=0){window.selectSecTile(idx);setTimeout(function(){en.click();},80);}else en.click();}});}catch(_e){}
+  try{const ip=nhG('insightP'),tx=ip?(ip.textContent||'').trim():'';
+    if(tx)rows.push({ic:'ti-bulb',t:'오늘 경제지표 한 줄 해석',go:function(){nhNoteOpen('오늘 경제지표 한 줄 해석',tx);}});}catch(_e){}
+  try{
+    const eb=nhG('nhEnBody'),own=eb&&eb.querySelector('button');
+    const en=[...document.querySelectorAll('#sectionsContainer button')].find(function(b){return b.textContent.trim()==='EN 영어학습';});
+    if(own)rows.push({ic:'ti-language',t:'영어 학습',s:'오늘 지표·뉴스로 배우는 영어 표현',go:function(){nhFullOpen('nhEnFull');try{const blk=eb.querySelector('.en-learn-block');if(blk&&blk.style.display==='none')own.click();}catch(_e){}}});
+    else if(en)rows.push({ic:'ti-language',t:'영어 학습',s:'오늘 뉴스로 배우는 영어 표현',go:function(){const pane=en.closest('.secPane');const idx=(window._secPanes||[]).indexOf(pane);if(idx>=0){window.selectSecTile(idx);setTimeout(function(){en.click();},80);}else en.click();}});
+  }catch(_e){}
   try{const cs=nhG('curatedSection');if(cs&&cs.style.display!=='none'&&nhG('nhPicksFull'))rows.push({ic:'ti-folder',t:'함께 보면 좋은 자료',go:function(){nhFullOpen('nhPicksFull');try{curatedUpdatePos&&curatedUpdatePos();}catch(_e){}}});}catch(_e){}
   try{const nv=nhG('naverBarWrap'),a=nhG('naverBarLink');if(nv&&nv.style.display!=='none'&&a&&a.href)rows.push({ic:'ti-search',t:'네이버에서 컨설턴트 검색',go:function(){window.open(a.href,'_blank');}});}catch(_e){}
   nhListOpen('더보기',rows);
@@ -6582,7 +6609,7 @@ function nhAskPaint(){
   const keepMsg=(nhG('nhAskMsg')||{}).value||'';
   const keepN=(nhG('nhAskName')||{}).value,keepP=(nhG('nhAskPhone')||{}).value,keepC=(nhG('nhAskOk')||{}).checked;
   const keepTop=(s.querySelector('.nh-sb')||{}).scrollTop||0;
-  let h='<div class="nh-st"><div class="nh-grip"></div><div class="nh-sh"><b>컨설턴트에게 문의하기</b><button type="button" class="nh-x" onclick="nhBack()" aria-label="닫기">✕</button></div></div><div class="nh-sb">';
+  let h='<div class="nh-st"><div class="nh-grip"></div><div class="nh-sh"><b>'+(a.sent?'문의하기':fcNm+'에게<br>문의할까요?')+'</b></div></div><div class="nh-sb">';
   if(a.sent){
     h+='<div class="nh-okbox"><div class="c">✓</div><b>접수되었습니다</b><p>'+fcNm+'가 확인한 뒤<br>남겨 주신 번호로 연락드립니다.</p></div></div>'
       +'<div class="nh-sf"><button type="button" class="nh-go" onclick="nhBack()">확인</button></div>';
@@ -6592,8 +6619,8 @@ function nhAskPaint(){
     h+='<div class="nh-ctx"><small>'+esc(a.ctx.section||'읽으신 글')+'</small><b>'+esc(a.ctx.title||'')+'</b></div>'
       +'<p class="d">이 글과 관련해 내 상황에서는 어떻게 되는지 물어보세요.</p>';
   }else{
-    h+='<p class="d">궁금한 주제를 고르시면 '+fcNm+'가 연락드립니다.</p>'
-      +'<div class="nh-lb">어떤 내용이 궁금하세요?</div><div class="nh-chips">'
+    h+='<p class="d">어떤 내용이 궁금하세요? 고르거나 적지 않고 보내셔도 됩니다.</p>'
+      +'<div class="nh-chips">'
       +NH_TOPICS.map(function(t){return '<button type="button" class="nh-chip'+(a.topic===t.k?' on':'')+'" data-k="'+t.k+'">'+t.t+'</button>';}).join('')+'</div>';
   }
   h+='<div class="nh-lb">남기실 말씀 <em>(선택)</em></div><textarea class="nh-ta" id="nhAskMsg" maxlength="600" placeholder="예) 퇴직이 3년 남았는데 연금을 어떻게 받는 게 좋을까요?"></textarea>';
@@ -6613,7 +6640,7 @@ function nhAskPaint(){
   }
   h+='<label class="nh-ck"><input type="checkbox" id="nhAskOk"><span>[필수] 개인정보 수집·이용에 동의합니다'
     +'<small>이름·휴대폰 번호·문의 내용이 '+fcNm+'에게 전달되어 상담 연락에만 쓰이고, 휴대폰 번호는 접수 30일 뒤 삭제됩니다.</small></span></label></div>'
-    +'<div class="nh-sf"><button type="button" class="nh-go" id="nhAskGo">문의 보내기</button></div>';
+    +'<div class="nh-sf"><button type="button" class="nh-go" id="nhAskGo">문의 보내기</button><button type="button" class="nh-later" onclick="nhBack()">다음에 할게요</button></div>';
   s.innerHTML=h;
   try{s.querySelector('.nh-sb').scrollTop=keepTop;}catch(_e){}
   const msg=nhG('nhAskMsg');if(msg)msg.value=keepMsg;
@@ -6636,7 +6663,6 @@ async function nhAskSend(){
   const name=(nmEl?nmEl.value:me.n).trim();
   const phone=(phEl?phEl.value:me.p).replace(/\D/g,'');
   const msgRaw=((nhG('nhAskMsg')||{}).value||'').trim();
-  if(a.ctx.from!=='article'&&!a.topic&&!msgRaw){toast('궁금한 주제를 고르거나 내용을 적어 주세요','warning');return;}
   if(!!_jvCID&&!nhSelfAsked()){toast('직접 받으셨는지 먼저 선택해 주세요','warning');return;}
   if(name.length<1||name.length>20){toast('이름을 입력해 주세요','warning');if(nmEl)nmEl.focus();return;}
   if(!/^010\d{8}$/.test(phone)){toast('휴대폰 번호를 정확히 입력해 주세요','warning');if(phEl)phEl.focus();return;}
@@ -7345,32 +7371,36 @@ html.nh .nh-mine button{width:100%;border:0;border-radius:12px;background:var(--
 html.nh #sectionsContainer{display:flex;flex-direction:column;padding-bottom:0 !important;background:#fff}
 html.nh #sectionsContainer>#mcSecWrap{order:-2;padding:0 16px !important;margin:0 0 4px !important}
 html.nh #myDatesWrap{padding:0 16px !important}
-html.nh .mct{background:#F4F6FB !important;border:1.5px solid var(--nh-navy) !important;border-radius:18px !important;box-shadow:none !important;padding:16px 16px 14px !important;color:var(--nh-ink) !important;font-family:var(--font) !important}
-html.nh .mct .mct-hd{gap:8px !important}
-html.nh .mct .mct-ic{display:none !important}
+html.nh .mct{background:#fff !important;border:1.5px solid var(--nh-navy) !important;border-radius:18px !important;box-shadow:none !important;padding:16px 16px 13px !important;color:var(--nh-ink) !important;font-family:var(--font) !important}
+html.nh .mct .mct-hd{gap:8px !important;flex-wrap:nowrap !important}
+html.nh .mct .mct-ic,html.nh .mct .mct-new{display:none !important}
 html.nh .mct .mct-t{display:inline-flex;align-items:center;gap:6px;background:var(--nh-navy);color:#fff !important;font-size:13.5px !important;font-weight:700 !important;border-radius:9px;padding:6px 11px}
 html.nh .mct .mct-t::before{content:"\ea59";font-family:"tabler-icons" !important;font-weight:400;font-size:16px;line-height:1}
-html.nh .mct .mct-new{background:var(--nh-gold) !important;color:var(--nh-navy) !important;font-size:11px !important;font-weight:700 !important;border-radius:6px !important;padding:3px 7px !important;letter-spacing:0 !important}
-html.nh .mct .mct-d{color:var(--nh-sub) !important;font-size:12.5px !important;font-weight:500 !important}
-html.nh .mct .mct-hl{font-size:17px !important;font-weight:700 !important;line-height:1.5 !important;margin-top:12px !important;color:var(--nh-ink) !important;display:-webkit-box !important;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-html.nh .mct .mct-row{display:flex !important;gap:6px !important;margin-top:12px !important}
-html.nh .mct .mct-chip{background:#fff !important;border:1px solid #D5DBE6;color:var(--nh-navy) !important;font-size:13px !important;font-weight:700 !important;border-radius:999px !important;padding:5px 11px !important}
-html.nh .mct .mct-chip b{font-weight:500 !important;color:var(--nh-sub)}
-html.nh .mct .mct-ag{display:flex !important;font-size:13px !important;color:var(--nh-sub) !important;margin-top:11px !important;font-variant-numeric:tabular-nums}
-html.nh .mct .mct-bar{background:#DCE2EC !important;height:8px !important}
-html.nh .mct .mct-bar i{background:var(--nh-navy) !important}
-html.nh .mct .mct-sub{color:var(--nh-sub) !important;font-size:13px !important}
-html.nh .mct .mct-go{background:var(--nh-navy) !important;color:#fff !important;text-align:center !important;padding:12px !important;margin-top:14px !important;font-size:15px !important;font-weight:700 !important;border-radius:12px !important}
-html.nh .mct .mct-go.ghost{background:#fff !important;color:var(--nh-sub) !important;font-weight:500 !important;border:1px solid var(--nh-line) !important}
-html.nh .mct.off{border-color:var(--nh-line) !important;background:#fff !important}
+html.nh .mct .mct-d{font-size:0 !important;margin-left:auto}
+html.nh .mct .mct-d::after{content:'오늘의 시장 전망';font-size:13px;font-weight:500;color:var(--nh-sub)}
+html.nh .mct .mct-hl{font-size:17.5px !important;font-weight:700 !important;line-height:1.45 !important;margin-top:11px !important;color:var(--nh-ink) !important;display:-webkit-box !important;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+html.nh .mct .mct-row{display:block !important;margin-top:6px !important;font-size:14px;color:var(--nh-sub);line-height:1.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+html.nh .mct .mct-chip{display:inline !important;background:none !important;border:0 !important;padding:0 !important;color:var(--nh-sub) !important;font-size:14px !important;font-weight:400 !important;border-radius:0 !important}
+html.nh .mct .mct-chip b{font-weight:400 !important}
+html.nh .mct .mct-chip+.mct-chip::before{content:'  ·  ';white-space:pre}
+html.nh .mct .mct-ag{display:none !important}
+html.nh .mct .mct-sub{color:var(--nh-sub) !important;font-size:14px !important;line-height:1.6 !important}
+html.nh .mct .mct-go{background:none !important;color:var(--nh-navy) !important;text-align:right !important;padding:0 !important;margin-top:8px !important;font-size:0 !important;font-weight:700 !important;border-radius:0 !important;border:0 !important}
+html.nh .mct .mct-go::after{content:'전망 전체 보기  ›';font-size:14.5px;white-space:pre}
+html.nh .mct .mct-go.ghost{font-size:13.5px !important;color:var(--nh-sub) !important;font-weight:500 !important}
+html.nh .mct .mct-go.ghost::after{content:none}
+html.nh .mct.off{border-color:var(--nh-line) !important}
 
 /* 경제지표 — 섹션 제목·해석은 접고 숫자 줄만 */
 html.nh #sectionsContainer>.wrap.nh-ind{order:-1;padding:6px 16px 0 !important;margin:0 !important}
 html.nh .nh-ind>.sec-divider{display:none !important}
 html.nh .nh-ind .market-strip{background:#fff !important;border:0 !important;border-bottom:1px solid var(--nh-line) !important;border-radius:0 !important;box-shadow:none !important;margin:0 !important;overflow:hidden}
-html.nh .nh-ind .market-item{min-width:0 !important;flex:0 0 33.34% !important;padding:10px 4px 12px 2px !important;border-right:0 !important;background:none !important}
+html.nh .nh-ind .market-item{min-width:33.34% !important;flex:0 0 auto !important;padding:10px 14px 12px 2px !important;border-right:0 !important;background:none !important}
 html.nh .nh-ind .mi-label{font-size:13px !important;color:var(--nh-sub) !important;margin-bottom:2px !important}
-html.nh .nh-ind .mi-val{font-family:var(--font) !important;font-size:17px !important;font-weight:700 !important;color:var(--nh-ink) !important;font-variant-numeric:tabular-nums;letter-spacing:-.3px !important;white-space:nowrap}
+html.nh .nh-ind .mi-val{font-family:var(--font) !important;font-size:16px !important;font-weight:700 !important;color:var(--nh-ink) !important;font-variant-numeric:tabular-nums;letter-spacing:-.4px !important;display:flex;flex-wrap:nowrap;align-items:baseline;gap:0 4px;white-space:nowrap}
+html.nh .nh-ind .nh-chg{font-size:11.5px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}
+html.nh .nh-ind .nh-chg.up{color:var(--nh-up)}html.nh .nh-ind .nh-chg.down{color:var(--nh-dn)}html.nh .nh-ind .nh-chg.flat{color:var(--nh-sub)}
+html.nh .nh-ind .market-item .mi-change{display:none !important}
 html.nh .nh-ind .mi-change{background:none !important;padding:0 !important;font-size:11px !important;letter-spacing:-.3px;gap:2px !important;font-weight:600 !important;margin-top:1px !important;font-variant-numeric:tabular-nums}
 html.nh .nh-ind .mi-change.up{color:var(--nh-up) !important}
 html.nh .nh-ind .mi-change.down{color:var(--nh-dn) !important}
@@ -7379,10 +7409,9 @@ html.nh .nh-ind .ms-fade{display:none !important}
 @media(hover:hover) and (pointer:fine){html.nh .nh-ind .market-scroll.scrollable{padding:0 44px}  /* PC: 좌우 화살표가 숫자를 가리지 않게 자리 확보 */
   html.nh .nh-ind .ms-prev{left:0 !important}html.nh .nh-ind .ms-next{right:0 !important}}
 html.nh .nh-ind .indicator-insight{display:none !important}
-html.nh .nh-ind.nh-ins-on .indicator-insight{display:block !important;background:var(--nh-bg) !important;border:0 !important;border-radius:12px !important;margin:10px 0 4px !important;padding:12px 14px !important;box-shadow:none !important}
-html.nh .nh-insbtn{display:block;width:100%;text-align:right;border:0;background:none;font-family:inherit;font-size:12.5px;color:var(--nh-sub);padding:6px 2px 2px;cursor:pointer}
 
-html.nh #sectionsContainer>.wrap.nh-en0{order:-1;padding:0 16px !important;margin:2px 0 0 !important}
+html.nh #nhEnBody>.wrap{padding:0 16px !important;margin:0 0 8px !important}
+html.nh .nh-note{font-size:16px;line-height:1.75;color:var(--nh-ink);word-break:keep-all;padding:6px 0 10px;margin:0}
 /* 뉴스 4줄 */
 html.nh #sectionsContainer>.wrap.nh-tiles{padding:0 !important;margin:10px 0 0 !important;border-top:8px solid var(--nh-bg)}
 html.nh .secTileGrid{display:block !important;margin:0 !important}
@@ -7448,6 +7477,9 @@ html.nh .nh-st{flex:0 0 auto;padding:8px 18px 2px}
 html.nh .nh-sb{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:0 18px 14px}
 html.nh .nh-sf{flex:0 0 auto;padding:10px 18px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--nh-line);background:#fff}
 html.nh .nh-sf .nh-go{margin-top:0}
+html.nh .nh-later{display:block;width:100%;border:0;background:none;font-family:inherit;font-size:15px;color:var(--nh-sub);padding:12px 0 2px;cursor:pointer}
+html.nh .nh-ask .nh-sh b{font-size:21px;line-height:1.35}
+html.nh .nh-ask .nh-st{padding-top:10px}
 html.nh .nh-grip{width:40px;height:4px;border-radius:2px;background:#D5DAE2;margin:4px auto 12px}
 html.nh .nh-sh{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 html.nh .nh-sh b{flex:1;font-size:19px;font-weight:700;color:var(--nh-ink);word-break:keep-all}
@@ -7508,7 +7540,7 @@ html.nh #barAskBtn .fcBarBtn-tx{font-weight:700 !important;font-size:12.5px !imp
 html.nh #consultForm .phoneRow,html.nh #consultForm .phoneRow+.fieldHint{display:none !important}
 
 @media(min-width:700px){html.nh body{background:var(--nh-bg) !important}}
-@media(max-width:359px){html.nh .nh-ind .mi-val{font-size:14.5px !important}html.nh .nh-ind .mi-change{font-size:9.5px !important}html.nh .nh-ind .mi-label{font-size:12px !important}html.nh .date-main{font-size:19px !important}html.nh .audio-title::after,html.nh .clip .t::after{font-size:13px}html.nh .secTile .stTitle{font-size:17px !important}html.nh #nhQuick button span{font-size:12px}}
+@media(max-width:359px){html.nh .nh-ind .mi-val{font-size:15px !important}html.nh .nh-ind .nh-chg{font-size:11px}html.nh .nh-ind .mi-label{font-size:12px !important}html.nh .date-main{font-size:19px !important}html.nh .audio-title::after,html.nh .clip .t::after{font-size:13px}html.nh .secTile .stTitle{font-size:17px !important}html.nh #nhQuick button span{font-size:12px}}
 </style>
 </body>
 </html>
