@@ -179,6 +179,7 @@ function renderMem(){
    <div class="crm-chips">${F.map(x=>`<button class="crm-chip ${s.f===x[0]?'on':''}" data-f="${x[0]}">${x[1]}</button>`).join('')}</div>
    <div class="sp"><button class="crm-btn sec sm" id="crm-csv">📥 엑셀(CSV)</button>${L.length?`<button class="crm-btn grn sm" id="crm-start">▶ 이 목록 첫 회원부터</button>`:''}</div></div>
    ${!isCrm&&unassigned?`<div class="crm-assign">👤 담당자 미지정 <b>${fmt(unassigned)}명</b> → <select id="crm-as">${mgrOpts('',false)}</select> <button class="crm-btn sm" id="crm-as-go">한 번에 배정</button></div>`:''}
+   ${!isCrm&&L.length?`<div class="crm-assign">🔁 지금 목록(검색·조건 적용) <b>${fmt(L.length)}명</b>의 담당자를 → <select id="crm-bm">${mgrOpts('',false)}<option value="">담당자 미지정 (배정 취소)</option></select> <button class="crm-btn sec sm" id="crm-bm-go">한 번에 변경</button></div>`:''}
    ${C.agg?'':'<div class="crm-hint" style="margin:0 0 8px">30일 접속·기능 이용은 집계 중입니다 (잠시 후 자동 표시)</div>'}
    ${sortSel(MCOLS,s)}
    <div class="crm-tw"><table class="crm-list"><thead>${th(MCOLS,s)}</thead><tbody>${P.length?P.map((m,i)=>{
@@ -198,6 +199,7 @@ function renderMem(){
   $c('crm-csv').onclick=()=>csv('회원별관리_회원목록',['No.','이름','아이디','소속','직함','회원유형','연락처','담당','마지막 접속','30일 접속일','30일 기능 이용','이번 달 학습(분)','최근 소통','소통 수','다음 연락','진행 요청','주의'],
     L.map(m=>[m.no,m.name,m.loginId,m.co,m.title,m.rl,m.phone,m.mgrName,m.lastAct,m.d30,m.f30,Math.round((m.lm||0)/60),m.lastC,m.nCnt,m.next,m.openR,m.warn.join(' / ')]));
   const ag=$c('crm-as-go');if(ag)ag.onclick=()=>bulkAssign($c('crm-as').value);
+  const bm=$c('crm-bm-go');if(bm)bm.onclick=()=>bulkChange(L,$c('crm-bm').value);
   bindCommon(s);
 }
 async function bulkAssign(mgrId){
@@ -206,6 +208,17 @@ async function bulkAssign(mgrId){
   try{for(let i=0;i<L.length;i+=400){const b=writeBatch(C.db);L.slice(i,i+400).forEach(m=>b.update(doc(C.db,'users',m.id),{'crm.mgrId':g.id,'crm.mgrName':g.name,'crm.updatedAt':serverTimestamp()}));await b.commit();}
     L.forEach(m=>{m.mgrId=g.id;m.mgrName=g.name;});toast(L.length+'명을 '+g.name+' 담당으로 배정했습니다');renderToday();renderMem();
   }catch(e){toast('배정 실패: '+e.message);}
+}
+/* ★ [2026-11-20] 담당자 일괄 변경·배정 취소 — 지금 목록(검색·조건 적용)의 회원 대상 */
+async function bulkChange(list,mgrId){
+  const g=mgrId?C.mgrs.find(x=>x.id===mgrId):null;if(mgrId&&!g)return;
+  const L=list.filter(m=>(m.mgrId||'')!==(mgrId||''));
+  if(!L.length){toast('바꿀 회원이 없습니다 (이미 '+(g?g.name+' 담당':'미지정')+')');return;}
+  const to=g?`「${g.name}」 담당으로 변경`:'「담당자 미지정」으로 배정 취소';
+  if(!confirm(`지금 목록 회원 ${L.length}명을 ${to}합니다.\n(이미 같은 담당인 ${list.length-L.length}명은 제외)\n계속할까요?`))return;
+  try{for(let i=0;i<L.length;i+=400){const b=writeBatch(C.db);L.slice(i,i+400).forEach(m=>b.update(doc(C.db,'users',m.id),{'crm.mgrId':g?g.id:'','crm.mgrName':g?g.name:'','crm.updatedAt':serverTimestamp()}));await b.commit();}
+    L.forEach(m=>{m.mgrId=g?g.id:'';m.mgrName=g?g.name:'';});toast(L.length+'명 '+(g?g.name+' 담당으로 변경':'배정 취소')+' 완료');renderToday();renderMem();
+  }catch(e){toast('변경 실패: '+e.message);}
 }
 function csv(name,head,rows){const q=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
   const txt='﻿'+[head,...rows].map(r=>r.map(q).join(',')).join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));a.download=name+'_'+TODAY()+'.csv';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);}
