@@ -37,6 +37,12 @@ const fmt=n=>Number(n||0).toLocaleString('ko-KR');
 const nowHM=()=>{const d=new Date();return pad(d.getHours())+':'+pad(d.getMinutes());};
 
 let C=null;   // 화면 상태
+/* ★ [2026-11-20] 작성자 이름 — 관리자 계정을 여러 직원이 함께 쓰므로 기록마다 실제 작성자 이름을 남긴다(브라우저별 기억) */
+const WKEY=()=>'jvcrm_writer_'+((C&&C.me&&C.me.id)||'');
+function getWriter(){try{return localStorage.getItem(WKEY())||'';}catch(_e){return '';}}
+function setWriter(v){try{localStorage.setItem(WKEY(),v);}catch(_e){}}
+function needWriter(){const el=$c('crm-writer');const w=((el&&el.value)||getWriter()).trim();if(!w){toast('작성자 이름을 먼저 입력해 주세요');if(el)el.focus();return '';}setWriter(w);return w;}
+const whoTxt=(w,acc)=>esc(w||acc||'')+(w&&acc&&w!==acc?' <span class="sub">('+esc(acc)+' 계정)</span>':'');
 export async function mountCrm(opt){
   if(C&&C.root===opt.root&&C.ready){if(opt.openUid)openByUid(opt.openUid);return;}
   C={db:opt.db,root:opt.root,me:opt.me||{},ready:false,page:'mem',quick:'',view:[],cur:-1,dtab:'note',
@@ -45,6 +51,7 @@ export async function mountCrm(opt){
         req:{key:'createdAt',dir:-1,p:1,q:'',mg:'all',st:'open',ps:50}},
      M:[],MM:{},mgrs:[],agg:null,lms:{},notesAll:null,reqsAll:null,det:null};
   injectCss();
+  if(C.me.role==='crm'&&!getWriter()&&C.me.name)setWriter(C.me.name);
   C.root.innerHTML='<div id="crm-app"><div class="crm-loading">회원 정보를 불러오는 중...</div></div>';
   await loadBase();
   C.ready=true;render();
@@ -60,7 +67,7 @@ export function openByUid(uid){
 /* ═════ 기본 데이터 ═════ */
 async function loadBase(){
   const db=C.db;
-  try{const a=await getDocs(collection(db,'admins'));C.mgrs=a.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.status==='active').map(x=>({id:x.id,name:x.name||x.loginId,role:x.role,authUid:x.authUid||''}));}catch(e){C.mgrs=[];}
+  try{const a=await getDocs(collection(db,'admins'));C.mgrs=a.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.status==='active').map(x=>({id:x.id,name:x.name||x.loginId,loginId:x.loginId||'',role:x.role,authUid:x.authUid||''}));}catch(e){C.mgrs=[];}
   const us=await getDocs(collection(db,'users'));
   const today=TODAY();
   C.M=us.docs.map(d=>({id:d.id,...d.data()})).filter(m=>ROLES.includes(m.role)&&m.status!=='withdrawn'&&m.isTrial!==true&&m.isAdminTest!==true).map(m=>{
@@ -145,7 +152,7 @@ function th(cols,s){return '<tr>'+cols.map(c=>c[2]?`<th class="s ${s.key===c[0]?
 function sortBy(L,s,get){const k=s.key,d=s.dir;return L.sort((a,b)=>{const x=get(a,k),y=get(b,k);if(x===y)return 0;if(x===''||x==null)return 1;if(y===''||y==null)return -1;return (x>y?1:-1)*d;});}
 function pager(n,s){const pages=Math.max(1,Math.ceil(n/s.ps));if(s.p>pages)s.p=pages;const a=Math.max(1,s.p-3),b=Math.min(pages,a+6);let h=`<button data-pg="${s.p-1}" ${s.p<=1?'disabled':''}>‹</button>`;
   for(let i=a;i<=b;i++)h+=`<button data-pg="${i}" class="${i===s.p?'on':''}">${i}</button>`;h+=`<button data-pg="${s.p+1}" ${s.p>=pages?'disabled':''}>›</button>`;
-  return `<div class="crm-pager"><span>전체 ${fmt(n)}건${n?' · '+fmt((s.p-1)*s.ps+1)+'~'+fmt(Math.min(n,s.p*s.ps))+' 표시':''}</span><div class="pg">${h}</div><span><select data-ps>${[30,50,100].map(x=>`<option ${x===s.ps?'selected':''}>${x}</option>`).join('')}</select> 줄씩</span></div>`;}
+  return `<div class="crm-pager"><span>전체 ${fmt(n)}건${n?' · '+fmt((s.p-1)*s.ps+1)+'~'+fmt(Math.min(n,s.p*s.ps))+' 표시':''}</span><div class="pg">${h}</div><span><select data-ps>${[20,50,100,500,1000].map(x=>`<option ${x===s.ps?'selected':''}>${x}</option>`).join('')}</select> 줄씩</span></div>`;}
 function sortSel(cols,s){return `<div class="crm-sortm">정렬 <select id="crm-sortm">${cols.filter(c=>c[2]).flatMap(c=>[[c[0]+'|1',c[1]+' ▲'],[c[0]+'|-1',c[1]+' ▼']]).map(o=>`<option value="${o[0]}" ${s.key+'|'+s.dir===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></div>`;}
 function bindCommon(s){
   C.root.querySelectorAll('#crm-page th.s').forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(s.key===k)s.dir*=-1;else{s.key=k;s.dir=(['name','next','co','mgrName','role','title','d','due','memberName','byName','type'].includes(k)?1:-1);}s.p=1;renderPage();});
@@ -153,7 +160,7 @@ function bindCommon(s){
   const ps=C.root.querySelector('#crm-page [data-ps]');if(ps)ps.onchange=()=>{s.ps=+ps.value;s.p=1;renderPage();};
   const sm=$c('crm-sortm');if(sm)sm.onchange=()=>{const [k,d]=sm.value.split('|');s.key=k;s.dir=+d;s.p=1;renderPage();};
 }
-function mgrOpts(sel,withAll){return (withAll?`<option value="all">전체 담당자</option><option value="me">내 담당 회원</option>`:'')+C.mgrs.map(x=>`<option value="${x.id}" ${sel===x.id?'selected':''}>${esc(x.name)}${x.role==='crm'?' (CRM)':''}</option>`).join('')+(withAll?`<option value="none">담당자 미지정</option>`:'');}
+function mgrOpts(sel,withAll){return (withAll?`<option value="all">전체 담당자</option><option value="me">내 담당 회원</option>`:'')+C.mgrs.map(x=>`<option value="${x.id}" ${sel===x.id?'selected':''}>${esc(x.name)} (${esc(x.loginId)}${x.role==='crm'?' · CRM':''})</option>`).join('')+(withAll?`<option value="none">담당자 미지정</option>`:'');}
 
 /* ═════ ① 회원 목록 ═════ */
 const MCOLS=[['no','No.',1,'r'],['name','이름',1],['co','소속·직함',1],['role','회원유형',1],['mgrName','담당',1],['ago','마지막 접속',1],['d30','30일 접속',1,'r'],['f30','30일 기능 이용',1,'r'],['lm','이번 달 학습',1,'r'],['lastC','최근 소통',1],['nCnt','소통 수',1,'r'],['next','다음 연락',1],['openR','진행 요청',1,'r'],['flag','상태',0]];
@@ -214,22 +221,22 @@ async function renderNotes(){
   let L=C.notesAll.rows.map(n=>({...n,co:(C.MM[n.memberUid]||{}).co||'',atMs:ms(n.at)}));
   if(s.mg==='me')L=L.filter(x=>x.byUid===C.me.uid);else if(s.mg!=='all')L=L.filter(x=>x.byId===s.mg);
   if(s.how)L=L.filter(x=>x.how===s.how);if(s.res)L=L.filter(x=>x.res===s.res);
-  if(s.q){const q=s.q.toLowerCase();L=L.filter(x=>((x.memberName||'')+(x.memberLoginId||'')+(x.txt||'')).toLowerCase().includes(q));}
-  sortBy(L,s,(x,k)=>k==='at'?x.atMs:x[k]);const P=L.slice((s.p-1)*s.ps,s.p*s.ps);
+  if(s.q){const q=s.q.toLowerCase();L=L.filter(x=>((x.memberName||'')+(x.memberLoginId||'')+(x.txt||'')+(x.writerName||'')).toLowerCase().includes(q));}
+  sortBy(L,s,(x,k)=>k==='at'?x.atMs:(k==='byName'?(x.writerName||x.byName||''):x[k]));const P=L.slice((s.p-1)*s.ps,s.p*s.ps);
   pg.innerHTML=`<div class="crm-fbar"><input type="date" id="crm-nf" value="${s.from}"> ~ <input type="date" id="crm-nt" value="${s.to}">
-   <select id="crm-nm"><option value="all">전체 작성자</option><option value="me" ${s.mg==='me'?'selected':''}>내가 쓴 기록</option>${C.mgrs.map(x=>`<option value="${x.id}" ${s.mg===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>
+   <select id="crm-nm"><option value="all">전체 작성자</option><option value="me" ${s.mg==='me'?'selected':''}>내가 쓴 기록</option>${C.mgrs.map(x=>`<option value="${x.id}" ${s.mg===x.id?'selected':''}>${esc(x.name)} (${esc(x.loginId)})</option>`).join('')}</select>
    <select id="crm-nh"><option value="">모든 방법</option>${HOWS.map(x=>`<option ${s.how===x?'selected':''}>${x}</option>`).join('')}</select>
    <select id="crm-nr"><option value="">모든 결과</option>${RESS.map(x=>`<option ${s.res===x[0]?'selected':''}>${x[0]}</option>`).join('')}</select>
-   <input type="search" id="crm-nq" placeholder="회원·내용 검색" value="${esc(s.q)}"><div class="sp"><button class="crm-btn sec sm" id="crm-ncsv">📥 엑셀(CSV)</button></div></div>
+   <input type="search" id="crm-nq" placeholder="회원·내용·작성자 검색" value="${esc(s.q)}"><div class="sp"><button class="crm-btn sec sm" id="crm-ncsv">📥 엑셀(CSV)</button></div></div>
    ${sortSel(NCOLS,s)}
    <div class="crm-tw"><table class="crm-list"><thead>${th(NCOLS,s)}</thead><tbody>${P.length?P.map(x=>`<tr data-id="${esc(x.memberUid)}"><td data-l="일시">${md(x.d)} ${esc(x.t||'')}</td><td data-l="회원"><span class="nm">${esc(x.memberName||'')}</span> <span class="sub">${esc(x.memberLoginId||'')}</span></td><td data-l="소속">${esc(x.co)}</td>
     <td data-l="방법"><span class="how">${esc(x.how||'')}</span></td><td data-l="결과"><span class="res r-${(RESS.find(r=>r[0]===x.res)||['','ok'])[1]}">${esc(x.res||'')}</span></td><td data-l="내용"><div class="trunc">${esc(x.txt||'')}</div></td>
-    <td data-l="다음 연락">${x.next?md(x.next):'-'}</td><td data-l="작성">${esc(x.byName||'')}</td><td data-l="관련 요청">${esc(x.reqNo||'-')}</td></tr>`).join(''):`<tr><td colspan="9" class="crm-empty">조건에 맞는 기록이 없습니다.</td></tr>`}</tbody></table></div>${pager(L.length,s)}
+    <td data-l="다음 연락">${x.next?md(x.next):'-'}</td><td data-l="작성">${whoTxt(x.writerName,x.byName)}</td><td data-l="관련 요청">${esc(x.reqNo||'-')}</td></tr>`).join(''):`<tr><td colspan="9" class="crm-empty">조건에 맞는 기록이 없습니다.</td></tr>`}</tbody></table></div>${pager(L.length,s)}
    <div class="crm-hint">행을 누르면 그 회원의 상세 화면이 열립니다 · 고른 기간의 기록만 불러옵니다 (기본 최근 30일)</div>`;
   const on=(id,f,re)=>{$c(id).onchange=e=>{f(e.target.value);s.p=1;if(re)C.notesAll=null;renderNotes();};};
   on('crm-nf',v=>s.from=v,1);on('crm-nt',v=>s.to=v,1);on('crm-nm',v=>s.mg=v);on('crm-nh',v=>s.how=v);on('crm-nr',v=>s.res=v);on('crm-nq',v=>s.q=v.trim());
   C.root.querySelectorAll('#crm-page tbody tr[data-id]').forEach(r=>r.onclick=()=>{C.view=[r.dataset.id];openD(0);});
-  $c('crm-ncsv').onclick=()=>csv('회원별관리_관리기록',['날짜','시각','회원','아이디','소속','방법','결과','내용','다음 연락','작성','관련 요청'],L.map(x=>[x.d,x.t,x.memberName,x.memberLoginId,x.co,x.how,x.res,x.txt,x.next,x.byName,x.reqNo]));
+  $c('crm-ncsv').onclick=()=>csv('회원별관리_관리기록',['날짜','시각','회원','아이디','소속','방법','결과','내용','다음 연락','작성자','로그인 계정','관련 요청'],L.map(x=>[x.d,x.t,x.memberName,x.memberLoginId,x.co,x.how,x.res,x.txt,x.next,x.writerName||'',x.byName,x.reqNo]));
   bindCommon(s);
 }
 
@@ -246,7 +253,7 @@ async function renderReqs(){
   if(s.q){const q=s.q.toLowerCase();L=L.filter(x=>((x.memberName||'')+(x.title||'')+(x.no||'')).toLowerCase().includes(q));}
   sortBy(L,s,(x,k)=>k==='createdAt'?ms(x.createdAt):x[k]);const P=L.slice((s.p-1)*s.ps,s.p*s.ps);
   pg.innerHTML=`<div class="crm-fbar"><div class="crm-chips">${[['open','진행 중'],['over','기한 지남'],['done','완료'],['all','전체']].map(x=>`<button class="crm-chip ${s.st===x[0]?'on':''}" data-st="${x[0]}">${x[1]}</button>`).join('')}</div>
-   <select id="crm-rm"><option value="all">전체 담당</option><option value="me" ${s.mg==='me'?'selected':''}>내 담당</option>${C.mgrs.map(x=>`<option value="${x.id}" ${s.mg===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>
+   <select id="crm-rm"><option value="all">전체 담당</option><option value="me" ${s.mg==='me'?'selected':''}>내 담당</option>${C.mgrs.map(x=>`<option value="${x.id}" ${s.mg===x.id?'selected':''}>${esc(x.name)} (${esc(x.loginId)})</option>`).join('')}</select>
    <input type="search" id="crm-rq" placeholder="회원·제목·번호 검색" value="${esc(s.q)}"><div class="sp"><button class="crm-btn sec sm" id="crm-rre">↻ 새로 불러오기</button></div></div>
    ${sortSel(RCOLS,s)}
    <div class="crm-tw"><table class="crm-list"><thead>${th(RCOLS,s)}</thead><tbody>${P.length?P.map(x=>{const over=x.st<2&&x.due&&x.due<t;return `<tr data-id="${esc(x.memberUid)}"><td data-l="번호">${esc(x.no)}</td><td data-l="접수일">${md(x.d)}</td><td data-l="회원"><span class="nm">${esc(x.memberName||'')}</span></td>
@@ -298,7 +305,7 @@ function renderD(keep){
   box.innerHTML=`<div class="crm-mh"><div class="av">${esc((m.name||'?')[0])}</div>
    <div class="who"><h3>${esc(m.name)} <span class="sub">${esc(m.loginId)}</span></h3>
     <div class="meta">${esc(m.co)} ${esc(m.title)} · <b>${esc(m.rl)}</b> · 가입 ${esc(m.join||'-')} · 마지막 접속 ${agoTxt(m.ago)}${m.phone?` · <a href="tel:${esc(m.phone.replace(/[^0-9+]/g,''))}" class="tel">📞 ${esc(m.phone)}</a>`:''}</div></div>
-   <div class="nav"><select id="crm-mgr" class="crm-sel">${`<option value="">담당자 미지정</option>`+C.mgrs.map(x=>`<option value="${x.id}" ${x.id===m.mgrId?'selected':''}>담당 ${esc(x.name)}</option>`).join('')}</select>
+   <div class="nav"><select id="crm-mgr" class="crm-sel">${`<option value="">담당자 미지정</option>`+C.mgrs.map(x=>`<option value="${x.id}" ${x.id===m.mgrId?'selected':''}>담당 ${esc(x.name)} (${esc(x.loginId)})</option>`).join('')}</select>
     <button class="crm-btn sec sm" id="crm-pv" ${C.cur<=0?'disabled':''}>◀ 이전</button><span class="pos">${C.cur+1} / ${fmt(C.view.length)}</span><button class="crm-btn sec sm" id="crm-nx" ${C.cur>=C.view.length-1?'disabled':''}>다음 ▶</button>
     <button class="x" id="crm-x" aria-label="닫기">×</button></div></div>
   <div class="crm-mscroll">
@@ -312,6 +319,7 @@ function renderD(keep){
     <div class="card ${m.lm?'':'warn'}"><div class="k">이번 달 학습</div><div class="v">${hm(m.lm)}</div><div class="s">누적 이수 ${m.ldone}강좌</div></div>
    </div>
    <div class="crm-quick"><h4>📝 소통 기록 <small>Ctrl+Enter = 저장 후 다음 회원 · 부재중은 버튼 한 번에 저장(다음 연락 내일)</small></h4>
+    <div class="qrow"><span class="lb">작성자 <b style="color:#C0392B">*</b></span><input id="crm-writer" class="crm-sel" style="width:160px" maxlength="20" placeholder="실제 작성자 이름" value="${esc(getWriter())}"><span class="sub">로그인 계정: ${esc(C.me.name||'')} · 이 PC에서는 다음부터 자동으로 채워집니다</span></div>
     <div class="qrow"><span class="lb">결과</span>${RESS.filter(r=>r[0]!=='부재중').map(r=>`<button class="qb ${QF.res===r[0]?'on':''}" data-res="${r[0]}">${r[0]==='통화 완료'?'✅ ':r[0]==='재연락 요청'?'🔁 ':'💬 '}${r[0]}</button>`).join('')}<button class="qb miss" id="crm-miss">📵 부재중 (바로 저장 → 다음)</button></div>
     <div class="qrow"><span class="lb">방법</span>${HOWS.slice(0,5).map(x=>`<button class="qb ${QF.how===x?'on':''}" data-how="${x}">${x}</button>`).join('')}<select id="crm-how2" class="crm-sel"><option value="">기타 방법…</option>${HOWS.slice(5).map(x=>`<option ${QF.how===x?'selected':''}>${x}</option>`).join('')}</select></div>
     <div class="qrow"><span class="lb">자주 쓰는 말</span>${PHRASES.map(x=>`<button class="qb ph" data-ph="${x}">+ ${x}</button>`).join('')}</div>
@@ -323,6 +331,7 @@ function renderD(keep){
    <div class="crm-tabs">${[['note','📝 관리 기록'],['req','📌 요청사항'+(open.length?` <span class="n">${open.length}</span>`:'')],['learn','🎓 학습 현황'],['use','📋 이용 기록'],['pat','📊 이용 패턴'],['mon','📅 월별 요약']].map(x=>`<button data-t="${x[0]}" class="${C.dtab===x[0]?'on':''}">${x[1]}</button>`).join('')}</div>
    <div class="crm-tbody" id="crm-tb"></div></div>`;
   $c('crm-x').onclick=closeD;
+  $c('crm-writer').onchange=e=>{setWriter(e.target.value.trim());};
   $c('crm-pv').onclick=()=>{if(C.cur>0)openD(C.cur-1);};$c('crm-nx').onclick=()=>{if(C.cur<C.view.length-1)openD(C.cur+1);};
   $c('crm-mgr').onchange=async e=>{const g=C.mgrs.find(x=>x.id===e.target.value);try{await updateDoc(doc(C.db,'users',m.id),{'crm.mgrId':g?g.id:'','crm.mgrName':g?g.name:'','crm.updatedAt':serverTimestamp()});m.mgrId=g?g.id:'';m.mgrName=g?g.name:'';toast('담당자: '+(g?g.name:'미지정'));}catch(err){toast('변경 실패: '+err.message);}};
   box.querySelectorAll('[data-res]').forEach(b=>b.onclick=()=>{QF.res=b.dataset.res;renderD(true);});
@@ -342,10 +351,11 @@ let _saving=false;
 async function saveNote(next,silent){
   if(_saving)return false;const d=C.det;const m=C.MM[d.uid];const ta=$c('crm-qt');const txt=(ta.value||'').trim();
   if(!txt&&QF.res!=='부재중'){toast('내용을 입력하거나 「자주 쓰는 말」을 눌러 주세요');ta.focus();return false;}
+  const writer=needWriter();if(!writer)return false;
   const nx=$c('crm-qn').value||QF.next||'';const reqNo=$c('crm-qr').value||'';const day=TODAY(),tm=nowHM();
   _saving=true;
   try{
-    const rec={memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:day,t:tm,at:serverTimestamp(),how:QF.how,res:QF.res,txt:txt||'부재중',next:nx,reqNo,byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',createdAt:serverTimestamp()};
+    const rec={memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:day,t:tm,at:serverTimestamp(),how:QF.how,res:QF.res,txt:txt||'부재중',next:nx,reqNo,byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',writerName:writer,createdAt:serverTimestamp()};
     const ref=await addDoc(collection(C.db,'member_notes'),rec);
     const up={'crm.lastContact':day,'crm.next':nx,'crm.noteCnt':increment(1),'crm.updatedAt':serverTimestamp()};
     if(!m.mgrId&&C.me.id){up['crm.mgrId']=C.me.id;up['crm.mgrName']=C.me.name||'';m.mgrId=C.me.id;m.mgrName=C.me.name||'';}
@@ -378,7 +388,7 @@ function tNote(d){
   const show=d.notes.slice(0,d.nLim);const g={};show.forEach(n=>(g[n.d]=g[n.d]||[]).push(n));
   return Object.keys(g).map(day=>`<div class="day">${dl(day)}${day===TODAY()?' · 오늘':''}<small>${g[day].length}건</small></div>`+g[day].map(n=>`<div class="note"><span class="t">${esc(n.t||'')}</span>
    <span><span class="how">${esc(n.how||'')}</span> <span class="res r-${(RESS.find(r=>r[0]===n.res)||['','ok'])[1]}">${esc(n.res||'')}</span></span>
-   <div class="c">${esc(n.txt||'')}${n.next?`<div><span class="nx">⏰ 다음 연락 ${md(n.next)}</span></div>`:''}${n.reqNo?`<div class="lk">📌 관련 요청 ${esc(n.reqNo)}</div>`:''}<div class="by">작성 ${esc(n.byName||'')}</div></div></div>`).join('')).join('')
+   <div class="c">${esc(n.txt||'')}${n.next?`<div><span class="nx">⏰ 다음 연락 ${md(n.next)}</span></div>`:''}${n.reqNo?`<div class="lk">📌 관련 요청 ${esc(n.reqNo)}</div>`:''}<div class="by">작성 ${whoTxt(n.writerName,n.byName)}</div></div></div>`).join('')).join('')
    +(d.notes.length>d.nLim?`<div class="more"><button class="crm-btn sec sm" id="crm-more">이전 기록 더 보기</button></div>`:'');
 }
 /* 요청사항 탭 */
@@ -387,14 +397,14 @@ function tReq(d,m){
   return `<details class="crm-req" id="crm-rf" style="padding:9px 12px;background:#F7FBFD" ${d.reqs.length?'':'open'}><summary style="cursor:pointer;font-weight:700;color:#1B3A5C">➕ 새 요청 등록</summary>
    <div class="crm-rform"><label>접수일<input type="date" id="crm-r-d" value="${t}"></label><label>접수 경로<select id="crm-r-v">${HOWS.map(x=>`<option>${x}</option>`).join('')}</select></label>
    <label>유형<select id="crm-r-y">${RTYPES.map(x=>`<option>${x}</option>`).join('')}</select></label><label>처리 기한<input type="date" id="crm-r-due" value="${addD(t,3)}"></label>
-   <label class="w2">제목<input id="crm-r-t" placeholder="한 줄 요약 (예: 휴대폰 공유 버튼 오류)"></label><label class="w2">처리 담당<select id="crm-r-m">${C.mgrs.map(x=>`<option value="${x.id}" ${x.id===(m.mgrId||C.me.id)?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label>
+   <label class="w2">제목<input id="crm-r-t" placeholder="한 줄 요약 (예: 휴대폰 공유 버튼 오류)"></label><label class="w2">처리 담당<select id="crm-r-m">${C.mgrs.map(x=>`<option value="${x.id}" ${x.id===(m.mgrId||C.me.id)?'selected':''}>${esc(x.name)} (${esc(x.loginId)})</option>`).join('')}</select></label>
    <label class="w4">내용<textarea id="crm-r-b" rows="2" placeholder="회원이 요청한 내용을 그대로 적어 주세요"></textarea></label></div>
    <div style="text-align:right;margin-top:8px"><button class="crm-btn" id="crm-r-save">요청 등록</button></div></details>`+
    (d.reqsErr?'<div class="crm-empty">요청사항을 불러오지 못했습니다 — '+esc(d.reqsErr)+'</div>':'')+
    (d.reqs.length?d.reqs.map(r=>{const over=r.st<2&&r.due&&r.due<t;return `<div class="crm-req" data-id="${r.id}"><div class="req-h"><span class="rno sub">${esc(r.no)}</span>
-    <div class="ti">${esc(r.title)}<div class="rmt">${md(r.d)} 접수 · ${esc(r.via||'')} · ${esc(r.type||'')} · 기한 <span class="${over?'due':''}">${md(r.due)}${over?' 지남':''}</span> · 담당 ${esc(r.mgrName||'')}</div></div><span class="st st-${r.st}">${ST[r.st]}</span></div>
+    <div class="ti">${esc(r.title)}<div class="rmt">${md(r.d)} 접수 · ${esc(r.via||'')} · ${esc(r.type||'')} · 기한 <span class="${over?'due':''}">${md(r.due)}${over?' 지남':''}</span> · 담당 ${esc(r.mgrName||'')}${r.writerName||r.byName?' · 등록 '+whoTxt(r.writerName,r.byName):''}</div></div><span class="st st-${r.st}">${ST[r.st]}</span></div>
     <div class="req-b"><div class="rbody">${esc(r.body||'')}</div>
-     <div class="steps">${(r.steps||[]).map(s=>`<div class="step"><b>${esc(s.d||'')} ${esc(s.t||'')}</b> ${esc(s.txt||'')} <span class="sub">· ${esc(s.byName||'')}</span></div>`).join('')}</div>
+     <div class="steps">${(r.steps||[]).map(s=>`<div class="step"><b>${esc(s.d||'')} ${esc(s.t||'')}</b> ${esc(s.txt||'')} <span class="sub">· ${whoTxt(s.writer,s.byName)}</span></div>`).join('')}</div>
      ${r.st===2?`<div class="rdone">✅ 처리 결과 · ${esc(r.result||'')} <span class="sub">(${md(r.doneD)} 완료)</span></div>`:''}
      <div class="radd"><input class="r-step" placeholder="${r.st===2?'다시 진행할 내용 (상태를 바꿔 저장)':'진행 내용 추가 (예: 개발 전달, 자료 발송)'}"><select class="r-st">${ST.map((s,k)=>`<option value="${k}" ${k===r.st?'selected':''}>${s}</option>`).join('')}</select><button class="crm-btn sm r-add">저장</button></div>
      ${r.st<2?'<div class="sub" style="margin-top:4px">「완료」로 바꾸면 입력한 내용이 처리 결과로 남고, 관리 기록에도 한 줄 자동으로 남습니다</div>':''}</div></div>`;}).join(''):'<div class="crm-empty">등록된 요청이 없습니다.</div>');
@@ -426,7 +436,7 @@ function tLearn(d,m){
 function useRows(d){
   const from=Date.now()-d.useDays*864e5;
   const rows=(d.logs||[]).filter(r=>r.t>=from).map(r=>({...r}));
-  (d.notes||[]).forEach(n=>{const t=new Date((n.d||'')+'T'+(n.t||'00:00')).getTime();if(t>=from)rows.push({t,c:'관리 기록',x:(n.how||'')+' '+(n.res||'')+' · '+(n.txt||''),s:n.byName||'',mg:1});});
+  (d.notes||[]).forEach(n=>{const t=new Date((n.d||'')+'T'+(n.t||'00:00')).getTime();if(t>=from)rows.push({t,c:'관리 기록',x:(n.how||'')+' '+(n.res||'')+' · '+(n.txt||''),s:n.writerName||n.byName||'',mg:1});});
   (d.reqs||[]).forEach(r=>{const t=new Date((r.d||'')+'T09:00').getTime();if(t>=from)rows.push({t,c:'요청',x:(r.no||'')+' '+(r.title||''),s:ST[r.st]||'',mg:1});});
   rows.sort((a,b)=>a.t-b.t);let g=null;const keep=[];rows.forEach(r=>{if(r.main&&g&&r.t-g.last<=30*60e3){g.n++;g.last=r.t;g.x='메인 화면 진입 ('+g.n+'회)';return;}if(r.main){g=r;g.n=1;g.last=r.t;}keep.push(r);});
   return keep.sort((a,b)=>b.t-a.t);
@@ -528,11 +538,12 @@ function bindTab(d,m){
 }
 async function saveReq(d,m){
   const title=$c('crm-r-t').value.trim();if(!title){toast('제목을 입력해 주세요');$c('crm-r-t').focus();return;}
+  const writer=needWriter();if(!writer)return;
   const g=C.mgrs.find(x=>x.id===$c('crm-r-m').value)||{id:C.me.id,name:C.me.name};const day=$c('crm-r-d').value||TODAY();
   const no='R-'+day.slice(2).replace(/-/g,'')+'-'+Math.random().toString(36).slice(2,6).toUpperCase();
   const rec={no,memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:day,via:$c('crm-r-v').value,type:$c('crm-r-y').value,title,body:$c('crm-r-b').value.trim()||title,
-    due:$c('crm-r-due').value||'',mgrId:g.id,mgrName:g.name,st:0,steps:[{d:TODAY(),t:nowHM(),txt:'요청 접수',byName:C.me.name||'',byUid:C.me.uid||''}],result:'',doneD:'',
-    byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+    due:$c('crm-r-due').value||'',mgrId:g.id,mgrName:g.name,st:0,steps:[{d:TODAY(),t:nowHM(),txt:'요청 접수',byName:C.me.name||'',byUid:C.me.uid||'',writer}],result:'',doneD:'',
+    byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',writerName:writer,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
   try{const ref=await addDoc(collection(C.db,'member_reqs'),rec);await updateDoc(doc(C.db,'users',m.id),{'crm.openReq':increment(1),'crm.updatedAt':serverTimestamp()});
     m.openR++;d.reqs=[{id:ref.id,...rec,createdAt:Timestamp.now()},...(d.reqs||[])];C.reqsAll=null;toast(no+' 요청을 등록했습니다');renderD(true);
   }catch(e){toast('등록 실패: '+e.message);}
@@ -540,13 +551,14 @@ async function saveReq(d,m){
 async function stepReq(d,m,box){
   const r=(d.reqs||[]).find(x=>x.id===box.dataset.id);if(!r)return;const txt=box.querySelector('.r-step').value.trim();const st=+box.querySelector('.r-st').value;
   if(!txt&&st===r.st){toast('진행 내용을 입력해 주세요');return;}
-  const step={d:TODAY(),t:nowHM(),txt:txt||('상태 변경: '+ST[st]),byName:C.me.name||'',byUid:C.me.uid||''};const steps=[...(r.steps||[]),step];
+  const writer=needWriter();if(!writer)return;
+  const step={d:TODAY(),t:nowHM(),txt:txt||('상태 변경: '+ST[st]),byName:C.me.name||'',byUid:C.me.uid||'',writer};const steps=[...(r.steps||[]),step];
   const up={steps,st,updatedAt:serverTimestamp()};if(st===2&&r.st<2){up.result=txt||'처리 완료';up.doneD=TODAY();}
   const delta=(r.st<2&&st===2)?-1:(r.st===2&&st<2?1:0);
   try{await updateDoc(doc(C.db,'member_reqs',r.id),up);
     if(delta){await updateDoc(doc(C.db,'users',m.id),{'crm.openReq':increment(delta),'crm.updatedAt':serverTimestamp()});m.openR=Math.max(0,m.openR+delta);}
     Object.assign(r,up,{updatedAt:Timestamp.now()});C.reqsAll=null;
-    if(st===2&&delta){const rec={memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:TODAY(),t:nowHM(),at:serverTimestamp(),how:'🗒 기타',res:'통화 완료',txt:'요청 '+r.no+' 처리 완료 — '+up.result,next:'',reqNo:r.no,byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',createdAt:serverTimestamp()};
+    if(st===2&&delta){const rec={memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:TODAY(),t:nowHM(),at:serverTimestamp(),how:'🗒 기타',res:'통화 완료',txt:'요청 '+r.no+' 처리 완료 — '+up.result,next:'',reqNo:r.no,byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',writerName:writer,createdAt:serverTimestamp()};
       try{await addDoc(collection(C.db,'member_notes'),rec);await updateDoc(doc(C.db,'users',m.id),{'crm.noteCnt':increment(1),'crm.lastContact':TODAY()});m.nCnt++;m.lastC=TODAY();if(d.notes)d.notes.unshift({...rec,at:Timestamp.now()});}catch(_e){}}
     toast(st===2&&delta?'요청을 완료 처리했습니다':'진행 기록을 저장했습니다');renderD(true);
     setTimeout(()=>{const o=document.querySelector(`.crm-req[data-id="${r.id}"]`);if(o)o.classList.add('open');},0);
