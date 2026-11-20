@@ -127,7 +127,7 @@ function render(){
   C.root.querySelectorAll('.crm-ptabs button').forEach(b=>b.onclick=()=>{C.quick='';setPage(b.dataset.p);});
   C.root.querySelector('.crm-mbg').onclick=closeD;
   $c('crm-reload').onclick=()=>{const o={db:C.db,root:C.root,me:C.me};C.ready=false;mountCrm(o);};
-  if(!C._key){C._key=true;document.addEventListener('keydown',e=>{const m=document.getElementById('crm-mdl');if(!m||!m.classList.contains('on'))return;if(e.key==='Escape')closeD();if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();saveNote(true);}});}
+  if(!C._key){C._key=true;document.addEventListener('keydown',e=>{const m=document.getElementById('crm-mdl');if(!m||!m.classList.contains('on'))return;if(e.key==='Escape')closeD();if(e.ctrlKey&&e.key==='Enter'&&document.activeElement&&document.activeElement.id==='crm-qt'){e.preventDefault();saveNote(false);}});}
   setPage(C.page);
 }
 const $c=id=>document.getElementById(id);
@@ -230,7 +230,7 @@ async function renderNotes(){
   const key=s.from+'~'+s.to;
   if(!C.notesAll||C.notesAll.key!==key){pg.innerHTML='<div class="crm-loading">관리 기록을 불러오는 중...</div>';
     try{const sn=await getDocs(query(collection(C.db,'member_notes'),where('at','>=',Timestamp.fromDate(new Date(s.from+'T00:00:00'))),where('at','<=',Timestamp.fromDate(new Date(s.to+'T23:59:59'))),orderBy('at','desc'),limit(3000)));
-      C.notesAll={key,rows:sn.docs.map(d=>({id:d.id,...d.data()}))};}catch(e){pg.innerHTML='<div class="crm-empty">불러오지 못했습니다 — '+esc(e.message)+'</div>';return;}}
+      C.notesAll={key,rows:sn.docs.map(d=>({id:d.id,...d.data()})).filter(x=>!x.del)};}catch(e){pg.innerHTML='<div class="crm-empty">불러오지 못했습니다 — '+esc(e.message)+'</div>';return;}}
   let L=C.notesAll.rows.map(n=>({...n,co:(C.MM[n.memberUid]||{}).co||'',atMs:ms(n.at)}));
   if(s.mg==='me')L=L.filter(x=>x.byUid===C.me.uid);else if(s.mg!=='all')L=L.filter(x=>x.byId===s.mg);
   if(s.how)L=L.filter(x=>x.how===s.how);if(s.res)L=L.filter(x=>x.res===s.res);
@@ -291,7 +291,7 @@ async function openD(i,keepTab){
   loadNotes();loadReqs();
 }
 function closeD(){$c('crm-mdl').classList.remove('on');document.body.style.overflow='';renderToday();if(C.page==='mem')renderMem();}
-async function loadNotes(){const d=C.det;try{const sn=await getDocs(query(collection(C.db,'member_notes'),where('memberUid','==',d.uid),orderBy('at','desc'),limit(d.nLim+1)));if(C.det!==d)return;d.notes=sn.docs.map(x=>({id:x.id,...x.data()}));}catch(e){if(C.det!==d)return;d.notes=[];d.notesErr=e.message;}if(C.dtab==='note'||C.dtab==='use')renderTab();}
+async function loadNotes(){const d=C.det;try{const sn=await getDocs(query(collection(C.db,'member_notes'),where('memberUid','==',d.uid),orderBy('at','desc'),limit(d.nLim+1)));if(C.det!==d)return;d.notes=sn.docs.map(x=>({id:x.id,...x.data()})).filter(x=>!x.del);}catch(e){if(C.det!==d)return;d.notes=[];d.notesErr=e.message;}if(C.dtab==='note'||C.dtab==='use')renderTab();}
 async function loadReqs(){const d=C.det;try{const sn=await getDocs(query(collection(C.db,'member_reqs'),where('memberUid','==',d.uid),orderBy('createdAt','desc'),limit(100)));if(C.det!==d)return;d.reqs=sn.docs.map(x=>({id:x.id,...x.data()}));}catch(e){if(C.det!==d)return;d.reqs=[];d.reqsErr=e.message;}renderD(true);}
 async function loadLogs(days){
   const d=C.det;d.logDays=days;d.logs=null;renderTab();
@@ -331,15 +331,15 @@ function renderD(keep){
     <div class="card"><div class="k">30일 기능 이용</div><div class="v">${m.f30==null?'…':fmt(m.f30)+'회'}</div><div class="s">${C.agg?'전체 평균 '+Math.round(C.agg.avgF)+'회':''}</div></div>
     <div class="card ${m.lm?'':'warn'}"><div class="k">이번 달 학습</div><div class="v">${hm(m.lm)}</div><div class="s">누적 이수 ${m.ldone}강좌</div></div>
    </div>
-   <div class="crm-quick"><h4>📝 소통 기록 <small>Ctrl+Enter = 저장 후 다음 회원 · 부재중은 버튼 한 번에 저장(다음 연락 내일)</small></h4>
+   <div class="crm-quick"><h4>📝 소통 기록 <small>Ctrl+Enter = 저장 · 부재중은 버튼 한 번에 저장(다음 연락 내일) · 저장한 기록은 아래 목록에서 수정·삭제</small></h4>
     <div class="qrow"><span class="lb">작성자 <b style="color:#C0392B">*</b></span><input id="crm-writer" class="crm-sel" style="width:160px" maxlength="20" placeholder="실제 작성자 이름" value="${esc(getWriter())}"><span class="sub">로그인 계정: ${esc(C.me.name||'')} · 이 PC에서는 다음부터 자동으로 채워집니다</span></div>
-    <div class="qrow"><span class="lb">결과</span>${RESS.filter(r=>r[0]!=='부재중').map(r=>`<button class="qb ${QF.res===r[0]?'on':''}" data-res="${r[0]}">${r[0]==='통화 완료'?'✅ ':r[0]==='재연락 요청'?'🔁 ':'💬 '}${r[0]}</button>`).join('')}<button class="qb miss" id="crm-miss">📵 부재중 (바로 저장 → 다음)</button></div>
+    <div class="qrow"><span class="lb">결과</span>${RESS.filter(r=>r[0]!=='부재중').map(r=>`<button class="qb ${QF.res===r[0]?'on':''}" data-res="${r[0]}">${r[0]==='통화 완료'?'✅ ':r[0]==='재연락 요청'?'🔁 ':'💬 '}${r[0]}</button>`).join('')}<button class="qb miss" id="crm-miss">📵 부재중 (바로 저장)</button></div>
     <div class="qrow"><span class="lb">방법</span>${HOWS.slice(0,5).map(x=>`<button class="qb ${QF.how===x?'on':''}" data-how="${x}">${x}</button>`).join('')}<select id="crm-how2" class="crm-sel"><option value="">기타 방법…</option>${HOWS.slice(5).map(x=>`<option ${QF.how===x?'selected':''}>${x}</option>`).join('')}</select></div>
     <div class="qrow"><span class="lb">자주 쓰는 말</span>${PHRASES.map(x=>`<button class="qb ph" data-ph="${x}">+ ${x}</button>`).join('')}</div>
     <div class="qrow"><span class="lb">내용</span><textarea id="crm-qt" placeholder="통화·안내 내용, 회원 반응, 약속한 것">${esc(qt)}</textarea></div>
     <div class="qrow"><span class="lb">다음 연락</span>${[['+1일',1],['+3일',3],['+1주',7],['+2주',14],['+1달',30],['없음',0]].map(x=>`<button class="qb ${QF.nset&&QF.next===(x[1]?addD(t,x[1]):'')?'on':''}" data-nx="${x[1]}">${x[0]}</button>`).join('')}<input type="date" id="crm-qn" value="${QF.next}" class="crm-sel">
      <select id="crm-qr" class="crm-sel"><option value="">관련 요청 없음</option>${reqs.filter(r=>r.st<2).map(r=>`<option value="${esc(r.no)}">${esc(r.no)} ${esc((r.title||'').slice(0,14))}</option>`).join('')}</select></div>
-    <div class="qsave"><small>회원이 요청한 것이 있으면 「요청으로도 등록」을 누르세요</small><button class="crm-btn sec" id="crm-toreq">📌 요청으로도 등록</button><button class="crm-btn sec" id="crm-sv">저장</button><button class="crm-btn grn" id="crm-svn">저장 후 다음 ▶</button></div>
+    <div class="qsave"><small>회원이 요청한 것이 있으면 「요청으로도 등록」을 누르세요</small><button class="crm-btn sec" id="crm-toreq">📌 요청으로도 등록</button><button class="crm-btn grn" id="crm-sv">저장</button></div>
    </div>
    <div class="crm-tabs">${[['note','📝 관리 기록'],['req','📌 요청사항'+(open.length?` <span class="n">${open.length}</span>`:'')],['learn','🎓 학습 현황'],['use','📋 이용 기록'],['pat','📊 이용 패턴'],['mon','📅 월별 요약']].map(x=>`<button data-t="${x[0]}" class="${C.dtab===x[0]?'on':''}">${x[1]}</button>`).join('')}</div>
    <div class="crm-tbody" id="crm-tb"></div></div>`;
@@ -353,8 +353,8 @@ function renderD(keep){
   box.querySelectorAll('[data-ph]').forEach(b=>b.onclick=()=>{const ta=$c('crm-qt');ta.value=(ta.value?ta.value+', ':'')+b.dataset.ph;ta.focus();});
   box.querySelectorAll('[data-nx]').forEach(b=>b.onclick=()=>{const n=+b.dataset.nx;QF.next=n?addD(TODAY(),n):'';QF.nset=true;renderD(true);});
   $c('crm-qn').onchange=e=>{QF.next=e.target.value;QF.nset=true;};
-  $c('crm-miss').onclick=()=>{QF.res='부재중';QF.next=addD(TODAY(),1);QF.nset=true;const ta=$c('crm-qt');if(!ta.value.trim())ta.value='부재중';saveNote(true);};
-  $c('crm-sv').onclick=()=>saveNote(false);$c('crm-svn').onclick=()=>saveNote(true);
+  $c('crm-miss').onclick=()=>{QF.res='부재중';QF.next=addD(TODAY(),1);QF.nset=true;const ta=$c('crm-qt');if(!ta.value.trim())ta.value='부재중';saveNote(false);};
+  $c('crm-sv').onclick=()=>saveNote(false);
   $c('crm-toreq').onclick=async()=>{const txt=$c('crm-qt').value.trim();if(txt){const ok=await saveNote(false,true);if(!ok)return;}C.dtab='req';renderD(true);setTimeout(()=>{const f=$c('crm-rf');if(f){f.open=true;$c('crm-r-b').value=txt;$c('crm-r-t').focus();}},0);};
   box.querySelectorAll('.crm-tabs button').forEach(b=>b.onclick=()=>{C.dtab=b.dataset.t;box.querySelectorAll('.crm-tabs button').forEach(x=>x.classList.toggle('on',x===b));renderTab();});
   if(keep){const s=box.querySelector('.crm-mscroll');if(s)s.scrollTop=sc;}
@@ -370,15 +370,16 @@ async function saveNote(next,silent){
   try{
     const rec={memberUid:m.id,memberName:m.name,memberLoginId:m.loginId,orgId:m.orgId||'',d:day,t:tm,at:serverTimestamp(),how:QF.how,res:QF.res,txt:txt||'부재중',next:nx,reqNo,byUid:C.me.uid||'',byId:C.me.id||'',byName:C.me.name||'',writerName:writer,createdAt:serverTimestamp()};
     const ref=await addDoc(collection(C.db,'member_notes'),rec);
-    const up={'crm.lastContact':day,'crm.next':nx,'crm.noteCnt':increment(1),'crm.updatedAt':serverTimestamp()};
-    if(!m.mgrId&&C.me.id){up['crm.mgrId']=C.me.id;up['crm.mgrName']=C.me.name||'';m.mgrId=C.me.id;m.mgrName=C.me.name||'';}
-    await updateDoc(doc(C.db,'users',m.id),up);
+    /* ★ [2026-11-20] 저장 즉시 아래 목록에 표시 — 목록을 아직 불러오는 중이었으면 저장 뒤 다시 불러온다 */
+    const wasLoading=!d.notes;if(d.notes)d.notes.unshift({id:ref.id,...rec,at:Timestamp.now()});C.notesAll=null;
     m.lastC=day;m.next=nx;m.nCnt++;
-    if(d.notes)d.notes.unshift({id:ref.id,...rec,at:Timestamp.now()});C.notesAll=null;
-    if(!silent)toast(`${m.name} · ${QF.res} 기록 저장${nx?' · 다음 연락 '+md(nx):''}`);
-    QF={res:'통화 완료',how:QF.how,next:''};ta.value='';
-    if(next){if(C.cur<C.view.length-1){_saving=false;openD(C.cur+1);return true;}toast('목록의 마지막 회원입니다');}
-    renderD(true);return true;
+    const res=QF.res;QF={res:'통화 완료',how:QF.how,next:''};ta.value='';
+    let upErr='';
+    try{const up={'crm.lastContact':day,'crm.next':nx,'crm.noteCnt':increment(1),'crm.updatedAt':serverTimestamp()};
+      if(!m.mgrId&&C.me.id){up['crm.mgrId']=C.me.id;up['crm.mgrName']=C.me.name||'';m.mgrId=C.me.id;m.mgrName=C.me.name||'';}
+      await updateDoc(doc(C.db,'users',m.id),up);}catch(e2){upErr=e2.message;}
+    if(upErr)toast('기록은 저장됨 · 최근 소통 갱신 실패: '+upErr);else if(!silent)toast(`${m.name} · ${res} 기록 저장${nx?' · 다음 연락 '+md(nx):''}`);
+    C.dtab=silent?C.dtab:'note';renderD(true);if(wasLoading&&C.det===d)loadNotes();return true;
   }catch(e){toast('저장 실패: '+e.message);return false;}
   finally{_saving=false;}
 }
@@ -401,7 +402,7 @@ function tNote(d){
   const show=d.notes.slice(0,d.nLim);const g={};show.forEach(n=>(g[n.d]=g[n.d]||[]).push(n));
   return Object.keys(g).map(day=>`<div class="day">${dl(day)}${day===TODAY()?' · 오늘':''}<small>${g[day].length}건</small></div>`+g[day].map(n=>`<div class="note"><span class="t">${esc(n.t||'')}</span>
    <span><span class="how">${esc(n.how||'')}</span> <span class="res r-${(RESS.find(r=>r[0]===n.res)||['','ok'])[1]}">${esc(n.res||'')}</span></span>
-   <div class="c">${esc(n.txt||'')}${n.next?`<div><span class="nx">⏰ 다음 연락 ${md(n.next)}</span></div>`:''}${n.reqNo?`<div class="lk">📌 관련 요청 ${esc(n.reqNo)}</div>`:''}<div class="by">작성 ${whoTxt(n.writerName,n.byName)}</div></div></div>`).join('')).join('')
+   <div class="c">${esc(n.txt||'')}${n.next?`<div><span class="nx">⏰ 다음 연락 ${md(n.next)}</span></div>`:''}${n.reqNo?`<div class="lk">📌 관련 요청 ${esc(n.reqNo)}</div>`:''}<div class="by">작성 ${whoTxt(n.writerName,n.byName)}${n.editedBy?` · 수정 ${esc(n.editedBy)}${n.editedD?' '+md(n.editedD):''}`:''}${canEdit(n)?` <span class="ned"><button data-ne="${esc(n.id)}">수정</button><button data-nd="${esc(n.id)}">삭제</button></span>`:''}</div></div></div>`).join('')).join('')
    +(d.notes.length>d.nLim?`<div class="more"><button class="crm-btn sec sm" id="crm-more">이전 기록 더 보기</button></div>`:'');
 }
 /* 요청사항 탭 */
@@ -539,6 +540,8 @@ function tMon(d,m){
 }
 function bindTab(d,m){
   const el=$c('crm-tb');if(!el)return;
+  el.querySelectorAll('[data-ne]').forEach(b=>b.onclick=()=>editNote(d,m,b.dataset.ne,b.closest('.note')));
+  el.querySelectorAll('[data-nd]').forEach(b=>b.onclick=()=>delNote(d,m,b.dataset.nd));
   const mo=$c('crm-more');if(mo)mo.onclick=()=>{d.nLim+=30;d.notes=null;renderTab();loadNotes();};
   el.querySelectorAll('[data-ud]').forEach(b=>b.onclick=()=>{d.useDays=+b.dataset.ud;if(d.useDays>d.logDays){d._lload=true;loadLogs(365);}else renderTab();});
   el.querySelectorAll('[data-uc]').forEach(b=>b.onclick=()=>{d.useCat=b.dataset.uc;renderTab();});
@@ -548,6 +551,40 @@ function bindTab(d,m){
   const rs=$c('crm-r-save');if(rs)rs.onclick=()=>saveReq(d,m);
   el.querySelectorAll('.req-h').forEach(h=>h.onclick=()=>h.parentNode.classList.toggle('open'));
   el.querySelectorAll('.r-add').forEach(b=>b.onclick=()=>stepReq(d,m,b.closest('.crm-req')));
+}
+/* ★ [2026-11-20] 관리 기록 수정·삭제 — CRM 담당은 본인이 쓴 기록만, 관리자는 전체. 삭제는 기록을 남긴 채 숨김(del) */
+function canEdit(n){return !!n.id&&(C.me.role!=='crm'||n.byUid===C.me.uid);}
+function syncLatest(d,m){const top=(d.notes||[])[0];return {'crm.lastContact':top?top.d||'':'','crm.next':top?top.next||'':'','crm.updatedAt':serverTimestamp()};}
+function editNote(d,m,id,box){
+  const n=(d.notes||[]).find(x=>x.id===id);if(!n||!box)return;const c=box.querySelector('.c');
+  c.innerHTML=`<div class="nedit"><select class="crm-sel" data-k="how">${HOWS.map(x=>`<option ${n.how===x?'selected':''}>${x}</option>`).join('')}</select>
+   <select class="crm-sel" data-k="res">${RESS.map(x=>`<option ${n.res===x[0]?'selected':''}>${x[0]}</option>`).join('')}</select>
+   <textarea data-k="txt">${esc(n.txt||'')}</textarea>
+   <span class="sub">다음 연락</span> <input type="date" class="crm-sel" data-k="next" value="${esc(n.next||'')}">
+   <button class="crm-btn sm" data-a="ok">수정 저장</button> <button class="crm-btn sec sm" data-a="no">취소</button></div>`;
+  c.querySelector('[data-a=no]').onclick=()=>renderTab();
+  c.querySelector('[data-a=ok]').onclick=async()=>{
+    const writer=needWriter();if(!writer)return;const v=k=>c.querySelector(`[data-k=${k}]`).value;
+    const txt=v('txt').trim();if(!txt){toast('내용을 입력해 주세요');return;}
+    const ch={how:v('how'),res:v('res'),txt,next:v('next')||'',editedBy:writer,editedD:TODAY(),editedAt:serverTimestamp(),editCnt:increment(1)};
+    try{await updateDoc(doc(C.db,'member_notes',id),ch);
+      Object.assign(n,ch,{editCnt:(n.editCnt||0)+1});C.notesAll=null;
+      if(d.notes[0]===n){try{await updateDoc(doc(C.db,'users',m.id),syncLatest(d,m));}catch(_e){}m.next=n.next;}
+      toast('기록을 수정했습니다');renderD(true);
+    }catch(e){toast('수정 실패: '+e.message);}
+  };
+}
+async function delNote(d,m,id){
+  const i=(d.notes||[]).findIndex(x=>x.id===id);if(i<0)return;const n=d.notes[i];
+  const writer=needWriter();if(!writer)return;
+  if(!confirm(`이 기록을 삭제할까요?\n\n${n.d||''} ${n.t||''} · ${n.how||''} ${n.res||''}\n${(n.txt||'').slice(0,80)}`))return;
+  try{await updateDoc(doc(C.db,'member_notes',id),{del:true,delBy:writer,delAt:serverTimestamp()});
+    d.notes.splice(i,1);C.notesAll=null;m.nCnt=Math.max(0,m.nCnt-1);
+    const up=Object.assign({'crm.noteCnt':increment(-1)},i===0?syncLatest(d,m):{'crm.updatedAt':serverTimestamp()});
+    if(i===0){const top=d.notes[0];m.lastC=top?top.d||'':'';m.next=top?top.next||'':'';}
+    try{await updateDoc(doc(C.db,'users',m.id),up);}catch(_e){}
+    toast('기록을 삭제했습니다');renderD(true);
+  }catch(e){toast('삭제 실패: '+e.message);}
 }
 async function saveReq(d,m){
   const title=$c('crm-r-t').value.trim();if(!title){toast('제목을 입력해 주세요');$c('crm-r-t').focus();return;}
@@ -649,7 +686,8 @@ function injectCss(){
 #crm-mdl .crm-tbody{padding:12px 18px 20px}
 #crm-mdl .day{padding:9px 2px 3px;font-weight:700;color:#1B3A5C;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;border-bottom:2px solid #E8EEF3}#crm-mdl .day small{font-weight:500;color:#7F8C8D;font-size:11px}
 #crm-mdl .note{display:grid;grid-template-columns:48px 170px 1fr;gap:10px;padding:8px 4px;border-bottom:1px solid #F0F3F6;align-items:start}#crm-mdl .note .t{color:#5c6b78}#crm-mdl .note .c{min-width:0;word-break:keep-all;white-space:pre-wrap}
-#crm-mdl .note .by{font-size:11px;color:#9AA6B1;margin-top:2px}#crm-mdl .nx{display:inline-block;font-size:11px;color:#C25E00;background:#FFF4E5;border-radius:5px;padding:0 6px;margin-top:3px}#crm-mdl .lk{font-size:11px;color:#2E86AB}
+#crm-mdl .note .by{font-size:11px;color:#9AA6B1;margin-top:2px}#crm-mdl .ned button{border:1px solid #D5DCE3;background:#fff;color:#5c6b78;border-radius:5px;font-size:11px;padding:1px 7px;margin-left:4px;cursor:pointer}#crm-mdl .ned button[data-nd]{color:#C0392B}
+#crm-mdl .nedit{display:flex;flex-wrap:wrap;gap:6px;align-items:center}#crm-mdl .nedit textarea{flex:1 1 100%;min-height:60px;border:1px solid #D5DCE3;border-radius:7px;padding:6px 8px;font:inherit;box-sizing:border-box;width:100%}#crm-mdl .nedit .crm-sel{max-width:100%}#crm-mdl .nx{display:inline-block;font-size:11px;color:#C25E00;background:#FFF4E5;border-radius:5px;padding:0 6px;margin-top:3px}#crm-mdl .lk{font-size:11px;color:#2E86AB}
 #crm-mdl .more{text-align:center;margin-top:10px}
 #crm-mdl .crm-req{border:1px solid #E1E8EE;border-radius:9px;margin-bottom:8px;overflow:hidden}#crm-mdl .req-h{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:9px 12px;cursor:pointer}
 #crm-mdl .req-h:hover{background:#FAFCFE}#crm-mdl .req-h .ti{font-weight:700;word-break:keep-all;min-width:0}#crm-mdl .req-h .rmt{font-size:11px;color:#7F8C8D;font-weight:400}
