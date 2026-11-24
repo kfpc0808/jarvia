@@ -4658,8 +4658,8 @@ body.jv-card-lock #mob-menu > #mob-card-reg.mcr.mcr.on{display:flex!important}
         </div>
       </div>
       <div class="bal-card"><span>충전 잔액</span><strong id="mp-bal">0</strong><span>원</span><button class="btn-accent" id="mp-charge-btn" onclick="openCharge()">충전하기</button></div>
-      <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
-      <div id="mp-sp-note" style="display:none;margin-top:6px;padding:9px 12px;background:#FFF7E6;border:1px solid #F5D9A8;border-radius:8px;font-size:12.5px;line-height:1.6;color:#8B5A00;word-break:keep-all"></div>   <!-- ★ [2026-11-19] 특별포인트 소멸 예정 표시 -->
+      <div class="bal-card" style="background:linear-gradient(135deg,#2ECC71,#27AE60);margin-top:8px;cursor:pointer" onclick="mpGoChargeTab()" title="포인트 적립·사용 내역 보기"><span>보유 포인트</span><strong id="mp-point">0</strong><span>P</span></div>
+      <div id="mp-sp-note" onclick="mpGoChargeTab()" style="display:none;cursor:pointer;margin-top:6px;padding:9px 12px;background:#FFF7E6;border:1px solid #F5D9A8;border-radius:8px;font-size:12.5px;line-height:1.6;color:#8B5A00;word-break:keep-all"></div>   <!-- ★ [2026-11-19] 특별포인트 소멸 예정 표시 -->
         <!-- ═══ ★ [2026-11-05] 관심 분야(맞춤 자료) — users.needs · 수정은 맞춤 설정 모달(edit) ═══ -->
         <div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:16px 18px;margin-top:12px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px;flex-wrap:wrap">
@@ -15630,7 +15630,7 @@ async function loadChargeHistory(){
   tsnap.docs.forEach(d=>{const t=d.data();if(t.refId)txMap[t.refId]=t.balanceAfter;});}catch(e){}
   // ★ 관리자 수동 지급도 충전 내역에 팩트 그대로 표시 (잔액=원 / 포인트=P)
   let adjList=[];
-  try{const asnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));adjList=asnap.docs.map(d=>d.data()).filter(t=>t.type==='admin_adjust'||t.type==='admin_point_adjust'||t.type==='review_reward'||t.type==='referral_welcome'||t.type==='member_bonus');}catch(e){}   /* ★ [2026-10-30] 정규회원 포인트 5,000P */
+  try{const asnap=await getDocs(query(collection(db,'transactions'),where('userId','==',me.uid)));adjList=asnap.docs.map(d=>d.data()).filter(t=>t.type==='admin_adjust'||t.type==='admin_point_adjust'||t.type==='review_reward'||t.type==='referral_welcome'||t.type==='member_bonus'||t.type==='special_point'||t.type==='special_point_expire');}catch(e){}   /* ★ [2026-11-24] 특별포인트 적립·소멸 */   /* ★ [2026-10-30] 정규회원 포인트 5,000P */
   if(!list.length&&!adjList.length){$('tb-charges').innerHTML='<tr><td colspan="5" class="tc">충전 내역이 없습니다.</td></tr>';return;}
   const sm={paid:'완료',ready:'대기',failed:'실패',canceled:'취소',refunded:'환불'};
   const rows=[];
@@ -15639,9 +15639,22 @@ async function loadChargeHistory(){
     rows.push({t:p.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(p.createdAt)}</td><td>${fmt(p.paidAmount)}원</td><td>${fmt(p.chargeAmount)}원</td><td>${bal}</td><td>${sm[p.status]||p.status}</td></tr>`});
   }
   for(const a of adjList){
-    const isPt=a.type==='admin_point_adjust'||a.type==='review_reward'||a.type==='referral_welcome'||a.type==='member_bonus';
+    const isPt=a.type==='admin_point_adjust'||a.type==='review_reward'||a.type==='referral_welcome'||a.type==='member_bonus'||a.type==='special_point'||a.type==='special_point_expire';
     const credit=isPt?(fmt(a.amount)+'P'):(fmt(a.amount)+'원');
     const after=isPt?(a.pointAfter!=null?fmt(a.pointAfter)+'P':'-'):(a.balanceAfter!=null?fmt(a.balanceAfter)+'원':'-');
+    /* ★ [2026-11-24] 특별포인트 — 적립: 사유·사용 기한(지나면 「기한 만료」) / 소멸: 별도 줄 */
+    if(a.type==='special_point'||a.type==='special_point_expire'){
+      let st;
+      if(a.type==='special_point_expire'){ st='<b style="color:#C0392B">특별포인트 소멸</b>'; }
+      else{
+        const ex=String(a.expireDate||''), rs=String(a.memo||'').replace(/^특별포인트 적립 · /,'').replace(/ \([0-9-]+까지\)$/,'');
+        const md=ex?(Number(ex.slice(5,7))+'월 '+Number(ex.slice(8,10))+'일까지'):'';
+        const over=ex&&ex<new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+        st='특별포인트 적립<div style="font-size:11.5px;color:#8B5A00;line-height:1.5;word-break:keep-all">'+esc(rs)+(md?' · '+md:'')+(over?' <b style="color:#C0392B">기한 만료</b>':'')+'</div>';
+      }
+      rows.push({t:a.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(a.createdAt)}</td><td>-</td><td>${credit}</td><td>${after}</td><td>${st}</td></tr>`});
+      continue;
+    }
     const label=a.type==='review_reward'?'노하우보상':a.type==='member_bonus'?(a.refType==='regular_bulk'?'정규회원 포인트':'멤버십 전환 포인트'):a.type==='referral_welcome'?'추천가입선물':(a.amount<0?'관리자회수':'관리자지급');
     rows.push({t:a.createdAt?.toMillis?.()??0,html:`<tr><td>${fdatetime(a.createdAt)}</td><td>-</td><td>${credit}</td><td>${after}</td><td>${label}</td></tr>`});
   }
@@ -25249,7 +25262,8 @@ function jvSpArm(){
     }
   }catch(_e){}
 }
-Object.assign(window,{spGoMy,jvSpArm,spPaintNote});
+function mpGoChargeTab(){ try{ const tb=document.querySelector('#pg-mypage .tab[data-t="mp-charge"]'); if(tb){ tb.click(); try{ tb.scrollIntoView({block:'nearest',inline:'center'}); }catch(_e){} } }catch(_e){} }   /* ★ [2026-11-24] 보유 포인트 → 충전 내역 */
+Object.assign(window,{spGoMy,jvSpArm,spPaintNote,mpGoChargeTab});
 async function jvCardLockNag(p){
   try{ if(!(await jvCardGateNeed())){ jvCardUnlock(); nav(p); return; } }catch(_e){}
   if($('mdl-card-gate').classList.contains('hidden')) jvCardLoginShow(true);
