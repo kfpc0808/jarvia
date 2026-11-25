@@ -1055,7 +1055,7 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
         <h3 style="margin-bottom:12px;font-size:15px;color:#1B3A5C">📅 회차 일자 편집 <span style="font-size:12px;font-weight:400;color:#7F8C8D">— 저장 시 배너·신청화면 자동 반영</span></h3>
         <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-bottom:14px"><input type="checkbox" id="zs-active"> <b>메인 히어로 배너에 노출</b> (해제 시 배너 미표시 · 신청화면은 "준비중"으로 안내)</label>
         <div class="fr">
-          <div class="fg"><label>대상 월 (YYYY-MM)</label><input id="zs-month" placeholder="2026-09" maxlength="7" oninput="zsPreview()"></div>
+          <div class="fg"><label>대상 월 (YYYY-MM)</label><select id="zs-month" onchange="zsMonthChanged()"></select><!-- ★ [2026-11-25] 이번 달·다음 달만 선택 --></div>
           <div class="fg"><label>공통 시간</label><input id="zs-time" placeholder="오후 6~7시" maxlength="20" oninput="zsPreview()"></div>
         </div>
         <div class="tbl-wrap"><table class="tbl mt"><thead><tr><th style="width:70px">회차</th><th style="width:170px">날짜</th><th style="width:60px">요일</th><th>커리큘럼 주제 <span style="font-weight:400;color:#7F8C8D">(알림톡 #{세션주제}에 사용)</span></th><th style="width:190px">시간(비우면 공통시간)</th></tr></thead><tbody id="zs-sess-tb"></tbody></table></div>
@@ -1069,7 +1069,9 @@ window._mcfOff=function(b){var x=document.querySelector('.m-cf[data-g="'+b.datas
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin:6px 0 10px"><input type="checkbox" id="zs-auto-notify"> <b>알림톡 자동발송 켜기</b> <span style="font-size:12px;color:#7F8C8D">— 신청 직후 / 전일 오전 10시 / 당일 시작 30분 전 (템플릿 심사 통과·ID 등록 후 켜세요)</span></label>
         <button class="btn mt" onclick="zsSave()">저장</button>
+        <button class="btn btn-sec mt" id="zs-prev-btn" style="display:none;margin-left:6px" onclick="zsTogglePrev()">📂 직전월 일정 보기</button><!-- ★ [2026-11-25] 직전월 보관 일정 열람 (읽기 전용) -->
         <span id="zs-save-msg" style="margin-left:10px;font-size:13px;color:#666"></span>
+        <div id="zs-prev-box" style="display:none;border:1px solid #FDBA74;background:#FFF7ED;border-radius:8px;padding:12px 14px;margin-top:12px;max-width:100%;box-sizing:border-box"></div>
         <div style="background:#0F2440;border:1px solid #1B3A5C;border-radius:8px;padding:12px 14px;margin-top:14px">
           <div style="font-size:12px;color:#C9A96E;font-weight:700;letter-spacing:1px;margin-bottom:6px">배너 미리보기</div>
           <div id="zs-preview" style="font-size:14px;line-height:1.7;color:rgba(255,255,255,.9)">—</div>
@@ -13423,10 +13425,22 @@ function zsMd(ymd){const p=String(ymd||'').split('-');return p.length===3?((+p[1
 function zsSetDate(i,v){if(_zsSess[i]){_zsSess[i].date=v;}zsRenderSess();}
 function zsSetTime(i,v){if(_zsSess[i])_zsSess[i].time=v;zsPreview();}
 function zsSetTopic(i,v){if(_zsSess[i])_zsSess[i].topic=v;}   /* ★ [2026-09-09] */
+/* ★ [2026-11-25] 줌설명회 달력 잠금 — 대상 월은 이번 달·다음 달만, 회차 날짜는 대상 월 1일~말일만 */
+function zsMonthKeyKst(add){const d=new Date(Date.now()+9*3600*1000);const t=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+add,1));return t.getUTCFullYear()+'-'+String(t.getUTCMonth()+1).padStart(2,'0');}
+function zsFillMonthOpts(saved){
+  const sel=$('zs-month');if(!sel)return;
+  const cur=zsMonthKeyKst(0),nxt=zsMonthKeyKst(1);
+  let h='<option value="">선택</option><option value="'+cur+'">'+cur+' (이번 달)</option><option value="'+nxt+'">'+nxt+' (다음 달)</option>';
+  if(saved&&saved!==cur&&saved!==nxt)h+='<option value="'+esc(saved)+'">'+esc(saved)+' (저장된 값)</option>';
+  sel.innerHTML=h;sel.value=saved||'';
+}
+function zsMonthRange(){const mk=($('zs-month')?.value||'').trim();if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(mk))return null;const y=+mk.slice(0,4),m=+mk.slice(5,7);const last=new Date(Date.UTC(y,m,0)).getUTCDate();return {mk,min:mk+'-01',max:mk+'-'+String(last).padStart(2,'0')};}
+function zsMonthChanged(){zsRenderSess();}
 function zsRenderSess(){
   const tb=$('zs-sess-tb');if(!tb)return;
+  const _rg=zsMonthRange();const _mm=_rg?` min="${_rg.min}" max="${_rg.max}"`:'';
   tb.innerHTML=_zsSess.map((s,i)=>`<tr><td style="text-align:center;font-weight:700">${i+1}주차</td>`
-    +`<td><input type="date" value="${esc(s.date)}" onchange="zsSetDate(${i},this.value)" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font)"></td>`
+    +`<td><input type="date" value="${esc(s.date)}"${_mm} onchange="zsSetDate(${i},this.value)" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font)"></td>`
     +`<td style="text-align:center">${zsWeekday(s.date)||'—'}</td>`
     +`<td><input value="${esc(s.topic||ZS_TOPIC[i+1]||'')}" oninput="zsSetTopic(${i},this.value)" maxlength="40" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font)"></td>`
     +`<td><input value="${esc(s.time)}" oninput="zsSetTime(${i},this.value)" placeholder="공통시간 사용" maxlength="20" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font)"></td></tr>`).join('');
@@ -13443,12 +13457,34 @@ function zsPreview(){
   p.textContent='ZOOM 설명회 '+mon+'· 4주 완성 · 참가비 무료 / '+line+(def?(' · '+def):'')+' · 매주 60분';
 }
 var _zsPrev=null;   /* ★ [2026-10-28] settings/zoom_seminar_prev (지난달 일정 보관본) */
+/* ★ [2026-11-25] 직전월 보관 일정 열람 — 읽기 전용. 보관본이 있고 현재 대상 월과 다를 때만 버튼 노출 */
+function zsPrevSorted(){return (Array.isArray(_zsPrev&&_zsPrev.sessions)?_zsPrev.sessions:[]).filter(s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s.date||''))).slice().sort((a,b)=>a.date<b.date?-1:1);}
+function zsRenderPrevBtn(){
+  const btn=$('zs-prev-btn'),box=$('zs-prev-box');if(!btn)return;
+  const pm=String((_zsPrev&&_zsPrev.monthKey)||'');const mk=($('zs-month')?.value||'').trim();
+  const show=!!(pm&&pm!==mk&&zsPrevSorted().length);
+  btn.style.display=show?'':'none';
+  btn.textContent='📂 직전월 일정 보기 ('+pm+')';
+  if(!show&&box)box.style.display='none';
+  else if(box&&box.style.display!=='none')zsRenderPrevBox();
+}
+function zsRenderPrevBox(){
+  const box=$('zs-prev-box');if(!box||!_zsPrev)return;
+  const pm=String(_zsPrev.monthKey||'');const def=String(_zsPrev.timeLabel||'');
+  const today=new Date(Date.now()+9*3600*1000).toISOString().slice(0,10);
+  const rows=zsPrevSorted().map((s,i)=>{const past=s.date<today;const st=past?'<span style="color:#999">종료</span>':'<b style="color:#C2410C">발송 예정</b>';
+    return `<tr style="${past?'color:#999':''}"><td>${i+1}주차</td><td>${esc(s.date)}</td><td>${esc(zsWeekday(s.date))}</td><td style="word-break:keep-all">${esc(String(s.topic||''))}</td><td>${esc(String(s.time||'').trim()||def||'-')}</td><td>${st}</td></tr>`;}).join('');
+  box.innerHTML=`<div style="font-size:14px;font-weight:700;color:#9A3412;margin-bottom:8px">📂 직전월(${esc(pm)}) 보관 일정 <span style="font-size:12px;font-weight:400;color:#7F8C8D">— 읽기 전용 · 남은 회차 알림톡은 이 일정으로 자동 발송됩니다</span></div>`
+    +`<div class="tbl-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="tbl" style="min-width:560px"><thead><tr><th style="width:60px">회차</th><th style="width:110px">날짜</th><th style="width:50px">요일</th><th>주제</th><th style="width:110px">시간</th><th style="width:80px">알림톡</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    +`<div style="font-size:13px;color:#555;margin-top:8px;line-height:1.8;word-break:break-all">공통 시간: ${esc(def||'-')}<br>Zoom 링크: ${esc(String(_zsPrev.zoomUrl||'-'))}<br>회의 ID: ${esc(String(_zsPrev.zoomId||'-'))} · 암호: ${esc(String(_zsPrev.zoomPw||'-'))}<br>자동발송: ${_zsPrev.autoNotify===true?'<b style="color:#15803D">켜짐</b>':'<b style="color:#B91C1C">꺼짐</b>'}</div>`;
+}
+function zsTogglePrev(){const box=$('zs-prev-box');if(!box)return;if(box.style.display==='none'){zsRenderPrevBox();box.style.display='';}else box.style.display='none';}
 async function loadZoomSeminar(){
   try{
     const s=await getDoc(doc(db,'settings','zoom_seminar'));
     const d=s.exists()?s.data():{};
     $('zs-active').checked=d.isActive===true;
-    $('zs-month').value=d.monthKey||'';
+    zsFillMonthOpts(String(d.monthKey||''));   /* ★ [2026-11-25] */
     $('zs-time').value=d.timeLabel||'';
     const src=Array.isArray(d.sessions)?d.sessions:[];
     _zsSess=[0,1,2,3].map(i=>({no:i+1,date:String(src[i]?.date||''),time:String(src[i]?.time||''),topic:String(src[i]?.topic||ZS_TOPIC[i+1]||'')}));
@@ -13461,6 +13497,7 @@ async function loadZoomSeminar(){
     /* ★ [2026-10-28] 지난달 보관 일정 — 남은 회차 수동 발송 버튼용 */
     try{const p=await getDoc(doc(db,'settings','zoom_seminar_prev'));_zsPrev=p.exists()?(p.data()||null):null;}catch(_e){_zsPrev=null;}
     zsRenderNotifyBtns();
+    zsRenderPrevBtn();   /* ★ [2026-11-25] */
   }catch(e){toast('불러오기 실패: '+e.message,'error');}
   zsLoadApps();
   esLoadSessions();   /* ★ [2026-09-28] 전문분야 세션 회차 목록 */
@@ -13470,6 +13507,7 @@ async function zsSave(){
   const dates=_zsSess.map(s=>(s.date||'').trim());
   const bad=dates.filter(d=>d&&!/^\d{4}-\d{2}-\d{2}$/.test(d));
   if(bad.length)return toast('날짜 형식이 올바르지 않습니다.','error');
+  if(/^\d{4}-(0[1-9]|1[0-2])$/.test(mk)&&dates.some(d=>d&&d.slice(0,7)!==mk))return toast('날짜가 대상 월('+mk+')을 벗어났습니다. 대상 월 안의 날짜만 입력하세요.','error');   /* ★ [2026-11-25] */
   if($('zs-active').checked){
     if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(mk))return toast('대상 월을 YYYY-MM 형식으로 입력하세요. (예: 2026-09)','error');
     if(dates.filter(Boolean).length!==4)return toast('노출하려면 4개 회차 날짜를 모두 입력하세요.','error');
@@ -13502,6 +13540,7 @@ async function zsSave(){
     const m=$('zs-save-msg');if(m){m.textContent='✅ 저장됨 — 배너·신청화면에 반영되었습니다';setTimeout(()=>{m.textContent='';},4000);}
     toast('줌설명회 일정 저장 완료','success');
     zsRenderNotifyBtns();
+    zsRenderPrevBtn();   /* ★ [2026-11-25] 저장 직후 직전월 버튼 즉시 반영 */
   }catch(e){toast('저장 실패: '+e.message,'error');}
 }
 /* ★ [2026-09-09] 회차별 알림톡 수동 발송 버튼 + 상태 셀 */
@@ -13735,7 +13774,7 @@ function zsExcel(){
     toast('엑셀 다운로드 완료 ('+rows.length+'명)','success');
   });
 }
-window.loadZoomSeminar=loadZoomSeminar;window.zsSave=zsSave;window.zsSetDate=zsSetDate;window.zsSetTime=zsSetTime;window.zsSetTopic=zsSetTopic;window.zsNotifyNow=zsNotifyNow;window.zsNotifyApply=zsNotifyApply;window.zsRenderNotifyBtns=zsRenderNotifyBtns;window.zsNoticePreview=zsNoticePreview;window.zsNoticeSend=zsNoticeSend;   /* ★ [2026-09-16] 모집 안내 발송 */
+window.loadZoomSeminar=loadZoomSeminar;window.zsSave=zsSave;window.zsSetDate=zsSetDate;window.zsSetTime=zsSetTime;window.zsSetTopic=zsSetTopic;window.zsNotifyNow=zsNotifyNow;window.zsNotifyApply=zsNotifyApply;window.zsRenderNotifyBtns=zsRenderNotifyBtns;window.zsTogglePrev=zsTogglePrev;window.zsMonthChanged=zsMonthChanged;window.zsNoticePreview=zsNoticePreview;window.zsNoticeSend=zsNoticeSend;   /* ★ [2026-09-16] 모집 안내 발송 */
 window.zsPreview=zsPreview;window.zsLoadApps=zsLoadApps;window.zsRender=zsRender;window.zsDelApp=zsDelApp;window.zsExcel=zsExcel;
 /* ═══ ★ [2026-09-28] 전문분야 지원 세션(edu_sessions · edu_applications) · 매월 일정 안내 구독자(seminar_subscribers) ═══ */
 let _esSess=[],_esApps=[],_esCur='',_subs=[],_subConfirm='',_subSel=new Set(),_subTarget=0;   /* ★ [2026-11-03] _subSel: 선택 발송 대상(구독자 문서 ID) */
