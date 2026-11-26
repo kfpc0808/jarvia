@@ -30237,13 +30237,30 @@ async function ttpGen(id){
   if(!confirm(`No.${p.no} 주제를 ${t?'다시 ':''}생성합니다 (10~25분).${t?'\n지금 본문은 이전본에 보관됩니다.':''}${t&&t.status==='published'?'\n⚠ 이미 승인된 주제입니다 — 새 본문이 바로 회원 화면에 나갑니다.':''}${t&&t.htmlSource==='manual'?'\n⚠ 담당자가 고친 HTML 이 자동 생성본으로 바뀝니다.':''}\n진행할까요?`))return;
   try{await ttpApi({action:'generate',id});toast('생성을 시작했습니다','success');ttpLoad(true);}catch(e){toast(e.message,'error');}
 }
-async function ttpBatch(){   /* 일괄 생성 — 아직 본문이 없는 칸(예정·실패)을 번호 순으로 */
-  const left=_ttp.plans.filter(p=>(p.status==='scheduled'||p.status==='failed')&&!_ttp.topics[p.tid]&&(p.pubDate||'')>=_ttp.today);
-  if(!left.length){toast('일괄 생성할 칸이 없습니다 (예정·실패 상태이면서 아직 본문이 없는 칸)','error');return;}
-  const v=prompt(`몇 개를 만들까요? (1~30)\n\n아직 본문이 없는 칸 ${left.length}개 중 번호 순 — No.${left[0].no}부터\n2개씩 동시에 차례로 생성 · 1개 10~25분 (20개 약 2~4시간)\nAI 비용 1개 약 400~850원\n끝난 주제는 「검수 대기」로 쌓이며, 승인 전에는 공개되지 않습니다.`,String(Math.min(20,left.length)));
-  if(v===null)return;
-  const n=Math.round(Number(v));if(!(n>=1&&n<=30)){toast('1~30 사이 숫자를 넣어 주세요','error');return;}
-  try{const r=await ttpApi({action:'batchGen',count:n});toast(`일괄 생성 시작 — No.${r.from}~${r.to} (${r.count}개)`,'success');ttpLoad(true);}catch(e){toast(e.message,'error');}
+async function ttpBatch(){   /* 일괄 생성 — 아직 본문이 없는 칸(예정·실패)을 목록에서 골라 생성 */
+  const L=_ttp.plans.filter(p=>(p.status==='scheduled'||p.status==='failed')&&!_ttp.topics[p.tid]&&(p.pubDate||'')>=_ttp.today).sort((a,b)=>a.pubDate<b.pubDate?-1:a.pubDate>b.pubDate?1:a.no-b.no);
+  if(!L.length){toast('일괄 생성할 칸이 없습니다 (예정·실패 상태이면서 아직 본문이 없는 칸)','error');return;}
+  const grp=p=>p.memo&&p.memo.indexOf('오픈')===0?'오픈 추천':p.pubDate.slice(0,4)+'년 '+Number(p.pubDate.slice(5,7))+'월';
+  const groups=[...new Set(L.map(grp))];
+  const sel=new Set(L.filter(p=>grp(p)===groups[0]).slice(0,30).map(p=>p.id));
+  const m=ttpModal(`<h3>⚡ 일괄 생성 — 만들 칸 고르기</h3><div class="sub">고른 칸을 공개일이 빠른 순으로 2개씩 차례로 만듭니다. 끝난 주제는 「검수 대기」로 쌓이며, 승인하기 전에는 회원에게 보이지 않습니다. 한 번에 30개까지.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${groups.map((g,k)=>`<button type="button" class="btn btn-sec" style="padding:5px 10px;font-size:12.5px;margin:0" data-g="${k}">${ttpE(g)} (${L.filter(p=>grp(p)===g).length})</button>`).join('')}<button type="button" class="btn btn-sec" style="padding:5px 10px;font-size:12.5px;margin:0;color:#7a8299" data-none>모두 해제</button></div>
+    <div class="pool" id="tpb-list"></div>
+    <div id="tpb-sum" style="margin-top:10px;font-size:13px;color:#33415c;line-height:1.6"></div>
+    <div class="acts"><button class="btn btn-sec" data-x>닫기</button><button class="btn" id="tpb-go">생성 시작</button></div>`);
+  const draw=()=>{
+    $('tpb-list').innerHTML=L.map(p=>`<div data-id="${p.id}" style="display:flex;flex-wrap:wrap;gap:4px 10px;align-items:flex-start;${sel.has(p.id)?'background:#EEF4FF':''}"><input type="checkbox" ${sel.has(p.id)?'checked':''} style="width:16px;height:16px;margin-top:2px;flex:none;pointer-events:none"><b style="flex:none;width:58px;color:#1F3A6B">No.${p.no}</b><span style="flex:none;width:112px;color:#33415c">${ttpE(p.pubDate)} (${ttpDow(p.pubDate)})</span><span style="flex:1 1 260px;min-width:0">${ttpE(p.topic)}<small>${ttpE(grp(p))}${p.status==='failed'?' · 실패한 칸':''}</small></span></div>`).join('');
+    const n=sel.size,over=n>30;
+    $('tpb-sum').innerHTML=n?`<b>${n}개</b> 선택 · 걸리는 시간 약 ${Math.max(1,Math.round(n*10/2/60*10)/10)}~${Math.round(n*25/2/60*10)/10}시간 · AI 비용 약 ${(n*800).toLocaleString()}~${(n*1700).toLocaleString()}원${over?' · <b style="color:#C62828">30개까지만 고를 수 있습니다</b>':''}`:'만들 칸을 눌러 고르세요.';
+    const go=$('tpb-go');go.disabled=!n||over;go.textContent=n?`선택한 ${n}개 생성 시작`:'생성 시작';go.style.opacity=go.disabled?.5:1;
+  };
+  draw();
+  m.querySelector('[data-x]').onclick=()=>m.remove();
+  m.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{const g=groups[Number(b.dataset.g)];const ids=L.filter(p=>grp(p)===g).map(p=>p.id);const all=ids.every(id=>sel.has(id));ids.forEach(id=>all?sel.delete(id):sel.add(id));draw();});
+  m.querySelector('[data-none]').onclick=()=>{sel.clear();draw();};
+  $('tpb-list').onclick=e=>{const d=e.target.closest('[data-id]');if(!d)return;const id=d.dataset.id;sel.has(id)?sel.delete(id):sel.add(id);draw();};
+  $('tpb-go').onclick=async()=>{if(!sel.size||sel.size>30)return;const go=$('tpb-go');go.disabled=true;go.textContent='시작하는 중…';
+    try{const r=await ttpApi({action:'batchGen',ids:[...sel]});m.remove();toast(`일괄 생성 시작 — ${r.count}개 (No.${r.from}부터)`,'success');ttpLoad(true);}catch(e){toast(e.message,'error');draw();}};
 }
 async function ttpBatchCancel(){if(!confirm('일괄 대기 중인 칸을 「예정」으로 되돌립니다.\n지금 생성 중인 칸은 끝까지 만들어집니다. 진행할까요?'))return;try{const r=await ttpApi({action:'batchCancel'});toast(`${r.count}칸 취소`,'success');ttpLoad(true);}catch(e){toast(e.message,'error');}}
 /* ★ 편성 칸 삭제 — 생성된 본문까지 지움. 게시(승인)된 적이 있는 주제는 서버가 막음 */
@@ -30264,10 +30281,26 @@ function ttpPool(){
   m.querySelector('[data-x]').onclick=()=>m.remove();
   $('tpl-list').onclick=async e=>{const row=e.target.closest('[data-pid]');if(!row)return;const pid=row.dataset.pid,x=_ttp.pool.find(y=>y.id===pid);
     if(e.target.closest('[data-del]')){if(!confirm(`이 예비 주제를 삭제할까요? 되돌릴 수 없습니다.\n${x?x.topic:''}`))return;try{await ttpApi({action:'poolDelete',poolId:pid});_ttp.pool=_ttp.pool.filter(y=>y.id!==pid);draw();toast('삭제했습니다','success');ttpRender();}catch(er){toast(er.message,'error');}return;}
-    if(e.target.closest('[data-sw]')){const v=prompt(`어느 칸과 바꿀까요? 칸 번호(No.)를 적어 주세요.\n\n${x?x.topic:''}`);if(v===null)return;const no=Math.round(Number(String(v).replace(/[^0-9]/g,'')));const p=_ttp.plans.find(y=>y.no===no);
-      if(!p){toast(`No.${v} 칸이 없습니다`,'error');return;}
-      if(!confirm(`No.${p.no} (${p.pubDate} 공개)\n「${p.topic}」\n→ 「${x?x.topic:''}」\n\n이렇게 바꿀까요?`))return;
-      try{await ttpApi({action:'swap',id:p.id,poolId:pid});m.remove();toast(`No.${p.no} 주제를 바꿨습니다`,'success');ttpLoad(true);}catch(er){toast(er.message,'error');}}};
+    if(e.target.closest('[data-sw]'))ttpPoolPick(m,x);};
+}
+/* 예비 주제를 넣을 칸 고르기 — 바꿀 수 있는 칸(예정·실패·건너뜀)만 목록으로 */
+function ttpPoolPick(m,x){
+  if(!x)return;
+  const bx=m.querySelector('.bx'),keep=bx.innerHTML;
+  const ok=_ttp.plans.filter(p=>['scheduled','failed','skipped'].indexOf(p.status)>=0&&(p.pubDate||'')>=_ttp.today);
+  const months=[...new Set(ok.map(p=>(p.pubDate||'').slice(0,7)))].filter(Boolean).sort();
+  bx.innerHTML=`<h3>넣을 칸 고르기</h3><div class="sub">넣을 예비 주제 · <b>${ttpE(x.topic)}</b> <span style="color:#7a8299">(${ttpE(x.cat)})</span><br>칸을 누르면 그 칸의 주제가 바뀌고, 원래 주제는 예비로 돌아옵니다. 생성 중·승인·검수 대기 칸은 목록에 나오지 않습니다.</div>
+    <div class="rw2"><input type="search" id="tpk-q" placeholder="번호·주제·분야 검색"><select id="tpk-m"><option value="">전체 월</option>${months.map(mm=>`<option value="${mm}">${mm.replace('-','년 ')}월</option>`).join('')}</select></div>
+    <div class="pool" id="tpk-list"></div><div class="acts"><button class="btn btn-sec" data-back>← 예비 주제 목록</button><button class="btn btn-sec" data-x2>닫기</button></div>`;
+  const draw=()=>{const q=($('tpk-q').value||'').toLowerCase(),mm=$('tpk-m').value;
+    const L=ok.filter(p=>(!mm||(p.pubDate||'').slice(0,7)===mm)&&(!q||(`no.${p.no} ${p.no} ${p.topic} ${p.cat}`).toLowerCase().includes(q)));
+    $('tpk-list').innerHTML=L.map(p=>`<div data-no="${p.no}" style="display:flex;flex-wrap:wrap;gap:4px 10px;align-items:flex-start"><b style="flex:none;width:62px;color:#1F3A6B">No.${p.no}</b><span style="flex:none;width:118px;color:#33415c">${ttpE(p.pubDate)} (${ttpDow(p.pubDate)})</span><span style="flex:1 1 260px;min-width:0">${ttpE(p.topic)}<small>${ttpE(p.cat)}${p.status==='skipped'?' · 건너뜀':p.status==='failed'?' · 실패':''}</small></span></div>`).join('')||'<div>바꿀 수 있는 칸이 없습니다</div>';};
+  draw();$('tpk-q').oninput=draw;$('tpk-m').onchange=draw;
+  bx.querySelector('[data-x2]').onclick=()=>m.remove();
+  bx.querySelector('[data-back]').onclick=()=>{m.remove();ttpPool();};
+  $('tpk-list').onclick=async e=>{const d=e.target.closest('[data-no]');if(!d)return;const p=_ttp.plans.find(y=>y.no===Number(d.dataset.no));if(!p)return;
+    if(!confirm(`No.${p.no} (${p.pubDate} 공개)\n「${p.topic}」\n→ 「${x.topic}」\n\n이렇게 바꿀까요?`))return;
+    try{await ttpApi({action:'swap',id:p.id,poolId:x.id});m.remove();toast(`No.${p.no} 주제를 바꿨습니다`,'success');ttpLoad(true);}catch(er){toast(er.message,'error');}};
 }
 async function ttpSkip(id,on){if(on&&!confirm('이 칸을 건너뜁니다 (생성·공개하지 않음). 진행할까요?'))return;try{await ttpApi({action:'planUpdate',id,skip:on});ttpLoad(true);}catch(e){toast(e.message,'error');}}
 async function ttpApprove(tid){
