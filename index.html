@@ -7910,6 +7910,7 @@ function hpFabToggle(){
   const onMain=$('pg-main')&&!$('pg-main').classList.contains('hidden');
   if(f)f.classList.remove('on');   /* ★ [2026-10-17] 도움말 플로팅 제거 — 메인 메뉴줄(PC)·삼선 메뉴(모바일)로 이동 */
   try{if(window.emFabSync)emFabSync();}catch(_e){}   /* ★ [2026-10-17] 이지메모 플로팅 */
+  try{if(window.myjaiSync)myjaiSync();}catch(_e){}   /* ★ [2026-11-27] MyJai 플로팅 */
   const k=$('kkFab');if(k)k.classList.toggle('on',!!onMain);
   const r=$('rptFab');if(r)r.classList.toggle('on',!!onMain);   /* ★ [2026-09-12] 알림톡 — 회원 자격과 무관하게 메인에서 노출 */
 }
@@ -8051,6 +8052,102 @@ function emFabSync(){
   try{if(window.JvMemo){if(ok&&!JvMemo.ready())JvMemo.init({db,uid:me.uid,email:me.email||'',role:meData.role,noFab:true,fs:{doc,getDoc,collection,setDoc,serverTimestamp,deleteDoc}}).then(emTodoPaint);else if(!ok&&JvMemo.ready())JvMemo.init({noFab:true}).then(emTodoPaint);}}catch(_e){}   /* ★ [2026-10-17] ⑦ 고객 할 일 메모 */
 }
 window.emFabSync=emFabSync;
+/* ═══ ★ [2026-11-27] MyJai 플로팅 버튼 — 메인·마이페이지 왼쪽 아래 모서리
+   · 노출: 자비아·이너·컨홈·지사장 회원 중 MYJAI_OPEN 이면 전원, 아니면 MYJAI_PILOT(gildong)만 · 기간제·카드 잠금·팝업·삼선 메뉴 중에는 숨김
+   · 로그인 후 처음 나타날 때 한 번 위에서 떨어져 튀다가 자리 잡는다(2.3초, 「동작 줄이기」 설정이면 생략)
+   · 누르면 연결 안내(커넥터 주소 복사·Claude 연결 3단계)와 MyJai 업무함 바로가기. 남은 업무함 건수는 빨간 숫자로 표시
+   · 이름은 모두 myjai 로 시작 — 기존 mj(자비아멤버십)와 겹치지 않게 ═══ */
+const MYJAI_OPEN=false;   /* 정식 오픈 때 true 로 바꾸면 4개 회원 유형 전원에게 보인다 */
+const MYJAI_PILOT=['gildong'];
+const MYJAI_ROLES=['jarvia_member','inner_circle','con_homepage','branch_manager'];
+const MYJAI_URL='https://mcp-connector-388025068900.asia-northeast3.run.app/mcp';
+let _myjaiCountDone=false;
+function myjaiOk(){
+  if(!(me&&meData))return false;
+  if(window.jvIsFreeUser&&jvIsFreeUser(meData))return false;
+  if(MYJAI_ROLES.indexOf(meData.role)<0)return false;
+  return MYJAI_OPEN||MYJAI_PILOT.indexOf(String(meData.loginId||'').toLowerCase())>=0;
+}
+function myjaiBuild(){
+  if($('myjaiFab'))return $('myjaiFab');
+  const st=document.createElement('style');st.id='myjaiCss';
+  st.textContent=
+    '#myjaiFab{position:fixed;left:20px;bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:9500;width:56px;height:56px;padding:0;border:0;background:none;cursor:pointer;display:none;-webkit-tap-highlight-color:transparent}'
+   +'#myjaiFab.on{display:block}'
+   +'#myjaiFab .myjai-in{width:100%;height:100%;border-radius:50%;background:#1B3A5C;border:1.5px solid #C9A96E;box-shadow:0 4px 16px rgba(20,48,79,.42);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:14px;font-weight:800;line-height:1.05;letter-spacing:-.2px;box-sizing:border-box}'
+   +'#myjaiFab .myjai-in b{color:#E9C47C;font-weight:800}'
+   +'#myjaiFab:active .myjai-in{transform:scale(.94)}'
+   +'#myjaiFab .myjai-badge{position:absolute;top:-3px;right:-3px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#E74C3C;color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;box-sizing:border-box;display:none}'
+   +'@keyframes myjaiDrop{0%{transform:translateY(-110vh)}38%{transform:translateY(0);animation-timing-function:cubic-bezier(.2,.6,.4,1)}52%{transform:translateY(-70px);animation-timing-function:cubic-bezier(.6,0,.8,.4)}64%{transform:translateY(0);animation-timing-function:cubic-bezier(.2,.6,.4,1)}74%{transform:translateY(-26px);animation-timing-function:cubic-bezier(.6,0,.8,.4)}82%{transform:translateY(0);animation-timing-function:cubic-bezier(.2,.6,.4,1)}88%{transform:translateY(-8px);animation-timing-function:cubic-bezier(.6,0,.8,.4)}93%,100%{transform:translateY(0)}}'
+   +'@keyframes myjaiSquash{0%,37%{transform:scale(1,1)}39%{transform:scale(1.18,.82)}43%{transform:scale(.95,1.05)}48%,63%{transform:scale(1,1)}65%{transform:scale(1.1,.9)}69%,81%{transform:scale(1,1)}83%{transform:scale(1.05,.95)}87%,100%{transform:scale(1,1)}}'
+   +'#myjaiFab.myjai-drop{animation:myjaiDrop 2.3s linear both}'
+   +'#myjaiFab.myjai-drop .myjai-in{animation:myjaiSquash 2.3s linear both;transform-origin:50% 100%}'
+   +'@media (prefers-reduced-motion:reduce){#myjaiFab.myjai-drop,#myjaiFab.myjai-drop .myjai-in{animation:none}}'
+   +'@media(max-width:640px){#myjaiFab{left:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));width:48px;height:48px}#myjaiFab .myjai-in{font-size:12px}}'
+   +'body.jv-card-lock #myjaiFab,body:has(.modal:not(.hidden):not(#mdl-detail):not(#mdl-viewer)) #myjaiFab,body:has(#mob-menu.open) #myjaiFab,body:has(#myjaiOv) #myjaiFab{display:none!important}'
+   +'#myjaiOv{position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}'
+   +'#myjaiOv .myjai-box{width:100%;max-width:400px;max-height:86vh;overflow:auto;background:#fff;border-radius:16px;padding:20px 18px;box-sizing:border-box;color:#1B3A5C;word-break:keep-all;overflow-wrap:anywhere}'
+   +'#myjaiOv .myjai-step{display:flex;gap:10px;font-size:13.5px;line-height:1.6;margin-top:10px;color:#334155}'
+   +'#myjaiOv .myjai-step i{flex:0 0 22px;height:22px;border-radius:50%;background:#1B3A5C;color:#fff;font-style:normal;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:1px}'
+   +'#myjaiOv .myjai-url{display:flex;gap:8px;align-items:stretch;margin-top:8px}'
+   +'#myjaiOv .myjai-url code{flex:1;min-width:0;font-size:11.5px;background:#F4F6FA;border:1px solid #E2E8F0;border-radius:8px;padding:8px 9px;color:#1B3A5C;word-break:break-all;line-height:1.45}'
+   +'#myjaiOv button{font-family:inherit;cursor:pointer}';
+  document.head.appendChild(st);
+  const b=document.createElement('button');b.id='myjaiFab';b.type='button';b.setAttribute('aria-label','MyJai — 나만의 AI');
+  b.innerHTML='<span class="myjai-in">My<b>Jai</b></span><span class="myjai-badge" id="myjaiBadge"></span>';
+  b.addEventListener('click',myjaiOpen);
+  b.addEventListener('animationend',function(e){if(e.target===b)b.classList.remove('myjai-drop');});
+  document.body.appendChild(b);
+  return b;
+}
+function myjaiSync(){
+  const ok=myjaiOk();
+  const vis=p=>{const el=$('pg-'+p);return !!(el&&!el.classList.contains('hidden'));};
+  const on=ok&&(vis('main')||vis('mypage'));   /* 카드 잠금 중에는 CSS(jv-card-lock)가 가린다 — 풀리면 바로 보이게 */
+  if(!on){const f=$('myjaiFab');if(f)f.classList.remove('on');return;}
+  const f=myjaiBuild();
+  if(!f.classList.contains('on')){
+    f.classList.add('on');
+    let first=true;try{first=!sessionStorage.getItem('myjai_dropped');sessionStorage.setItem('myjai_dropped','1');}catch(_e){}
+    if(first){f.classList.remove('myjai-drop');void f.offsetWidth;f.classList.add('myjai-drop');}
+  }
+  if(!_myjaiCountDone){_myjaiCountDone=true;   /* 업무함 남은 건수 — 접속마다 1번 */
+    httpsCallable(functions,'mjInbox')({action:'list'}).then(function(r){
+      const n=((r&&r.data&&r.data.items)||[]).length,bg=$('myjaiBadge');
+      if(bg){bg.textContent=n>99?'99+':String(n);bg.style.display=n?'block':'none';}
+    }).catch(function(){});
+  }
+}
+function myjaiOpen(){
+  try{logSvc('myjai');}catch(_e){}
+  if($('myjaiOv'))return;
+  const n=Number(($('myjaiBadge')||{}).textContent||0)||0;
+  const ov=document.createElement('div');ov.id='myjaiOv';
+  ov.innerHTML='<div class="myjai-box" role="dialog" aria-label="MyJai 연결 안내">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:19px;font-weight:800">My<span style="color:#C9A96E">Jai</span></div>'
+    +'<button type="button" id="myjaiX" aria-label="닫기" style="border:0;background:none;font-size:22px;line-height:1;color:#94A3B8;padding:4px 6px">×</button></div>'
+    +'<div style="font-size:13.5px;color:#5A6484;margin-top:4px;line-height:1.6">일을 대신 끝내는 나만의 AI — 고객 찾기·리포트 발송·예약·계산을 말로 맡기고, 보내기 전에는 회원님이 OK 합니다.</div>'
+    +'<div style="font-size:14px;font-weight:800;margin-top:16px">Claude에 연결하기 (처음 한 번)</div>'
+    +'<div class="myjai-step"><i>1</i><span>Claude → 설정 → 커넥터 → <b>사용자 지정 커넥터 추가</b></span></div>'
+    +'<div class="myjai-step"><i>2</i><span style="flex:1;min-width:0">이름 <b>MyJai</b>, 아래 주소를 붙여 넣기<div class="myjai-url"><code id="myjaiUrl">'+MYJAI_URL+'</code><button type="button" id="myjaiCopy" style="flex:0 0 auto;border:1px solid #1B3A5C;background:#fff;color:#1B3A5C;border-radius:8px;padding:0 12px;font-size:12.5px;font-weight:800">복사</button></div></span></div>'
+    +'<div class="myjai-step"><i>3</i><span><b>연결</b> → 자비아 아이디로 로그인하면 끝</span></div>'
+    +'<button type="button" id="myjaiInbox" style="width:100%;margin-top:18px;padding:12px;border:0;border-radius:10px;background:#1B3A5C;color:#fff;font-size:14px;font-weight:800">MyJai 업무함 확인'+(n?' ('+n+'건)':'')+'</button>'
+    +'<div style="font-size:11.5px;color:#94A3B8;margin-top:10px;line-height:1.55">고객 연락처는 AI에 전달되지 않습니다. 알림톡 발송은 지금처럼 건당 20원이 포인트에서 차감됩니다.</div>'
+    +'</div>';
+  ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+  document.body.appendChild(ov);
+  $('myjaiX').onclick=function(){ov.remove();};
+  $('myjaiCopy').onclick=function(){
+    const done=function(){try{toast('주소를 복사했어요','success');}catch(_e){}};
+    try{navigator.clipboard.writeText(MYJAI_URL).then(done,function(){prompt('아래 주소를 복사하세요',MYJAI_URL);});}catch(_e){prompt('아래 주소를 복사하세요',MYJAI_URL);}
+  };
+  $('myjaiInbox').onclick=function(){
+    const lid=(meData&&meData.loginId)||'';if(!lid)return;
+    try{sessionStorage.removeItem('mj_inbox_seen');}catch(_e){}
+    window.open('https://jarvia.co.kr/@'+encodeURIComponent(lid),'_blank');ov.remove();
+  };
+}
+window.myjaiSync=myjaiSync;
 /* ★ [2026-10-17] 메인 콘텐츠 상세·보기 화면(문서·오디오·영상)에서 「이 콘텐츠 담기」 — 그 외에는 지금처럼 이지메모 열기 */
 function emContentItem(){
   const tx=e=>e?String(e.textContent||'').replace(/\s+/g,' ').trim():'';
@@ -9876,6 +9973,7 @@ function updateBal(){if(!meData)return;const _bv=Number(meData.balance)||0;const
   /* ★ [2026-09-29] 이지M² 버튼 — 정규회원(EM_ROLES)만 노출 */
   try{const _mb=$('jm-memo-btn');if(_mb)_mb.style.display=EM_ROLES.includes(meData.role)?'inline-flex':'none';}catch(_e){}
   try{emFabSync();}catch(_e){}   /* ★ [2026-10-17] 이지메모 플로팅·삼선 메뉴 줄 */
+  try{if(window.myjaiSync)myjaiSync();}catch(_e){}   /* ★ [2026-11-27] MyJai 플로팅 — 로그인 직후 */
   /* ★ [2026-09-28] 이너전용가이드(헤더·삼선메뉴) — 같은 기준(inner_circle+관리자)만 노출 */
   try{const _gOn=(meData.role==='inner_circle'||meData.role==='admin');const _hg=$('hdr-inner-guide');if(_hg)_hg.style.display=_gOn?'inline-block':'none';const _mg=$('mob-inner-guide');if(_mg)_mg.style.display=_gOn?'':'none';}catch(_e){}
   try{mjPaintEntry();}catch(_e){}   /* ★ [2026-10-01] 자비아멤버십 셀프가입 진입 버튼 — 일반회원만 */
