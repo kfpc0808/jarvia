@@ -8100,6 +8100,114 @@ function myjaiBuild(){
   document.body.appendChild(b);
   return b;
 }
+/* ════════ ★ [2026-11-28] 접속 시 「오늘·내일 고객 일정」 팝업 · MyJai → 제안서AI 넘김 ════════
+   · 일정: 연락 예정일(fc_clients.nextContact) · 업무일지 다음 할 일(fc_activities.nextDate, 완료 제외) · 확정 미팅(fc_consultation_requests.bookingStatus=confirmed)
+     로그인 뒤 하루 한 번(회원별) — 다른 팝업이 떠 있으면 기다렸다가 띄운다. 일정이 없으면 띄우지 않는다. 비용 없음.
+   · 제안서: MyJai(jv_proposal_send)가 넘긴 상담 내용을 mjInbox(proposal_list)로 읽어 안내 → 제안서AI(슬라이드형)를 열면
+     제안서AI가 postMessage(jbMjProposal)로 받아 입력칸을 채운다. 받았다는 답(jbMjProposalOk)이 오면 넘김을 지운다(1회용). */
+let _jvSchedDone=false,_jvPropDone=false;
+const _jvYmd=(n)=>{const k=new Date(Date.now()+9*3600000+(n||0)*86400000);return k.getUTCFullYear()+String(k.getUTCMonth()+1).padStart(2,'0')+String(k.getUTCDate()).padStart(2,'0');};
+function _jvMeetYmd(s,today){   /* 확정 일시(「9월 8일(월) 오후 2:00」·「2026-12-03 14:00」·「12/3」) → YYYYMMDD — MyJai 서버 meetYmd 와 같은 규칙 */
+  const t=String(s||'');let y,m,d,x;
+  if((x=t.match(/(20\d{2})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})/))){y=+x[1];m=+x[2];d=+x[3];}
+  else if((x=t.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/))||(x=t.match(/(?:^|[^\d])(\d{1,2})\s*[/.]\s*(\d{1,2})(?![\d])/))){
+    m=+x[1];d=+x[2];y=+today.slice(0,4);
+    const c=Date.UTC(y,m-1,d),n=Date.UTC(+today.slice(0,4),+today.slice(4,6)-1,+today.slice(6,8));
+    if((c-n)/86400000<-60)y+=1;
+  }else return '';
+  if(!(m>=1&&m<=12&&d>=1&&d<=31))return '';
+  return y+String(m).padStart(2,'0')+String(d).padStart(2,'0');
+}
+function _jvEsc(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _jvPopCss(){
+  if($('jvPopCss'))return;
+  const st=document.createElement('style');st.id='jvPopCss';
+  st.textContent='.jvpop{position:fixed;inset:0;z-index:99990;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}'
+   +'.jvpop .jvp-box{width:100%;max-width:420px;max-height:calc(100dvh - 24px);overflow:auto;background:#fff;border-radius:16px;padding:18px 16px 14px;box-sizing:border-box;color:#1B3A5C;word-break:keep-all;overflow-wrap:anywhere;box-shadow:0 10px 40px rgba(0,0,0,.2)}'
+   +'.jvpop h3{margin:0 0 4px;font-size:16px;font-weight:800}.jvpop .jvp-sub{font-size:12px;color:#64748B;margin-bottom:10px}'
+   +'.jvpop .jvp-day{font-size:12px;font-weight:800;color:#C9A96E;margin:10px 0 4px}'
+   +'.jvpop .jvp-it{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #EEF1F5;font-size:13px;line-height:1.45}'
+   +'.jvpop .jvp-tg{flex:0 0 auto;white-space:nowrap;font-size:11px;font-weight:700;border-radius:6px;padding:2px 6px;background:#EEF2F8;color:#1B3A5C}'
+   +'.jvpop .jvp-tg.m{background:#FBF4E6;color:#8A6A2C}.jvpop .jvp-tg.w{background:#E7F6EC;color:#1E7B3C}'
+   +'.jvpop .jvp-it b{font-weight:700}.jvpop .jvp-it span{min-width:0}'
+   +'.jvpop .jvp-txt{font-size:13px;line-height:1.6;background:#F7F9FC;border:1px solid #E5EAF1;border-radius:10px;padding:9px 10px;white-space:pre-wrap;max-height:180px;overflow:auto}'
+   +'.jvpop .jvp-btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}.jvpop .jvp-btns button{flex:1 1 120px;font:inherit;font-size:13.5px;font-weight:700;border-radius:10px;padding:10px 8px;cursor:pointer;border:1px solid #D5DDE8;background:#fff;color:#1B3A5C}'
+   +'.jvpop .jvp-btns button.pri{background:#1B3A5C;border-color:#1B3A5C;color:#fff}';
+  document.head.appendChild(st);
+}
+function _jvPopShow(html,wire){   /* 닫힐 때 끝나는 약속을 돌려준다 — 접속 팝업 순서 큐(jvPopQ)가 다음 팝업을 기다리게 */
+  _jvPopCss();
+  return new Promise(res=>{
+    const ov=document.createElement('div');ov.className='jvpop';ov.innerHTML='<div class="jvp-box" role="dialog" aria-modal="true">'+html+'</div>';
+    const close=()=>{if(ov.parentNode)ov.remove();res();};
+    ov.addEventListener('click',e=>{if(e.target===ov)close();});
+    document.body.appendChild(ov);wire&&wire(ov,close);
+  });
+}
+async function jvSchedCheck(){
+  if(_jvSchedDone||!me||!meData)return;_jvSchedDone=true;
+  const today=_jvYmd(0),tmr=_jvYmd(1),key='jv_sched_seen_'+me.uid;
+  try{if(localStorage.getItem(key)===today)return;}catch(_e){}
+  const out={[today]:[],[tmr]:[]};
+  const d8=v=>String(v||'').replace(/-/g,'').slice(0,8);
+  try{
+    const [cs,as,ms]=await Promise.all([
+      getDocs(query(collection(db,'fc_clients'),where('fcAuthUid','==',me.uid))).catch(()=>null),
+      getDocs(query(collection(db,'fc_activities'),where('uid','==',me.uid))).catch(()=>null),
+      getDocs(query(collection(db,'fc_consultation_requests'),where('fcAuthUid','==',me.uid),where('bookingStatus','==','confirmed'),limit(300))).catch(()=>null)
+    ]);
+    if(cs)cs.forEach(x=>{const c=x.data()||{};const d=d8(c.nextContact);if(out[d])out[d].push({k:'연락',c:'',n:c.name||'',w:'연락 예정일'});});
+    if(as)as.forEach(x=>{const a=x.data()||{};if(a.done===true)return;const d=d8(a.nextDate);if(out[d])out[d].push({k:'할 일',c:'w',n:a.clientName||a.corpName||'',w:String(a.nextAction||'업무일지 다음 할 일').slice(0,60)});});
+    if(ms)ms.forEach(x=>{const r=x.data()||{};const d=_jvMeetYmd(r.confirmedTime,today);if(out[d])out[d].push({k:'미팅',c:'m',n:r.name||'',w:'확정 미팅 '+String(r.confirmedTime||'').slice(0,30)+(r.confirmedPlace?' · '+String(r.confirmedPlace).slice(0,20):'')});});
+  }catch(e){console.warn('[jvSched]',e);return;}
+  const nT=out[today].length,nM=out[tmr].length;
+  if(!nT&&!nM)return;
+  const row=it=>'<div class="jvp-it"><span class="jvp-tg '+it.c+'">'+_jvEsc(it.k)+'</span><span><b>'+_jvEsc(it.n||'(이름 없음)')+'</b> · '+_jvEsc(it.w)+'</span></div>';
+  const day=(lab,arr)=>arr.length?'<div class="jvp-day">'+lab+' '+arr.length+'건</div>'+arr.slice(0,15).map(row).join('')+(arr.length>15?'<div class="jvp-sub">외 '+(arr.length-15)+'건</div>':''):'';
+  jvPopQ(24,()=>{
+    try{localStorage.setItem(key,today);}catch(_e){}
+    return _jvPopShow('<h3>📅 오늘·내일 고객 일정</h3><div class="jvp-sub">연락 예정일 · 업무일지 다음 할 일 · 확정 미팅</div>'+day('오늘',out[today])+day('내일',out[tmr])
+      +'<div class="jvp-btns"><button type="button" data-wl>업무일지 열기</button><button type="button" class="pri" data-x>확인</button></div>',
+      (ov,close)=>{ov.querySelector('[data-x]').onclick=close;ov.querySelector('[data-wl]').onclick=()=>{close();location.href='worklog.html';};});
+  });
+}
+window.__mjProp=null;
+async function jvMjPropCheck(){
+  if(_jvPropDone||!me||!meData)return;_jvPropDone=true;
+  let want='';try{want=new URLSearchParams(location.search).get('mjprop')||'';}catch(_e){}
+  if(!want){try{if(sessionStorage.getItem('jv_mjprop_seen'))return;}catch(_e){}}
+  let items=[];
+  try{const r=await httpsCallable(functions,'mjInbox')({action:'proposal_list'});items=(r&&r.data&&r.data.items)||[];}catch(e){return;}
+  if(!items.length)return;
+  const it=(want&&items.find(x=>x.id===want))||items[0];
+  try{sessionStorage.setItem('jv_mjprop_seen','1');}catch(_e){}
+  jvPopQ(want?12:21,()=>{
+    return _jvPopShow('<h3>📑 MyJai가 준비한 제안서 내용</h3><div class="jvp-sub">'+_jvEsc(it.domain)+' · '+_jvEsc(it.customerName)+(it.company?' · '+_jvEsc(it.company):'')+(items.length>1?' · 대기 '+items.length+'건':'')+'</div>'
+      +'<div class="jvp-txt">'+_jvEsc(String(it.caseText||'').slice(0,600))+(String(it.caseText||'').length>600?' …':'')+'</div>'
+      +'<div class="jvp-sub" style="margin-top:8px">「제안서AI 열기」를 누르면 이 내용이 입력칸에 채워집니다. 이용안내를 확인한 뒤 「생성」을 누르세요.</div>'
+      +'<div class="jvp-btns"><button type="button" data-del>지우기</button><button type="button" data-x>나중에</button><button type="button" class="pri" data-go>제안서AI 열기</button></div>',
+      (ov,close)=>{
+        ov.querySelector('[data-x]').onclick=close;
+        ov.querySelector('[data-del]').onclick=async()=>{if(!confirm('MyJai가 준비한 이 제안서 내용을 지울까요?'))return;try{await httpsCallable(functions,'mjInbox')({action:'proposal_done',id:it.id});}catch(_e){}close();toast('지웠습니다');};
+        ov.querySelector('[data-go]').onclick=()=>{
+          close();window.__mjProp=it;
+          if(window.jvTrialLocked&&window.jvTrialLocked('proposal'))return;
+          const run=()=>{try{_aipOpenLegacy();}catch(e){console.warn('[mjprop]',e);}};
+          if(window.jvCardGate)jvCardGate(run);else run();
+        };
+      });
+  });
+}
+window.addEventListener('message',async function(ev){   /* 제안서AI ↔ 자비아: 넘길 내용 요청·받음 확인 */
+  const d=ev&&ev.data;if(!d||(d.type!=='jbMjProposal'&&d.type!=='jbMjProposalOk'))return;
+  if(!(window._jbMsgOriginOK&&window._jbMsgOriginOK(ev.origin)))return;
+  const it=window.__mjProp;
+  if(d.type==='jbMjProposal'){
+    try{ev.source&&ev.source.postMessage({type:'jbMjProposalResult',reqId:d.reqId,ok:!!it,item:it?{id:it.id,domain:it.domain,customerName:it.customerName,company:it.company,caseText:it.caseText}:null},ev.origin);}catch(_e){}
+    return;
+  }
+  if(it&&d.id===it.id){window.__mjProp=null;try{await httpsCallable(functions,'mjInbox')({action:'proposal_done',id:it.id});}catch(_e){}}
+});
 function myjaiSync(){
   const ok=myjaiOk();
   const vis=p=>{const el=$('pg-'+p);return !!(el&&!el.classList.contains('hidden'));};
@@ -24171,6 +24279,7 @@ function jvWelcomeArm(){
   try{ jvKkcArm(); }catch(_e){}   /* ★ [2026-10-28] 카카오 고객센터 연결 안내 */
   try{ jvNeedsArm(); }catch(_e){}   /* ★ [2026-11-05] 맞춤 니즈 설문 */
   try{ jvTodayArm(); }catch(_e){}   /* ★ [2026-11-07] 오늘의 자비아 */
+  try{ jvSchedCheck(); jvMjPropCheck(); }catch(_e){}   /* ★ [2026-11-28] 오늘·내일 고객 일정 · MyJai 제안서 넘김 (접속마다 1번 · 접속 팝업 큐) */
   try{ jvAlimArm(); }catch(_e){}   /* ★ [2026-11-01] 알림톡 사용 동의 · 잔액 안내 */
   try{ jvSpArm(); }catch(_e){}   /* ★ [2026-11-19] 특별포인트 소멸 전·후 안내 (각 1회) */
   /* ★ 카드 등록 팝업 판정이 끝난 뒤 큐 시작 — 카드 팝업이 다른 팝업보다 먼저 뜨도록 */
@@ -27263,7 +27372,7 @@ function _aiProposalUrl(){
   var n=(window.meData&&meData.name)||'', r=(window.meData&&meData.role)||'';
   var co=(window.meData&&meData.company)||'', ti=(window.meData&&meData.title)||'';
   var sep=AI_PROPOSAL_URL.indexOf('?')>=0?'&':'?';
-  return AI_PROPOSAL_URL+sep+'name='+encodeURIComponent(n)+'&role='+encodeURIComponent(r)+'&company='+encodeURIComponent(co)+'&title='+encodeURIComponent(ti)+'&lid='+encodeURIComponent((window.meData&&meData.loginId)||'');  // ★2026-07-13: CEO리포트 오픈 전 게이트용
+  return AI_PROPOSAL_URL+sep+'name='+encodeURIComponent(n)+'&role='+encodeURIComponent(r)+'&company='+encodeURIComponent(co)+'&title='+encodeURIComponent(ti)+'&lid='+encodeURIComponent((window.meData&&meData.loginId)||'')+(window.__mjProp?'&mjprop=1':'');   /* ★ [2026-11-28] MyJai 넘김 — 제안서AI가 자비아 창에 내용을 요청한다 */  // ★2026-07-13: CEO리포트 오픈 전 게이트용
 }
 function goAiProposal(){
   if(!window.me){ if(typeof openM==='function') openM('mdl-login-prompt'); return; }
